@@ -183,7 +183,7 @@ async function main() {
     if (common.length === 0) throw new Error('No version of the Docker CLI exists for all platforms.');
     version = common.sort(compareVersions).at(-1);
   }
-  if (version === current.version && given === undefined) {
+  if (version === current.version && given === undefined && current.api !== undefined) {
     console.log(`The pin has the newest version already: ${version}`);
     return;
   }

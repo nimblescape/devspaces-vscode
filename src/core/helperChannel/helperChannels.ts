@@ -216,6 +216,18 @@ function engineName(target: DockerTarget): string {
   return target.kind === 'local' ? 'the local Docker' : target.host;
 }
 
+/**
+ * The message when the Docker CLI of Devspaces (ChannelOpenDeps.dockerCliApi) cannot work with the remote engine of
+ * `target`: from the API versions `api` of the probe of its worker, or from the error output `detail` of a call of
+ * that CLI there (dockerApiErrorMismatch). Undefined when it can, or when the windows there run no such CLI.
+ */
+function apiMismatchText(deps: ChannelOpenDeps, target: DockerTarget, name: string, from: { api?: EngineApiVersions; detail?: string }): string | undefined {
+  const cli = target.kind === 'remote' ? deps.dockerCliApi?.(target) : undefined;
+  if (cli === undefined) return undefined;
+  const mismatch = from.api !== undefined ? dockerApiMismatch(from.api, cli.range) : dockerApiErrorMismatch(from.detail ?? '', cli.range);
+  return mismatch === undefined ? undefined : dockerApiMismatchText(mismatch, name, cli.name);
+}
+
 /** An engine identity in a message: its ID and root folder as JSON strings (control characters escaped). */
 function identityText(identity: EngineIdentity): string {
   return `${JSON.stringify(identity.id)} ${JSON.stringify(identity.rootDir)}`;
@@ -307,6 +319,9 @@ export async function openHelperChannel(deps: ChannelOpenDeps, target: DockerTar
   // The engine identity without the worker, read before the start: on an SSH host, on the shell before the relay, whose
   // login the new connection then takes over (no login after it).
   const direct = await readEngineIdentity(ownDeps, target);
+  // That call failed with the error of the engine for the Docker CLI of Devspaces: no login and no worker for it.
+  const refused = direct.identity === undefined ? apiMismatchText(deps, target, name, { detail: direct.detail }) : undefined;
+  if (refused !== undefined) throw new DockerApiMismatchError(refused);
   try {
     const channel = await startChannel(ownDeps, target, name, relay, (connection) => (opened = connection));
     await checkChannelEngine(ownDeps, target, name, channel, direct);
@@ -442,21 +457,13 @@ async function checkChannelEngine(deps: ChannelOpenDeps, target: DockerTarget, n
   // why before a window of a devspace there opens and fails in its attach. Checked before the identity: the call of the
   // identity runs with that CLI too where it is the one of the operation (the WSL distribution, the open connection of
   // the relay, an SSH host without the shell before the relay), and fails then with an error of the Docker API only.
-  // A call that failed with the error of the engine for that CLI names the mismatch itself; else the versions of the
-  // probe, only for a worker that named the engine of that call. Any other failure, or another engine: the identity
-  // check says why.
-  const cli = target.kind === 'remote' ? deps.dockerCliApi?.(target) : undefined;
-  const mismatch =
-    cli === undefined
-      ? undefined
-      : identity === undefined
-        ? dockerApiErrorMismatch(detail, cli.range)
-        : engine !== undefined && sameEngine(engine, identity)
-          ? dockerApiMismatch(api, cli.range)
-          : undefined;
-  if (cli !== undefined && mismatch !== undefined) {
+  // Only the versions of a worker that named the engine of that call; any other engine, or any other failure of that
+  // call: the identity check says why.
+  const sameIdentity = identity !== undefined && engine !== undefined && sameEngine(engine, identity);
+  const refused = identity === undefined ? apiMismatchText(deps, target, name, { detail }) : sameIdentity ? apiMismatchText(deps, target, name, { api }) : undefined;
+  if (refused !== undefined) {
     channel.close();
-    throw new DockerApiMismatchError(dockerApiMismatchText(mismatch, name, cli.name));
+    throw new DockerApiMismatchError(refused);
   }
   if (engine === undefined || identity === undefined || !sameEngine(engine, identity)) {
     channel.close();

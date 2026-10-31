@@ -189,6 +189,15 @@ describe('openHelperChannel with the connection of the relay', () => {
     await expect(openHelperChannel(deps({ relay: () => fresh, dockerCliApi: () => cli }), REMOTE)).rejects.toMatchObject({ code: 'open', message });
     expect(connection.closes).toEqual(['the worker could not be opened']);
     expect(fresh.use).not.toHaveBeenCalled();
+    // A call of the identity before the start that fails with the error of the engine for that CLI (the WSL
+    // distribution, an SSH host without the shell before the relay): no login and no worker.
+    const unused = vi.fn<RelayAccess['connect']>();
+    const tooNew = async () => ({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', timedOut: false });
+    await expect(openHelperChannel(deps({ relay: () => access(unused), dockerCliApi: () => cli, runDirect: tooNew }), REMOTE)).rejects.toMatchObject({
+      code: 'open',
+      message: expect.stringContaining('the engine speaks the Docker API up to version 1.39, and the CLI needs version 1.40 or later.'),
+    });
+    expect(unused).not.toHaveBeenCalled();
     // On the open connection of the engine: no new connection, whose worker would be refused for the same reason after
     // one more login, and the open connection stays the one of the Docker pipe. The call of the identity goes through
     // that connection with the same CLI, so it fails with the error of the engine: the API versions say why.

@@ -59,6 +59,9 @@ describe('dockerApiErrorMismatch', () => {
     expect(dockerApiErrorMismatch('Error response from daemon: client version 1.41 is too new. Maximum supported API version is 1.39', CLI)).toBeUndefined();
     expect(dockerApiErrorMismatch('Error response from daemon: client version 1.43 is too old. Minimum supported API version is 1.44', CLI)).toBeUndefined();
     expect(dockerApiErrorMismatch('', CLI)).toBeUndefined();
+    // A call with the newest version of the CLI after a failed negotiation, on an engine that the CLI can work with.
+    expect(dockerApiErrorMismatch('Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.47', CLI)).toBeUndefined();
+    expect(dockerApiErrorMismatch('Error response from daemon: client version 1.56 is too old. Minimum supported API version is 1.44', CLI)).toBeUndefined();
     expect(dockerApiErrorMismatch('Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?', CLI)).toBeUndefined();
   });
 });

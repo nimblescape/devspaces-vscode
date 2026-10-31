@@ -571,11 +571,11 @@ async function activateExtension(
   // of the heartbeats.
   context.subscriptions.push(closingWork.deferred({ dispose: () => helperBuilds.dispose() }));
   // The Docker CLI of Devspaces, for the check of the API versions of a remote engine (dockerApiVersion.ts): in the
-  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs; in another window
-  // when it is installed, as its Docker calls on a remote engine and the windows of devspaces then run it. Without it,
-  // the Docker CLI of this computer runs them, whose API versions are not known: no check.
+  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs (after a failed
+  // download it runs the Docker CLI of this computer, whose API versions are not known: no check); in another window
+  // where Docker publishes it for this computer, as the windows of devspaces download and run it, also the first one.
   const dockerCliApi = (): DockerCliApi | undefined =>
-    (pipeWindow ? ownCliInPath : presentOwnCli() !== undefined) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
+    (pipeWindow ? ownCliInPath : ownCliBuild) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
   const channels = new HelperChannels({
     logger,
     dockerCliApi,

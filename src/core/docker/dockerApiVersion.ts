@@ -62,13 +62,14 @@ const TOO_OLD = new RegExp(String.raw`client version (${API_VERSION_SOURCE}) is 
 /**
  * The mismatch that the error output `text` of a Docker call names, when the call came from the CLI with the API
  * versions `cli`: in both cases that CLI calls with its newest API version (see above), so an error of another CLI
- * (for example the one of the shell before the relay) is not taken. Undefined for any other text.
+ * (for example the one of the shell before the relay) is not taken; nor is an error whose engine the CLI can work with
+ * (a call with the newest version after a failed negotiation, for example). Undefined for any other text.
  */
 export function dockerApiErrorMismatch(text: string, cli: DockerApiRange): DockerApiMismatch | undefined {
   const tooNew = TOO_NEW.exec(text);
-  if (tooNew !== null && tooNew[1] === cli.max) return { kind: 'engineTooOld', engine: tooNew[2], minimum: cli.min };
+  if (tooNew !== null && tooNew[1] === cli.max) return dockerApiMismatch({ apiVersion: tooNew[2] }, cli);
   const tooOld = TOO_OLD.exec(text);
-  if (tooOld !== null && tooOld[1] === cli.max) return { kind: 'cliTooOld', client: cli.max, minimum: tooOld[2] };
+  if (tooOld !== null && tooOld[1] === cli.max) return dockerApiMismatch({ minApiVersion: tooOld[2] }, cli);
   return undefined;
 }
 
