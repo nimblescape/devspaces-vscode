@@ -171,7 +171,7 @@ The steps in words:
 3. **Open flow.** The window runs the open flow of its devspace on the Docker host of the devspace, whatever host Devspaces uses now ([`Controller.withHostOf`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/vscode/controller.ts)). The flow has a progress notification, so its SSH login may ask questions in VS Code.
 4. **Shell before the relay.** The SSH check of the host is the login of the shell before the relay. The checks that only read run on that shell as one command line each: `docker info`, the check of the helper image, the engine identity, and for a rootless engine the folder `$XDG_RUNTIME_DIR` of its socket ([`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/remoteShell.ts)).
 5. **Start of the relay.** The connection of the relay takes the login of the shell over and writes the start script into the idle shell ([`openRelayConnection`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/transport.ts)). The script starts the worker container with `docker run --rm -i`. Its pipe loader reads the bundle from the first line of its input, checks its SHA-256 hash against the hash on the command line, and starts the relay.
-6. **Worker.** The extension opens the stream with the target `worker`. The relay starts the worker. The extension sends `hello` and `probe`, and compares the engine identity of the worker with the identity that it read before the start. Only when they match, the connection becomes the current connection of the host, and the Docker pipe of the extension for the host starts to listen.
+6. **Worker.** The extension opens the stream with the target `worker`. The relay starts the worker. The extension sends `hello` and `probe`, and compares the engine identity of the worker with the identity that it read before the start. When the windows of the host run the Docker CLI of Devspaces, it also compares the API versions of the engine from the probe with the API versions of that CLI (see [The Docker CLI of Devspaces](#the-docker-cli-of-devspaces)). Only when both fit, the connection becomes the current connection of the host, and the Docker pipe of the extension for the host starts to listen.
 7. **Operation.** The worker runs the operation `open` (see [architecture.md, Open](architecture.md#open)): it starts the container, or builds and creates it when needed, and returns the container, the remote user, and the folder.
 8. **Attach.** `activate()` returns, and VS Code lets the Dev Containers extension resolve the window. Its Docker calls go to the Docker pipe of the window. Each connection to the pipe becomes one stream with the target `docker` on the same connection of the relay. No new login is needed.
 
@@ -392,7 +392,7 @@ The window of a devspace on a remote host runs the Dev Containers extension with
 | macOS x86_64 and aarch64 | `mac/static/stable/<arch>/docker-<version>.tgz` |
 | Linux x86_64 and aarch64 | `linux/static/stable/<arch>/docker-<version>.tgz` |
 
-Docker publishes no checksums and no signatures for these files. So [`scripts/docker-cli-pin.mjs`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/scripts/docker-cli-pin.mjs) computes the size and the hash from its own download. On another platform (for example Windows 10 on Arm), the window uses the Docker CLI of this computer.
+Docker publishes no checksums and no signatures for these files. So [`scripts/docker-cli-pin.mjs`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/scripts/docker-cli-pin.mjs) computes the size and the hash from its own download. The pin also names the Docker API versions that this version speaks (`api`, 1.40 to 1.56 for 29.9.2). The script measures them with the Linux build against a fake engine, in a container without network and without the files of the computer, because nothing checks a new CLI before its pin. On another platform (for example Windows 10 on Arm), the window uses the Docker CLI of this computer.
 
 **Download and unpack.**
 
@@ -407,7 +407,9 @@ Docker publishes no checksums and no signatures for these files. So [`scripts/do
 - The Docker calls of Devspaces in an operation on a remote host use this CLI in every window once it is installed (option `ownCli` of `BootstrapDocker`).
 - The calls for the local Docker keep the Docker CLI of this computer. `PATH` of your terminals does not change.
 
-**Updates.** The workflow [`.github/workflows/docker-cli.yml`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/.github/workflows/docker-cli.yml) downloads the files of the pin again once a week and fails when one of them changed. When Docker published a newer version for all platforms of the pin, it opens a pull request with the new pin and starts CI on it. A new CLI version reaches the users only with a new version of Devspaces.
+**API versions.** The Docker CLI asks the engine for its newest API version and speaks the lower of that and its own newest one. With an engine that is older than its oldest API version, it speaks its newest one, and the engine refuses it. An engine also refuses an API version below its minimum (`DOCKER_MIN_API_VERSION` of `dockerd`). So before the attach, Devspaces checks that the newest API version of the engine is at least the oldest one of the CLI, and that the minimum of the engine is at most the newest one of the CLI ([`src/core/docker/dockerApiVersion.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/docker/dockerApiVersion.ts)). It takes the API versions of the engine from the probe of the worker (`GET /version`). When a Docker call of this CLI fails before the worker (the engine identity, the check of the helper image, or `docker info` of the host test), it reads the versions from the error of the engine. When they do not fit, the open fails with a message that names both versions and what to update; no worker starts after such an error. The check applies only where the windows run this CLI: in the window of a devspace when its folder is in `PATH`, and in the other windows when the pin has a build for this computer, because they download it before their first call.
+
+**Updates.** The workflow [`.github/workflows/docker-cli.yml`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/.github/workflows/docker-cli.yml) downloads the files of the pin again once a week and fails when one of them changed or when the CLI speaks other API versions than the pin names. When Docker published a newer version for all platforms of the pin, it opens a pull request with the new pin, its API versions measured, and starts CI on it. A new CLI version reaches the users only with a new version of Devspaces.
 
 More rules: [architecture.md, The Docker CLI of Devspaces](architecture.md#the-docker-cli-of-devspaces).
 
@@ -584,6 +586,7 @@ The CI job "vscode attach remote" counts the logins of the open of a restored wi
 | The connection of the relay ends (network lost) | Its streams end. The next worker or Docker connection opens a new connection. Docker connections of the window that come meanwhile wait for that open up to 30 seconds, and then use `dial-stdio`. |
 | A worker on the open connection cannot be opened | The same open tries a new connection at once. |
 | The engine identity of a new worker differs | The connection that this open started is closed, and the open fails. |
+| The engine and the Docker CLI of Devspaces speak no common API version | The open fails before the attach, and the message names both API versions and what to update. A worker that already runs is closed. |
 | The download of the Docker CLI fails or is cancelled | The window uses the Docker CLI of this computer and says so. Without one, **Use a Remote Docker Host…** sets no host. |
 | The window cannot serve its Docker pipe | The window closes its remote connection with a message, before the Dev Containers extension uses the address. |
 | `ssh` or `wsl.exe` is missing on this computer | The window of a remote devspace does not open, and the message names the missing program. |
@@ -592,7 +595,7 @@ The CI job "vscode attach remote" counts the logins of the open of a restored wi
 
 ## Not implemented
 
-- **API version check.** Devspaces does not compare the API versions that the Docker CLI of Devspaces speaks with the API versions of the engine before the attach. The Docker CLI negotiates the API version with the engine by itself. When they do not fit (for example a very old engine), the Docker calls fail with the message of Docker.
+- **API version check of the Docker CLI of this computer.** Devspaces checks the API versions only for the Docker CLI of Devspaces. When a window uses the Docker CLI of this computer, or a read runs on the Docker CLI of an SSH host, a Docker call with API versions that do not fit fails with the message of Docker.
 - **Filter of Docker API requests.** The Docker pipes pass every request. They log the method and the path of the first requests, but refuse none.
 
 ## Where the code differs from the design
