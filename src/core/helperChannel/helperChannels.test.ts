@@ -862,6 +862,17 @@ describe('the engine identity as values', () => {
     expect(remote.ended()).toBe(true);
   });
 
+  // A worker on another engine than the calls without it: the identity check names both engines, whatever the API
+  // versions of the engine of the worker.
+  it('names the other engine before the API versions of the engine of the worker', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const worker = probeProcess({ id: 'other', rootDir: '/var/lib/docker' }, { apiVersion: '1.39' });
+    await expect(openHelperChannel({ ...deps(worker.process), dockerCliApi: () => cli }, REMOTE)).rejects.toThrow(
+      'The helper channel to build-box was closed: it reaches another Docker engine ("other" "/var/lib/docker")',
+    );
+    expect(worker.ended()).toBe(true);
+  });
+
   it('refuses a worker whose engine is no identity: an invalid answer, never compared', async () => {
     for (const engine of [ENGINE, { id: '', rootDir: '/var/lib/docker' }, { ...ENGINE_IDENTITY, extra: 1 }, { id: ENGINE_IDENTITY.id, rootDir: 'r'.repeat(1_025) }]) {
       const worker = probeProcess(engine);

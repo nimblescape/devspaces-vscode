@@ -612,8 +612,11 @@ async function activateExtension(
             );
           },
           runDirect: (args, options, withoutPipe) => (withoutPipe === true ? docker.runWithoutPipe(args, options) : docker.run(args, options)),
-          // The windows of devspaces on a remote engine run the Docker CLI of Devspaces (or download it first).
-          dockerCliApi: () => (ownCliBuild ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined),
+          // The windows of devspaces on a remote engine run the Docker CLI of Devspaces, which they download first;
+          // the window of a devspace whose download failed runs the Docker CLI of this computer, whose versions are
+          // not known.
+          dockerCliApi: () =>
+            ownCliBuild && (!pipeWindow || presentOwnCli() !== undefined) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined,
           logger,
           script: workerScript,
           helperTag: async () => helperImageTag(await fs.promises.readFile(helperDockerfile, 'utf8')),

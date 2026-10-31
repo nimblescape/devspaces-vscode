@@ -190,10 +190,12 @@ describe('openHelperChannel with the connection of the relay', () => {
     expect(connection.closes).toEqual(['the worker could not be opened']);
     expect(fresh.use).not.toHaveBeenCalled();
     // On the open connection of the engine: no new connection, whose worker would be refused for the same reason after
-    // one more login, and the open connection stays the one of the Docker pipe.
+    // one more login, and the open connection stays the one of the Docker pipe. The call of the identity goes through
+    // that connection with the same CLI, so it fails with the error of the engine: the API versions say why.
     const connect = vi.fn<RelayAccess['connect']>();
     const shared = access(connect, fakeConnection(fakeWorker({ apiVersion: '1.39' })));
-    await expect(openHelperChannel(deps({ relay: () => shared, dockerCliApi: () => cli }), REMOTE)).rejects.toMatchObject({
+    const refused = async () => ({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', timedOut: false });
+    await expect(openHelperChannel(deps({ relay: () => shared, dockerCliApi: () => cli, runDirect: refused }), REMOTE)).rejects.toMatchObject({
       code: 'open',
       message:
         'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine speaks the Docker API up to version 1.39, and the ' +

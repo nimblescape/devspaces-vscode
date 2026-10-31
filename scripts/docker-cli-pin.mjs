@@ -85,8 +85,9 @@ function runnablePlatform() {
  * The Docker API versions that the `docker` program of `archive` (a .tgz of download.docker.com) speaks, measured with a
  * fake engine on a Unix socket. The CLI asks the engine for its newest API version (`/_ping`, header `Api-Version`) and
  * then calls `GET /v<version>/version` with the lower of that and its own newest one, or with its own newest one when the
- * engine is older than its oldest one. So its newest one is the one that it calls on an engine of 1.999, and its oldest
- * one is the lowest 1.<n> below that which it calls on an engine of that version.
+ * engine is older than its oldest one (or it calls nothing then). So its newest one is the one that it calls on an
+ * engine of 1.999, and its oldest one is the lowest 1.<n> that it calls on an engine of that version (a search by
+ * halves: the CLI speaks every version between its oldest and its newest one).
  */
 async function measureApi(archive) {
   const dir = mkdtempSync(join(tmpdir(), 'docker-cli-api-'));
@@ -105,22 +106,33 @@ async function measureApi(archive) {
       response.end(match ? JSON.stringify({ Version: '0.0.0', ApiVersion: engineApi, MinAPIVersion: '1.0', Os: 'linux', Arch: 'amd64' }) : 'OK');
     });
     await new Promise((resolve, reject) => server.once('error', reject).listen(socket, resolve));
-    // The API version that the CLI calls `/version` with on an engine of `api`.
+    // The API version that the CLI calls `/version` with on an engine of `api` (undefined: none), and how it ended.
     const calledOn = async (api) => {
       engineApi = api;
       called = undefined;
       // Only these variables: DOCKER_API_VERSION or a context would decide the version or the engine instead.
       const env = { PATH: process.env.PATH ?? '', DOCKER_HOST: `unix://${socket}`, DOCKER_CONFIG: dir };
-      await new Promise((resolve) => execFile(docker, ['version', '--format', '{{.Server.APIVersion}}'], { env, timeout: 30_000 }, () => resolve()));
-      if (called === undefined) throw new Error(`The Docker CLI called no /version on an engine of the API version ${api}.`);
-      return called;
+      const end = await new Promise((resolve) =>
+        execFile(docker, ['version', '--format', '{{.Server.APIVersion}}'], { env, timeout: 30_000 }, (error, _stdout, stderr) =>
+          resolve(error ? `${error.message} ${String(stderr).trim()}`.trim() : 'exit code 0'),
+        ),
+      );
+      return { version: called, end };
     };
     try {
-      const max = await calledOn('1.999');
-      const [major, newest] = max.split('.').map(Number);
-      let min = max;
-      for (let minor = newest - 1; minor >= 0 && (await calledOn(`${major}.${minor}`)) === `${major}.${minor}`; minor--) min = `${major}.${minor}`;
-      return { min, max };
+      const newest = await calledOn('1.999');
+      if (newest.version === undefined) throw new Error(`The Docker CLI called no /version on an engine of the API version 1.999: ${newest.end}`);
+      const [major, newestMinor] = newest.version.split('.').map(Number);
+      const speaks = async (minor) => (await calledOn(`${major}.${minor}`)).version === `${major}.${minor}`;
+      // The lowest minor version in [low, high] that the CLI speaks; it speaks `high`.
+      let low = 0;
+      let high = newestMinor;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (await speaks(middle)) high = middle;
+        else low = middle + 1;
+      }
+      return { min: `${major}.${high}`, max: newest.version };
     } finally {
       server.close();
     }

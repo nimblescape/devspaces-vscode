@@ -201,7 +201,6 @@ const NAME_IN_USE = /container name "?[^"\s]*"? is already in use/i;
  */
 const WORKER_NAME_ATTEMPTS = 10;
 
-/** The name of the engine of `target` in the log. */
 /**
  * The open of a worker on an engine whose API versions the Docker CLI of the windows of devspaces there does not speak
  * (ChannelOpenDeps.dockerCliApi): another connection of the relay would not change it.
@@ -212,6 +211,7 @@ class DockerApiMismatchError extends HelperChannelError {
   }
 }
 
+/** The name of the engine of `target` in the log. */
 function engineName(target: DockerTarget): string {
   return target.kind === 'local' ? 'the local Docker' : target.host;
 }
@@ -438,6 +438,20 @@ async function checkChannelEngine(deps: ChannelOpenDeps, target: DockerTarget, n
   }
   // The engine identity, compared as values with one call without the worker.
   const { identity, detail } = direct ?? (await readEngineIdentity(deps, target));
+  // An engine that the Docker CLI of the windows of devspaces there cannot work with gets no worker, so its flows say
+  // why before a window of a devspace there opens and fails in its attach. Checked before the identity: the call of the
+  // identity runs with that CLI too where it is the one of the operation (the WSL distribution, the open connection of
+  // the relay, an SSH host without the shell before the relay), and fails then with an error of the Docker API only.
+  // Not for a worker that reaches another engine than that call: the identity check names both.
+  const cli = target.kind === 'remote' ? deps.dockerCliApi?.(target) : undefined;
+  const otherEngine = engine !== undefined && identity !== undefined && !sameEngine(engine, identity);
+  if (cli !== undefined && !otherEngine) {
+    const mismatch = dockerApiMismatch(api, cli.range);
+    if (mismatch !== undefined) {
+      channel.close();
+      throw new DockerApiMismatchError(dockerApiMismatchText(mismatch, name, cli.name));
+    }
+  }
   if (engine === undefined || identity === undefined || !sameEngine(engine, identity)) {
     channel.close();
     const why =
@@ -447,14 +461,6 @@ async function checkChannelEngine(deps: ChannelOpenDeps, target: DockerTarget, n
           ? `the Docker engine could not be identified without it${detail ? ` (${detail})` : ''}`
           : `it reaches another Docker engine (${identityText(engine)}) than the Docker calls without it (${identityText(identity)})`;
     throw new HelperChannelError('open', `The helper channel to ${name} was closed: ${why}.`);
-  }
-  // An engine that the Docker CLI of the windows of devspaces there cannot work with gets no worker, so its flows say
-  // why before a window of a devspace there opens and fails in its attach.
-  const cli = target.kind === 'remote' ? deps.dockerCliApi?.(target) : undefined;
-  const mismatch = cli === undefined ? undefined : dockerApiMismatch(api, cli.range);
-  if (cli !== undefined && mismatch !== undefined) {
-    channel.close();
-    throw new DockerApiMismatchError(dockerApiMismatchText(mismatch, name, cli.name));
   }
   // Channel containers that an earlier open created but never started are removed, in the background (a failure is
   // logged; the channel is open already). Its value is checked (parseSweepValue) and the number of removed containers
