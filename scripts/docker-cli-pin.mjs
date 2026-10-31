@@ -10,13 +10,13 @@
 // newest that all platforms of the pin have. The pin also names the Docker API versions that the CLI speaks (`api`,
 // its oldest and its newest one), which the extension checks against the engine of a remote host before a window of a
 // devspace there opens (src/core/docker/dockerApiVersion.ts); they are measured with the Linux build of this computer,
-// so a new pin is written only on Linux x86_64 or aarch64. The workflow "Docker CLI" runs this every week and opens a
-// pull request when the file changed. --check writes nothing: it downloads the files of the current pin again and fails
-// when a size or a hash differs (Docker replaced a file), or, on Linux, when the CLI speaks other API versions than the
-// pin names.
+// in a container of its Docker engine (measureApi), so a new pin is written only on Linux x86_64 or aarch64 with
+// Docker. The workflow "Docker CLI" runs this every week and opens a pull request when the file changed. --check writes
+// nothing: it downloads the files of the current pin again and fails when a size or a hash differs (Docker replaced a
+// file), or, on Linux, when the CLI speaks other API versions than the pin names.
 import { execFile, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -89,35 +89,60 @@ function runnablePlatform() {
  * script needs a look). So its newest one is the one that it calls on an engine of 1.999, and its oldest one is the
  * lowest 1.<n> that it calls on an engine of that version (a search by halves: the CLI speaks every version between its
  * oldest and its newest one).
+ *
+ * Nothing checks a new CLI before its pin, so it runs only in a container of the Docker engine of this computer, never
+ * next to this script: an image of the archive alone (`docker import`), without network, with a read-only file system,
+ * without capabilities, as the user nobody, and with only the folder of the socket, read-only. It cannot change the pin
+ * or another file of this computer, and nothing of it runs after its call. What it gives back is only the version of
+ * its call, which the fake engine takes in the form 1.<n> alone.
  */
 async function measureApi(archive) {
+  const docker = (args, options) => spawnSync('docker', args, { encoding: 'utf8', ...options });
   const dir = mkdtempSync(join(tmpdir(), 'docker-cli-api-'));
+  // The folder of the socket, the only folder of this computer in the container.
+  const engineDir = join(dir, 'engine');
+  mkdirSync(engineDir);
+  chmodSync(engineDir, 0o755);
+  const socket = join(engineDir, 'engine.sock');
+  const image = `devspaces-docker-cli-api:${randomBytes(6).toString('hex')}`;
   try {
-    const untar = spawnSync('tar', ['-xzf', '-', '-C', dir, 'docker/docker'], { input: archive });
-    if (untar.status !== 0) throw new Error(`tar could not take docker/docker out of the archive: ${untar.stderr}`);
-    const docker = join(dir, 'docker', 'docker');
-    const socket = join(dir, 'engine.sock');
+    const imported = docker(['import', '-', image], { input: archive });
+    if (imported.error !== undefined || imported.status !== 0) {
+      throw new Error(`The API versions are measured in a container, which needs Docker on this computer; docker import failed: ${imported.error?.message ?? imported.stderr.trim()}`);
+    }
     let engineApi = '';
     let called;
     const server = createServer((request, response) => {
       response.setHeader('Api-Version', engineApi);
       response.setHeader('Content-Type', 'application/json');
-      const match = /^\/v(\d+\.\d+)\/version$/.exec(request.url ?? '');
+      const match = /^\/v(\d{1,4}\.\d{1,4})\/version$/.exec(request.url ?? '');
       if (match) called = match[1];
       response.end(match ? JSON.stringify({ Version: '0.0.0', ApiVersion: engineApi, MinAPIVersion: '1.0', Os: 'linux', Arch: 'amd64' }) : 'OK');
     });
     await new Promise((resolve, reject) => server.once('error', reject).listen(socket, resolve));
+    // The user nobody of the container connects to the socket.
+    chmodSync(socket, 0o666);
+    let runs = 0;
     // The API version that the CLI calls `/version` with on an engine of `api` (undefined: none), and how it ended.
     const calledOn = async (api) => {
       engineApi = api;
       called = undefined;
+      const name = `${image.replace(/[:]/g, '-')}-${runs++}`;
       // Only these variables: DOCKER_API_VERSION or a context would decide the version or the engine instead.
-      const env = { PATH: process.env.PATH ?? '', DOCKER_HOST: `unix://${socket}`, DOCKER_CONFIG: dir };
+      const args = [
+        'run', '--rm', '--name', name, '--network', 'none', '--read-only', '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges', '--user', '65534:65534', '--pids-limit', '64', '--tmpfs', '/tmp',
+        '--mount', `type=bind,source=${engineDir},target=/engine,readonly`,
+        '--env', 'DOCKER_HOST=unix:///engine/engine.sock', '--env', 'DOCKER_CONFIG=/tmp',
+        image, '/docker/docker', 'version', '--format', '{{.Server.APIVersion}}',
+      ];
       const end = await new Promise((resolve) =>
-        execFile(docker, ['version', '--format', '{{.Server.APIVersion}}'], { env, timeout: 30_000 }, (error, _stdout, stderr) =>
+        execFile('docker', args, { timeout: 60_000 }, (error, _stdout, stderr) =>
           resolve(error ? `${error.message} ${String(stderr).trim()}`.trim() : 'exit code 0'),
         ),
       );
+      // A run that ended by the time limit leaves its container; the removal of a removed one fails, which is fine.
+      if (end !== 'exit code 0') docker(['rm', '--force', name]);
       return { version: called, end };
     };
     try {
@@ -147,6 +172,7 @@ async function measureApi(archive) {
       server.close();
     }
   } finally {
+    docker(['image', 'rm', '--force', image]);
     rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -168,7 +194,8 @@ async function main() {
     }
     const api = await measureApi(Buffer.concat(chunks));
     if (api.min !== current.api?.min || api.max !== current.api?.max) {
-      throw new Error(`The Docker CLI ${current.version} speaks the API versions ${api.min} to ${api.max}, and the pin names ${current.api?.min} to ${current.api?.max}.`);
+      const named = current.api === undefined ? 'no API versions' : `${current.api.min} to ${current.api.max}`;
+      throw new Error(`The Docker CLI ${current.version} speaks the API versions ${api.min} to ${api.max}, and the pin names ${named}. The script with --version ${current.version} writes them.`);
     }
     console.log(`The Docker CLI ${current.version} speaks the API versions ${api.min} to ${api.max}, as the pin names them.`);
     return;

@@ -10,8 +10,10 @@
 # it looks for a newer version that download.docker.com has for all platforms
 # of the pin, and computes the size and the SHA-256 of each of its files with
 # scripts/docker-cli-pin.mjs. The script also measures the Docker API versions
-# that the CLI speaks, with its Linux build on this runner: the check fails
-# when they differ from the pin, and a new pin names them. Only this job
+# that the CLI speaks, with its Linux build: the check fails when they differ
+# from the pin, and a new pin names them. Nothing checks a new CLI before its
+# pin, so the script runs it only in a container of the Docker engine of the
+# runner, without network and without the files of the runner. Only this job
 # downloads, and it gets no write scope. When the pin changed, the job "pull
 # request" commits the new pin to the branch docker-cli-<version>, opens a
 # pull request for it, and starts the workflow "CI" on that branch, because a
