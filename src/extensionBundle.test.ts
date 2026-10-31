@@ -37,6 +37,8 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'archive.ts',
     'attachDiagnostics.ts',
     'bootstrapDocker.ts',
+    // The check of the Docker API versions of an engine against the Docker CLI of Devspaces, at the open of a worker.
+    'dockerApiVersion.ts',
     'dockerCli.ts',
     'dockerCliPin.json',
     'dockerDownload.ts',

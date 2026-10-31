@@ -245,8 +245,13 @@ export function dockerEngine(
       if (answer.status !== 200) fail(answer);
     },
     version: async (signal) => {
-      const value = (await list('/version', signal)) as { ApiVersion?: unknown; Version?: unknown };
-      return { apiVersion: typeof value?.ApiVersion === 'string' ? value.ApiVersion : '', version: typeof value?.Version === 'string' ? value.Version : '' };
+      const value = (await list('/version', signal)) as { ApiVersion?: unknown; Version?: unknown; MinAPIVersion?: unknown };
+      const answer: { apiVersion: string; version: string; minApiVersion?: string } = {
+        apiVersion: typeof value?.ApiVersion === 'string' ? value.ApiVersion : '',
+        version: typeof value?.Version === 'string' ? value.Version : '',
+      };
+      if (typeof value?.MinAPIVersion === 'string') answer.minApiVersion = value.MinAPIVersion;
+      return answer;
     },
     // The identity of the probe, checked as the extension checks it (parseEngineIdentity).
     identity: async (signal) => {

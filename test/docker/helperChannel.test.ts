@@ -235,6 +235,9 @@ describe('the helper channel with the real Docker engine', () => {
     // Docker CLI of the runner, and the same identity, compared as values (as the open compares them).
     const probe = parseProbeValue(await timings.measure('probe through the channel', () => channel.operation(OP_PROBE, parseProbeParams({}), { timeoutMs: 30_000 })));
     expect(probe?.serverVersion).toBe(cli.ok(['version', '--format', '{{.Server.Version}}']));
+    // The API versions of the engine, which the open checks against the Docker CLI of Devspaces on a remote engine.
+    expect(probe?.apiVersion).toBe(cli.ok(['version', '--format', '{{.Server.APIVersion}}']));
+    expect(probe?.minApiVersion).toBe(cli.ok(['version', '--format', '{{.Server.MinAPIVersion}}']));
     expect(probe?.engine).toBeDefined();
     expect(probe?.engine).toEqual(engineIdentity(cli.ok([...ENGINE_IDENTITY_ARGS])));
 

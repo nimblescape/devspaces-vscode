@@ -793,8 +793,11 @@ describe('the engine identity at the open', () => {
 // The worker reads its identity over the Engine API, the extension with its Docker CLI; both are compared as values,
 // and the value of the worker is checked as everything that it answers.
 describe('the engine identity as values', () => {
-  /** A channel process that answers hello and a probe whose engine is `engine`; `ended()` after the extension closed it. */
-  function probeProcess(engine: unknown) {
+  /**
+   * A channel process that answers hello and a probe whose engine is `engine` (with the values `extra` in addition);
+   * `ended()` after the extension closed it.
+   */
+  function probeProcess(engine: unknown, extra: Record<string, unknown> = {}) {
     let stdout: ((text: string) => void) | undefined;
     let ended = false;
     const process: StartedProcess = {
@@ -803,7 +806,7 @@ describe('the engine identity as values', () => {
           const message = parseClientMessage(line);
           if (message?.t === 'hello') queueMicrotask(() => stdout?.(encodeMessage({ t: 'hello', protocol: CHANNEL_PROTOCOL_VERSION, node: 'v24', ops: ['probe'] })));
           if (message?.t === 'op' && message.op === 'probe') {
-            queueMicrotask(() => stdout?.(encodeMessage({ t: 'result', id: message.id, ok: true, value: { serverVersion: '27.1.0', detail: 'Docker 27.1.0', engine } })));
+            queueMicrotask(() => stdout?.(encodeMessage({ t: 'result', id: message.id, ok: true, value: { serverVersion: '27.1.0', detail: 'Docker 27.1.0', engine, ...extra } })));
           }
         }
         return true;
@@ -841,6 +844,22 @@ describe('the engine identity as values', () => {
       'The helper channel to build-box was closed: it reaches another Docker engine ("other\\nid" "/var/lib/docker") than the Docker calls without it ("7b1c7a44-2f0e-4d38-9d1d-3a8f7b0e8c11" "/var/lib/docker").',
     );
     expect(worker.ended()).toBe(true);
+  });
+
+  // The Docker CLI of Devspaces runs only in the windows of devspaces on a remote engine: the local Docker keeps the
+  // Docker CLI of this computer, whose API versions the extension does not know.
+  it('checks the API versions of a remote engine only, also when the Docker CLI starts its worker', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const tooOld = { apiVersion: '1.39' };
+    const local = probeProcess(ENGINE_IDENTITY, tooOld);
+    const channel = await openHelperChannel({ ...deps(local.process), dockerCliApi: () => cli }, LOCAL_DOCKER_TARGET);
+    expect(channel.isOpen).toBe(true);
+    channel.close();
+    const remote = probeProcess(ENGINE_IDENTITY, tooOld);
+    await expect(openHelperChannel({ ...deps(remote.process), dockerCliApi: () => cli }, REMOTE)).rejects.toThrow(
+      'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine speaks the Docker API up to version 1.39',
+    );
+    expect(remote.ended()).toBe(true);
   });
 
   it('refuses a worker whose engine is no identity: an invalid answer, never compared', async () => {

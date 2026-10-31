@@ -22,4 +22,15 @@ describe('sameEngine and parseProbeValue', () => {
       expect(parseProbeValue({ serverVersion, detail: 'd', engine: { id: 'id', rootDir: '/r' } }), JSON.stringify(serverVersion)).toBeUndefined();
     }
   });
+
+  // The API versions go into the check of the Docker CLI of Devspaces and into its message: only the form `1.40`.
+  it('parseProbeValue takes API versions of the form 1.40 only', () => {
+    const value = { serverVersion: '29.1.0', apiVersion: '1.52', minApiVersion: '1.44', detail: 'd' };
+    expect(parseProbeValue(value)).toEqual(value);
+    expect(parseProbeValue({ serverVersion: '29.1.0', detail: 'd' })).toStrictEqual({ serverVersion: '29.1.0', detail: 'd' });
+    for (const odd of [1.52, null, '', '1', 'v1.52', '1.52.0', '1.52\n', '12345.1', ['1.52']]) {
+      expect(parseProbeValue({ ...value, apiVersion: odd }), JSON.stringify(odd)).toBeUndefined();
+      expect(parseProbeValue({ ...value, minApiVersion: odd }), JSON.stringify(odd)).toBeUndefined();
+    }
+  });
 });

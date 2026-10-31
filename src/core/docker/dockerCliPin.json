@@ -1,5 +1,9 @@
 {
   "version": "29.9.2",
+  "api": {
+    "min": "1.40",
+    "max": "1.56"
+  },
   "files": {
     "windows-x86_64": {
       "url": "https://download.docker.com/win/static/stable/x86_64/docker-29.9.2.zip",

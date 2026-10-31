@@ -12,7 +12,7 @@ import * as vscode from 'vscode';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
 import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
-import { ownDockerCliDownload, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
+import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
 import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslKeeper } from '../core/docker/wslKeeper';
 import { WslLifetime } from '../core/docker/wslLifetime';
@@ -612,6 +612,8 @@ async function activateExtension(
             );
           },
           runDirect: (args, options, withoutPipe) => (withoutPipe === true ? docker.runWithoutPipe(args, options) : docker.run(args, options)),
+          // The windows of devspaces on a remote engine run the Docker CLI of Devspaces (or download it first).
+          dockerCliApi: () => (ownCliBuild ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined),
           logger,
           script: workerScript,
           helperTag: async () => helperImageTag(await fs.promises.readFile(helperDockerfile, 'utf8')),

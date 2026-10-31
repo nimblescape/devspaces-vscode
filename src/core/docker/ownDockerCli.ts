@@ -17,6 +17,7 @@ import * as path from 'path';
 import type { Logger } from '../ports';
 import { compareVersions } from '../vscodeExtensions';
 import { extractTarGzEntry, extractZipEntry } from './archive';
+import type { DockerApiRange } from './dockerApiVersion';
 import pin from './dockerCliPin.json';
 import { downloadFile, type HttpGet } from './dockerDownload';
 
@@ -24,6 +25,8 @@ import { downloadFile, type HttpGet } from './dockerDownload';
 export const DOCKER_CLI_DOWNLOAD_HOST = 'download.docker.com';
 /** The pinned version of the Docker CLI of Devspaces. */
 export const OWN_DOCKER_CLI_VERSION: string = pin.version;
+/** The Docker API versions that the pinned version speaks (measured by scripts/docker-cli-pin.mjs). */
+export const OWN_DOCKER_CLI_API: DockerApiRange = pin.api;
 /** The largest program that is taken out of an archive (the CLI 29.9.2 has 42 to 45 MB). */
 const MAX_CLI_SIZE = 200 * 1024 * 1024;
 /** A part of an earlier download (a window that was closed during it) that is older than this is removed. */

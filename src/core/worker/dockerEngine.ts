@@ -220,9 +220,10 @@ export interface DockerEngine {
   updateRestartPolicy(container: string, policy: 'no' | 'on-failure' | 'unless-stopped', signal?: AbortSignal): Promise<void>;
   /**
    * The API version (`GET /version`, for example `1.48`) and the version of the engine (empty when the engine names
-   * none). The version is also the answer of the worker's probe (ProbeValue).
+   * none), and the oldest API version that the engine accepts (`MinAPIVersion`; undefined when it names none). They are
+   * also the answer of the worker's probe (ProbeValue).
    */
-  version(signal?: AbortSignal): Promise<{ apiVersion: string; version: string }>;
+  version(signal?: AbortSignal): Promise<{ apiVersion: string; version: string; minApiVersion?: string }>;
   /**
    * The identity of the engine (`GET /info`: its `ID` and `DockerRootDir`), which the probe of the worker answers so
    * that the extension can check that the worker reaches the engine of the target. Rejects with an EngineError when the

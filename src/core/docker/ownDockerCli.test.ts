@@ -9,7 +9,9 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import * as zlib from 'zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { API_VERSION_PATTERN } from '../helperChannel/protocol';
 import { silentLogger, type Logger } from '../ports';
+import { compareVersions } from '../vscodeExtensions';
 import pin from './dockerCliPin.json';
 import type { HttpGet } from './dockerDownload';
 import {
@@ -18,6 +20,7 @@ import {
   installOwnDockerCli,
   ownDockerCliDownload,
   ownDockerCliPath,
+  OWN_DOCKER_CLI_API,
   OWN_DOCKER_CLI_VERSION,
   presentOwnDockerCli,
   type DockerCliPin,
@@ -97,6 +100,12 @@ describe('the pin of the Docker CLI', () => {
   it('names one version and, for each platform, a file of that version on download.docker.com with its size and SHA-256', () => {
     expect(pin.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(OWN_DOCKER_CLI_VERSION).toBe(pin.version);
+    // The Docker API versions that it speaks (scripts/docker-cli-pin.mjs measures them), the oldest first.
+    expect(Object.keys(pin.api).sort()).toEqual(['max', 'min']);
+    expect(pin.api.min).toMatch(API_VERSION_PATTERN);
+    expect(pin.api.max).toMatch(API_VERSION_PATTERN);
+    expect(compareVersions(pin.api.min, pin.api.max)).toBeLessThanOrEqual(0);
+    expect(OWN_DOCKER_CLI_API).toEqual(pin.api);
     const folders: Record<string, string> = {
       'windows-x86_64': 'win/static/stable/x86_64',
       'mac-x86_64': 'mac/static/stable/x86_64',
