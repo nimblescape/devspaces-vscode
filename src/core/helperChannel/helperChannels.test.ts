@@ -887,6 +887,27 @@ describe('the engine identity as values', () => {
     expect(remote.ended()).toBe(true);
   });
 
+  // The call of the identity runs with the Docker CLI of Devspaces where it is the CLI of the operation: when it fails
+  // with the error of the engine for that CLI, the API versions say why; any other failure is the one of the identity.
+  it('takes a failed call of the identity as the API versions only with the error of the engine for that CLI', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const failing = (stderr: string) => async () => ({ exitCode: 1, stdout: '', stderr: `${stderr}\n`, timedOut: false });
+    const apiError = probeProcess(ENGINE_IDENTITY, { apiVersion: '1.39' });
+    await expect(
+      openHelperChannel(
+        { ...deps(apiError.process), runDirect: failing('Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39'), dockerCliApi: () => cli },
+        REMOTE,
+      ),
+    ).rejects.toThrow('The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine speaks the Docker API up to version 1.39');
+    const otherError = probeProcess(ENGINE_IDENTITY, { apiVersion: '1.39' });
+    await expect(
+      openHelperChannel({ ...deps(otherError.process), runDirect: failing('ssh: connect to host build-box port 22: Connection timed out'), dockerCliApi: () => cli }, REMOTE),
+    ).rejects.toThrow(
+      'The helper channel to build-box was closed: the Docker engine could not be identified without it (ssh: connect to host build-box port 22: Connection timed out).',
+    );
+    expect(otherError.ended()).toBe(true);
+  });
+
   // A worker on another engine than the calls without it: the identity check names both engines, whatever the API
   // versions of the engine of the worker.
   it('names the other engine before the API versions of the engine of the worker', async () => {

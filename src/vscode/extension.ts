@@ -12,6 +12,7 @@ import * as vscode from 'vscode';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
 import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
+import type { DockerCliApi } from '../core/docker/dockerApiVersion';
 import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
 import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslKeeper } from '../core/docker/wslKeeper';
@@ -573,7 +574,7 @@ async function activateExtension(
   // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs; in another window
   // when it is installed, as its Docker calls on a remote engine and the windows of devspaces then run it. Without it,
   // the Docker CLI of this computer runs them, whose API versions are not known: no check.
-  const dockerCliApi = (): { name: string; range: typeof OWN_DOCKER_CLI_API } | undefined =>
+  const dockerCliApi = (): DockerCliApi | undefined =>
     (pipeWindow ? ownCliInPath : presentOwnCli() !== undefined) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
   const channels = new HelperChannels({
     logger,

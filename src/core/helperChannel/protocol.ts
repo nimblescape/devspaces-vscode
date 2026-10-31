@@ -34,6 +34,7 @@ import type { ContainerState, DevspaceSource, GitSummary } from '../types';
 import { isGitSummary } from '../git/gitSummary';
 import { isUserErrorCode, type UserErrorCode } from '../errors';
 import { parseExtensionList } from '../vscodeExtensions';
+import { API_VERSION_SOURCE } from '../docker/dockerApiVersion';
 import { hasOnlyKeys, isRecord } from '../valueChecks';
 
 /**
@@ -712,7 +713,7 @@ export function sameEngine(a: EngineIdentity, b: EngineIdentity): boolean {
 export const MAX_PROBE_DETAIL_LENGTH = 2_000;
 
 /** An API version of Docker, as ProbeValue names it: `1.40`. */
-export const API_VERSION_PATTERN = /^\d{1,4}\.\d{1,4}$/;
+export const API_VERSION_PATTERN = new RegExp(`^${API_VERSION_SOURCE}$`);
 
 /** The check of ProbeValue (the extension). */
 export function parseProbeValue(value: unknown): ProbeValue | undefined {

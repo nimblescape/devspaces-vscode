@@ -125,7 +125,14 @@ async function measureApi(archive) {
       const [major, newestMinor] = newest.version.split('.').map(Number);
       // The search covers 1.<n>; a CLI of another major version needs a look at this script first.
       if (major !== 1) throw new Error(`The Docker CLI speaks the API version ${newest.version}: this script measures only the versions 1.<n>.`);
-      const speaks = async (minor) => (await calledOn(`${major}.${minor}`)).version === `${major}.${minor}`;
+      // On an engine of a version that it speaks, the CLI calls with that version, else with its newest one; a run that
+      // calls nothing (a time limit, a failure) stops the measure instead of moving its result.
+      const speaks = async (minor) => {
+        const call = await calledOn(`${major}.${minor}`);
+        if (call.version === `${major}.${minor}`) return true;
+        if (call.version === newest.version) return false;
+        throw new Error(`The Docker CLI called ${call.version === undefined ? 'no /version' : `/v${call.version}/version`} on an engine of the API version ${major}.${minor}: ${call.end}`);
+      };
       // The lowest minor version in [low, high] that the CLI speaks; it speaks `high`.
       let low = 0;
       let high = newestMinor;

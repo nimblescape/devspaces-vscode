@@ -12,10 +12,19 @@
 // error of the engine for a call of the CLI before the worker (dockerApiErrorMismatch). No `vscode`.
 import { compareVersions } from '../vscodeExtensions';
 
+/** An API version of Docker, `1.40`, as the source of a regular expression. */
+export const API_VERSION_SOURCE = String.raw`\d{1,4}\.\d{1,4}`;
+
 /** The API versions that a Docker CLI speaks: from its oldest one to its newest one. */
 export interface DockerApiRange {
   min: string;
   max: string;
+}
+
+/** A Docker CLI whose API versions are checked: its name in a message (`the Docker CLI 29.9.2 of Devspaces`), its versions. */
+export interface DockerCliApi {
+  name: string;
+  range: DockerApiRange;
 }
 
 /** The API versions of an engine (`GET /version`): its newest one and its minimum; undefined when it named none. */
@@ -46,9 +55,9 @@ export function dockerApiMismatch(engine: EngineApiVersions, cli: DockerApiRange
 }
 
 /** The error of the engine for a call with a newer API version than it speaks: the version of the call, its newest. */
-const TOO_NEW = /client version (\d{1,4}\.\d{1,4}) is too new\. Maximum supported API version is (\d{1,4}\.\d{1,4})/;
+const TOO_NEW = new RegExp(String.raw`client version (${API_VERSION_SOURCE}) is too new\. Maximum supported API version is (${API_VERSION_SOURCE})`);
 /** The error of the engine for a call with an older API version than its minimum: the version of the call, the minimum. */
-const TOO_OLD = /client version (\d{1,4}\.\d{1,4}) is too old\. Minimum supported API version is (\d{1,4}\.\d{1,4})/;
+const TOO_OLD = new RegExp(String.raw`client version (${API_VERSION_SOURCE}) is too old\. Minimum supported API version is (${API_VERSION_SOURCE})`);
 
 /**
  * The mismatch that the error output `text` of a Docker call names, when the call came from the CLI with the API
@@ -61,6 +70,12 @@ export function dockerApiErrorMismatch(text: string, cli: DockerApiRange): Docke
   const tooOld = TOO_OLD.exec(text);
   if (tooOld !== null && tooOld[1] === cli.max) return { kind: 'cliTooOld', client: cli.max, minimum: tooOld[2] };
   return undefined;
+}
+
+/** The message when the error output `text` of a Docker call of `cli` on the engine on `host` is a mismatch, or undefined. */
+export function dockerApiErrorText(text: string, host: string, cli: DockerCliApi): string | undefined {
+  const mismatch = dockerApiErrorMismatch(text, cli.range);
+  return mismatch === undefined ? undefined : dockerApiMismatchText(mismatch, host, cli.name);
 }
 
 /**
