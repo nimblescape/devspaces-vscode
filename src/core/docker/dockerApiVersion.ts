@@ -56,6 +56,8 @@ export function dockerApiMismatch(engine: EngineApiVersions, cli: DockerApiRange
 
 /** The error of the engine for a call with a newer API version than it speaks: the version of the call, its newest. */
 const TOO_NEW = new RegExp(String.raw`client version (${API_VERSION_SOURCE}) is too new\. Maximum supported API version is (${API_VERSION_SOURCE})`);
+/** The same error of an engine before Docker 17.04 (API 1.27): the version of the call, the newest one of the engine. */
+const NEWER_THAN_SERVER = new RegExp(String.raw`client is newer than server \(client API version: (${API_VERSION_SOURCE}), server API version: (${API_VERSION_SOURCE})\)`);
 /** The error of the engine for a call with an older API version than its minimum: the version of the call, the minimum. */
 const TOO_OLD = new RegExp(String.raw`client version (${API_VERSION_SOURCE}) is too old\. Minimum supported API version is (${API_VERSION_SOURCE})`);
 
@@ -66,7 +68,7 @@ const TOO_OLD = new RegExp(String.raw`client version (${API_VERSION_SOURCE}) is 
  * (a call with the newest version after a failed negotiation, for example). Undefined for any other text.
  */
 export function dockerApiErrorMismatch(text: string, cli: DockerApiRange): DockerApiMismatch | undefined {
-  const tooNew = TOO_NEW.exec(text);
+  const tooNew = TOO_NEW.exec(text) ?? NEWER_THAN_SERVER.exec(text);
   if (tooNew !== null && tooNew[1] === cli.max) return dockerApiMismatch({ apiVersion: tooNew[2] }, cli);
   const tooOld = TOO_OLD.exec(text);
   if (tooOld !== null && tooOld[1] === cli.max) return dockerApiMismatch({ minApiVersion: tooOld[2] }, cli);

@@ -231,6 +231,12 @@ async function activateExtension(
   };
   const ownCli = pipeWindow ? presentOwnCli() : undefined;
   if (ownCli !== undefined) useOwnDockerCli(ownCli);
+  // The Docker CLI of Devspaces, for the check of the API versions of a remote engine (dockerApiVersion.ts): in the
+  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs (after a failed
+  // download it runs the Docker CLI of this computer, whose API versions are not known: no check); in another window
+  // where Docker publishes it for this computer, as the windows of devspaces download and run it, also the first one.
+  const dockerCliApi = (): DockerCliApi | undefined =>
+    (pipeWindow ? ownCliInPath : ownCliBuild) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
   const dockerPath = installedCli ?? ownCli;
   // Windows: the Dev Containers extension, which connects the windows to the containers, runs in this extension host and
   // looks up `docker` in its PATH and in C:\Program Files\Docker\Docker\resources\bin only. A CLI that Devspaces found
@@ -434,6 +440,7 @@ async function activateExtension(
     viaDockerPipe: (host) => hostPipes?.dockerHost(host) !== undefined,
     shells,
     identityFor: (host) => sshKeys.identityFor(host),
+    dockerCliApi,
   });
   // What the checks whether an engine answers need (dockerEngineAnswers): Docker is never started (a WSL distribution
   // only while its Monitor runs permanently or in a flow of the user, because `wsl.exe` starts it), and a remote host
@@ -570,12 +577,6 @@ async function activateExtension(
   // Cancelled when the window closes, after the release of deactivate() (which may join its build), as the preparations
   // of the heartbeats.
   context.subscriptions.push(closingWork.deferred({ dispose: () => helperBuilds.dispose() }));
-  // The Docker CLI of Devspaces, for the check of the API versions of a remote engine (dockerApiVersion.ts): in the
-  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs (after a failed
-  // download it runs the Docker CLI of this computer, whose API versions are not known: no check); in another window
-  // where Docker publishes it for this computer, as the windows of devspaces download and run it, also the first one.
-  const dockerCliApi = (): DockerCliApi | undefined =>
-    (pipeWindow ? ownCliInPath : ownCliBuild) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
   const channels = new HelperChannels({
     logger,
     dockerCliApi,

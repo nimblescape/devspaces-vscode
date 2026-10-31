@@ -9,7 +9,7 @@
 // the open in full, also within that wait); when it cannot, the call is refused, never taken a way without it. The
 // worker runs the whole pipeline itself; the extension relays no Docker calls, pulls, starts or locks through it. No
 // `vscode`.
-import { dockerApiErrorMismatch, dockerApiErrorText, dockerApiMismatch, dockerApiMismatchText, type DockerCliApi, type EngineApiVersions } from '../docker/dockerApiVersion';
+import { dockerApiErrorText, dockerApiMismatch, dockerApiMismatchText, type DockerCliApi, type EngineApiVersions } from '../docker/dockerApiVersion';
 import { runWithDockerTarget } from '../docker/dockerTargets';
 import { isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import type { HelperMaintenance } from '../helper/helperImages';
@@ -221,10 +221,16 @@ function engineName(target: DockerTarget): string {
  * `target`: from the API versions `api` of the probe of its worker, or from the error output `detail` of a call of
  * that CLI there (dockerApiErrorMismatch). Undefined when it can, or when the windows there run no such CLI.
  */
-function apiMismatchText(deps: ChannelOpenDeps, target: DockerTarget, name: string, from: { api?: EngineApiVersions; detail?: string }): string | undefined {
+function apiMismatchText(
+  deps: Pick<ChannelOpenDeps, 'dockerCliApi'>,
+  target: DockerTarget,
+  name: string,
+  from: { api?: EngineApiVersions; detail?: string },
+): string | undefined {
   const cli = target.kind === 'remote' ? deps.dockerCliApi?.(target) : undefined;
   if (cli === undefined) return undefined;
-  const mismatch = from.api !== undefined ? dockerApiMismatch(from.api, cli.range) : dockerApiErrorMismatch(from.detail ?? '', cli.range);
+  if (from.api === undefined) return dockerApiErrorText(from.detail ?? '', name, cli);
+  const mismatch = dockerApiMismatch(from.api, cli.range);
   return mismatch === undefined ? undefined : dockerApiMismatchText(mismatch, name, cli.name);
 }
 
@@ -684,8 +690,7 @@ export class HelperChannels {
         const cause = isUserFacingError(error) && error.detail ? `${error.message} ${error.detail}` : errorMessage(error);
         this.options.logger.warn(`The helper image for the worker on ${engineName(target)} could not be prepared: ${cause}`);
         // A CLI that does not speak the API versions of the engine: the message of the open of a worker, as no build helps.
-        const cli = target.kind === 'remote' ? this.options.dockerCliApi?.(target) : undefined;
-        const mismatch = cli === undefined ? undefined : dockerApiErrorText(cause, engineName(target), cli);
+        const mismatch = apiMismatchText(this.options, target, engineName(target), { detail: cause });
         if (mismatch !== undefined) throw new HelperChannelError('unavailable', mismatch);
         // The refresh found no helper image; the window builds it in the background (never this refresh).
         if (passive && refresh) this.reportRefreshWithoutHelper(target);
