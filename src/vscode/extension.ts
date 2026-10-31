@@ -221,7 +221,10 @@ async function activateExtension(
     logger.info(`Docker publishes no Docker CLI for ${platform} on ${process.arch} that runs here, so this window uses the Docker CLI of this computer.`);
   }
   const presentOwnCli = (): string | undefined => (ownCliBuild ? presentOwnDockerCli(paths.dockerCliDir, platform, process.arch) : undefined);
+  // Whether this window put the Docker CLI of Devspaces first in PATH (useOwnDockerCli).
+  let ownCliInPath = false;
   const useOwnDockerCli = (cli: string): void => {
+    ownCliInPath = true;
     putFolderFirstInPath(process.env, platform, path.dirname(cli));
     logger.info(`The Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces is first in PATH of this window: ${cli}`);
   };
@@ -566,8 +569,15 @@ async function activateExtension(
   // Cancelled when the window closes, after the release of deactivate() (which may join its build), as the preparations
   // of the heartbeats.
   context.subscriptions.push(closingWork.deferred({ dispose: () => helperBuilds.dispose() }));
+  // The Docker CLI of Devspaces, for the check of the API versions of a remote engine (dockerApiVersion.ts): in the
+  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs; in another window
+  // when it is installed, as its Docker calls on a remote engine and the windows of devspaces then run it. Without it,
+  // the Docker CLI of this computer runs them, whose API versions are not known: no check.
+  const dockerCliApi = (): { name: string; range: typeof OWN_DOCKER_CLI_API } | undefined =>
+    (pipeWindow ? ownCliInPath : presentOwnCli() !== undefined) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
   const channels = new HelperChannels({
     logger,
+    dockerCliApi,
     // The refresh found no helper image (see helperBuilds above); never on an engine that Devspaces was removed from.
     onRefreshWithoutHelper: (target) => {
       void engineRemoved(target).then((removed) => (removed ? undefined : helperBuilds.request(target)));
@@ -612,11 +622,7 @@ async function activateExtension(
             );
           },
           runDirect: (args, options, withoutPipe) => (withoutPipe === true ? docker.runWithoutPipe(args, options) : docker.run(args, options)),
-          // The windows of devspaces on a remote engine run the Docker CLI of Devspaces, which they download first;
-          // the window of a devspace whose download failed runs the Docker CLI of this computer, whose versions are
-          // not known.
-          dockerCliApi: () =>
-            ownCliBuild && (!pipeWindow || presentOwnCli() !== undefined) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined,
+          dockerCliApi,
           logger,
           script: workerScript,
           helperTag: async () => helperImageTag(await fs.promises.readFile(helperDockerfile, 'utf8')),

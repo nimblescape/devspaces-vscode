@@ -9,7 +9,7 @@
 // the open in full, also within that wait); when it cannot, the call is refused, never taken a way without it. The
 // worker runs the whole pipeline itself; the extension relays no Docker calls, pulls, starts or locks through it. No
 // `vscode`.
-import { dockerApiMismatch, dockerApiMismatchText, type DockerApiRange, type EngineApiVersions } from '../docker/dockerApiVersion';
+import { dockerApiErrorMismatch, dockerApiMismatch, dockerApiMismatchText, type DockerApiRange, type EngineApiVersions } from '../docker/dockerApiVersion';
 import { runWithDockerTarget } from '../docker/dockerTargets';
 import { isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import type { HelperMaintenance } from '../helper/helperImages';
@@ -442,10 +442,11 @@ async function checkChannelEngine(deps: ChannelOpenDeps, target: DockerTarget, n
   // why before a window of a devspace there opens and fails in its attach. Checked before the identity: the call of the
   // identity runs with that CLI too where it is the one of the operation (the WSL distribution, the open connection of
   // the relay, an SSH host without the shell before the relay), and fails then with an error of the Docker API only.
-  // Not for a worker that reaches another engine than that call: the identity check names both.
+  // Only for a worker that named its engine, and not for one that reaches another engine than that call: the identity
+  // check says why then.
   const cli = target.kind === 'remote' ? deps.dockerCliApi?.(target) : undefined;
-  const otherEngine = engine !== undefined && identity !== undefined && !sameEngine(engine, identity);
-  if (cli !== undefined && !otherEngine) {
+  const checked = engine !== undefined && (identity === undefined || sameEngine(engine, identity));
+  if (cli !== undefined && checked) {
     const mismatch = dockerApiMismatch(api, cli.range);
     if (mismatch !== undefined) {
       channel.close();
@@ -513,6 +514,11 @@ export interface HelperChannelsOptions {
    * refresh itself still never builds and never waits for a build.
    */
   onRefreshWithoutHelper?(target: DockerTarget): void;
+  /**
+   * ChannelOpenDeps.dockerCliApi: for the failure of `prepare` or `checkPresent` with the error of the engine for the
+   * API version of that CLI (dockerApiErrorMismatch), which runs their calls where it is the CLI of the operation.
+   */
+  dockerCliApi?(target: DockerTarget): { name: string; range: DockerApiRange } | undefined;
   logger: Logger;
   idleCloseMs?: number;
   retryAfterFailureMs?: number;
@@ -665,6 +671,10 @@ export class HelperChannels {
         if (isAbortError(error) || signal?.aborted) throw isAbortError(error) ? error : abortError();
         const cause = isUserFacingError(error) && error.detail ? `${error.message} ${error.detail}` : errorMessage(error);
         this.options.logger.warn(`The helper image for the worker on ${engineName(target)} could not be prepared: ${cause}`);
+        // A CLI that does not speak the API versions of the engine: the message of the open of a worker, as no build helps.
+        const cli = target.kind === 'remote' ? this.options.dockerCliApi?.(target) : undefined;
+        const mismatch = cli === undefined ? undefined : dockerApiErrorMismatch(cause, cli.range);
+        if (cli !== undefined && mismatch !== undefined) throw new HelperChannelError('unavailable', dockerApiMismatchText(mismatch, engineName(target), cli.name));
         // The refresh found no helper image; the window builds it in the background (never this refresh).
         if (passive && refresh) this.reportRefreshWithoutHelper(target);
         throw new HelperChannelError('unavailable', `the helper image could not be prepared: ${cause}`);

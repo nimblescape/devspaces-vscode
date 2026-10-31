@@ -349,6 +349,31 @@ describe('HelperChannels', () => {
     channels.dispose();
   });
 
+  // The calls of the helper image run with the Docker CLI of Devspaces where it is the CLI of the operation (the WSL
+  // distribution, an open connection of the relay), so they fail first on an engine whose API versions it does not
+  // speak: the message of the open of a worker, with the way out, and no build in the background.
+  it('flow: a helper image step refused for the API version of the Docker CLI of Devspaces says why, only on a remote engine', async () => {
+    const open = vi.fn(async () => fakeChannel() as unknown as HelperChannel);
+    const tooOld = 'Error response from daemon: client version 1.56 is too old. Minimum supported API version is 1.60, please upgrade your client to a newer version';
+    const prepare = vi.fn(async () => {
+      throw new UserFacingError('helperFailed', 'The workspace helper could not be prepared.', tooOld);
+    });
+    const onRefreshWithoutHelper = vi.fn();
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const channels = new HelperChannels({ open, prepare, checkPresent: prepare, onRefreshWithoutHelper, dockerCliApi: () => cli, logger: silentLogger });
+    const message =
+      'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine needs the Docker API version 1.60 or later, and the ' +
+      'CLI speaks only up to version 1.56. A newer version of Devspaces brings a newer Docker CLI. Until then, that engine accepts the CLI when the ' +
+      'environment variable DOCKER_MIN_API_VERSION of dockerd is 1.56 or lower.';
+    await expect(channels.flow(REMOTE, 'stop', {})).rejects.toMatchObject({ name: 'HelperChannelError', code: 'unavailable', message });
+    await expect(channels.refresh(REMOTE, [])).rejects.toMatchObject({ code: 'unavailable', message });
+    expect(onRefreshWithoutHelper).not.toHaveBeenCalled();
+    // The local Docker keeps the Docker CLI of this computer.
+    await expect(channels.flow(LOCAL_DOCKER_TARGET, 'stop', {})).rejects.toMatchObject({ message: expect.stringContaining('the helper image could not be prepared:') });
+    expect(open).not.toHaveBeenCalled();
+    channels.dispose();
+  });
+
   it('flow: a helper image that cannot be prepared refuses the call with the cause, and opens nothing', async () => {
     const open = vi.fn(async () => fakeChannel() as unknown as HelperChannel);
     const prepare = vi.fn(async () => {

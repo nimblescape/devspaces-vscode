@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 import { describe, expect, it } from 'vitest';
-import { dockerApiMismatch, dockerApiMismatchText } from './dockerApiVersion';
+import { dockerApiErrorMismatch, dockerApiMismatch, dockerApiMismatchText } from './dockerApiVersion';
 
 /** The API versions of the Docker CLI 29.9.2. */
 const CLI = { min: '1.40', max: '1.56' };
@@ -38,6 +38,28 @@ describe('dockerApiMismatch', () => {
     expect(dockerApiMismatch({}, CLI)).toBeUndefined();
     expect(dockerApiMismatch({ apiVersion: '1.52' }, CLI)).toBeUndefined();
     expect(dockerApiMismatch({ minApiVersion: '1.40' }, CLI)).toBeUndefined();
+  });
+});
+
+describe('dockerApiErrorMismatch', () => {
+  it('reads the two errors of the engine for the API version of the CLI', () => {
+    expect(dockerApiErrorMismatch('Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', CLI)).toEqual({
+      kind: 'engineTooOld',
+      engine: '1.39',
+      minimum: '1.40',
+    });
+    expect(
+      dockerApiErrorMismatch('Error response from daemon: client version 1.56 is too old. Minimum supported API version is 1.60, please upgrade your client to a newer version', CLI),
+    ).toEqual({ kind: 'cliTooOld', client: '1.56', minimum: '1.60' });
+  });
+
+  // Another CLI (the one of the shell before the relay, or of this computer) calls with another version: its error is
+  // not one of the Docker CLI of Devspaces.
+  it('reads no error of a call with another API version, and no other error', () => {
+    expect(dockerApiErrorMismatch('Error response from daemon: client version 1.41 is too new. Maximum supported API version is 1.39', CLI)).toBeUndefined();
+    expect(dockerApiErrorMismatch('Error response from daemon: client version 1.43 is too old. Minimum supported API version is 1.44', CLI)).toBeUndefined();
+    expect(dockerApiErrorMismatch('', CLI)).toBeUndefined();
+    expect(dockerApiErrorMismatch('Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?', CLI)).toBeUndefined();
   });
 });
 

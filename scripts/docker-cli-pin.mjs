@@ -123,6 +123,8 @@ async function measureApi(archive) {
       const newest = await calledOn('1.999');
       if (newest.version === undefined) throw new Error(`The Docker CLI called no /version on an engine of the API version 1.999: ${newest.end}`);
       const [major, newestMinor] = newest.version.split('.').map(Number);
+      // The search covers 1.<n>; a CLI of another major version needs a look at this script first.
+      if (major !== 1) throw new Error(`The Docker CLI speaks the API version ${newest.version}: this script measures only the versions 1.<n>.`);
       const speaks = async (minor) => (await calledOn(`${major}.${minor}`)).version === `${major}.${minor}`;
       // The lowest minor version in [low, high] that the CLI speaks; it speaks `high`.
       let low = 0;
@@ -152,8 +154,8 @@ async function main() {
       if (now.size !== file.size || now.sha256 !== file.sha256) throw new Error(`${file.url} changed: ${now.size} bytes, SHA-256 ${now.sha256}`);
       console.log(`${file.url}: unchanged`);
     }
-    if (runnable === undefined) {
-      console.log(`The API versions of the pin were not measured: that needs Linux on x86_64 or aarch64, not ${process.platform} on ${process.arch}.`);
+    if (runnable === undefined || current.files[runnable] === undefined) {
+      console.log(`The API versions of the pin were not measured: that needs Linux on x86_64 or aarch64 with its file in the pin, not ${process.platform} on ${process.arch}.`);
       return;
     }
     const api = await measureApi(Buffer.concat(chunks));

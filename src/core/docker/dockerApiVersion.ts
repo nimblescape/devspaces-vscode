@@ -8,7 +8,8 @@
 // The engine refuses an API version below its minimum (DOCKER_MIN_API_VERSION of dockerd). So both work together when
 // the newest API version of the engine is at least the oldest one of the CLI, and the minimum of the engine is at most
 // the newest one of the CLI. The range of the CLI comes from its pin (dockerCliPin.json, measured by
-// scripts/docker-cli-pin.mjs), the versions of the engine from the probe of the worker (`GET /version`). No `vscode`.
+// scripts/docker-cli-pin.mjs), the versions of the engine from the probe of the worker (`GET /version`), or from the
+// error of the engine for a call of the CLI before the worker (dockerApiErrorMismatch). No `vscode`.
 import { compareVersions } from '../vscodeExtensions';
 
 /** The API versions that a Docker CLI speaks: from its oldest one to its newest one. */
@@ -41,6 +42,24 @@ export function dockerApiMismatch(engine: EngineApiVersions, cli: DockerApiRange
   if (engine.minApiVersion !== undefined && compareVersions(engine.minApiVersion, cli.max) > 0) {
     return { kind: 'cliTooOld', client: cli.max, minimum: engine.minApiVersion };
   }
+  return undefined;
+}
+
+/** The error of the engine for a call with a newer API version than it speaks: the version of the call, its newest. */
+const TOO_NEW = /client version (\d{1,4}\.\d{1,4}) is too new\. Maximum supported API version is (\d{1,4}\.\d{1,4})/;
+/** The error of the engine for a call with an older API version than its minimum: the version of the call, the minimum. */
+const TOO_OLD = /client version (\d{1,4}\.\d{1,4}) is too old\. Minimum supported API version is (\d{1,4}\.\d{1,4})/;
+
+/**
+ * The mismatch that the error output `text` of a Docker call names, when the call came from the CLI with the API
+ * versions `cli`: in both cases that CLI calls with its newest API version (see above), so an error of another CLI
+ * (for example the one of the shell before the relay) is not taken. Undefined for any other text.
+ */
+export function dockerApiErrorMismatch(text: string, cli: DockerApiRange): DockerApiMismatch | undefined {
+  const tooNew = TOO_NEW.exec(text);
+  if (tooNew !== null && tooNew[1] === cli.max) return { kind: 'engineTooOld', engine: tooNew[2], minimum: cli.min };
+  const tooOld = TOO_OLD.exec(text);
+  if (tooOld !== null && tooOld[1] === cli.max) return { kind: 'cliTooOld', client: cli.max, minimum: tooOld[2] };
   return undefined;
 }
 
