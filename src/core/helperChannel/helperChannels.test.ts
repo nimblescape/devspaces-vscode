@@ -899,6 +899,18 @@ describe('the engine identity as values', () => {
         REMOTE,
       ),
     ).rejects.toThrow('The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine speaks the Docker API up to version 1.39');
+    // The error names the mismatch itself, also when the worker named no API versions of its engine.
+    const withoutVersions = probeProcess(ENGINE_IDENTITY);
+    await expect(
+      openHelperChannel(
+        {
+          ...deps(withoutVersions.process),
+          runDirect: failing('Error response from daemon: client version 1.56 is too old. Minimum supported API version is 1.60, please upgrade your client to a newer version'),
+          dockerCliApi: () => cli,
+        },
+        REMOTE,
+      ),
+    ).rejects.toThrow('the engine needs the Docker API version 1.60 or later, and the CLI speaks only up to version 1.56.');
     const otherError = probeProcess(ENGINE_IDENTITY, { apiVersion: '1.39' });
     await expect(
       openHelperChannel({ ...deps(otherError.process), runDirect: failing('ssh: connect to host build-box port 22: Connection timed out'), dockerCliApi: () => cli }, REMOTE),

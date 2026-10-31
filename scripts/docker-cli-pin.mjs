@@ -85,9 +85,10 @@ function runnablePlatform() {
  * The Docker API versions that the `docker` program of `archive` (a .tgz of download.docker.com) speaks, measured with a
  * fake engine on a Unix socket. The CLI asks the engine for its newest API version (`/_ping`, header `Api-Version`) and
  * then calls `GET /v<version>/version` with the lower of that and its own newest one, or with its own newest one when the
- * engine is older than its oldest one (or it calls nothing then). So its newest one is the one that it calls on an
- * engine of 1.999, and its oldest one is the lowest 1.<n> that it calls on an engine of that version (a search by
- * halves: the CLI speaks every version between its oldest and its newest one).
+ * engine is older than its oldest one (the CLI 29.9.2 does so; a CLI that calls nothing then stops the measure, so the
+ * script needs a look). So its newest one is the one that it calls on an engine of 1.999, and its oldest one is the
+ * lowest 1.<n> that it calls on an engine of that version (a search by halves: the CLI speaks every version between its
+ * oldest and its newest one).
  */
 async function measureApi(archive) {
   const dir = mkdtempSync(join(tmpdir(), 'docker-cli-api-'));
