@@ -75,12 +75,13 @@ describe('DockerRequestParser', () => {
     expect(seen).toEqual(['POST /containers/abc/exec', 'GET /forbidden/too']);
   });
 
-  it('passes a chunked body with extensions and trailers, and checks the request after it', () => {
+  it('passes a chunked body with an extension, and checks the request after it', () => {
     const { seen, rule } = recordingRule();
     const parser = new DockerRequestParser(rule);
-    const request = 'PUT /containers/abc/archive HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5;name=x\r\nhello\r\n0\r\nX-Trailer: 1\r\n\r\n';
+    const request = 'PUT /containers/abc/archive HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5;name=x\r\nhello\r\n0\r\n\r\n';
     let forwarded = '';
-    for (const piece of [request.slice(0, 60), request.slice(60, 75), request.slice(75)]) forwarded += text(parser.push(Buffer.from(piece)));
+    // In pieces, also between the CR and the LF of the last line.
+    for (const piece of [request.slice(0, 60), request.slice(60, 75), request.slice(75, -1), request.slice(-1)]) forwarded += text(parser.push(Buffer.from(piece)));
     expect(forwarded).toBe(request);
     const next = parser.push(Buffer.from('GET /forbidden HTTP/1.1\r\n\r\n'));
     expect(next.refused?.path).toBe('/forbidden');
@@ -106,9 +107,23 @@ describe('DockerRequestParser', () => {
     ['a header line without a name', 'GET /a HTTP/1.1\r\n folded\r\n\r\n', 'a header of the request is not valid'],
     ['an exec without Upgrade', 'POST /exec/abc/start HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}', 'the request takes the connection over without an Upgrade header'],
     ['a chunked takeover', 'POST /exec/abc/start HTTP/1.1\r\nUpgrade: tcp\r\nTransfer-Encoding: chunked\r\n\r\n', 'a request that takes the connection over must have a length'],
+    // The engine could read a second request after the LF alone.
+    ['an LF alone in a header', 'GET /_ping HTTP/1.1\r\nX: a\n\nPOST /containers/create HTTP/1.1\r\n\r\n', 'the head of the request has a line end without CRLF'],
+    ['a CR alone in the request line', 'GET /_ping\rPOST /containers/create HTTP/1.1\r\n\r\n', 'the head of the request has a line end without CRLF'],
   ])('refuses a request with %s', (_name, request, reason) => {
     const parsed = new DockerRequestParser(() => undefined).push(Buffer.from(request));
     expect(parsed.forward).toEqual([]);
+    expect(parsed.refused?.reason).toBe(reason);
+  });
+
+  // The head of these requests is allowed and goes on; the problem is in the body, and nothing from it on goes on.
+  it.each([
+    ['trailer fields', '0\r\n', 'X: a\n\nPOST /containers/create HTTP/1.1\r\n\r\n', 'the request has trailer fields'],
+    ['a line end in a chunk extension', '', '1;a\nb\r\nx\r\n0\r\n\r\n', 'the chunked body of the request is not valid'],
+  ])('refuses a chunked body with %s', (_name, allowed, rest, reason) => {
+    const head = 'POST /a HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n';
+    const parsed = new DockerRequestParser(() => undefined).push(Buffer.from(`${head}${allowed}${rest}`));
+    expect(text(parsed)).toBe(`${head}${allowed}`);
     expect(parsed.refused?.reason).toBe(reason);
   });
 
@@ -145,6 +160,12 @@ describe('DockerRequestParser', () => {
     expect(parser.answer(false)).toEqual({ forward: [] });
     const rest = parser.push(Buffer.from('"a"GET /forbidden HTTP/1.1\r\n\r\n'));
     expect(rest).toEqual({ forward: [Buffer.from('"a"')], end: true });
+  });
+
+  it('refuses a takeover that is not the first request of its connection', () => {
+    const parsed = new DockerRequestParser(() => undefined).push(Buffer.from('GET /_ping HTTP/1.1\r\n\r\nPOST /exec/abc/start HTTP/1.1\r\nUpgrade: tcp\r\n\r\n'));
+    expect(text(parsed)).toBe('GET /_ping HTTP/1.1\r\n\r\n');
+    expect(parsed.refused?.reason).toBe('a request that takes the connection over must be the first one of its connection');
   });
 
   it('treats any request with an Upgrade header as a takeover, and the answer 200 as a refusal', () => {

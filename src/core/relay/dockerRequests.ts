@@ -93,6 +93,8 @@ export class DockerRequestParser {
   /** The answer of the engine to the takeover that the parser waits for: undefined while it did not come. */
   private takeoverAnswer: boolean | undefined;
   private awaiting = false;
+  /** The requests of the connection that went on. */
+  private requests = 0;
 
   constructor(private readonly rule: DockerRequestRule) {}
 
@@ -161,7 +163,7 @@ export class DockerRequestParser {
             this.pending = data;
             return { forward };
           }
-          const size = /^([0-9A-Fa-f]{1,15})(?:;.*)?$/.exec(data.subarray(0, end).toString('latin1'));
+          const size = /^([0-9A-Fa-f]{1,15})(?:;[\t\x20-\x7e]*)?$/.exec(data.subarray(0, end).toString('latin1'));
           if (size === null) return this.refuse(forward, undefined, 'the chunked body of the request is not valid');
           forward.push(data.subarray(0, end + 2));
           data = data.subarray(end + 2);
@@ -170,16 +172,16 @@ export class DockerRequestParser {
           break;
         }
         case 'trailers': {
-          // The trailer fields after the last chunk, up to an empty line.
-          const end = data.indexOf('\r\n');
-          if (end < 0) {
-            if (data.length > MAX_REQUEST_HEAD_BYTES) return this.refuse(forward, undefined, 'the chunked body of the request is not valid');
+          // The empty line after the last chunk. Trailer fields are refused: the Docker CLI sends none, and a line end
+          // in them that the engine reads otherwise than this parser could hide a request.
+          if (data.length < 2 && data.toString('latin1') === '\r') {
             this.pending = data;
             return { forward };
           }
-          forward.push(data.subarray(0, end + 2));
-          data = data.subarray(end + 2);
-          if (end === 0) this.state = { kind: 'head' };
+          if (data.subarray(0, 2).toString('latin1') !== '\r\n') return this.refuse(forward, undefined, 'the request has trailer fields');
+          forward.push(data.subarray(0, 2));
+          data = data.subarray(2);
+          this.state = { kind: 'head' };
           break;
         }
         case 'head': {
@@ -193,11 +195,12 @@ export class DockerRequestParser {
           const head = data.subarray(0, end + 4);
           const parsed = parseHead(head.toString('latin1'));
           if (typeof parsed === 'string') return this.refuse(forward, undefined, parsed);
-          const reason = this.rule(parsed.request, parsed.headers) ?? bodyProblem(parsed.request, parsed.headers);
+          const reason = this.rule(parsed.request, parsed.headers) ?? bodyProblem(parsed.request, parsed.headers) ?? this.orderProblem(parsed.headers);
           if (reason !== undefined) return this.refuse(forward, parsed.request, reason);
           forward.push(head);
           data = data.subarray(end + 4);
           const takeover = isTakeover(parsed.headers);
+          this.requests += 1;
           if (takeover) {
             this.awaiting = true;
             this.takeoverAnswer = undefined;
@@ -237,6 +240,15 @@ export class DockerRequestParser {
     return { forward: state.held };
   }
 
+  /**
+   * Why the request cannot come now, or undefined. A takeover must be the first request of its connection, as the
+   * Docker CLI sends it (a new connection for each exec, attach and BuildKit session): so the first answer of the engine
+   * on the connection is its answer, never the rest of the answer to an earlier request.
+   */
+  private orderProblem(headers: ReadonlyMap<string, string>): string | undefined {
+    return isTakeover(headers) && this.requests > 0 ? 'a request that takes the connection over must be the first one of its connection' : undefined;
+  }
+
   /** The request of a takeover was sent: wait for the answer of the engine, or apply the answer that came already. */
   private takeOver(): { end?: boolean } {
     if (this.takeoverAnswer === undefined) {
@@ -262,6 +274,9 @@ function isTakeover(headers: ReadonlyMap<string, string>): boolean {
 /** The request and its headers (names in lower case) from the head `text`, or the reason why it is not valid. */
 function parseHead(text: string): { request: DockerRequest; headers: Map<string, string> } | string {
   const lines = text.slice(0, -4).split('\r\n');
+  // A CR or LF alone (or a NUL) ends a line for some HTTP servers: the engine could read two requests where this parser
+  // reads one.
+  if (lines.some((line) => /[\r\n\0]/.test(line))) return 'the head of the request has a line end without CRLF';
   const match = REQUEST_LINE.exec(lines[0] ?? '');
   if (match === null) return 'the request is no HTTP/1 request';
   const path = dockerRequestPath(match[2]);
