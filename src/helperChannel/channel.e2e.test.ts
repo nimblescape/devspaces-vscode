@@ -50,7 +50,7 @@ function fakeEngine(socketPath: string) {
     requests.push(request);
     req.resume();
     const json = (status: number, value: unknown) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(value));
-    if (request === 'GET /version') return json(200, { Version: '27.1.0', ApiVersion: '1.47' });
+    if (request === 'GET /version') return json(200, { Version: '27.1.0', ApiVersion: '1.47', MinAPIVersion: '1.24' });
     if (request === 'GET /info') return json(200, { ID: ENGINE_ID, DockerRootDir: '/var/lib/docker', Containers: 3 });
     if (request === PRUNE) {
       res.on('close', () => {
@@ -159,9 +159,11 @@ describeUnix('the helper channel script in a Node.js process', () => {
     // never-started channel containers; no relay operation.
     expect(channel.operations).toEqual(['delete', 'deleteCheck', 'heartbeat', 'listConfigurations', 'monitorEnsure', 'monitorRunNow', 'open', 'prepare', 'probe', 'reconcile', 'recordGitState', 'refresh', 'stop', 'sweep', 'tokenRemove', 'windowState']);
     const before = engine.requests.length;
-    // With the identity of the engine as its values.
+    // With the API versions and the identity of the engine as their values.
     expect(parseProbeValue(await channel.operation(OP_PROBE, parseProbeParams({})))).toEqual({
       serverVersion: '27.1.0',
+      apiVersion: '1.47',
+      minApiVersion: '1.24',
       detail: 'Docker 27.1.0',
       engine: { id: ENGINE_ID, rootDir: '/var/lib/docker' },
     });

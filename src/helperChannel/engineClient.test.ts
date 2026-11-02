@@ -613,6 +613,14 @@ describe('the port of the engine over the Engine API', () => {
       expect(urls).toContain('/networks?filters={"label":["x"]}');
     });
 
+    // The oldest API version that the engine accepts, for the check of the Docker CLI of Devspaces; only a string.
+    it('reads the minimum API version of the engine when it names one', async () => {
+      const answers = [{ ApiVersion: '1.52', Version: '29.1.0', MinAPIVersion: '1.44' }, { ApiVersion: '1.52', Version: '29.1.0', MinAPIVersion: 1.44 }];
+      const { engine } = await serve(() => ({ status: 200, json: answers.shift() }));
+      expect(await engine.version()).toEqual({ apiVersion: '1.52', version: '29.1.0', minApiVersion: '1.44' });
+      expect(await engine.version()).toStrictEqual({ apiVersion: '1.52', version: '29.1.0' });
+    });
+
     it('refuses an inspect or a list that it cannot read', async () => {
       const { engine } = await serve((call) => (call.url.startsWith('/images/json') ? { status: 200, json: { not: 'a list' } } : { status: 200, body: 'not json' }));
       await expect(engine.inspect('container', 'c')).rejects.toBeInstanceOf(EngineError);

@@ -398,6 +398,23 @@ describe('the WSL distribution of Devspaces: no SSH', () => {
     expect(runner.run).not.toHaveBeenCalled();
   });
 
+  // `docker info` there runs with the Docker CLI of Devspaces through its Docker pipe: an engine that refuses its API
+  // version gets the message with both versions and the way out, not the one of a host that cannot be reached.
+  it('names the API versions when the engine refuses the Docker CLI of Devspaces', async () => {
+    const refused = { exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too old. Minimum supported API version is 1.60\n', timedOut: false };
+    const docker = fakeDocker(() => refused);
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const deps = { docker, runner: sshRunner(), state, logger, sshPath: undefined, env: {}, shells: wslShells() };
+    await expect(ensureDockerHostReachable(remoteDockerTarget(WSL_HOST), { ...deps, dockerCliApi: () => cli })).rejects.toMatchObject({
+      code: 'dockerHostUnreachable',
+      message: expect.stringMatching(/^The Docker CLI 29\.9\.2 of Devspaces cannot work with the Docker engine on wsl:devspaces: the engine needs the Docker API version 1\.60 or later/),
+    });
+    // Without that CLI (the Docker CLI of this computer runs the call): the message of the host.
+    const error = await ensureDockerHostReachable(remoteDockerTarget(WSL_HOST), { ...deps, dockerCliApi: () => undefined }).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'dockerHostUnreachable' });
+    expect((error as UserFacingError).message).not.toContain('Docker API version');
+  });
+
   it('reads the runtime folder of a rootless engine only on its shell', async () => {
     const runner = { run: vi.fn(async () => ok('/run/user/9')) };
     await expect(readRootlessSocket(runner, undefined, WSL_HOST, {}, undefined, wslShells({ ok: true }, ok('/run/user/0')))).resolves.toEqual({ ok: true, socket: '/run/user/0/docker.sock' });

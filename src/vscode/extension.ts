@@ -12,7 +12,8 @@ import * as vscode from 'vscode';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
 import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
-import { ownDockerCliDownload, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
+import type { DockerCliApi } from '../core/docker/dockerApiVersion';
+import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
 import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslKeeper } from '../core/docker/wslKeeper';
 import { WslLifetime } from '../core/docker/wslLifetime';
@@ -221,12 +222,21 @@ async function activateExtension(
     logger.info(`Docker publishes no Docker CLI for ${platform} on ${process.arch} that runs here, so this window uses the Docker CLI of this computer.`);
   }
   const presentOwnCli = (): string | undefined => (ownCliBuild ? presentOwnDockerCli(paths.dockerCliDir, platform, process.arch) : undefined);
+  // Whether this window put the Docker CLI of Devspaces first in PATH (useOwnDockerCli).
+  let ownCliInPath = false;
   const useOwnDockerCli = (cli: string): void => {
+    ownCliInPath = true;
     putFolderFirstInPath(process.env, platform, path.dirname(cli));
     logger.info(`The Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces is first in PATH of this window: ${cli}`);
   };
   const ownCli = pipeWindow ? presentOwnCli() : undefined;
   if (ownCli !== undefined) useOwnDockerCli(ownCli);
+  // The Docker CLI of Devspaces, for the check of the API versions of a remote engine (dockerApiVersion.ts): in the
+  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs (after a failed
+  // download it runs the Docker CLI of this computer, whose API versions are not known: no check); in another window
+  // where Docker publishes it for this computer, as the windows of devspaces download and run it, also the first one.
+  const dockerCliApi = (): DockerCliApi | undefined =>
+    (pipeWindow ? ownCliInPath : ownCliBuild) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
   const dockerPath = installedCli ?? ownCli;
   // Windows: the Dev Containers extension, which connects the windows to the containers, runs in this extension host and
   // looks up `docker` in its PATH and in C:\Program Files\Docker\Docker\resources\bin only. A CLI that Devspaces found
@@ -430,6 +440,7 @@ async function activateExtension(
     viaDockerPipe: (host) => hostPipes?.dockerHost(host) !== undefined,
     shells,
     identityFor: (host) => sshKeys.identityFor(host),
+    dockerCliApi,
   });
   // What the checks whether an engine answers need (dockerEngineAnswers): Docker is never started (a WSL distribution
   // only while its Monitor runs permanently or in a flow of the user, because `wsl.exe` starts it), and a remote host
@@ -568,6 +579,7 @@ async function activateExtension(
   context.subscriptions.push(closingWork.deferred({ dispose: () => helperBuilds.dispose() }));
   const channels = new HelperChannels({
     logger,
+    dockerCliApi,
     // The refresh found no helper image (see helperBuilds above); never on an engine that Devspaces was removed from.
     onRefreshWithoutHelper: (target) => {
       void engineRemoved(target).then((removed) => (removed ? undefined : helperBuilds.request(target)));
@@ -612,6 +624,7 @@ async function activateExtension(
             );
           },
           runDirect: (args, options, withoutPipe) => (withoutPipe === true ? docker.runWithoutPipe(args, options) : docker.run(args, options)),
+          dockerCliApi,
           logger,
           script: workerScript,
           helperTag: async () => helperImageTag(await fs.promises.readFile(helperDockerfile, 'utf8')),

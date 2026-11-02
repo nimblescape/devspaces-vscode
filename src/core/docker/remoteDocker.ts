@@ -57,6 +57,7 @@ import {
   type DockerTarget,
 } from './dockerHost';
 import { ShellGoneError, dockerShellCommand } from '../relay/remoteShell';
+import { dockerApiErrorText, type DockerCliApi } from './dockerApiVersion';
 import { deleteEnv, withEnvValue } from './dockerCli';
 import { runWithDockerTarget } from './dockerTargets';
 
@@ -473,6 +474,8 @@ export interface RemoteReachabilityDeps {
   shells?: RemoteShellAccess;
   /** The key of Devspaces for `host` (SshCheckDeps.identityFor). */
   identityFor?(host: string): string | undefined;
+  /** The Docker CLI of Devspaces whose API versions the engine may refuse (ChannelOpenDeps.dockerCliApi). */
+  dockerCliApi?(): DockerCliApi | undefined;
 }
 
 /**
@@ -495,6 +498,11 @@ export async function ensureDockerHostReachable(
   const check = await checkCurrentEngine(deps.docker, options);
   if (!check.ok) {
     deps.logger.warn(`The Docker host ${target.host} cannot be reached: ${check.detail}`);
+    // `docker info` with the Docker CLI of Devspaces (on the WSL distribution, or through the Docker pipe of the
+    // extension), refused for its API version: the message with both versions and the way out.
+    const cli = deps.dockerCliApi?.();
+    const mismatch = cli === undefined ? undefined : dockerApiErrorText(check.detail, target.host, cli);
+    if (mismatch !== undefined) throw new UserFacingError('dockerHostUnreachable', mismatch, check.detail);
     throw dockerHostUnreachable(target.host, check.problem, check.detail);
   }
   deps.logger.info(`Docker host ${target.host}: Docker engine ${check.version}${check.rootless ? ' (rootless)' : ''}.`);

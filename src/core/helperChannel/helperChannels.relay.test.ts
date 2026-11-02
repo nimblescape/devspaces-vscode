@@ -20,8 +20,11 @@ const REMOTE: DockerTarget = remoteDockerTarget('build-box');
 const ENGINE = '"7b1c7a44-2f0e-4d38-9d1d-3a8f7b0e8c11" "/var/lib/docker"';
 const ENGINE_IDENTITY = { id: '7b1c7a44-2f0e-4d38-9d1d-3a8f7b0e8c11', rootDir: '/var/lib/docker' };
 
-/** A worker that answers `hello` and the probe; its input lines are kept, and it ends at the end of its input or a kill. */
-function fakeWorker() {
+/**
+ * A worker that answers `hello` and the probe (with the values `probe` in addition); its input lines are kept, and it
+ * ends at the end of its input or a kill.
+ */
+function fakeWorker(probe: Record<string, unknown> = {}) {
   let stdout: ((text: string) => void) | undefined;
   let finish: (result: { exitCode: number | null }) => void = () => {};
   const lines: string[] = [];
@@ -33,7 +36,7 @@ function fakeWorker() {
         const message = parseClientMessage(line);
         if (message?.t === 'hello') queueMicrotask(() => stdout?.(encodeMessage({ t: 'hello', protocol: CHANNEL_PROTOCOL_VERSION, node: 'v24', ops: ['probe', 'sweep'] })));
         if (message?.t === 'op' && message.op === 'probe') {
-          queueMicrotask(() => stdout?.(encodeMessage({ t: 'result', id: message.id, ok: true, value: { serverVersion: '27.1.0', detail: 'Docker 27.1.0', engine: ENGINE_IDENTITY } })));
+          queueMicrotask(() => stdout?.(encodeMessage({ t: 'result', id: message.id, ok: true, value: { serverVersion: '27.1.0', detail: 'Docker 27.1.0', engine: ENGINE_IDENTITY, ...probe } })));
         }
       }
       return true;
@@ -169,6 +172,61 @@ describe('openHelperChannel with the connection of the relay', () => {
     expect(connect).toHaveBeenCalledTimes(1);
     expect(next.closes).toEqual(['the worker could not be opened']);
     expect(sharedAccess.use).not.toHaveBeenCalled();
+  });
+
+  // Mutation: an open without the check of the API versions gives a worker on an engine that the Docker CLI of the
+  // windows of devspaces cannot work with, and a window there fails in its attach without a reason.
+  it('refuses an engine whose API versions the Docker CLI of Devspaces does not speak, without a second login', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const needsNewer = { apiVersion: '1.64', minApiVersion: '1.57' };
+    const message =
+      'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine needs the Docker API version 1.57 or later, and the ' +
+      'CLI speaks only up to version 1.56. A newer version of Devspaces brings a newer Docker CLI. Until then, that engine accepts the CLI when the ' +
+      'environment variable DOCKER_MIN_API_VERSION of dockerd is 1.56 or lower.';
+    // On a new connection: it ends, and the engine never uses it.
+    const connection = fakeConnection(fakeWorker(needsNewer));
+    const fresh = access(async () => connection as unknown as RelayConnection);
+    await expect(openHelperChannel(deps({ relay: () => fresh, dockerCliApi: () => cli }), REMOTE)).rejects.toMatchObject({ code: 'open', message });
+    expect(connection.closes).toEqual(['the worker could not be opened']);
+    expect(fresh.use).not.toHaveBeenCalled();
+    // A call of the identity before the start that fails with the error of the engine for that CLI (the WSL
+    // distribution, an SSH host without the shell before the relay): no login and no worker.
+    const unused = vi.fn<RelayAccess['connect']>();
+    const tooNew = async () => ({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', timedOut: false });
+    await expect(openHelperChannel(deps({ relay: () => access(unused), dockerCliApi: () => cli, runDirect: tooNew }), REMOTE)).rejects.toMatchObject({
+      code: 'open',
+      message: expect.stringContaining('the engine speaks the Docker API up to version 1.39, and the CLI needs version 1.40 or later.'),
+    });
+    expect(unused).not.toHaveBeenCalled();
+    // On the open connection of the engine: no new connection, whose worker would be refused for the same reason after
+    // one more login, and the open connection stays the one of the Docker pipe. The call of the identity goes through
+    // that connection with the same CLI, so it fails with the error of the engine: the API versions say why.
+    const connect = vi.fn<RelayAccess['connect']>();
+    const shared = access(connect, fakeConnection(fakeWorker({ apiVersion: '1.39' })));
+    const refused = async () => ({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', timedOut: false });
+    await expect(openHelperChannel(deps({ relay: () => shared, dockerCliApi: () => cli, runDirect: refused }), REMOTE)).rejects.toMatchObject({
+      code: 'open',
+      message:
+        'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine speaks the Docker API up to version 1.39, and the ' +
+        'CLI needs version 1.40 or later. Update that Docker engine.',
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(shared.retire).not.toHaveBeenCalled();
+    // Without the Docker CLI of Devspaces for this computer, the open checks no API versions.
+    const other = fakeConnection(fakeWorker(needsNewer));
+    const channel = await openHelperChannel(deps({ relay: () => access(async () => other as unknown as RelayConnection), dockerCliApi: () => undefined }), REMOTE);
+    expect(channel.isOpen).toBe(true);
+    channel.close();
+  });
+
+  it('opens a worker on an engine whose API versions fit the Docker CLI of Devspaces', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const dockerCliApi = vi.fn(() => cli);
+    const connection = fakeConnection(fakeWorker({ apiVersion: '1.52', minApiVersion: '1.40' }));
+    const channel = await openHelperChannel(deps({ relay: () => access(async () => connection as unknown as RelayConnection), dockerCliApi }), REMOTE);
+    expect(channel.isOpen).toBe(true);
+    expect(dockerCliApi).toHaveBeenCalledWith(REMOTE);
+    channel.close();
   });
 
   it('opens a new connection at once when the worker cannot be opened on the open connection of the engine', async () => {
