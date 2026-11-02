@@ -11,10 +11,12 @@
 // (processDockerDial): the relay would set Devspaces up there again. No `vscode`.
 import * as fs from 'fs';
 import * as net from 'net';
+import type { Duplex } from 'stream';
 import { errorMessage } from '../errors';
 import type { Logger, StartedByteProcess } from '../ports';
 import { bridgeStream } from './bridge';
 import type { RelayConnection } from './connection';
+import { FilteredConnection, requestText, type DockerRequestRule } from './dockerRequests';
 import type { DockerPipeAddress } from './pipeAddress';
 
 /** The errors of a connect to a socket file that nobody serves (or a file that is no socket). */
@@ -41,10 +43,16 @@ export const PIPE_FIRST_BYTES_TIMEOUT_MS = 30_000;
 export interface DockerPipeOptions {
   address: DockerPipeAddress;
   /**
-   * Connects one connection of the pipe, a paused socket whose first bytes came, with the Docker engine (relayDockerDial,
-   * processDockerDial). Rejects when it cannot; the socket is destroyed then.
+   * Connects one connection of the pipe, a paused socket whose first bytes came (with `requests`, its FilteredConnection),
+   * with the Docker engine (relayDockerDial, processDockerDial). Rejects when it cannot; the connection is destroyed then.
    */
-  connect(socket: net.Socket): Promise<void>;
+  connect(connection: Duplex): Promise<void>;
+  /**
+   * Decides about each request of each connection (dockerRequests.ts): a refused request gets the answer 403 of the
+   * Docker API, nothing of it reaches the engine, and its connection closes; a warning names it. Undefined: every
+   * request goes on.
+   */
+  requests?: DockerRequestRule;
   logger: Logger;
   /** Named in the log lines, for example the container of the devspace. */
   name: string;
@@ -283,13 +291,18 @@ export class DockerPipe {
       } else {
         this.uncountedConnections += 1;
       }
-      this.options.connect(socket).then(
+      const rule = this.options.requests;
+      const connection: Duplex =
+        rule === undefined
+          ? socket
+          : new FilteredConnection(socket, rule, (request) => logger.warn(`The Docker pipe of ${name} refused ${requestText(request)}: ${request.reason}.`));
+      this.options.connect(connection).then(
         () => {
-          if (!socket.destroyed) socket.resume();
+          if (!connection.destroyed) connection.resume();
         },
         (error: unknown) => {
           logger.warn(`The Docker pipe of ${name} could not reach the Docker engine: ${errorMessage(error)}`);
-          socket.destroy();
+          connection.destroy();
         },
       );
     });
@@ -314,7 +327,7 @@ export function requestLine(chunk: Buffer): string {
  * Connects `socket`, a connection of the pipe, with a new Docker stream of `connection` (the connection of the relay to
  * the host). Throws when the connection is closed or has no stream left.
  */
-export function relayDockerDial(connection: RelayConnection, socket: net.Socket): void {
+export function relayDockerDial(connection: RelayConnection, socket: Duplex): void {
   const stream = connection.openDocker();
   // The Docker CLI gave up meanwhile.
   if (socket.destroyed) {
@@ -329,7 +342,7 @@ export function relayDockerDial(connection: RelayConnection, socket: net.Socket)
  * output carry the bytes of the connection, as the Docker CLI does for an SSH host itself. It ends with the
  * connection; its error output is logged when it fails.
  */
-export function processDockerDial(start: () => StartedByteProcess, logger: Logger, name: string): (socket: net.Socket) => Promise<void> {
+export function processDockerDial(start: () => StartedByteProcess, logger: Logger, name: string): (socket: Duplex) => Promise<void> {
   return async (socket) => {
     // The Docker CLI gave up already (while the relay was tried): no program that nobody ends.
     if (socket.destroyed) return;

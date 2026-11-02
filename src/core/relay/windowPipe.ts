@@ -7,7 +7,7 @@
 // (pipeAddress.ts). Each connection goes through the connection of the relay to the host of the devspace; on an engine
 // with the removal mark, through its own `docker system dial-stdio` over SSH, so that no worker sets Devspaces up there
 // again. No `vscode`.
-import type * as net from 'net';
+import type { Duplex } from 'stream';
 import * as path from 'path';
 import { dockerHostOf, hostAccessOf } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
@@ -178,7 +178,7 @@ export async function serveWindowPipe(dockerHost: string, containerName: string,
       return opening;
     };
     const waitMs = deps.relayWaitMs ?? RELAY_WAIT_MS;
-    const throughRelay = async (connection: RelayConnection, socket: net.Socket): Promise<void> => {
+    const throughRelay = async (connection: RelayConnection, socket: Duplex): Promise<void> => {
       try {
         relayDockerDial(connection, socket);
       } catch (error) {
@@ -187,7 +187,7 @@ export async function serveWindowPipe(dockerHost: string, containerName: string,
         return direct(socket);
       }
     };
-    const connect = async (socket: net.Socket): Promise<void> => {
+    const connect = async (socket: Duplex): Promise<void> => {
       if (await engineRemoved()) return direct(socket);
       const open = deps.openRelayConnection(host);
       if (open !== undefined) {
@@ -215,7 +215,11 @@ export async function serveWindowPipe(dockerHost: string, containerName: string,
       if ('error' in outcome) return direct(socket);
       return throughRelay(outcome.connection, socket);
     };
-    const pipe = await DockerPipe.listen({ address, connect, logger, name: containerName, platform: deps.platform, inUseWaitMs: deps.inUseWaitMs });
+    const requests = (request: { method: string; path: string }) => {
+      logger.info(`MEASURE ${containerName}: ${request.method} ${request.path}`);
+      return undefined;
+    };
+    const pipe = await DockerPipe.listen({ address, connect, requests, logger, name: containerName, platform: deps.platform, inUseWaitMs: deps.inUseWaitMs });
     return { kind: 'served', pipe };
   } catch (error) {
     return refuse(errorMessage(error));

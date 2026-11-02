@@ -103,6 +103,14 @@ describe('the window of a devspace on a Docker engine over SSH', () => {
 
   after(() => {
     if (failed) printLogs();
+    const measured = new Map<string, number>();
+    for (const line of channelLog('Devspaces').split('\n')) {
+      const match = /MEASURE (.*)$/.exec(line);
+      if (!match) continue;
+      const key = match[1].replace(/[0-9a-f]{64}/g, '<id>');
+      measured.set(key, (measured.get(key) ?? 0) + 1);
+    }
+    printLong(`MEASURED REQUESTS\n${[...measured].map(([line, count]) => `MEASURED ${count} ${line}`).join('\n')}`);
   });
 
   // The first test: the tests after it run Docker over SSH themselves.
