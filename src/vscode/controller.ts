@@ -170,6 +170,16 @@ export interface ControllerDeps {
    * authority). Default: none.
    */
   windowDockerHost?: (devspace: Devspace, containerName: string) => string | undefined;
+  /**
+   * The connection of this window to the SSH host of its devspace, which the window opens before it attaches after a
+   * Start (connectAfterStart): `sshHostOf` names that host, or undefined (the local Docker, the WSL distribution of
+   * Devspaces, whose logins ask nothing); `connect` opens the connection of the relay through the worker of its engine
+   * (HelperChannels.ensure; `again` ends the wait after a failed open). Default: none.
+   */
+  hostConnection?: {
+    sshHostOf(devspace: Devspace): string | undefined;
+    connect(host: string, options: { signal?: AbortSignal; again?: boolean }): Promise<void>;
+  };
   /** "Use a Remote Docker Host…", "Use the Local Docker", and the choice of the first row of the view. */
   remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'useLocalDocker' | 'chooseDockerHost'>;
   /** "Set Up Docker for Devspaces…" and "Remove the WSL Distribution of Devspaces…" (Windows). */
@@ -730,6 +740,11 @@ export class Controller implements vscode.Disposable {
     const repository = this.displayName({ repository: devspace.repository });
     if (pipelineJustRan(pending, devspace.id, this.clock.now())) {
       this.logger.info(`The open pipeline of ${repository} has just run for this window.`);
+      // The window shows its own connection error; the status bar offers Reconnect.
+      if (!(await this.connectAfterStart(devspace, repository)) && this.current?.devspace.id === devspace.id) {
+        this.current.lost = true;
+        this.updateStatusBar();
+      }
     } else {
       this.logger.info(`This window was restored or reloaded. The open pipeline of ${repository} runs before it connects.`);
       // Assumption: activation through ATTACHED_CONTAINER_ACTIVATION_EVENT blocks the connection until activate()
@@ -781,6 +796,36 @@ export class Controller implements vscode.Disposable {
       }
     }
     this.background(this.readWindowBranch(), 'read the branch of the devspace');
+  }
+
+  /**
+   * Role A after a Start, whose open pipeline ran in the extension host before this one: the window of a devspace on an
+   * SSH host opens its connection to that host now, before VS Code attaches. Else the first connection of its Docker
+   * pipe would log in, without questions (BatchMode), which fails on a host that needs a password or a new host key.
+   * First without questions, as the pipe would, so a login with a key shows nothing; when that fails, in a flow whose
+   * login may ask, with its progress notification and Cancel. True when the connection is open, or when the devspace
+   * needs none.
+   */
+  private async connectAfterStart(devspace: Devspace, repository: string): Promise<boolean> {
+    const connection = this.deps.hostConnection;
+    const host = connection?.sshHostOf(devspace);
+    if (connection === undefined || host === undefined) return true;
+    try {
+      await connection.connect(host, {});
+      return true;
+    } catch (error) {
+      this.logger.info(`The connection to ${host} without questions failed, so its login may ask now: ${errorMessage(error)}`);
+    }
+    const shown = this.shownName(this.devspaceTarget(devspace));
+    // No Try again: once the window attached without the connection, Reconnect in the status bar runs the open flow.
+    return this.operation(this.keyOfDevspace(repository, devspace), 'Open', () =>
+      runWithProgress({
+        title: Messages.connectingTo(shown, host),
+        repository: shown,
+        cancellable: true,
+        task: (_progress, signal) => connection.connect(host, { signal, again: true }),
+      }),
+    );
   }
 
   /**

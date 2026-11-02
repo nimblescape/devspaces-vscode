@@ -3,11 +3,11 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 import { describe, expect, it } from 'vitest';
-import { dockerApiErrorMismatch, dockerApiMismatch, dockerApiMismatchText } from './dockerApiVersion';
+import { dockerApiErrorMismatch, dockerApiErrorText, dockerApiMismatch, dockerApiMismatchText, localDockerCliApi } from './dockerApiVersion';
 
 /** The API versions of the Docker CLI 29.9.2. */
 const CLI = { min: '1.40', max: '1.56' };
-const OWN = 'the Docker CLI 29.9.2 of Devspaces';
+const OWN = { name: 'the Docker CLI 29.9.2 of Devspaces', kind: 'devspaces' } as const;
 
 describe('dockerApiMismatch', () => {
   it('finds no mismatch while the newest API version of the engine is at least the oldest one of the CLI, and its minimum at most the newest one', () => {
@@ -83,5 +83,30 @@ describe('dockerApiMismatchText', () => {
         'CLI speaks only up to version 1.56. A newer version of Devspaces brings a newer Docker CLI. Until then, that engine accepts the CLI when the ' +
         'environment variable DOCKER_MIN_API_VERSION of dockerd is 1.56 or lower.',
     );
+  });
+});
+
+// The Docker CLI of this computer names only its newest API version.
+describe('localDockerCliApi', () => {
+  it('reads the version and the newest API version that `docker version` prints, also without an engine', () => {
+    expect(localDockerCliApi('29.9.2 1.56\n')).toEqual({ name: 'the Docker CLI 29.9.2 of this computer', range: { max: '1.56' }, kind: 'computer' });
+    expect(localDockerCliApi('24.0.7-ce 1.43')).toEqual({ name: 'the Docker CLI 24.0.7-ce of this computer', range: { max: '1.43' }, kind: 'computer' });
+    for (const output of ['', '1.56', '29.9.2 latest', '29.9.2 1.56 more', 'a\tb 1.56', `${'9'.repeat(65)} 1.56`]) {
+      expect(localDockerCliApi(output), JSON.stringify(output)).toBeUndefined();
+    }
+  });
+
+  it('finds only an engine whose minimum is newer than its newest API version, by the probe or by the error of the engine', () => {
+    const local = localDockerCliApi('24.0.7 1.43');
+    if (local === undefined) throw new Error('not read');
+    expect(dockerApiMismatch({ apiVersion: '1.56', minApiVersion: '1.44' }, local.range)).toEqual({ kind: 'cliTooOld', client: '1.43', minimum: '1.44' });
+    expect(dockerApiErrorText('Error response from daemon: client version 1.43 is too old. Minimum supported API version is 1.44, please upgrade your client to a newer version', 'build-box', local)).toBe(
+      'The Docker CLI 24.0.7 of this computer cannot work with the Docker engine on build-box: the engine needs the Docker API version 1.44 or later, and ' +
+        'the CLI speaks only up to version 1.43. Update the Docker CLI of this computer. Until then, that engine accepts the CLI when the environment ' +
+        'variable DOCKER_MIN_API_VERSION of dockerd is 1.43 or lower.',
+    );
+    // Its oldest version is not known: an old engine is left to the message of Docker.
+    expect(dockerApiMismatch({ apiVersion: '1.20', minApiVersion: '1.12' }, local.range)).toBeUndefined();
+    expect(dockerApiErrorMismatch('Error response from daemon: client version 1.43 is too new. Maximum supported API version is 1.20', local.range)).toBeUndefined();
   });
 });
