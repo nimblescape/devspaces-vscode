@@ -175,7 +175,7 @@ The steps in words:
 7. **Operation.** The worker runs the operation `open` (see [architecture.md, Open](architecture.md#open)): it starts the container, or builds and creates it when needed, and returns the container, the remote user, and the folder.
 8. **Attach.** `activate()` returns, and VS Code lets the Dev Containers extension resolve the window. Its Docker calls go to the Docker pipe of the window. Each connection to the pipe becomes one stream with the target `docker` on the same connection of the relay. No new login is needed.
 
-**Start from the sidebar.** A **Start** runs steps 3 to 7 in the window where you clicked it, as a flow with its progress notification. Then the extension opens the folder URI of the devspace. VS Code starts a new extension host for that window, also when the same window is used. The new extension host has no connection yet. It opens one when it first needs the host, for example for the first connection of its Docker pipe, with one more login. This login is not part of a flow of the user, so it asks nothing (see [SSH logins without setup](#ssh-logins-without-setup)).
+**Start from the sidebar.** A **Start** runs steps 3 to 7 in the window where you clicked it, as a flow with its progress notification. Then the extension opens the folder URI of the devspace. VS Code starts a new extension host for that window, also when the same window is used. The new extension host has no connection yet. Before `activate()` returns, it opens one to the SSH host of the devspace, through its worker ([`Controller.connectAfterStart`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/vscode/controller.ts)). First it logs in without questions, so a login with a key shows nothing. When that login fails, for example on a host that needs a password, it logs in again in a flow with the progress notification "Connecting to `<host>` for `<repository>`…", whose login may ask (see [SSH logins without setup](#ssh-logins-without-setup)). The Docker pipe of the window then uses this connection. When this login fails too or is cancelled, the window shows the error, and **Reconnect** in the status bar runs the open flow. A devspace on the WSL distribution needs no such step, because its logins ask nothing.
 
 **A devspace on the local Docker** has no Docker pipe and no relay. Its window URI names no Docker host, its worker starts with the Docker CLI of this computer, and the Dev Containers extension uses the current Docker context.
 
@@ -445,7 +445,8 @@ Every other login asks nothing:
 
 - the refresh of the sidebar, the heartbeats, and the builds in the background;
 - the Docker calls with `ssh://<host>`, and `docker system dial-stdio`;
-- the logins that the Docker pipe of a window starts, for example in the window of a devspace after a **Start**, whose open flow ran in the extension host before the reload (see [How a window of a remote devspace opens](#how-a-window-of-a-remote-devspace-opens)).
+- the logins that the Docker pipe of a window starts, for example when the connection of the window ended;
+- the first login of the window of a devspace after a **Start**, whose open flow ran in the extension host before the reload. When it fails, the window logs in again in a flow of its own, which may ask (see [How a window of a remote devspace opens](#how-a-window-of-a-remote-devspace-opens)).
 
 The `ssh` of Devspaces runs for them with `BatchMode=yes` and `SSH_ASKPASS_REQUIRE=never`. The `ssh` that the Docker CLI starts for `ssh://<host>` has no terminal and gets `SSH_ASKPASS_REQUIRE=never`; on Windows it can wait on a hidden console until the time limit of the call. Such a login works only when `ssh` can log in without a question: with the key of Devspaces, or with a key or agent of your SSH setup. Otherwise it fails, and the next flow of the user asks.
 
@@ -536,7 +537,7 @@ For an SSH host. Each VS Code window has its own extension host, so each window 
 | Situation | SSH logins |
 | --- | --- |
 | The open of a restored window, or of **Open Recent**, with the helper image on the engine | 1: the shell before the relay, which the connection of the relay takes over. The Dev Containers extension and the Docker calls of Devspaces use the same connection. |
-| **Start** in a window | 1 in the window that runs the Start (0 when that window has an open connection to the host), and 1 in the new extension host of the window of the devspace (without questions). |
+| **Start** in a window | 1 in the window that runs the Start (0 when that window has an open connection to the host), and 1 in the new extension host of the window of the devspace, before the attach. When that login needs a question (for example a password), 1 more, which asks. |
 | The helper image is missing on the engine | 1 or more for `docker build` with `ssh://<host>`, before the start of the relay. Any other Docker call of Devspaces that changes something while no connection of the relay is open also logs in itself. |
 | Docker refused the name of the worker (another container has it) | 1 more: the list of names and the next connection use a new shell. |
 | A new worker within one hour after the open of the connection | 0. |

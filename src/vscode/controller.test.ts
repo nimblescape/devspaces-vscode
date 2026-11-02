@@ -19,6 +19,7 @@ import { DockerContextKeys } from '../core/docker/dockerSetup';
 import { UserFacingError } from '../core/errors';
 import { GitHubApiError } from '../core/discovery/githubApi';
 import { Actions, Messages, dockerHostReason } from '../core/messages';
+import { sshPromptsAllowed } from '../core/sshAskpass';
 import { removalEndedNote } from '../core/docker/engineRemoval';
 import { CONTAINER_VERSION, HOST_ACCESS_UNRESTRICTED, LABEL_CONTAINER_VERSION, LABEL_HOST_ACCESS } from '../core/names';
 import { OP_TOKEN_REMOVE } from '../core/helperChannel/protocol';
@@ -287,6 +288,8 @@ function createHarness(
     remoteDocker?: ControllerDeps['remoteDocker'];
     /** The Docker pipe of the window of a devspace. Default: none. */
     windowDockerHost?: ControllerDeps['windowDockerHost'];
+    /** The connection of the window to the SSH host of its devspace after a Start. Default: none. */
+    hostConnection?: ControllerDeps['hostConnection'];
     /** The heartbeat of Close and Keep Running (on every engine). */
     sessionMonitor?: ControllerDeps['sessionMonitor'];
     /** The pause between the checks of the container (default 0). */
@@ -489,6 +492,7 @@ function createHarness(
     dockerTargets: options.dockerTargets,
     remoteDocker: options.remoteDocker,
     windowDockerHost: options.windowDockerHost,
+    hostConnection: options.hostConnection,
     sessionMonitor: options.sessionMonitor,
     monitorQuestion,
     engineRecords,
@@ -6301,6 +6305,8 @@ describe('the Docker host of Devspaces', () => {
   let resolves: number;
   let depth = 0;
   let windowDockerHost: Mock<NonNullable<ControllerDeps['windowDockerHost']>>;
+  // The Docker targets of the harness of each test, for a harness of a nested describe.
+  let sharedTargets: ControllerDeps['dockerTargets'];
   let remote: {
     useRemoteHost: Mock<RemoteDockerCommands['useRemoteHost']>;
     useLocalDocker: Mock<RemoteDockerCommands['useLocalDocker']>;
@@ -6350,7 +6356,8 @@ describe('the Docker host of Devspaces', () => {
     };
     // Every devspace on an SSH host has the Docker pipe of its window (ssh is installed).
     windowDockerHost = vi.fn((shown: Devspace) => (shown.dockerHost === undefined ? undefined : PIPE));
-    h = createHarness({ dockerTargets: dockerTargets as unknown as ControllerDeps['dockerTargets'], remoteDocker: remote, windowDockerHost });
+    sharedTargets = dockerTargets as unknown as ControllerDeps['dockerTargets'];
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost });
   });
 
   function remoteDevspace(overrides: Partial<Devspace> = {}): Devspace {
@@ -6823,6 +6830,76 @@ describe('the Docker host of Devspaces', () => {
     expect(calls).not.toContain('context show');
     const logged = h.logger.info.mock.calls.map(([line]) => String(line)).filter((line) => line.startsWith('Before the window connects:'));
     expect(logged).toEqual([`Before the window connects: the Dev Containers extension reaches build-box through the Docker pipe ${pipe} of the window.`]);
+  });
+
+  describe('the connection of the window after a Start', () => {
+    const fresh = () => ({ devspaceId: REMOTE_ENV_ID, windowId: 'old', createdAt: iso(NOW - 30_000) });
+    let connects: { host: string; again: boolean; asks: boolean }[];
+    let failWithoutQuestions: boolean;
+    let failWithQuestions: boolean;
+
+    beforeEach(() => {
+      fs.rmSync(h.root, { recursive: true, force: true });
+      connects = [];
+      failWithoutQuestions = false;
+      failWithQuestions = false;
+      const hostConnection: NonNullable<ControllerDeps['hostConnection']> = {
+        // As extension.ts: only an SSH host, never the WSL distribution of Devspaces or the local Docker.
+        sshHostOf: (shown) => (shown.dockerHost !== undefined && !shown.dockerHost.startsWith('wsl:') ? shown.dockerHost : undefined),
+        connect: async (host, options) => {
+          connects.push({ host, again: options.again === true, asks: sshPromptsAllowed() });
+          if (options.again === true ? failWithQuestions : failWithoutQuestions) throw new Error('Permission denied (publickey,password).');
+        },
+      };
+      h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, hostConnection });
+    });
+
+    it('opens the connection without questions before the attach, and shows nothing when that works', async () => {
+      const env = remoteDevspace();
+      await h.registry.add(env);
+      await h.controller.openAttachedWindow(env, env.containerName, fresh());
+      expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
+      expect(connects).toEqual([{ host: 'build-box', again: false, asks: false }]);
+      expect(h.progressTitles).toEqual([]);
+      expect(h.statusBar.showConnectionLost).not.toHaveBeenCalled();
+    });
+
+    it('asks in a flow with its progress when the login without questions fails, for example on a host with a password', async () => {
+      failWithoutQuestions = true;
+      const env = remoteDevspace();
+      await h.registry.add(env);
+      await h.controller.openAttachedWindow(env, env.containerName, fresh());
+      expect(connects).toEqual([
+        { host: 'build-box', again: false, asks: false },
+        { host: 'build-box', again: true, asks: true },
+      ]);
+      expect(h.progressTitles[0]).toContain(Messages.connectingTo('acme/api', 'build-box'));
+      expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
+      expect(h.statusBar.showConnectionLost).not.toHaveBeenCalled();
+    });
+
+    it('shows the error and Reconnect when the login with questions fails too', async () => {
+      failWithoutQuestions = true;
+      failWithQuestions = true;
+      const env = remoteDevspace();
+      await h.registry.add(env);
+      await h.controller.openAttachedWindow(env, env.containerName, fresh());
+      expect(connects).toHaveLength(2);
+      expect(fakeVscode.window.showErrorMessage).toHaveBeenCalled();
+      expect(h.statusBar.showConnectionLost).toHaveBeenCalled();
+    });
+
+    it('opens no connection for a devspace on the WSL distribution, nor when the pipeline did not just run', async () => {
+      const wsl = remoteDevspace({ dockerHost: 'wsl:devspaces' });
+      await h.registry.add(wsl);
+      await h.controller.openAttachedWindow(wsl, wsl.containerName, fresh());
+      expect(connects).toEqual([]);
+      // A restored window runs the open flow, whose logins may ask anyway.
+      const env = remoteDevspace();
+      await h.controller.openAttachedWindow(env, env.containerName, undefined);
+      expect(connects).toEqual([]);
+      expect(h.service.openDevspaceInWorker).toHaveBeenCalled();
+    });
   });
 });
 

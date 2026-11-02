@@ -1089,6 +1089,19 @@ async function activateExtension(
         transportFound,
         current: connection.currentDockerHost(),
       }),
+    // The connection of the window of a devspace on an SSH host after a Start: through the worker of its engine, as the
+    // Docker pipe of the window opens it, but before the attach (Controller.connectAfterStart).
+    hostConnection: {
+      sshHostOf: (devspace) => {
+        const host = dockerHostOf(devspace);
+        return hostAccessOf(host)?.kind === 'ssh' ? host : undefined;
+      },
+      connect: async (host, options) => {
+        const target = await hostEngine(host, engineSources);
+        if (target === undefined) throw new Error(`${host} is no remote Docker host`);
+        await channels.ensure(target, options.signal, { again: options.again });
+      },
+    },
     remoteDocker,
     wslSetup,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop

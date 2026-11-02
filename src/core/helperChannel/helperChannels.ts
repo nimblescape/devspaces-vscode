@@ -604,11 +604,13 @@ export class HelperChannels {
   /**
    * The open channel to the engine of `target`, opened now if needed as for a passive read (the helper image only
    * checked, never built; the wait after a failed open kept): for the Docker pipe of the window, which needs the
-   * connection of the relay that the worker opens, and which logs in by itself without it. Throws
-   * HelperChannelError('unavailable') with the cause, and an AbortError when `signal` aborts.
+   * connection of the relay that the worker opens, and which logs in by itself without it. With `again` (a flow of the
+   * user that opens the connection of its window, whose login may ask), the wait after a failed open ends, and the open
+   * is awaited in full, as for a flow; the helper image is still only checked. Throws HelperChannelError('unavailable')
+   * with the cause, and an AbortError when `signal` aborts.
    */
-  ensure(target: DockerTarget, signal?: AbortSignal): Promise<HelperChannel> {
-    return this.ready(target, signal, true);
+  ensure(target: DockerTarget, signal?: AbortSignal, options: { again?: boolean } = {}): Promise<HelperChannel> {
+    return this.ready(target, signal, true, undefined, false, options.again === true);
   }
 
   /** The open channel, or the shared opening of one (see get). */
@@ -661,7 +663,8 @@ export class HelperChannels {
    * the open that keeps the wait after a failed open). Throws HelperChannelError('unavailable') with the cause when
    * either fails, and an AbortError when `signal` aborts. `maintenance` (the flow of an operation `open`) goes to
    * `prepare`; a worker that is open already is used as it is, without a preparation, and one that another call is
-   * opening gets the preparation without the maintenance.
+   * opening gets the preparation without the maintenance. `again` (with `passive`, see ensure): the open of a flow
+   * after the check of a passive read.
    */
   private async ready(
     target: DockerTarget,
@@ -669,6 +672,7 @@ export class HelperChannels {
     passive = false,
     maintenance?: HelperMaintenance,
     refresh = false,
+    again = false,
   ): Promise<HelperChannel> {
     if (signal?.aborted) throw abortError();
     const open = this.entries.get(keyOf(target))?.channel;
@@ -697,7 +701,7 @@ export class HelperChannels {
         throw new HelperChannelError('unavailable', `the helper image could not be prepared: ${cause}`);
       }
     }
-    if (passive) {
+    if (passive && !again) {
       // The refresh keeps the wait after a failed open (CHANNEL_RETRY_AFTER_FAILURE_MS): within it, it is refused at
       // once; only an operation (a flow that is not passive) opens again at once (openInFull). At most
       // CHANNEL_PASSIVE_OPEN_WAIT_MS for an open that is still running.
