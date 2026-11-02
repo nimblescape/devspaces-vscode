@@ -231,7 +231,7 @@ function apiMismatchText(
   if (cli === undefined) return undefined;
   if (from.api === undefined) return dockerApiErrorText(from.detail ?? '', name, cli);
   const mismatch = dockerApiMismatch(from.api, cli.range);
-  return mismatch === undefined ? undefined : dockerApiMismatchText(mismatch, name, cli.name);
+  return mismatch === undefined ? undefined : dockerApiMismatchText(mismatch, name, cli);
 }
 
 /** An engine identity in a message: its ID and root folder as JSON strings (control characters escaped). */

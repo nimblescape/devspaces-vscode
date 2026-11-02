@@ -177,7 +177,7 @@ describe('openHelperChannel with the connection of the relay', () => {
   // Mutation: an open without the check of the API versions gives a worker on an engine that the Docker CLI of the
   // windows of devspaces cannot work with, and a window there fails in its attach without a reason.
   it('refuses an engine whose API versions the Docker CLI of Devspaces does not speak, without a second login', async () => {
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const needsNewer = { apiVersion: '1.64', minApiVersion: '1.57' };
     const message =
       'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine needs the Docker API version 1.57 or later, and the ' +
@@ -220,7 +220,7 @@ describe('openHelperChannel with the connection of the relay', () => {
   });
 
   it('opens a worker on an engine whose API versions fit the Docker CLI of Devspaces', async () => {
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const dockerCliApi = vi.fn(() => cli);
     const connection = fakeConnection(fakeWorker({ apiVersion: '1.52', minApiVersion: '1.40' }));
     const channel = await openHelperChannel(deps({ relay: () => access(async () => connection as unknown as RelayConnection), dockerCliApi }), REMOTE);

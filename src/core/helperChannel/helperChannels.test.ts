@@ -374,7 +374,7 @@ describe('HelperChannels', () => {
       throw new UserFacingError('helperFailed', 'The workspace helper could not be prepared.', tooOld);
     });
     const onRefreshWithoutHelper = vi.fn();
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const channels = new HelperChannels({ open, prepare, checkPresent: prepare, onRefreshWithoutHelper, dockerCliApi: () => cli, logger: silentLogger });
     const message =
       'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine needs the Docker API version 1.60 or later, and the ' +
@@ -889,7 +889,7 @@ describe('the engine identity as values', () => {
   // The Docker CLI of Devspaces runs only in the windows of devspaces on a remote engine: the local Docker keeps the
   // Docker CLI of this computer, whose API versions the extension does not know.
   it('checks the API versions of a remote engine only, also when the Docker CLI starts its worker', async () => {
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const tooOld = { apiVersion: '1.39' };
     const local = probeProcess(ENGINE_IDENTITY, tooOld);
     const channel = await openHelperChannel({ ...deps(local.process), dockerCliApi: () => cli }, LOCAL_DOCKER_TARGET);
@@ -905,7 +905,7 @@ describe('the engine identity as values', () => {
   // The call of the identity runs with the Docker CLI of Devspaces where it is the CLI of the operation: when it fails
   // with the error of the engine for that CLI, the API versions say why; any other failure is the one of the identity.
   it('takes a failed call of the identity as the API versions only with the error of the engine for that CLI', async () => {
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const failing = (stderr: string) => async () => ({ exitCode: 1, stdout: '', stderr: `${stderr}\n`, timedOut: false });
     const apiError = probeProcess(ENGINE_IDENTITY, { apiVersion: '1.39' });
     await expect(
@@ -938,7 +938,7 @@ describe('the engine identity as values', () => {
   // A worker on another engine than the calls without it: the identity check names both engines, whatever the API
   // versions of the engine of the worker.
   it('names the other engine before the API versions of the engine of the worker', async () => {
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const worker = probeProcess({ id: 'other', rootDir: '/var/lib/docker' }, { apiVersion: '1.39' });
     await expect(openHelperChannel({ ...deps(worker.process), dockerCliApi: () => cli }, REMOTE)).rejects.toThrow(
       'The helper channel to build-box was closed: it reaches another Docker engine ("other" "/var/lib/docker")',
