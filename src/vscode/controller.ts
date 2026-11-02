@@ -1931,7 +1931,7 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * A link to Devspaces (links.ts), for example on a website: `vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name`.
+   * A link to Devspaces (links.ts), for example on a website: `vscode://nimblescape.nimblescape-devspaces/open?repository=owner/name`.
    * VS Code asks first whether Devspaces may open it, unless the user answered "Do not ask me again for this
    * extension", and it installs Devspaces from the Marketplace when it is missing. The link opens the devspace of the
    * repository that an account of Devspaces used last on the current Docker engine. Without one, it creates the devspace

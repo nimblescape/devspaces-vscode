@@ -45,17 +45,15 @@ name="${repo#*/}"
 environment="marketplace"
 
 # The extension ID from package.json; its name nimblescape-<name>[-<n>] gives
-# the name of the repository, <name>-vscode[-<n>] (CONTRIBUTING.md, "Naming").
+# the name of the repository, <name>-vscode, without the number (CONTRIBUTING.md,
+# "Naming").
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 extension=$(node -p 'const p = require(process.argv[1]); `${p.publisher}.${p.name}`' "$root/package.json")
 base="${extension#*.}"
 [[ "$base" == nimblescape-* ]] || { echo "The name of the extension $extension does not start with nimblescape-." >&2; exit 1; }
 base="${base#nimblescape-}"
-if [[ "$base" =~ ^(.+)-([0-9]+)$ ]]; then
-  expected="${BASH_REMATCH[1]}-vscode-${BASH_REMATCH[2]}"
-else
-  expected="$base-vscode"
-fi
+[[ "$base" =~ ^(.+)-[0-9]+$ ]] && base="${BASH_REMATCH[1]}"
+expected="$base-vscode"
 [ "$name" = "$expected" ] || { echo "The extension $extension needs the repository $owner/$expected, not $repo." >&2; exit 1; }
 
 # The subject of the token that GitHub Actions issues to a job of the

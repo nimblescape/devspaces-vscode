@@ -25,7 +25,7 @@ What each side needs:
 
 | Where | What | Notes |
 | --- | --- | --- |
-| Your computer | VS Code, Devspaces, the Dev Containers extension | VS Code installs Dev Containers together with Devspaces ([`package.json`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/package.json), `extensionDependencies`). |
+| Your computer | VS Code, Devspaces, the Dev Containers extension | VS Code installs Dev Containers together with Devspaces ([`package.json`](https://github.com/nimblescape/devspaces-vscode/blob/main/package.json), `extensionDependencies`). |
 | Your computer | The OpenSSH client `ssh` | Windows 10 and 11, macOS, and Linux bring it. Only for SSH hosts. |
 | Your computer | A Docker CLI | Not needed: Devspaces downloads its own, see [The Docker CLI of Devspaces](#the-docker-cli-of-devspaces). |
 | Remote host | Docker Engine, rootful or rootless, with its Docker CLI | Set up once by the person who runs the host. Devspaces never installs or starts Docker on a remote host. |
@@ -118,9 +118,9 @@ Both kinds of hosts use the same relay, the same shell before the relay, the sam
 | Docker calls of Devspaces | Through the Docker pipe of the extension while a connection of the relay is open; else a call that only reads runs on the shell before the relay, and any other call uses `ssh://<host>` | Always through the Docker pipe of the extension; each connection runs its own `wsl.exe … docker system dial-stdio` |
 | Who installs Docker | The person who runs the host | Devspaces, with **Set Up Docker for Devspaces in WSL…** |
 | Lifetime | The host runs by itself | By default, WSL stops the distribution 15 seconds after the last `wsl.exe` for it ended; Devspaces keeps it running while it is needed (see [Start and stop of the distribution](#start-and-stop-of-the-distribution)) |
-| Code | [`sshHostTransport`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/transport.ts) | [`wslHostTransport`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/transport.ts) |
+| Code | [`sshHostTransport`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/transport.ts) | [`wslHostTransport`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/transport.ts) |
 
-`hostAccessOf` in [`src/core/docker/dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerHost.ts) decides the kind: `wsl:<name>` is a WSL distribution, unless the text is an SSH address (`wsl:2222` is the SSH host `wsl` with the port 2222).
+`hostAccessOf` in [`src/core/docker/dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerHost.ts) decides the kind: `wsl:<name>` is a WSL distribution, unless the text is an SSH address (`wsl:2222` is the SSH host `wsl` with the port 2222).
 
 ## How a window of a remote devspace opens
 
@@ -166,22 +166,22 @@ sequenceDiagram
 
 The steps in words:
 
-1. **Docker CLI.** While the window activates, the extension puts the folder of the Docker CLI of Devspaces first in `PATH` of its extension host. When the CLI is not there yet, the window downloads it first, with a progress notification ([`src/vscode/ownDockerCliWindow.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/ownDockerCliWindow.ts)).
-2. **Docker pipe of the window.** The folder URI of the window names the address of its Docker pipe (`settings.host`). The window serves that address before `activate()` returns, but only when it is the address that this computer makes for the devspace of the window ([`serveWindowPipe`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/windowPipe.ts)). Otherwise the window closes its remote connection with a message.
-3. **Open flow.** The window runs the open flow of its devspace on the Docker host of the devspace, whatever host Devspaces uses now ([`Controller.withHostOf`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/controller.ts)). The flow has a progress notification, so its SSH login may ask questions in VS Code.
-4. **Shell before the relay.** The SSH check of the host is the login of the shell before the relay. The checks that only read run on that shell as one command line each: `docker info`, the check of the helper image, the engine identity, and for a rootless engine the folder `$XDG_RUNTIME_DIR` of its socket ([`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/remoteShell.ts)).
-5. **Start of the relay.** The connection of the relay takes the login of the shell over and writes the start script into the idle shell ([`openRelayConnection`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/transport.ts)). The script starts the worker container with `docker run --rm -i`. Its pipe loader reads the bundle from the first line of its input, checks its SHA-256 hash against the hash on the command line, and starts the relay.
+1. **Docker CLI.** While the window activates, the extension puts the folder of the Docker CLI of Devspaces first in `PATH` of its extension host. When the CLI is not there yet, the window downloads it first, with a progress notification ([`src/vscode/ownDockerCliWindow.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/ownDockerCliWindow.ts)).
+2. **Docker pipe of the window.** The folder URI of the window names the address of its Docker pipe (`settings.host`). The window serves that address before `activate()` returns, but only when it is the address that this computer makes for the devspace of the window ([`serveWindowPipe`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/windowPipe.ts)). Otherwise the window closes its remote connection with a message.
+3. **Open flow.** The window runs the open flow of its devspace on the Docker host of the devspace, whatever host Devspaces uses now ([`Controller.withHostOf`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/controller.ts)). The flow has a progress notification, so its SSH login may ask questions in VS Code.
+4. **Shell before the relay.** The SSH check of the host is the login of the shell before the relay. The checks that only read run on that shell as one command line each: `docker info`, the check of the helper image, the engine identity, and for a rootless engine the folder `$XDG_RUNTIME_DIR` of its socket ([`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/remoteShell.ts)).
+5. **Start of the relay.** The connection of the relay takes the login of the shell over and writes the start script into the idle shell ([`openRelayConnection`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/transport.ts)). The script starts the worker container with `docker run --rm -i`. Its pipe loader reads the bundle from the first line of its input, checks its SHA-256 hash against the hash on the command line, and starts the relay.
 6. **Worker.** The extension opens the stream with the target `worker`. The relay starts the worker. The extension sends `hello` and `probe`, and compares the engine identity of the worker with the identity that it read before the start. When the windows of the host run the Docker CLI of Devspaces, it also compares the API versions of the engine from the probe with the API versions of that CLI (see [The Docker CLI of Devspaces](#the-docker-cli-of-devspaces)). Only when both fit, the connection becomes the current connection of the host, and the Docker pipe of the extension for the host starts to listen.
 7. **Operation.** The worker runs the operation `open` (see [architecture.md, Open](architecture.md#open)): it starts the container, or builds and creates it when needed, and returns the container, the remote user, and the folder.
 8. **Attach.** `activate()` returns, and VS Code lets the Dev Containers extension resolve the window. Its Docker calls go to the Docker pipe of the window. Each connection to the pipe becomes one stream with the target `docker` on the same connection of the relay. No new login is needed.
 
-**Start from the sidebar.** A **Start** runs steps 3 to 7 in the window where you clicked it, as a flow with its progress notification. Then the extension opens the folder URI of the devspace. VS Code starts a new extension host for that window, also when the same window is used. The new extension host has no connection yet. Before `activate()` returns, it opens one to the SSH host of the devspace, through its worker ([`Controller.connectAfterStart`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/controller.ts)). First it logs in without questions, so a login with a key shows nothing. When that login fails, for example on a host that needs a password, it logs in again in a flow with the progress notification "Connecting to `<host>` for `<repository>`…", whose login may ask (see [SSH logins without setup](#ssh-logins-without-setup)). The Docker pipe of the window then uses this connection. When this login fails too or is cancelled, the window shows the error, and **Reconnect** in the status bar runs the open flow. A devspace on the WSL distribution needs no such step, because its logins ask nothing.
+**Start from the sidebar.** A **Start** runs steps 3 to 7 in the window where you clicked it, as a flow with its progress notification. Then the extension opens the folder URI of the devspace. VS Code starts a new extension host for that window, also when the same window is used. The new extension host has no connection yet. Before `activate()` returns, it opens one to the SSH host of the devspace, through its worker ([`Controller.connectAfterStart`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/controller.ts)). First it logs in without questions, so a login with a key shows nothing. When that login fails, for example on a host that needs a password, it logs in again in a flow with the progress notification "Connecting to `<host>` for `<repository>`…", whose login may ask (see [SSH logins without setup](#ssh-logins-without-setup)). The Docker pipe of the window then uses this connection. When this login fails too or is cancelled, the window shows the error, and **Reconnect** in the status bar runs the open flow. A devspace on the WSL distribution needs no such step, because its logins ask nothing.
 
 **A devspace on the local Docker** has no Docker pipe and no relay. Its window URI names no Docker host, its worker starts with the Docker CLI of this computer, and the Dev Containers extension uses the current Docker context.
 
 ## The list of hosts
 
-Devspaces keeps its own list of hosts in `remote-docker.json` of its global storage ([`src/core/storage/remoteDockerState.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/storage/remoteDockerState.ts)). It never creates, changes, or uses a Docker context for a host of its list. It sets no `DOCKER_HOST` of your environment and writes no setting of the Dev Containers extension. So the `docker` command in your terminals keeps its target.
+Devspaces keeps its own list of hosts in `remote-docker.json` of its global storage ([`src/core/storage/remoteDockerState.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/storage/remoteDockerState.ts)). It never creates, changes, or uses a Docker context for a host of its list. It sets no `DOCKER_HOST` of your environment and writes no setting of the Dev Containers extension. So the `docker` command in your terminals keeps its target.
 
 The file holds:
 
@@ -192,18 +192,18 @@ The file holds:
 
 Each change of the file runs under the lock folder `remote-docker.lock`, because every window of this computer changes it.
 
-The commands ([`src/vscode/remoteDockerCommands.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/remoteDockerCommands.ts)):
+The commands ([`src/vscode/remoteDockerCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/remoteDockerCommands.ts)):
 
 - **Use a Remote Docker Host…** lists the hosts of the list, the other hosts of the SSH config, the SSH hosts of the Docker contexts of the user, and on Windows `wsl:devspaces` when WSL lists that distribution. It also takes a typed SSH address. It tests the host with a new login and `docker info` on it, and then makes it the Docker host of Devspaces. On a computer without a Docker CLI, it downloads the Docker CLI of Devspaces first.
 - **Use the Local Docker** goes back to the Docker of this computer and keeps the list.
 - **Choose the Docker Host…** (the first row of the sidebar) offers both in one list.
 - **Remove a Host from the List…** forgets a host. Its devspaces stay on that computer.
 
-An operation reads the Docker host of Devspaces once, at its start (`DockerTargets.resolve` in [`src/core/docker/dockerTargets.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerTargets.ts)). Every Docker call of that operation runs on that host, so a change of the host in another window cannot move the operation to another engine. The window of a devspace always uses the host of its devspace. More rules: [architecture.md, Remote Docker hosts](architecture.md#remote-docker-hosts).
+An operation reads the Docker host of Devspaces once, at its start (`DockerTargets.resolve` in [`src/core/docker/dockerTargets.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerTargets.ts)). Every Docker call of that operation runs on that host, so a change of the host in another window cannot move the operation to another engine. The window of a devspace always uses the host of its devspace. More rules: [architecture.md, Remote Docker hosts](architecture.md#remote-docker-hosts).
 
 ## The transport
 
-The transport is one process on this computer ([`src/core/relay/transport.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/transport.ts), `sshCommandArgs` and `wslCommandArgs` in [`src/core/docker/dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerHost.ts)). Its standard input and output are bytes.
+The transport is one process on this computer ([`src/core/relay/transport.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/transport.ts), `sshCommandArgs` and `wslCommandArgs` in [`src/core/docker/dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerHost.ts)). Its standard input and output are bytes.
 
 **SSH:**
 
@@ -229,7 +229,7 @@ wsl.exe -d devspaces -u root --cd / --exec sh -s
 
 ## The shell before the relay
 
-The checks before a connection of the relay run on the login that the connection then uses, so that the open of a window logs in once ([`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/remoteShell.ts), [`src/core/relay/remoteShells.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/remoteShells.ts)).
+The checks before a connection of the relay run on the login that the connection then uses, so that the open of a window logs in once ([`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/remoteShell.ts), [`src/core/relay/remoteShells.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/remoteShells.ts)).
 
 1. **Login.** The transport starts. The extension writes one line:
 
@@ -251,7 +251,7 @@ The checks before a connection of the relay run on the login that the connection
 
 ## The start script
 
-The start script is one line ([`src/core/relay/startScript.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/startScript.ts)):
+The start script is one line ([`src/core/relay/startScript.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/startScript.ts)):
 
 ```sh
 printf '%s\n' devspaces-start-<32 hex>; exec 'docker' 'run' '--rm' '-i' ... 'startRelay'
@@ -260,7 +260,7 @@ printf '%s\n' devspaces-start-<32 hex>; exec 'docker' 'run' '--rm' '-i' ... 'sta
 - Every word is in single quotes, so no word is read as shell syntax. A word with a line break or a NUL is refused.
 - `sh` reads a whole line before it runs it. The extension writes nothing more until it saw the marker and a line feed. So `docker run` gets all the input after the line: first the bundle line for the pipe loader, then the frames.
 - The marker is new and random for each connection, so no text of the login can look like it by chance.
-- The `docker run` has the same arguments as the start of a worker on the local Docker ([`channelRunArgs`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/helperChannel/helperChannels.ts)), but its entry is `startRelay` instead of `startChannel`:
+- The `docker run` has the same arguments as the start of a worker on the local Docker ([`channelRunArgs`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/helperChannel/helperChannels.ts)), but its entry is `startRelay` instead of `startChannel`:
 
 ```text
 docker run --rm -i --pull never --name <worker name>
@@ -273,13 +273,13 @@ docker run --rm -i --pull never --name <worker name>
   devspaces-worker:<tag> node -e <pipe loader> /opt/devspace/channel.js <sha256> startRelay
 ```
 
-The `<engine socket>` is `/var/run/docker.sock` of the host, or the socket of a rootless engine in `$XDG_RUNTIME_DIR`. The pipe loader ([`src/core/loader/pipeLoader.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/loader/pipeLoader.ts)) stores the bundle `dist/helperChannel.js` in the container only when its line is not too long and its SHA-256 hash is the hash on the command line. No code goes into an argument or a variable of the container. See [architecture.md, Pipe loading](architecture.md#pipe-loading).
+The `<engine socket>` is `/var/run/docker.sock` of the host, or the socket of a rootless engine in `$XDG_RUNTIME_DIR`. The pipe loader ([`src/core/loader/pipeLoader.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/loader/pipeLoader.ts)) stores the bundle `dist/helperChannel.js` in the container only when its line is not too long and its SHA-256 hash is the hash on the command line. No code goes into an argument or a variable of the container. See [architecture.md, Pipe loading](architecture.md#pipe-loading).
 
 The `docker run` uses the Docker CLI of the host, not the Docker CLI of Devspaces. The helper image `devspaces-worker:<tag>` must exist on the engine (`--pull never`). When it is missing, the extension builds it before the start, with a login of its own (see [Logins of a window](#logins-of-a-window)).
 
 ## The relay
 
-The relay is the entry `startRelay` of the bundle ([`src/helperChannel/relay.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/helperChannel/relay.ts)). The frames and the streams are the same code on both sides ([`src/core/relay/frames.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/frames.ts), [`src/core/relay/mux.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/mux.ts)).
+The relay is the entry `startRelay` of the bundle ([`src/helperChannel/relay.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/helperChannel/relay.ts)). The frames and the streams are the same code on both sides ([`src/core/relay/frames.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/frames.ts), [`src/core/relay/mux.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/mux.ts)).
 
 ### Frames
 
@@ -327,7 +327,7 @@ Each side sends PING after 15 seconds without another frame, and ends the connec
 
 ## One connection per window and host
 
-Each window keeps at most one current connection of the relay per host ([`src/core/relay/connections.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/connections.ts), [`src/core/relay/connection.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/connection.ts)). The worker channel, the Docker pipe of the window, and the Docker pipe of the extension for that host share it.
+Each window keeps at most one current connection of the relay per host ([`src/core/relay/connections.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/connections.ts), [`src/core/relay/connection.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/connection.ts)). The worker channel, the Docker pipe of the window, and the Docker pipe of the extension for that host share it.
 
 - **Open.** The open has 120 seconds, from the start of the transport to the HELLO of the relay. The error output of the transport (`ssh`, the relay, and the worker share it) is kept: its last 8 KiB are the reason of a failure.
 - **Checks first.** A new connection carries Docker streams only after its worker passed the check of the engine identity. When the worker reaches another engine than the one that was read before its start, the open fails and closes the connection that it started.
@@ -341,7 +341,7 @@ More rules: [architecture.md, The connection of the relay](architecture.md#the-c
 
 ### The Docker pipe of the window
 
-The window of a devspace on a remote host reaches its engine through a Docker pipe on this computer ([`src/core/relay/windowPipe.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/windowPipe.ts), [`src/core/relay/dockerPipe.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/dockerPipe.ts), [`src/core/relay/pipeAddress.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/pipeAddress.ts)).
+The window of a devspace on a remote host reaches its engine through a Docker pipe on this computer ([`src/core/relay/windowPipe.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/windowPipe.ts), [`src/core/relay/dockerPipe.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/dockerPipe.ts), [`src/core/relay/pipeAddress.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/pipeAddress.ts)).
 
 **Address.** The id of the pipe is the first 16 hex digits of the SHA-256 of the ID of this computer, the Docker host, and the container name. So each open of the same devspace gives the same window URI, and VS Code finds an open window of it.
 
@@ -373,7 +373,7 @@ flowchart TD
 
 ### The Docker pipe of the extension
 
-The Docker calls of Devspaces itself (`BootstrapDocker` in [`src/core/docker/bootstrapDocker.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/bootstrapDocker.ts)) use a second pipe for each host ([`src/core/relay/hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/hostPipes.ts)), with a random id that no window URI names.
+The Docker calls of Devspaces itself (`BootstrapDocker` in [`src/core/docker/bootstrapDocker.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/bootstrapDocker.ts)) use a second pipe for each host ([`src/core/relay/hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/hostPipes.ts)), with a random id that no window URI names.
 
 - **SSH host:** the pipe listens from the first time that a connection of the relay to the host passed its checks, until the window closes. A Docker call of an operation on the host gets `DOCKER_HOST` with this pipe only while the connection is open and the pipe listens. Otherwise a call that only reads runs on the shell before the relay, and any other call gets `ssh://<host>`, with one login. Each connection of the pipe is a stream of the open connection, or its own `ssh … docker system dial-stdio` when that connection ended meanwhile.
 - **WSL distribution:** the pipe listens from the first Docker call of an operation there until the window closes. Each of its connections runs its own `wsl.exe -d devspaces -u root --cd / --exec docker system dial-stdio`, also while a connection of the relay is open, so that these calls never depend on that connection. `ssh://` is never used for the distribution.
@@ -382,9 +382,9 @@ More rules: [architecture.md, The Docker pipe](architecture.md#the-docker-pipe).
 
 ## The Docker CLI of Devspaces
 
-The window of a devspace on a remote host runs the Dev Containers extension with a Docker CLI that Devspaces downloads ([`src/core/docker/ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/ownDockerCli.ts), [`src/core/docker/dockerDownload.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerDownload.ts), [`src/core/docker/archive.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/archive.ts)). So a computer without Docker can use a remote host, and every computer uses the same tested version.
+The window of a devspace on a remote host runs the Dev Containers extension with a Docker CLI that Devspaces downloads ([`src/core/docker/ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/ownDockerCli.ts), [`src/core/docker/dockerDownload.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerDownload.ts), [`src/core/docker/archive.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/archive.ts)). So a computer without Docker can use a remote host, and every computer uses the same tested version.
 
-**The pin.** [`src/core/docker/dockerCliPin.json`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerCliPin.json) names one version of the static builds of Docker Inc. (29.9.2 when this document was written) and, for each platform, the URL, the size in bytes, and the SHA-256 of its archive:
+**The pin.** [`src/core/docker/dockerCliPin.json`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerCliPin.json) names one version of the static builds of Docker Inc. (29.9.2 when this document was written) and, for each platform, the URL, the size in bytes, and the SHA-256 of its archive:
 
 | Platform | Archive on `download.docker.com` |
 | --- | --- |
@@ -392,7 +392,7 @@ The window of a devspace on a remote host runs the Dev Containers extension with
 | macOS x86_64 and aarch64 | `mac/static/stable/<arch>/docker-<version>.tgz` |
 | Linux x86_64 and aarch64 | `linux/static/stable/<arch>/docker-<version>.tgz` |
 
-Docker publishes no checksums and no signatures for these files. So [`scripts/docker-cli-pin.mjs`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/scripts/docker-cli-pin.mjs) computes the size and the hash from its own download. The pin also names the Docker API versions that this version speaks (`api`, 1.40 to 1.56 for 29.9.2). The script measures them with the Linux build against a fake engine, in a container without network and without the files of the computer, because nothing checks a new CLI before its pin. On another platform (for example Windows 10 on Arm), the window uses the Docker CLI of this computer.
+Docker publishes no checksums and no signatures for these files. So [`scripts/docker-cli-pin.mjs`](https://github.com/nimblescape/devspaces-vscode/blob/main/scripts/docker-cli-pin.mjs) computes the size and the hash from its own download. The pin also names the Docker API versions that this version speaks (`api`, 1.40 to 1.56 for 29.9.2). The script measures them with the Linux build against a fake engine, in a container without network and without the files of the computer, because nothing checks a new CLI before its pin. On another platform (for example Windows 10 on Arm), the window uses the Docker CLI of this computer.
 
 **Download and unpack.**
 
@@ -407,15 +407,15 @@ Docker publishes no checksums and no signatures for these files. So [`scripts/do
 - The Docker calls of Devspaces in an operation on a remote host use this CLI in every window once it is installed (option `ownCli` of `BootstrapDocker`).
 - The calls for the local Docker keep the Docker CLI of this computer. `PATH` of your terminals does not change.
 
-**API versions.** The Docker CLI asks the engine for its newest API version and speaks the lower of that and its own newest one. With an engine that is older than its oldest API version, it speaks its newest one, and the engine refuses it. An engine also refuses an API version below its minimum (`DOCKER_MIN_API_VERSION` of `dockerd`). So before the attach, Devspaces checks that the newest API version of the engine is at least the oldest one of the CLI, and that the minimum of the engine is at most the newest one of the CLI ([`src/core/docker/dockerApiVersion.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerApiVersion.ts)). It takes the API versions of the engine from the probe of the worker (`GET /version`). When a Docker call of this CLI fails before the worker (the engine identity, the check of the helper image, or `docker info` of the host test), it reads the versions from the error of the engine. When they do not fit, the open fails with a message that names both versions and what to update; no worker starts after such an error. The check applies where the windows run this CLI: in the window of a devspace when its folder is in `PATH`, and in the other windows when the pin has a build for this computer, because they download it before their first call. Where a window runs the Docker CLI of this computer for a remote engine instead, the same check runs with the newest API version of that CLI, which `docker version` names. A Docker CLI does not name its oldest API version, so with that CLI only an engine whose minimum is too new is refused, and the message says to update the Docker CLI of this computer.
+**API versions.** The Docker CLI asks the engine for its newest API version and speaks the lower of that and its own newest one. With an engine that is older than its oldest API version, it speaks its newest one, and the engine refuses it. An engine also refuses an API version below its minimum (`DOCKER_MIN_API_VERSION` of `dockerd`). So before the attach, Devspaces checks that the newest API version of the engine is at least the oldest one of the CLI, and that the minimum of the engine is at most the newest one of the CLI ([`src/core/docker/dockerApiVersion.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerApiVersion.ts)). It takes the API versions of the engine from the probe of the worker (`GET /version`). When a Docker call of this CLI fails before the worker (the engine identity, the check of the helper image, or `docker info` of the host test), it reads the versions from the error of the engine. When they do not fit, the open fails with a message that names both versions and what to update; no worker starts after such an error. The check applies where the windows run this CLI: in the window of a devspace when its folder is in `PATH`, and in the other windows when the pin has a build for this computer, because they download it before their first call. Where a window runs the Docker CLI of this computer for a remote engine instead, the same check runs with the newest API version of that CLI, which `docker version` names. A Docker CLI does not name its oldest API version, so with that CLI only an engine whose minimum is too new is refused, and the message says to update the Docker CLI of this computer.
 
-**Updates.** The workflow [`.github/workflows/docker-cli.yml`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/.github/workflows/docker-cli.yml) downloads the files of the pin again once a week and fails when one of them changed or when the CLI speaks other API versions than the pin names. When Docker published a newer version for all platforms of the pin, it opens a pull request with the new pin, its API versions measured, and starts CI on it. A new CLI version reaches the users only with a new version of Devspaces.
+**Updates.** The workflow [`.github/workflows/docker-cli.yml`](https://github.com/nimblescape/devspaces-vscode/blob/main/.github/workflows/docker-cli.yml) downloads the files of the pin again once a week and fails when one of them changed or when the CLI speaks other API versions than the pin names. When Docker published a newer version for all platforms of the pin, it opens a pull request with the new pin, its API versions measured, and starts CI on it. A new CLI version reaches the users only with a new version of Devspaces.
 
 More rules: [architecture.md, The Docker CLI of Devspaces](architecture.md#the-docker-cli-of-devspaces).
 
 ## The attach of the Dev Containers extension
 
-Devspaces does not attach to the container itself: it opens a folder URI, and the Dev Containers extension connects the window ([`src/vscode/connection/authority.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/connection/authority.ts), [`src/vscode/connectionAdapter.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/connectionAdapter.ts), [`src/core/devContainers.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/devContainers.ts)).
+Devspaces does not attach to the container itself: it opens a folder URI, and the Dev Containers extension connects the window ([`src/vscode/connection/authority.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/connection/authority.ts), [`src/vscode/connectionAdapter.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/connectionAdapter.ts), [`src/core/devContainers.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/devContainers.ts)).
 
 The folder URI is:
 
@@ -439,7 +439,7 @@ The JSON for a devspace on a remote host:
 
 ### Which logins may ask
 
-Only an SSH login of a **flow of the user** asks in VS Code: a command with its progress notification (Start, Open, Stop, and the other operations), and the test of a host of **Use a Remote Docker Host…** ([`withSshPrompts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/sshAskpass.ts)). This covers the shell before the relay and a connection of the relay that logs in itself.
+Only an SSH login of a **flow of the user** asks in VS Code: a command with its progress notification (Start, Open, Stop, and the other operations), and the test of a host of **Use a Remote Docker Host…** ([`withSshPrompts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshAskpass.ts)). This covers the shell before the relay and a connection of the relay that logs in itself.
 
 Every other login asks nothing:
 
@@ -452,7 +452,7 @@ The `ssh` of Devspaces runs for them with `BatchMode=yes` and `SSH_ASKPASS_REQUI
 
 ### How the questions reach VS Code
 
-([`src/core/sshAskpass.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/sshAskpass.ts), [`src/vscode/sshLoginPrompts.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/sshLoginPrompts.ts))
+([`src/core/sshAskpass.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshAskpass.ts), [`src/vscode/sshLoginPrompts.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshLoginPrompts.ts))
 
 1. The login runs `ssh` with `SSH_ASKPASS` set to the helper of Devspaces and `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 and later). For an older `ssh` (also the OpenSSH 8.1 of Windows 10), `DISPLAY` is set when it is not set.
 2. The helper `askpass.js` runs with the executable of VS Code as Node.js (`ELECTRON_RUN_AS_NODE=1`). On Linux and macOS a short launcher `askpass.sh` starts it. On Windows `SSH_ASKPASS` names `"<Code.exe>" "<askpass.js>"` directly, without `cmd.exe`, so the text of a question can never become a command.
@@ -464,7 +464,7 @@ A host key that changed is refused by `ssh` without a question. The **Cancel** o
 
 ### The key of Devspaces
 
-After a login of a flow of the user that asked for the password of the account, Devspaces asks once: "Log in to `<host>` without a password next time?" ([`src/core/sshKey.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/sshKey.ts), [`src/vscode/sshKeyOffer.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/sshKeyOffer.ts)).
+After a login of a flow of the user that asked for the password of the account, Devspaces asks once: "Log in to `<host>` without a password next time?" ([`src/core/sshKey.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshKey.ts), [`src/vscode/sshKeyOffer.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshKeyOffer.ts)).
 
 - **Use a Key**: `ssh-keygen` creates `~/.ssh/devspaces_ed25519` (Ed25519, no passphrase, comment `devspaces@<name of this computer>`) when it is not there. One command on the same shell adds the public key to `~/.ssh/authorized_keys` on the host, as `ssh-copy-id` does. A login that may use only this key checks it. Only then, the host gets `sshKey: "installed"`. When the check fails, the line is removed again.
 - **Not for This Host** records `sshKey: "declined"`, and the host is not asked again until it is removed from the list and added again.
@@ -478,7 +478,7 @@ On Windows, Devspaces can use Docker Engine in its own WSL distribution `devspac
 
 ### Setup
 
-**Set Up Docker for Devspaces in WSL…** ([`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/wslSetupCommands.ts)) runs these steps. One setup or removal runs at a time, also across windows (the lock folder `%LOCALAPPDATA%\nimblescape\devspaces\wsl.lock`).
+**Set Up Docker for Devspaces in WSL…** ([`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/wslSetupCommands.ts)) runs these steps. One setup or removal runs at a time, also across windows (the lock folder `%LOCALAPPDATA%\nimblescape\devspaces\wsl.lock`).
 
 1. **WSL**: `wsl.exe --version` must name WSL 2.4.4 or later. Without WSL, the message offers **Install WSL 2** (`wsl --install --no-distribution`, which needs administrator rights and a restart).
 2. **Which distribution**: `wsl.exe --list --quiet`, and the registry of the Windows user (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`). Devspaces knows its own distribution by the folder of its virtual disk.
@@ -494,7 +494,7 @@ After the setup and at the start of each window, Devspaces checks whether its di
 
 ### Start and stop of the distribution
 
-By default, WSL stops a distribution 15 seconds after the last Windows process for it ended (`instanceIdleTimeout` of WSL), with Docker and all its containers. A service of systemd, such as `dockerd`, does not keep it running. So Devspaces keeps Windows processes for the distribution running while it is needed ([`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslLifetime.ts), [`src/core/docker/wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslKeeper.ts)):
+By default, WSL stops a distribution 15 seconds after the last Windows process for it ended (`instanceIdleTimeout` of WSL), with Docker and all its containers. A service of systemd, such as `dockerd`, does not keep it running. So Devspaces keeps Windows processes for the distribution running while it is needed ([`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`src/core/docker/wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts)):
 
 ```mermaid
 flowchart LR
@@ -525,7 +525,7 @@ flowchart LR
 
 ### Upkeep and removal
 
-- **Weekly upgrade** ([`src/core/docker/wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslUpgrade.ts)): only in the distribution that Devspaces set up, and only while it runs. About once a week, Devspaces runs `apt-get update` and `apt-get upgrade --with-new-pkgs` as root there. A `policy-rc.d` of Devspaces keeps the packages from restarting services during the run, so Docker and the running devspaces go on; the new versions run after the next start of the distribution.
+- **Weekly upgrade** ([`src/core/docker/wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslUpgrade.ts)): only in the distribution that Devspaces set up, and only while it runs. About once a week, Devspaces runs `apt-get update` and `apt-get upgrade --with-new-pkgs` as root there. A `policy-rc.d` of Devspaces keeps the packages from restarting services during the run, so Docker and the running devspaces go on; the new versions run after the next start of the distribution.
 - **Removal**: **Remove the WSL Distribution of Devspaces…** runs `wsl.exe --unregister devspaces` after a warning, only for the distribution that Devspaces set up. It also removes the folder, the host of the list, and the start entry.
 
 More rules: [architecture.md, The WSL distribution of Devspaces](architecture.md#the-wsl-distribution-of-devspaces), and the user view in [guide.md](guide.md#the-wsl-distribution-of-devspaces-windows).
@@ -547,36 +547,36 @@ For an SSH host. Each VS Code window has its own extension host, so each window 
 | The test of a host in **Use a Remote Docker Host…** | 1: always a new login. |
 | The check of the key of Devspaces after **Use a Key** | 1: a login that may use only that key. |
 
-The CI job "vscode attach remote" counts the logins of the open of a restored window on another computer and allows one ([`test/vscode/attach/remote.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/vscode/attach/remote.test.ts)). The Docker tools in your terminals use your own Docker context and are not part of this count.
+The CI job "vscode attach remote" counts the logins of the open of a restored window on another computer and allows one ([`test/vscode/attach/remote.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/vscode/attach/remote.test.ts)). The Docker tools in your terminals use your own Docker context and are not part of this count.
 
 ## Time limits
 
 | What | Value | Code |
 | --- | --- | --- |
-| `ConnectTimeout` of the `ssh` of Devspaces (the Docker CLI gives its `ssh` 30 s) | 15 s | `sshCommandArgs` in [`dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerHost.ts) |
-| Login of the shell before the relay (stops while a question is open) | 30 s | `SHELL_LOGIN_TIMEOUT_MS` in [`remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/remoteShell.ts) |
+| `ConnectTimeout` of the `ssh` of Devspaces (the Docker CLI gives its `ssh` 30 s) | 15 s | `sshCommandArgs` in [`dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerHost.ts) |
+| Login of the shell before the relay (stops while a question is open) | 30 s | `SHELL_LOGIN_TIMEOUT_MS` in [`remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/remoteShell.ts) |
 | Shell without a command is closed | 2 min | `SHELL_IDLE_CLOSE_MS` |
 | Most output of one command on the shell | 16 MiB | `MAX_SHELL_COMMAND_OUTPUT` |
-| Open of a connection of the relay, up to its HELLO | 120 s | `RELAY_OPEN_TIMEOUT_MS` in [`connection.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/connection.ts) |
+| Open of a connection of the relay, up to its HELLO | 120 s | `RELAY_OPEN_TIMEOUT_MS` in [`connection.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/connection.ts) |
 | Most output of the login before the start marker | 64 KiB | `MAX_OUTPUT_BEFORE_MARKER` |
-| PING after silence of one side | 15 s | `RELAY_PING_INTERVAL_MS` in [`frames.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/frames.ts) |
+| PING after silence of one side | 15 s | `RELAY_PING_INTERVAL_MS` in [`frames.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/frames.ts) |
 | Connection ends without any frame | 60 s | `RELAY_SILENCE_MS` |
 | Payload of one frame | 64 KiB | `MAX_FRAME_PAYLOAD` |
 | Credit of each direction of a stream | 256 KiB | `STREAM_WINDOW` |
 | Streams of one connection at the same time | 256 | `MAX_STREAMS` |
-| Stop of a worker: SIGTERM, then SIGKILL | 45 s | `RELAY_WORKER_STOP_MS` in [`relay.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/helperChannel/relay.ts) |
-| Connection without a stream is closed | 10 min | `RELAY_IDLE_CLOSE_MS` in [`connections.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/connections.ts) |
+| Stop of a worker: SIGTERM, then SIGKILL | 45 s | `RELAY_WORKER_STOP_MS` in [`relay.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/helperChannel/relay.ts) |
+| Connection without a stream is closed | 10 min | `RELAY_IDLE_CLOSE_MS` in [`connections.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/connections.ts) |
 | A new worker starts on a connection only until | 1 h after its open | `RELAY_WORKER_MAX_AGE_MS` |
-| Worker without an operation is closed by the extension | 10 min | `CHANNEL_IDLE_CLOSE_MS` in [`protocol.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/helperChannel/protocol.ts) |
-| First bytes of a connection of a Docker pipe | 30 s | `PIPE_FIRST_BYTES_TIMEOUT_MS` in [`dockerPipe.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/dockerPipe.ts) |
-| Wait of a pipe connection for the open of the relay | 30 s | `RELAY_WAIT_MS` in [`windowPipe.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/windowPipe.ts) |
+| Worker without an operation is closed by the extension | 10 min | `CHANNEL_IDLE_CLOSE_MS` in [`protocol.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/helperChannel/protocol.ts) |
+| First bytes of a connection of a Docker pipe | 30 s | `PIPE_FIRST_BYTES_TIMEOUT_MS` in [`dockerPipe.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/dockerPipe.ts) |
+| Wait of a pipe connection for the open of the relay | 30 s | `RELAY_WAIT_MS` in [`windowPipe.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/windowPipe.ts) |
 | Next try of the relay after it could not be had | 60 s | `RELAY_RETRY_AFTER_MS` |
 | Wait while another program serves the address of a pipe | 15 s | `PIPE_IN_USE_WAIT_MS` |
 | New time of the socket and its folder | every hour | `PIPE_REFRESH_INTERVAL_MS` |
-| Download of the Docker CLI without any byte | 30 s | `STALLED_AFTER_MS` in [`ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/ownDockerCli.ts) |
-| WSL: checks of the idle session and of the keeper | every 60 s, end after 2 checks without a container | [`wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslKeeper.ts) |
-| WSL: next try of the Docker pipe of the extension | 10 s | `WSL_PIPE_RETRY_MS` in [`hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/hostPipes.ts) |
-| WSL: weekly upgrade | first check 5 min after the first use, then at most every 6 h; runs when the last good run is 7 days old; at most 30 min | [`wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslUpgrade.ts) |
+| Download of the Docker CLI without any byte | 30 s | `STALLED_AFTER_MS` in [`ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/ownDockerCli.ts) |
+| WSL: checks of the idle session and of the keeper | every 60 s, end after 2 checks without a container | [`wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) |
+| WSL: next try of the Docker pipe of the extension | 10 s | `WSL_PIPE_RETRY_MS` in [`hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/hostPipes.ts) |
+| WSL: weekly upgrade | first check 5 min after the first use, then at most every 6 h; runs when the last good run is 7 days old; at most 30 min | [`wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslUpgrade.ts) |
 
 ## When a part fails
 
@@ -613,45 +613,45 @@ The design [design/remote-devspaces-one-ssh-login.md](design/remote-devspaces-on
 
 ## Tests
 
-- **Unit tests** (`npm test`): the frames, the streams and the flow control, the start script, the shell before the relay, the connections, the Docker pipes and their addresses, and the relay itself, also behind a local `sh -s` with the start script ([`src/helperChannel/relay.e2e.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/helperChannel/relay.e2e.test.ts)). The WSL parts with fake processes.
-- **Docker tests** (`npm run test:docker`): a remote host through an SSH server in a container ([`test/docker/sshd/Dockerfile`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/docker/sshd/Dockerfile)), whose worker runs behind the relay ([`test/docker/remoteHost.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/docker/remoteHost.test.ts)); the login with a password and an unknown host key through the real `ssh` and `SSH_ASKPASS`, and the key of Devspaces ([`test/docker/sshLogin.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/docker/sshLogin.test.ts)); the WSL distribution through a fake `wsl.exe`, which takes exactly the arguments of the transport and runs the command on the runner ([`test/docker/helperChannel.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/docker/helperChannel.test.ts)); and the setup and upgrade scripts of the distribution as root in a container of Debian 13 ([`test/docker/wslProvision.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/docker/wslProvision.test.ts), [`test/docker/wslUpgrade.test.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/test/docker/wslUpgrade.test.ts)).
-- **VS Code test** (CI job "vscode attach remote" in [`.github/workflows/ci.yml`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/.github/workflows/ci.yml)): VS Code opens the window of a devspace on a Docker engine over SSH. The window downloads the Docker CLI of Devspaces, the Dev Containers extension attaches through the Docker pipe, and the test allows one SSH login for the open.
+- **Unit tests** (`npm test`): the frames, the streams and the flow control, the start script, the shell before the relay, the connections, the Docker pipes and their addresses, and the relay itself, also behind a local `sh -s` with the start script ([`src/helperChannel/relay.e2e.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/helperChannel/relay.e2e.test.ts)). The WSL parts with fake processes.
+- **Docker tests** (`npm run test:docker`): a remote host through an SSH server in a container ([`test/docker/sshd/Dockerfile`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/docker/sshd/Dockerfile)), whose worker runs behind the relay ([`test/docker/remoteHost.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/docker/remoteHost.test.ts)); the login with a password and an unknown host key through the real `ssh` and `SSH_ASKPASS`, and the key of Devspaces ([`test/docker/sshLogin.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/docker/sshLogin.test.ts)); the WSL distribution through a fake `wsl.exe`, which takes exactly the arguments of the transport and runs the command on the runner ([`test/docker/helperChannel.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/docker/helperChannel.test.ts)); and the setup and upgrade scripts of the distribution as root in a container of Debian 13 ([`test/docker/wslProvision.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/docker/wslProvision.test.ts), [`test/docker/wslUpgrade.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/docker/wslUpgrade.test.ts)).
+- **VS Code test** (CI job "vscode attach remote" in [`.github/workflows/ci.yml`](https://github.com/nimblescape/devspaces-vscode/blob/main/.github/workflows/ci.yml)): VS Code opens the window of a devspace on a Docker engine over SSH. The window downloads the Docker CLI of Devspaces, the Dev Containers extension attaches through the Docker pipe, and the test allows one SSH login for the open.
 - CI has no Windows computer with WSL 2, so the WSL distribution is tested only through the fake `wsl.exe` and the scripts in a Debian container.
 
 ## Source files
 
 | File | Role |
 | --- | --- |
-| [`src/core/docker/dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerHost.ts) | Kinds of Docker targets, SSH addresses, `wsl:` hosts, the arguments of `ssh` and `wsl.exe` |
-| [`src/core/docker/dockerTargets.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerTargets.ts) | The Docker host of an operation, read once at its start |
-| [`src/core/docker/remoteDocker.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/remoteDocker.ts) | The SSH check, the test of a host, the socket of a rootless engine |
-| [`src/core/storage/remoteDockerState.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/storage/remoteDockerState.ts) | The list of hosts in `remote-docker.json` |
-| [`src/vscode/remoteDockerCommands.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/remoteDockerCommands.ts) | The commands of the list of hosts |
-| [`src/core/relay/transport.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/transport.ts) | The transports `ssh` and `wsl.exe`, the open of a connection of the relay |
-| [`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/remoteShell.ts), [`remoteShells.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/remoteShells.ts) | The shell before the relay, one per window and host |
-| [`src/core/relay/startScript.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/startScript.ts) | The start script and its marker |
-| [`src/core/relay/frames.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/frames.ts) | The frames and their limits |
-| [`src/core/relay/mux.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/mux.ts) | The streams, the credit, the order of the frames, PING and silence; both sides |
-| [`src/core/relay/connection.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/connection.ts) | The connection of the relay on the side of the extension |
-| [`src/core/relay/connections.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/connections.ts) | One connection per window and host, its end without use |
-| [`src/core/relay/bridge.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/bridge.ts) | A socket and a stream joined in both directions, with their ends |
-| [`src/helperChannel/relay.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/helperChannel/relay.ts) | The relay in the worker container |
-| [`src/helperChannel/main.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/helperChannel/main.ts) | The entries of the bundle, also `startRelay` |
-| [`src/core/loader/pipeLoader.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/loader/pipeLoader.ts) | The pipe loader and the bundle line |
-| [`src/core/helperChannel/helperChannels.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/helperChannel/helperChannels.ts) | The open of a worker, behind the relay or with the Docker CLI; the check of the engine identity |
-| [`src/core/relay/pipeAddress.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/pipeAddress.ts) | The address and the id of a Docker pipe |
-| [`src/core/relay/dockerPipe.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/dockerPipe.ts) | The server of a Docker pipe, `dial-stdio` as a way without the relay |
-| [`src/core/relay/windowPipe.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/windowPipe.ts) | The Docker pipe of the window |
-| [`src/core/relay/hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/relay/hostPipes.ts) | The Docker pipe of the extension for each host |
-| [`src/core/docker/bootstrapDocker.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/bootstrapDocker.ts) | The Docker CLI calls of the extension, and how each one reaches its host |
-| [`src/core/docker/dockerCliPin.json`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerCliPin.json) | The pin of the Docker CLI of Devspaces |
-| [`src/core/docker/ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/ownDockerCli.ts), [`dockerDownload.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/dockerDownload.ts), [`archive.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/archive.ts) | The download, the check, and the unpack of the Docker CLI of Devspaces |
-| [`src/vscode/ownDockerCliWindow.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/ownDockerCliWindow.ts) | The download with a progress notification |
-| [`src/vscode/connection/authority.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/connection/authority.ts) | The folder URI with `settings.host` |
-| [`src/core/devContainers.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/devContainers.ts) | The internal details of the Dev Containers extension that Devspaces relies on |
-| [`src/vscode/extension.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/extension.ts) | The wiring: the logins, the connections, the pipes, the Docker CLI in `PATH` |
-| [`src/core/sshAskpass.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/sshAskpass.ts), [`src/vscode/sshLoginPrompts.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/sshLoginPrompts.ts) | The questions of SSH logins in VS Code |
-| [`src/core/sshKey.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/sshKey.ts), [`src/vscode/sshKeyOffer.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/sshKeyOffer.ts) | The key of Devspaces |
-| [`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/vscode/wslSetupCommands.ts) | The setup and the removal of the WSL distribution |
-| [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslKeeper.ts) | The idle session, the keeper, and the start entry |
-| [`src/core/docker/wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode-2/blob/main/src/core/docker/wslUpgrade.ts) | The weekly upgrade of the distribution |
+| [`src/core/docker/dockerHost.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerHost.ts) | Kinds of Docker targets, SSH addresses, `wsl:` hosts, the arguments of `ssh` and `wsl.exe` |
+| [`src/core/docker/dockerTargets.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerTargets.ts) | The Docker host of an operation, read once at its start |
+| [`src/core/docker/remoteDocker.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/remoteDocker.ts) | The SSH check, the test of a host, the socket of a rootless engine |
+| [`src/core/storage/remoteDockerState.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/storage/remoteDockerState.ts) | The list of hosts in `remote-docker.json` |
+| [`src/vscode/remoteDockerCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/remoteDockerCommands.ts) | The commands of the list of hosts |
+| [`src/core/relay/transport.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/transport.ts) | The transports `ssh` and `wsl.exe`, the open of a connection of the relay |
+| [`src/core/relay/remoteShell.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/remoteShell.ts), [`remoteShells.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/remoteShells.ts) | The shell before the relay, one per window and host |
+| [`src/core/relay/startScript.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/startScript.ts) | The start script and its marker |
+| [`src/core/relay/frames.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/frames.ts) | The frames and their limits |
+| [`src/core/relay/mux.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/mux.ts) | The streams, the credit, the order of the frames, PING and silence; both sides |
+| [`src/core/relay/connection.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/connection.ts) | The connection of the relay on the side of the extension |
+| [`src/core/relay/connections.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/connections.ts) | One connection per window and host, its end without use |
+| [`src/core/relay/bridge.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/bridge.ts) | A socket and a stream joined in both directions, with their ends |
+| [`src/helperChannel/relay.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/helperChannel/relay.ts) | The relay in the worker container |
+| [`src/helperChannel/main.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/helperChannel/main.ts) | The entries of the bundle, also `startRelay` |
+| [`src/core/loader/pipeLoader.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/loader/pipeLoader.ts) | The pipe loader and the bundle line |
+| [`src/core/helperChannel/helperChannels.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/helperChannel/helperChannels.ts) | The open of a worker, behind the relay or with the Docker CLI; the check of the engine identity |
+| [`src/core/relay/pipeAddress.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/pipeAddress.ts) | The address and the id of a Docker pipe |
+| [`src/core/relay/dockerPipe.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/dockerPipe.ts) | The server of a Docker pipe, `dial-stdio` as a way without the relay |
+| [`src/core/relay/windowPipe.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/windowPipe.ts) | The Docker pipe of the window |
+| [`src/core/relay/hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/hostPipes.ts) | The Docker pipe of the extension for each host |
+| [`src/core/docker/bootstrapDocker.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/bootstrapDocker.ts) | The Docker CLI calls of the extension, and how each one reaches its host |
+| [`src/core/docker/dockerCliPin.json`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerCliPin.json) | The pin of the Docker CLI of Devspaces |
+| [`src/core/docker/ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/ownDockerCli.ts), [`dockerDownload.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerDownload.ts), [`archive.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/archive.ts) | The download, the check, and the unpack of the Docker CLI of Devspaces |
+| [`src/vscode/ownDockerCliWindow.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/ownDockerCliWindow.ts) | The download with a progress notification |
+| [`src/vscode/connection/authority.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/connection/authority.ts) | The folder URI with `settings.host` |
+| [`src/core/devContainers.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/devContainers.ts) | The internal details of the Dev Containers extension that Devspaces relies on |
+| [`src/vscode/extension.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/extension.ts) | The wiring: the logins, the connections, the pipes, the Docker CLI in `PATH` |
+| [`src/core/sshAskpass.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshAskpass.ts), [`src/vscode/sshLoginPrompts.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshLoginPrompts.ts) | The questions of SSH logins in VS Code |
+| [`src/core/sshKey.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshKey.ts), [`src/vscode/sshKeyOffer.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshKeyOffer.ts) | The key of Devspaces |
+| [`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/wslSetupCommands.ts) | The setup and the removal of the WSL distribution |
+| [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) | The idle session, the keeper, and the start entry |
+| [`src/core/docker/wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslUpgrade.ts) | The weekly upgrade of the distribution |
