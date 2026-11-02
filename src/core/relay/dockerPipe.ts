@@ -8,7 +8,8 @@
 // (hostPipes.ts). Each connection of the pipe becomes one Docker stream of the connection of the relay to the host
 // (relayDockerDial), which the worker channel of the window shares, so the window logs in to the host once. A window
 // of a devspace on an engine with the removal mark gets one `docker system dial-stdio` over SSH per connection instead
-// (processDockerDial): the relay would set Devspaces up there again. No `vscode`.
+// (processDockerDial): the relay would set Devspaces up there again. With a rule (`requests`), each connection is a
+// FilteredConnection (dockerRequests.ts), which refuses the requests that the rule does not allow. No `vscode`.
 import * as fs from 'fs';
 import * as net from 'net';
 import type { Duplex } from 'stream';
@@ -295,7 +296,7 @@ export class DockerPipe {
       const connection: Duplex =
         rule === undefined
           ? socket
-          : new FilteredConnection(socket, rule, (request) => logger.warn(`The Docker pipe of ${name} refused ${requestText(request)}: ${request.reason}.`));
+          : new FilteredConnection(socket, rule, name, (request) => logger.warn(`The Docker pipe of ${name} refused ${requestText(request)}: ${request.reason}.`));
       this.options.connect(connection).then(
         () => {
           if (!connection.destroyed) connection.resume();

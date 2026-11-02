@@ -316,10 +316,17 @@ export class FilteredConnection extends Duplex {
   private statusLine = '';
   private refusedRequest = false;
   private endedClient = false;
+  /** The client ended while its bytes waited for the answer to a takeover: its direction ends after them. */
+  private endAfterAnswer = false;
 
+  /**
+   * `name` names the pipe in the answer to a refused request (`the extension on build-box`, or the container of the
+   * window).
+   */
   constructor(
     private readonly socket: net.Socket,
     rule: DockerRequestRule,
+    private readonly name: string,
     private readonly onRefused: (request: RefusedDockerRequest) => void,
     private readonly refusedCloseMs = REFUSED_CLOSE_MS,
   ) {
@@ -384,6 +391,10 @@ export class FilteredConnection extends Duplex {
   /** The direction of the client ends: its end, or the refusal of a takeover by the engine. */
   private endClient(): void {
     if (this.endedClient || this.refusedRequest) return;
+    if (this.parser.holding) {
+      this.endAfterAnswer = true;
+      return;
+    }
     this.endedClient = true;
     this.push(null);
     // What the client still sends is dropped, so that its end comes.
@@ -407,7 +418,8 @@ export class FilteredConnection extends Duplex {
       this.statusLine = '';
       const parsed = this.parser.answer(upgraded);
       this.apply(parsed);
-      if (upgraded && !this.parser.holding && !this.socket.destroyed) this.socket.resume();
+      if (this.endAfterAnswer) this.endClient();
+      else if (upgraded && !this.socket.destroyed) this.socket.resume();
       return;
     }
   }
@@ -420,7 +432,7 @@ export class FilteredConnection extends Duplex {
       const timer = setTimeout(() => socket.destroy(), this.refusedCloseMs);
       timer.unref?.();
       socket.once('close', () => clearTimeout(timer));
-      if (!socket.writableEnded) socket.end(refusalResponse(`Devspaces does not allow ${requestText(request)} through the Docker pipe of this window: ${request.reason}.`));
+      if (!socket.writableEnded) socket.end(refusalResponse(`Devspaces does not allow ${requestText(request)} through the Docker pipe of ${this.name}: ${request.reason}.`));
       // What the client still sends is dropped, so that its end comes.
       socket.resume();
     }

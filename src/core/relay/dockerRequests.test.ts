@@ -184,7 +184,7 @@ describe('FilteredConnection', () => {
     const closed = new Promise<void>((resolve) => (resolveClosed = resolve));
     const pipePath = path.join(dir, 'pipe.sock');
     const pipeServer = net.createServer({ allowHalfOpen: true }, (socket) => {
-      const connection = new FilteredConnection(socket, rule, (request) => refusals.push(request), 1_000);
+      const connection = new FilteredConnection(socket, rule, 'devspaces-acme-api', (request) => refusals.push(request), 1_000);
       connection.on('close', () => resolveClosed());
       const upstream = net.connect({ path: enginePath, allowHalfOpen: true });
       cleanups.push(() => upstream.destroy());
@@ -231,7 +231,7 @@ describe('FilteredConnection', () => {
     client.write('GET /_ping HTTP/1.1\r\n\r\n');
     await vi.waitFor(() => expect(engineGot()).toBe('GET /_ping HTTP/1.1\r\n\r\n'));
     client.write('DELETE /forbidden/x HTTP/1.1\r\n\r\n');
-    const body = JSON.stringify({ message: 'Devspaces does not allow DELETE /forbidden/x through the Docker pipe of this window: it is forbidden.' });
+    const body = JSON.stringify({ message: 'Devspaces does not allow DELETE /forbidden/x through the Docker pipe of devspaces-acme-api: it is forbidden.' });
     // The client keeps its direction open: the pipe closes the connection itself.
     await expect(answer).resolves.toBe(`HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n${refusalResponse(JSON.parse(body).message as string).toString()}`);
     await closed;
@@ -252,6 +252,20 @@ describe('FilteredConnection', () => {
     client.end('GET /forbidden HTTP/1.1\r\n\r\nexit\n');
     await expect(answer).resolves.toBe('HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\nbye');
     expect(engineGot()).toBe('POST /exec/abc/start HTTP/1.1\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 2\r\n\r\n{}GET /forbidden HTTP/1.1\r\n\r\nexit\n');
+  });
+
+  it('passes the input that a client sent before the answer 101, and its end after it', async () => {
+    const { client, engineGot } = await setup((socket, received) => {
+      socket.on('data', () => {
+        if (received().endsWith('{}')) setTimeout(() => socket.write('HTTP/1.1 101 UPGRADED\r\n\r\n'), 50);
+      });
+      socket.on('end', () => socket.end(`got ${received().length} bytes`));
+    });
+    const answer = readAll(client);
+    const request = 'POST /exec/abc/start HTTP/1.1\r\nUpgrade: tcp\r\nContent-Length: 2\r\n\r\n{}';
+    client.end(`${request}early input`);
+    await expect(answer).resolves.toBe(`HTTP/1.1 101 UPGRADED\r\n\r\ngot ${request.length + 'early input'.length} bytes`);
+    expect(engineGot()).toBe(`${request}early input`);
   });
 
   it('ends the direction to the engine when the engine refused a takeover', async () => {

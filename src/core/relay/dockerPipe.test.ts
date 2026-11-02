@@ -78,6 +78,8 @@ async function engine(): Promise<{ path: string; requests: string[] }> {
   const requests: string[] = [];
   const server = net.createServer({ allowHalfOpen: true }, (socket) => {
     let request = '';
+    // A connection that the pipe closed (a refused request): its answer finds no reader.
+    socket.on('error', () => {});
     socket.on('data', (chunk: Buffer) => (request += chunk.toString()));
     socket.on('end', () => {
       requests.push(request);
@@ -234,6 +236,28 @@ describe('the Docker pipe', () => {
     expect(answers).toEqual(['answer to one', 'answer to two', 'answer to three']);
     expect(connection).toHaveBeenCalledTimes(4);
     await vi.waitFor(() => expect(pipe.connectionCount).toBe(0));
+  });
+
+  it('filters the requests of each connection with its rule: a refused one gets 403, and the engine nothing of it', async () => {
+    const target = await engine();
+    const log = logger();
+    const address = dockerPipeAddress(ID, 'linux', base());
+    const pipe = await DockerPipe.listen({
+      address,
+      connect: async (socket) => relayDockerDial(relayConnection(target.path), socket),
+      requests: (request) => (request.path === '/containers/create' ? 'the test does not allow it' : undefined),
+      logger: log,
+      name: 'devspaces-api',
+    });
+    cleanups.push(() => pipe.close());
+    const allowed = 'GET /v1.47/containers/json HTTP/1.1\r\nHost: api.moby.localhost\r\n\r\n';
+    await expect(exchange(address.path, allowed)).resolves.toBe(`answer to ${allowed}`);
+    const answer = await refused(address.path, 'POST /v1.47/containers/create HTTP/1.1\r\nContent-Length: 2\r\n\r\n{}');
+    expect(answer).toMatch(/^HTTP\/1\.1 403 Forbidden\r\n/);
+    expect(answer).toContain('{"message":"Devspaces does not allow POST /containers/create through the Docker pipe of devspaces-api: the test does not allow it."}');
+    expect(log.lines).toContain('warn The Docker pipe of devspaces-api refused POST /containers/create: the test does not allow it.');
+    await vi.waitFor(() => expect(pipe.connectionCount).toBe(0));
+    expect(target.requests.join('')).not.toContain('/containers/create');
   });
 
   it('ends a connection when the engine cannot be reached, with the reason in the log', async () => {
