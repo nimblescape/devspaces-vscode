@@ -403,7 +403,7 @@ describe('the WSL distribution of Devspaces: no SSH', () => {
   it('names the API versions when the engine refuses the Docker CLI of Devspaces', async () => {
     const refused = { exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too old. Minimum supported API version is 1.60\n', timedOut: false };
     const docker = fakeDocker(() => refused);
-    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' } };
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
     const deps = { docker, runner: sshRunner(), state, logger, sshPath: undefined, env: {}, shells: wslShells() };
     await expect(ensureDockerHostReachable(remoteDockerTarget(WSL_HOST), { ...deps, dockerCliApi: () => cli })).rejects.toMatchObject({
       code: 'dockerHostUnreachable',
