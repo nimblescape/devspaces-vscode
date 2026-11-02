@@ -12,7 +12,7 @@ import * as vscode from 'vscode';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
 import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
-import type { DockerCliApi } from '../core/docker/dockerApiVersion';
+import { LOCAL_CLI_VERSION_FORMAT, LOCAL_CLI_VERSION_TIMEOUT_MS, localDockerCliApi, type DockerCliApi } from '../core/docker/dockerApiVersion';
 import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
 import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslKeeper } from '../core/docker/wslKeeper';
@@ -231,12 +231,35 @@ async function activateExtension(
   };
   const ownCli = pipeWindow ? presentOwnCli() : undefined;
   if (ownCli !== undefined) useOwnDockerCli(ownCli);
-  // The Docker CLI of Devspaces, for the check of the API versions of a remote engine (dockerApiVersion.ts): in the
-  // window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs (after a failed
-  // download it runs the Docker CLI of this computer, whose API versions are not known: no check); in another window
-  // where Docker publishes it for this computer, as the windows of devspaces download and run it, also the first one.
+  // The Docker CLI of this computer where the windows run it for a remote engine: in the window of a devspace without
+  // the Docker CLI of Devspaces in PATH (no build for this computer, or a failed download), and in the other windows
+  // where Docker publishes no such build. Read once, in the background: `docker version` prints the versions of the CLI
+  // also when it reaches no engine, so it gets an address that nobody serves (and no context). Only its newest API
+  // version (localDockerCliApi); undefined until it is read, and when it cannot be.
+  let localCliApi: DockerCliApi | undefined;
+  const readLocalCliApi = async (cli: string): Promise<void> => {
+    const noEngine = platform === 'win32' ? `npipe:////./pipe/devspaces-no-docker-engine-${process.pid}` : `unix://${path.join(paths.root, 'no-docker-engine.sock')}`;
+    const cliEnv: NodeJS.ProcessEnv = { ...dockerProcessEnv(env, platform, cli), DOCKER_HOST: noEngine };
+    delete cliEnv.DOCKER_CONTEXT;
+    const result = await runner.run(cli, ['version', '--format', LOCAL_CLI_VERSION_FORMAT], { env: cliEnv, timeoutMs: LOCAL_CLI_VERSION_TIMEOUT_MS });
+    localCliApi = localDockerCliApi(result.stdout);
+    if (localCliApi === undefined) {
+      logger.warn(`The API version of the Docker CLI of this computer could not be read, so it is not checked against remote engines: ${(result.stderr || result.stdout).trim().slice(-500) || 'no output'}`);
+    } else {
+      logger.info(`${localCliApi.name.charAt(0).toUpperCase()}${localCliApi.name.slice(1)} speaks the Docker API up to version ${localCliApi.range.max}.`);
+    }
+  };
+  if (installedCli !== undefined && (pipeWindow ? ownCli === undefined : !ownCliBuild)) {
+    void readLocalCliApi(installedCli).catch((error: unknown) => logger.warn(`The API version of the Docker CLI of this computer could not be read: ${errorMessage(error)}`));
+  }
+  // The Docker CLI whose API versions are checked against a remote engine (dockerApiVersion.ts): the Docker CLI of
+  // Devspaces in the window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs,
+  // and in another window where Docker publishes it for this computer, as the windows of devspaces download and run it,
+  // also the first one; else the Docker CLI of this computer.
   const dockerCliApi = (): DockerCliApi | undefined =>
-    (pipeWindow ? ownCliInPath : ownCliBuild) ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API } : undefined;
+    (pipeWindow ? ownCliInPath : ownCliBuild)
+      ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API, kind: 'devspaces' }
+      : localCliApi;
   const dockerPath = installedCli ?? ownCli;
   // Windows: the Dev Containers extension, which connects the windows to the containers, runs in this extension host and
   // looks up `docker` in its PATH and in C:\Program Files\Docker\Docker\resources\bin only. A CLI that Devspaces found
