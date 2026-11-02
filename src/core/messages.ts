@@ -281,6 +281,7 @@ export const Messages = {
     `${repository} does not belong to you or to one of your organizations. Opening it runs code from the repository (Dockerfile, Features, and commands) on your computer. Open it?`,
   signInRequired: 'Sign in with GitHub to use Devspaces.',
   opening: (repository: string) => `Opening ${repository}…`,
+  connectingTo: (repository: string, host: string) => `Connecting to ${host} for ${repository}…`,
   deleteConfirm: (repository: string) =>
     `Delete the devspace of ${repository}? The container and the files in the devspace are removed.`,
   /** The recorded state is older than the last use of the devspace. */

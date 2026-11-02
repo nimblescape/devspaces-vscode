@@ -319,7 +319,7 @@ When the login to the host asks a question, Devspaces asks it in VS Code, only i
 
 - **The host key**, the first time that your computer connects to the host: a dialog shows its fingerprint. Choose **Accept and Connect** only when it is the fingerprint of that host (ask the person who runs the host). `ssh` then keeps the key in your `known_hosts`, as in a terminal. When the host shows another key later, `ssh` refuses the login.
 - **Your password**, the passphrase of your key, or a code: an input box at the top of the window, which hides what you type. When the answer was not accepted, the box asks again. Cancel ends the login. **Cancel** of the progress notification closes the box too.
-- Devspaces keeps no answer. The work of Devspaces in the background (the states in the view, the builds of its helper image) asks nothing: without a key, it waits for your next command and shows the state as unknown until then. Each window logs in once for each host.
+- Devspaces keeps no answer. The work of Devspaces in the background (the states in the view, the builds of its helper image) asks nothing: without a key, it waits for your next command and shows the state as unknown until then. Each window logs in once for each host. After a **Start**, the window of the devspace logs in once more before it connects, because VS Code starts it again; without a key, it asks for your password again, with the notification "Connecting to `<host>` for `<repository>`…".
 - This needs the OpenSSH client of your computer (Windows 10 and 11, macOS, and Linux bring it). It asks through the program in `SSH_ASKPASS`, which Devspaces sets only for these logins.
 
 ### A key for the next logins

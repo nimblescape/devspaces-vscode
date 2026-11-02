@@ -171,6 +171,21 @@ describe('HelperChannels', () => {
     channels.dispose();
   });
 
+  // After a Start, the window opens its connection in a flow whose login may ask (Controller.connectAfterStart).
+  it('ensure with `again` ends the wait after a failed open and still only checks the helper image', async () => {
+    const channel = fakeChannel();
+    const prepare = vi.fn(async () => {});
+    const checkPresent = vi.fn(async () => {});
+    const open = vi.fn().mockRejectedValueOnce(new HelperChannelError('open', 'Permission denied.')).mockResolvedValueOnce(channel);
+    const channels = new HelperChannels({ open, prepare, checkPresent, logger: silentLogger, retryAfterFailureMs: 60_000 });
+    await expect(channels.ensure(REMOTE)).rejects.toMatchObject({ code: 'unavailable', message: 'Permission denied.' });
+    await expect(channels.ensure(REMOTE, undefined, { again: true })).resolves.toBe(channel);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(checkPresent).toHaveBeenCalledTimes(2);
+    expect(prepare).not.toHaveBeenCalled();
+    channels.dispose();
+  });
+
   // A context of the user pointed to another host under the same name.
   it('opens a channel of its own for the same context with another endpoint; the old one gets no new call', async () => {
     const first = fakeChannel();
