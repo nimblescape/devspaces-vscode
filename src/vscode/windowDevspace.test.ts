@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { silentLogger } from '../core/ports';
 import type { Devspace } from '../core/types';
 import { resourceName } from '../core/names';
-import { LOCAL_DOCKER_TARGET, dockerTargetOf } from '../core/docker/dockerHost';
+import { LOCAL_DOCKER_TARGET, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
 import { operationDockerTarget } from '../core/docker/dockerTargets';
 import type { RunResult } from '../core/ports';
 import {
@@ -24,16 +24,17 @@ import {
 
 const ENTRY = { id: 'e1', containerName: 'devspaces-acme-api-x' } as Devspace;
 
-function deps(options: { found?: Devspace[]; needsRestore?: boolean; installed?: boolean; added?: number | Error } = {}) {
+function deps(options: { found?: Devspace[]; needsRestore?: boolean; installed?: boolean; added?: number | Error; target?: DockerTarget } = {}) {
   const found = [...(options.found ?? [])];
   const errors: string[] = [];
   const warnings: string[] = [];
   const all = {
     registry: { findByContainerName: vi.fn(async () => found.shift()) },
     needsRestore: vi.fn(async () => options.needsRestore ?? true),
-    docker: { isInstalled: () => options.installed ?? true },
+    docker: { canRunOn: vi.fn((_target: Pick<DockerTarget, 'kind'>) => options.installed ?? true) },
+    current: async () => options.target ?? LOCAL_DOCKER_TARGET,
     service: {
-      reconcileInWorker: vi.fn(async (_options: { passive: boolean; signal?: AbortSignal }) => {
+      reconcileInWorker: vi.fn(async (_options: { passive: boolean; mayStart?: boolean; signal?: AbortSignal }) => {
         if (options.added instanceof Error) throw options.added;
         return options.added ?? 0;
       }),
@@ -55,8 +56,25 @@ describe('the devspace of the window at its activation', () => {
     expect(await findWindowDevspace('devspaces-acme-api-x', all)).toBe(ENTRY);
     const [options] = all.service.reconcileInWorker.mock.calls[0];
     expect(options.passive).toBe(true);
+    // Not a window that reaches its container through its Docker pipe on that host: a WSL distribution that does not
+    // run stays stopped.
+    expect(options.mayStart).toBeUndefined();
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(WINDOW_RESTORE_TIMEOUT_MS).toBe(30_000);
+  });
+
+  // Mutation: a restore that always may start the distribution (also for a window of a container on another engine)
+  // fails it, and so does one that never may.
+  it('may start a WSL distribution only for a window whose Docker pipe is for the host of the restore', async () => {
+    const wsl = { kind: 'remote' as const, host: 'wsl:devspaces', endpoint: 'wsl://devspaces' } as DockerTarget;
+    const asked: string[] = [];
+    const piped = deps({ found: [undefined as unknown as Devspace, ENTRY], added: 1, target: wsl });
+    await findWindowDevspace('devspaces-acme-api-x', { ...piped.all, windowPipeOn: (host) => (asked.push(host), host === 'wsl:devspaces') });
+    expect(asked).toEqual(['wsl:devspaces']);
+    expect(piped.all.service.reconcileInWorker.mock.calls[0]?.[0].mayStart).toBe(true);
+    const elsewhere = deps({ found: [undefined as unknown as Devspace, ENTRY], added: 1, target: wsl });
+    await findWindowDevspace('devspaces-acme-api-x', { ...elsewhere.all, windowPipeOn: () => false });
+    expect(elsewhere.all.service.reconcileInWorker.mock.calls[0]?.[0].mayStart).toBeUndefined();
   });
 
   it('nothing restored, a valid registry, or no Docker: no devspace', async () => {
@@ -70,6 +88,14 @@ describe('the devspace of the window at its activation', () => {
     const noDocker = deps({ installed: false });
     expect(await findWindowDevspace('c', noDocker.all)).toBeUndefined();
     expect(noDocker.all.service.reconcileInWorker).not.toHaveBeenCalled();
+  });
+
+  // On a computer without Docker, the Docker CLI of Devspaces runs the calls on a remote host (BootstrapDocker.canRunOn).
+  it('asks for a Docker CLI of the current engine before the restore', async () => {
+    const remote = remoteDockerTarget('build-box');
+    const { all } = deps({ found: [undefined as unknown as Devspace, ENTRY], added: 1, target: remote });
+    expect(await findWindowDevspace('devspaces-acme-api-x', all)).toBe(ENTRY);
+    expect(all.docker.canRunOn).toHaveBeenCalledWith(remote);
   });
 
   it('restores nothing when the activation may not (before the first use of Devspaces)', async () => {
@@ -119,7 +145,7 @@ describe('the devspace of the window at its activation', () => {
 
   // "Remove Devspaces from This Docker Engine…": until a flow of the user there, nothing runs there by itself.
   it('does the Docker work at the start on the current engine, unless Devspaces was removed from it', async () => {
-    const remote = dockerTargetOf('ssh://build-box', 'devspaces-build-box');
+    const remote = remoteDockerTarget('build-box');
     const lines: string[] = [];
     const logger = { ...silentLogger, info: (line: string) => void lines.push(line) };
     const removed = vi.fn(async (target: { host: string }) => target.host === 'build-box');
@@ -283,7 +309,7 @@ describe('the devspace of the window by the labels of its container', () => {
   // Mutation: the activation without this read leaves the window of another account on an engine with the mark
   // connected (role C).
   it('the activation reads them only for a lost registry on an engine with the mark, on that engine, within the time limit of the activation', async () => {
-    const remote = dockerTargetOf('ssh://build-box', 'devspaces-build-box');
+    const remote = remoteDockerTarget('build-box');
     const lines: string[] = [];
     const engines: unknown[] = [];
     const run = vi.fn(async () => {
@@ -292,7 +318,7 @@ describe('the devspace of the window by the labels of its container', () => {
     });
     const all = (options: { lost?: boolean; removed?: boolean; installed?: boolean } = {}) => ({
       needsRestore: async () => options.lost ?? true,
-      docker: { isInstalled: () => options.installed ?? true, run },
+      docker: { canRunOn: (target: Pick<DockerTarget, 'kind'>) => target === remote && (options.installed ?? true), run },
       current: async () => remote,
       removed: vi.fn(async () => options.removed ?? true),
       now: () => NOW,

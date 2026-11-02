@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // All user-visible texts.
-import { sshCommandLine } from './docker/dockerHost';
+import { sshCommandLine, wslDistributionOf, type DockerHostProblem } from './docker/dockerHost';
 
 export const Steps = {
   startingDocker: 'Starting Docker',
@@ -378,19 +378,25 @@ export const Messages = {
   cloneFailed: 'The repository could not be downloaded.',
   noDevspace: (repository: string) => `${repository} has no devspace.`,
   /**
-   * The remote Docker host (the current Docker context, `ssh://…`) did not answer. `reason` is one of dockerHostReason.
-   * Shown instead of the start of Docker Desktop and of the Docker setup.
+   * The remote Docker host (a host of the list of Devspaces, `ssh://…`) did not answer. `reason` is one of
+   * dockerHostReason. Shown instead of the start of Docker Desktop and of the Docker setup.
    */
   dockerHostUnreachable: (host: string, reason: string) => `The Docker host ${host} cannot be reached. ${reason}`,
   /** The current Docker context points to another computer without SSH (for example `tcp://`). */
   dockerEndpointUnsupported: (endpoint: string) =>
-    `Docker is set to ${endpoint}. Devspaces uses Docker on another computer only over SSH. Choose "Devspaces: Use a Remote Docker Host…" or "Devspaces: Use the Local Docker".`,
+    `Docker is set to ${endpoint}. Devspaces uses Docker on another computer only over SSH. Choose "Devspaces: Use a Remote Docker Host…", or set Docker on this computer to its local engine.`,
+  /**
+   * Devspaces uses the local Docker, but the current Docker context of the user (or DOCKER_HOST, `context` undefined)
+   * reaches `host` over SSH: Devspaces reaches remote hosts only through its own list (isDockerContextHostTarget).
+   */
+  dockerContextHost: (host: string, context: string | undefined) =>
+    `Docker on this computer is set to ${host} over SSH (${context === undefined ? 'DOCKER_HOST' : `Docker context ${context}`}). Devspaces uses a remote host only from its own list: choose "Devspaces: Use a Remote Docker Host…" and ${host}, or set Docker on this computer to its local engine${context === undefined ? '' : ' (for example with "docker context use default" in a terminal)'}.`,
   /**
    * The current Docker context could not be read (`docker context inspect` failed, and DOCKER_HOST is not set): the
    * Docker calls could reach another computer than the one that the devspaces record, so nothing is done.
    */
   dockerContextUnreadable:
-    'Devspaces cannot read the current Docker context, so it does not know which Docker to use. It does nothing with Docker until it can read the context. Run "docker context inspect" in a terminal to see the problem, or choose "Devspaces: Use the Local Docker" or "Devspaces: Use a Remote Docker Host…".',
+    'Devspaces cannot read the current Docker context, so it does not know which Docker to use. It does nothing with Docker until it can read the context. Run "docker context inspect" in a terminal to see the problem, or choose "Devspaces: Use a Remote Docker Host…".',
   /** The Docker host of a context that could not be read, in other texts ("Docker is set to …"). */
   unreadableDockerContextHost: 'a Docker context that cannot be read',
   /** The view's title and the first row of the sidebar while the current Docker context cannot be read. */
@@ -411,11 +417,12 @@ export const Messages = {
   containerNotReady: (repository: string, container: string) =>
     `The container ${container} of ${repository} does not run. Its state is in the details; start ${repository} again when the cause is fixed.`,
   /**
-   * The pipeline ran, but the current Docker context changed to another host meanwhile, so the window does not connect.
-   * The container stays on its host.
+   * The pipeline of a local devspace ran, but the current Docker context of this computer changed to another endpoint
+   * meanwhile (`currentHost`), so the window does not connect: its Dev Containers extension would ask that endpoint.
+   * The container stays on the local Docker.
    */
-  otherDockerHostAfterStart: (repository: string, devspaceHost: string, currentHost: string) =>
-    `The devspace of ${repository} runs on ${describeHost(devspaceHost)}, but Docker is now set to ${describeHost(currentHost)}, so this window does not connect to it. Choose "Devspaces: Use a Remote Docker Host…" or "Devspaces: Use the Local Docker" for ${describeHost(devspaceHost)}, then start ${repository} again.`,
+  otherDockerHostAfterStart: (repository: string, currentHost: string) =>
+    `The devspace of ${repository} runs on the local Docker, but Docker on this computer is now set to ${currentHost}, so this window does not connect to it. Set Docker on this computer back to its local engine, then start ${repository} again.`,
   /** A devspace of another Docker host is never acted on. */
   otherDockerHost: (repository: string, devspaceHost: string, currentHost: string) =>
     `The devspace of ${repository} is on ${describeHost(devspaceHost)}, but Docker is set to ${describeHost(currentHost)}. Nothing was changed.`,
@@ -436,9 +443,34 @@ function describeHost(host: string): string {
 
 /** The plain reason of a failed connection to the remote Docker host `host` (see dockerHostProblem). */
 export function dockerHostReason(
-  problem: 'unreachable' | 'closedBeforeLogin' | 'login' | 'hostKey' | 'dockerMissing' | 'dockerNotRunning' | 'dockerPermission' | 'sshMissing' | 'unknown',
+  problem: DockerHostProblem,
   host: string,
 ): string {
+  const distribution = wslDistributionOf(host);
+  // The WSL distribution of Devspaces is on this computer: no network, no SSH. The patterns of an SSH problem
+  // (dockerHostProblem) can match a message of wsl.exe, so these get a text of WSL too.
+  if (distribution !== undefined) {
+    switch (problem) {
+      case 'unreachable':
+        return 'WSL did not answer. Try again. When it does not help, run "wsl --shutdown" in a terminal, then try again.';
+      case 'closedBeforeLogin':
+      case 'login':
+      case 'hostKey':
+      case 'sshMissing':
+        return `WSL could not start a shell in the WSL distribution ${distribution}. The details show why.`;
+      case 'dockerMissing':
+        return `Docker is not installed in the WSL distribution ${distribution}.`;
+      case 'dockerNotRunning':
+        return `Docker is not running in the WSL distribution ${distribution}.`;
+      case 'dockerPermission':
+        return `Docker in the WSL distribution ${distribution} refused the call. The details show why.`;
+      case 'wslMissing':
+      case 'wslDistributionMissing':
+      case 'pipeNotListening':
+      case 'unknown':
+        break;
+    }
+  }
   switch (problem) {
     case 'unreachable':
       return 'The computer does not answer. Check its name and the network connection.';
@@ -456,6 +488,12 @@ export function dockerHostReason(
       return 'Your user on that computer may not use Docker. Add it to the group docker there.';
     case 'sshMissing':
       return 'The SSH client (ssh) was not found on this computer.';
+    case 'wslMissing':
+      return 'WSL (wsl.exe) was not found on this computer.';
+    case 'wslDistributionMissing':
+      return `The WSL distribution ${distribution ?? host} is not installed on this computer.`;
+    case 'pipeNotListening':
+      return 'The Docker pipe of Devspaces for it cannot listen on this computer. Devspaces tries again in a few seconds; the details show why.';
     case 'unknown':
       return 'The details show why.';
   }

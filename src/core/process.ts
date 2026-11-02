@@ -5,7 +5,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as path from 'path';
 import { MAX_CAPTURED_OUTPUT_BYTES, MAX_CAPTURED_STDERR_CHARACTERS } from './helper/analysisLimits';
-import { abortError, type ProcessRunner, type RunOptions, type RunResult, type StartOptions, type StartedProcess } from './ports';
+import { abortError, decodedOutput, heldOutput, type ProcessRunner, type RunOptions, type RunResult, type StartOptions, type StartedByteProcess, type StartedProcess } from './ports';
 
 /**
  * A program printed more than MAX_CAPTURED_OUTPUT_BYTES on its standard output. It was stopped,
@@ -198,6 +198,75 @@ export class NodeProcessRunner implements ProcessRunner {
    * after a time limit (on Windows the process tree: docker.exe starts ssh.exe).
    */
   start(file: string, args: readonly string[], options: StartOptions = {}): StartedProcess {
+    const stdout = decodedOutput();
+    const stderr = decodedOutput();
+    const started = this.spawnStarted(file, args, options, () => {
+      // The rest of an incomplete character at the end of the output.
+      stdout.end();
+      stderr.end();
+    });
+    const { child } = started;
+    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    return {
+      killNow: started.killNow,
+      write: (text) => {
+        if (started.ended() || child.stdin.destroyed || !child.stdin.writable) return false;
+        child.stdin.write(text);
+        return true;
+      },
+      end: () => {
+        if (!child.stdin.destroyed) child.stdin.end();
+      },
+      kill: started.kill,
+      onStdout: stdout.listen,
+      onStderr: stderr.listen,
+      exited: started.exited,
+      pid: child.pid,
+    };
+  }
+
+  /**
+   * A program whose standard input and output are bytes with their flow (the connection of the relay: `ssh … sh -s`).
+   * Stopped as `start` does.
+   */
+  startBytes(file: string, args: readonly string[], options: StartOptions = {}): StartedByteProcess {
+    // `null`: the end of the output.
+    const stdout = heldOutput<Buffer | null>();
+    const stderr = decodedOutput();
+    const started = this.spawnStarted(file, args, options, () => stderr.end());
+    const { child } = started;
+    child.stdout.on('data', (chunk: Buffer) => stdout.deliver(chunk));
+    child.stdout.on('end', () => stdout.deliver(null));
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    return {
+      killNow: started.killNow,
+      write: (chunk) => {
+        if (started.ended() || child.stdin.destroyed || !child.stdin.writable) return true;
+        return child.stdin.write(chunk);
+      },
+      onDrain: (listener) => {
+        child.stdin.once('drain', listener);
+      },
+      end: () => {
+        if (!child.stdin.destroyed) child.stdin.end();
+      },
+      kill: started.kill,
+      onStdout: (listener, onEnd) => stdout.listen((chunk) => (chunk === null ? onEnd() : listener(chunk))),
+      pauseStdout: () => child.stdout.pause(),
+      resumeStdout: () => child.stdout.resume(),
+      onStderr: stderr.listen,
+      exited: started.exited,
+      pid: child.pid,
+    };
+  }
+
+  /**
+   * The process of `start` and `startBytes`: its end (`exited`, after `beforeExit` delivered the rest of its output), and
+   * its stop. `kill` stops it (on Windows with its tree), and SIGKILL follows after START_KILL_GRACE_MS; `killNow` stops
+   * it and the programs that it started at once, also when the extension host exits.
+   */
+  private spawnStarted(file: string, args: readonly string[], options: StartOptions, beforeExit: () => void) {
     const child = spawn(file, [...args], {
       env: options.env ?? process.env,
       cwd: options.cwd,
@@ -205,25 +274,6 @@ export class NodeProcessRunner implements ProcessRunner {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const stdoutDecoder = new TextDecoder('utf-8');
-    const stderrDecoder = new TextDecoder('utf-8');
-    let stdoutListener: ((text: string) => void) | undefined;
-    let stderrListener: ((text: string) => void) | undefined;
-    // Output that came before a listener was set.
-    let pendingStdout = '';
-    let pendingStderr = '';
-    const deliverStdout = (text: string) => {
-      if (text === '') return;
-      if (stdoutListener) stdoutListener(text);
-      else pendingStdout += text;
-    };
-    const deliverStderr = (text: string) => {
-      if (text === '') return;
-      if (stderrListener) stderrListener(text);
-      else pendingStderr += text;
-    };
-    child.stdout.on('data', (chunk: Buffer) => deliverStdout(stdoutDecoder.decode(chunk, { stream: true })));
-    child.stderr.on('data', (chunk: Buffer) => deliverStderr(stderrDecoder.decode(chunk, { stream: true })));
     // EPIPE after the program ended; `exited` reports the end.
     child.stdin.on('error', () => {});
     let ended = false;
@@ -236,8 +286,7 @@ export class NodeProcessRunner implements ProcessRunner {
       child.on('close', (code) => {
         if (ended) return;
         ended = true;
-        deliverStdout(stdoutDecoder.decode());
-        deliverStderr(stderrDecoder.decode());
+        beforeExit();
         resolve({ exitCode: code });
       });
     });
@@ -259,60 +308,36 @@ export class NodeProcessRunner implements ProcessRunner {
     };
     const forget = killStartedOnExit(killNow);
     void exited.then(forget);
-    return {
-      killNow,
-      write: (text) => {
-        if (ended || child.stdin.destroyed || !child.stdin.writable) return false;
-        child.stdin.write(text);
-        return true;
-      },
-      end: () => {
-        if (!child.stdin.destroyed) child.stdin.end();
-      },
-      kill: () => {
-        if (ended) return;
-        this.stop(child);
-        // `docker run -i` passes SIGTERM on to its container over its connection and waits; over a hung connection it
-        // would never end. So SIGKILL after START_KILL_GRACE_MS (Windows: taskkill /F ended it).
-        const timer = setTimeout(() => {
-          // `exitCode`/`signalCode` are set on 'exit', which can come well before 'close' (a program that still holds
-          // its pipes); after it, the pid may belong to another program already.
-          if (ended || child.exitCode !== null || child.signalCode !== null) return;
-          // First the programs that it started (the Docker CLI starts `ssh` in a session of its own, which no signal to
-          // docker reaches; on Linux it would die with it, on macOS it would stay), then docker. Only after pkill ended
-          // (at most 1 s): a docker killed before would leave its children to process 1, where `pkill -P` does not find
-          // them.
-          const killDocker = () => {
-            if (!ended) child.kill('SIGKILL');
-          };
-          if (this.platform === 'win32' || child.pid === undefined) {
-            killDocker();
-            return;
-          }
-          const fallback = setTimeout(killDocker, 1_000);
-          fallback.unref?.();
-          this.killChildren(child.pid, () => {
-            clearTimeout(fallback);
-            killDocker();
-          });
-        }, this.startKillGraceMs);
-        timer.unref?.();
-      },
-      onStdout: (listener) => {
-        stdoutListener = listener;
-        const text = pendingStdout;
-        pendingStdout = '';
-        if (text !== '') listener(text);
-      },
-      onStderr: (listener) => {
-        stderrListener = listener;
-        const text = pendingStderr;
-        pendingStderr = '';
-        if (text !== '') listener(text);
-      },
-      exited,
-      pid: child.pid,
+    const kill = () => {
+      if (ended) return;
+      this.stop(child);
+      // `docker run -i` passes SIGTERM on to its container over its connection and waits; over a hung connection it
+      // would never end. So SIGKILL after START_KILL_GRACE_MS (Windows: taskkill /F ended it).
+      const timer = setTimeout(() => {
+        // `exitCode`/`signalCode` are set on 'exit', which can come well before 'close' (a program that still holds
+        // its pipes); after it, the pid may belong to another program already.
+        if (ended || child.exitCode !== null || child.signalCode !== null) return;
+        // First the programs that it started (the Docker CLI starts `ssh` in a session of its own, which no signal to
+        // docker reaches; on Linux it would die with it, on macOS it would stay), then docker. Only after pkill ended
+        // (at most 1 s): a docker killed before would leave its children to process 1, where `pkill -P` does not find
+        // them.
+        const killDocker = () => {
+          if (!ended) child.kill('SIGKILL');
+        };
+        if (this.platform === 'win32' || child.pid === undefined) {
+          killDocker();
+          return;
+        }
+        const fallback = setTimeout(killDocker, 1_000);
+        fallback.unref?.();
+        this.killChildren(child.pid, () => {
+          clearTimeout(fallback);
+          killDocker();
+        });
+      }, this.startKillGraceMs);
+      timer.unref?.();
     };
+    return { child, exited, killNow, kill, ended: () => ended };
   }
 }
 

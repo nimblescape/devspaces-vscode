@@ -14,6 +14,7 @@ import type { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { findExecutable } from '../core/docker/dockerCli';
 import { downloadFile, type DownloadOptions } from '../core/docker/dockerDownload';
 import {
+  DockerContextKeys,
   DockerSetupTexts,
   INITIAL_DOCKER_SETUP_STATE,
   INSTALL_WATCH_INTERVAL_MS,
@@ -96,7 +97,10 @@ export interface DockerSetupDeps {
   showLog: () => void;
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
-  /** The CLI was found or lost: the sidebar shows the repositories or the Docker setup (`setupRequired`). */
+  /**
+   * The CLI was found or lost, or the Docker host of Devspaces changed whether the setup shows (onDockerHostChanged):
+   * the sidebar shows the repositories or the Docker setup (`setupRequired`).
+   */
   onDidChangeInstalled: () => void;
   /** True when a remote Docker host is configured: a missing local CLI then needs no setup (see `dockerSetupRequired`). */
   remoteDockerHostConfigured: () => boolean;
@@ -297,6 +301,18 @@ export class DockerSetup implements vscode.Disposable {
   }
 
   /**
+   * A read of the Docker host of Devspaces (DockerTargets.onDidResolve): the context keys follow `setupRequired`, which
+   * depends on it (a remote host needs no Docker of this computer), and the sidebar renders again when it changed. Asks
+   * nothing. Before `initialize`, nothing.
+   */
+  onDockerHostChanged(): void {
+    if (this.shown === undefined) return;
+    const before = this.shown[DockerContextKeys.setupRequired];
+    this.apply({ kind: 'cli', found: this.state.cliFound });
+    if (this.shown[DockerContextKeys.setupRequired] !== before) this.deps.onDidChangeInstalled();
+  }
+
+  /**
    * Command devspaces.dockerSetup.install (sidebar button "Install Docker"): the installation plan of this
    * computer, after a modal confirmation. Afterwards, the CLI is looked up every 5 seconds for at most 30 minutes.
    */
@@ -363,7 +379,7 @@ export class DockerSetup implements vscode.Disposable {
     void showInformationMessage(DockerSetupUiTexts.dockerRunning).then(undefined, () => undefined);
   }
 
-  /** Command devspaces.dockerSetup.installWsl (sidebar button "Install WSL 2", Windows): `wsl --install` in the terminal. */
+  /** Command devspaces.dockerSetup.installWsl (sidebar button "Install WSL 2", Windows): WSL_INSTALL_COMMAND in the terminal. */
   async installWsl(): Promise<void> {
     if (this.refuseInRemoteWindow()) return;
     // The button shows until a check finds WSL ready, so a click before the first check ended waits for one.

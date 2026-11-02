@@ -33,9 +33,14 @@ const PIPELINE_MODULES = [
  */
 const ALLOWED_MODULES: Record<string, readonly string[]> = {
   'src/core/docker': [
+    // The Docker CLI of Devspaces for the window of a devspace on another computer: its download and its pin.
+    'archive.ts',
     'attachDiagnostics.ts',
     'bootstrapDocker.ts',
+    // The check of the Docker API versions of an engine against the Docker CLI of Devspaces, at the open of a worker.
+    'dockerApiVersion.ts',
     'dockerCli.ts',
+    'dockerCliPin.json',
     'dockerDownload.ts',
     'dockerHost.ts',
     'dockerObjects.ts',
@@ -47,7 +52,16 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     // "Remove Devspaces from This Docker Engine…": the removal of the Monitor, the helper containers and images and the
     // shared volumes with the Docker CLI of the bootstrap, after the worker was ended.
     'engineRemoval.ts',
+    'ownDockerCli.ts',
     'remoteDocker.ts',
+    // The idle session of a WSL distribution, and the rule for the work in the background there.
+    'wslLifetime.ts',
+    // The keeper of a WSL distribution after VS Code closed, and its start entry at the logon to Windows.
+    'wslKeeper.ts',
+    // The setup and the removal of the WSL distribution of Devspaces on Windows.
+    'wslSetup.ts',
+    // The weekly upgrade of the packages of the WSL distribution of Devspaces.
+    'wslUpgrade.ts',
   ],
   // missingHelperBuild.ts: the background build of a helper image that the refresh found missing.
   'src/core/helper': ['analysisLimits.ts', 'batchStepKinds.ts', 'helperImage.ts', 'helperImages.ts', 'helperPrebuild.ts', 'helperState.ts', 'missingHelperBuild.ts'],

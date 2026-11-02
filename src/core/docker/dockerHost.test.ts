@@ -13,21 +13,28 @@ import {
   dockerTargetOf,
   devspacesOfHost,
   isOnDockerHost,
-  isOwnContextDescription,
+  isDockerContextHostTarget,
   isRootlessEngine,
   isUsableSshAlias,
   parseContextInspect,
   parseSshAddress,
-  ownContextDescription,
-  remoteContextNames,
+  remoteDockerTarget,
   rootlessSocketPath,
   sameDockerHost,
   sshCommandArgs,
   sshEndpoint,
   sshTargetOf,
+  unsupportedTargetReason,
   RUNTIME_DIR_COMMAND,
+  WSL_HOST,
+  hostAccessOf,
+  hostEndpoint,
+  parseWslList,
+  wslText,
+  wslCommandArgs,
+  wslDistributionOf,
+  wslEnv,
 } from './dockerHost';
-import { namePair } from '../namePairs';
 
 describe('classifyDockerEndpoint (SSH only for another computer)', () => {
   it.each([
@@ -62,8 +69,28 @@ describe('classifyDockerEndpoint (SSH only for another computer)', () => {
   );
 
   it('keeps the context name only when a context decides the endpoint', () => {
-    expect(dockerTargetOf('ssh://box', 'devspaces-remote-26f8567f')).toEqual({ kind: 'remote', host: 'box', endpoint: 'ssh://box', context: 'devspaces-remote-26f8567f' });
-    expect(dockerTargetOf('ssh://box', undefined)).toEqual({ kind: 'remote', host: 'box', endpoint: 'ssh://box' });
+    expect(dockerTargetOf('unix:///var/run/docker.sock', 'default')).toEqual({ kind: 'local', host: '', endpoint: 'unix:///var/run/docker.sock', context: 'default' });
+    expect(dockerTargetOf('unix:///var/run/docker.sock', undefined)).toEqual({ kind: 'local', host: '', endpoint: 'unix:///var/run/docker.sock' });
+  });
+
+  // Devspaces reaches a remote host only through its own list, never through a Docker context or DOCKER_HOST of the user.
+  it('does not support a Docker context or DOCKER_HOST of the user that reaches a host over SSH, and names the host', () => {
+    const named = dockerTargetOf('ssh://me@box', 'box');
+    expect(named).toEqual({ kind: 'unsupported', host: 'ssh://me@box', endpoint: 'ssh://me@box', context: 'box', sshHost: 'me@box' });
+    expect(isDockerContextHostTarget(named)).toBe(true);
+    expect(unsupportedTargetReason(named)).toBe('The current Docker context box reaches me@box over SSH, which is not a host of the list of Devspaces.');
+    const variable = dockerTargetOf('ssh://box', undefined);
+    expect(variable).toEqual({ kind: 'unsupported', host: 'ssh://box', endpoint: 'ssh://box', sshHost: 'box' });
+    expect(unsupportedTargetReason(variable)).toBe('DOCKER_HOST reaches box over SSH, which is not a host of the list of Devspaces.');
+    const tcp = dockerTargetOf('tcp://192.0.2.10:2376', 'other');
+    expect(isDockerContextHostTarget(tcp)).toBe(false);
+    expect(unsupportedTargetReason(tcp)).toBe('The Docker endpoint tcp://192.0.2.10:2376 is neither local nor SSH.');
+    expect(isDockerContextHostTarget(dockerTargetOf('unix:///var/run/docker.sock', 'default'))).toBe(false);
+  });
+
+  it('gives a host of the list of Devspaces its Docker over SSH, without a context', () => {
+    expect(remoteDockerTarget('me@192.0.2.10:2222')).toEqual({ kind: 'remote', host: 'me@192.0.2.10:2222', endpoint: 'ssh://me@192.0.2.10:2222' });
+    expect(isDockerContextHostTarget(remoteDockerTarget('box'))).toBe(false);
   });
 });
 
@@ -87,50 +114,6 @@ describe('parseContextInspect', () => {
 });
 
 // The contexts are named after the SSH host and recognised as ours by their description.
-describe('remoteContextNames (the names of the context of a remote host)', () => {
-  it('takes an alias as it is, the pair of the host only for the second name', () => {
-    expect(remoteContextNames('htldvm')).toEqual(['htldvm', `htldvm-${namePair('htldvm')}`]);
-    expect(remoteContextNames('build_box.lan+1')).toEqual(['build_box.lan+1', `build_box.lan+1-${namePair('build_box.lan+1')}`]);
-  });
-
-  it('takes the host of an address, without the user and the port; the pair is of the whole address', () => {
-    expect(remoteContextNames('me@htldvm:2222')).toEqual(['htldvm', `htldvm-${namePair('me@htldvm:2222')}`]);
-    expect(remoteContextNames('me@htldvm')[0]).toBe('htldvm');
-    expect(remoteContextNames('htldvm:2222')[0]).toBe('htldvm');
-    // Same base name, different hosts: the second names differ.
-    expect(remoteContextNames('me@htldvm:2222')[1]).not.toBe(remoteContextNames('htldvm')[1]);
-  });
-
-  it('turns characters that Docker does not allow into "-"', () => {
-    const [name] = remoteContextNames('me@[fe80::1]:22');
-    expect(name).toMatch(/^[a-zA-Z0-9][a-zA-Z0-9_.+-]*$/);
-    expect(name).toBe('fe80-1');
-    expect(remoteContextNames('höst~name')[0]).toBe('h-st-name');
-    expect(remoteContextNames('-.box')[0]).toBe('box');
-  });
-
-  it("gives 'remote' for an empty name or the name 'default'", () => {
-    expect(remoteContextNames('default')).toEqual(['remote', `remote-${namePair('default')}`]);
-    expect(remoteContextNames('me@default')[0]).toBe('remote');
-    expect(remoteContextNames('')[0]).toBe('remote');
-    expect(remoteContextNames('~~~')[0]).toBe('remote');
-  });
-});
-
-describe('ownContextDescription and isOwnContextDescription (the contexts of "Use a Remote Docker Host…")', () => {
-  it('names the host in the description', () => {
-    expect(ownContextDescription('me@htldvm:2222')).toBe('Devspaces: remote Docker host me@htldvm:2222');
-  });
-
-  it('is true only for a description that Devspaces wrote, whatever the name of the context', () => {
-    expect(isOwnContextDescription(ownContextDescription('box'))).toBe(true);
-    expect(isOwnContextDescription(undefined)).toBe(false);
-    expect(isOwnContextDescription('')).toBe(false);
-    expect(isOwnContextDescription('Docker Desktop')).toBe(false);
-    expect(isOwnContextDescription('my box: Devspaces: remote Docker host box')).toBe(false);
-  });
-});
-
 describe('the Docker host of devspaces (registry filter)', () => {
   const local = { id: 'a', dockerHost: undefined };
   const box = { id: 'b', dockerHost: 'build-box' };
@@ -233,6 +216,20 @@ describe('SSH aliases and the ssh command line', () => {
     ]);
   });
 
+  it('gives the key of Devspaces with -i before the destination, and only that key for the check of the key offer', () => {
+    const key = '/home/ann/.ssh/devspaces_ed25519';
+    expect(sshCommandArgs({ host: 'box', port: 2222 }, 'true', 15, { identity: key })).toEqual([
+      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-T', '-i', key, '-p', '2222', '--', 'box', 'true',
+    ]);
+    expect(sshCommandArgs({ host: 'box' }, 'sh -s', 15, { prompts: true, identity: key })).toEqual(['-x', '-o', 'ConnectTimeout=15', '-T', '-i', key, '--', 'box', 'sh -s']);
+    expect(sshCommandArgs({ host: 'box' }, 'true', 15, { identity: key, identityOnly: true })).toEqual([
+      '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-T', '-i', key, '-o', 'IdentitiesOnly=yes', '-o', 'PreferredAuthentications=publickey',
+      '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '--', 'box', 'true',
+    ]);
+    // Without a key, identityOnly changes nothing.
+    expect(sshCommandArgs({ host: 'box' }, 'true', 15, { identityOnly: true })).toEqual(sshCommandArgs({ host: 'box' }, 'true'));
+  });
+
   it('parses a recorded host back into its parts, and refuses anything else', () => {
     expect(sshTargetOf('build-box')).toEqual({ host: 'build-box' });
     expect(sshTargetOf('me@box:2222')).toEqual({ user: 'me', host: 'box', port: 2222 });
@@ -257,6 +254,64 @@ describe('rootless Docker on the remote computer', () => {
     expect(rootlessSocketPath('relative/dir')).toBeUndefined();
     expect(rootlessSocketPath('/run/user/../etc')).toBeUndefined();
     expect(rootlessSocketPath('/run/user/1000;rm')).toBeUndefined();
+  });
+});
+
+describe('the WSL distribution of Devspaces as a host', () => {
+  it('names the distribution in its host, which is never an SSH alias or address', () => {
+    expect(WSL_HOST).toBe('wsl:devspaces');
+    expect(wslDistributionOf(WSL_HOST)).toBe('devspaces');
+    expect(wslDistributionOf('wsl:Ubuntu-24.04')).toBe('Ubuntu-24.04');
+    for (const host of ['wsl:', 'wsl:-d', 'wsl:a b', 'wsl:x/y', 'wsl:x;y', `wsl:${'a'.repeat(65)}`, 'devspaces', 'ssh://wsl:devspaces', 'WSL:devspaces']) {
+      expect(wslDistributionOf(host), host).toBeUndefined();
+    }
+    expect(sshTargetOf(WSL_HOST)).toBeUndefined();
+    expect(parseSshAddress(WSL_HOST).ok).toBe(false);
+  });
+
+  it('reaches an SSH host over SSH and the distribution through wsl.exe; any other host has no transport', () => {
+    expect(hostAccessOf(WSL_HOST)).toEqual({ kind: 'wsl', distribution: 'devspaces' });
+    expect(hostAccessOf('me@box:2222')).toEqual({ kind: 'ssh', address: { user: 'me', host: 'box', port: 2222 } });
+    expect(hostAccessOf('build-box')).toEqual({ kind: 'ssh', address: { host: 'build-box' } });
+    expect(hostAccessOf('box/path')).toBeUndefined();
+    expect(hostAccessOf('wsl:-x')).toBeUndefined();
+    // An SSH address stays an SSH host: the host `wsl` with the port 2222.
+    expect(wslDistributionOf('wsl:2222')).toBeUndefined();
+    expect(hostAccessOf('wsl:2222')).toEqual({ kind: 'ssh', address: { host: 'wsl', port: 2222 } });
+  });
+
+  it('gives its target the endpoint wsl://<distribution>, and an SSH host ssh://<host>', () => {
+    expect(remoteDockerTarget(WSL_HOST)).toEqual({ kind: 'remote', host: WSL_HOST, endpoint: 'wsl://devspaces' });
+    expect(hostEndpoint('build-box')).toBe('ssh://build-box');
+  });
+
+  it('runs a command as root in the root folder without a shell of the distribution, with the messages of wsl.exe in UTF-8', () => {
+    expect(wslCommandArgs('devspaces', ['sh', '-s'])).toEqual(['-d', 'devspaces', '-u', 'root', '--cd', '/', '--exec', 'sh', '-s']);
+    const base = { PATH: 'C:\\Windows\\System32', wsl_utf8: '0' };
+    expect(wslEnv(base)).toEqual({ PATH: 'C:\\Windows\\System32', WSL_UTF8: '1' });
+    expect(base).toEqual({ PATH: 'C:\\Windows\\System32', wsl_utf8: '0' });
+  });
+
+  it('reads the names of `wsl.exe --list --quiet`, also as UTF-16 of an older wsl.exe', () => {
+    expect(parseWslList('Ubuntu\r\ndevspaces\r\n\r\n')).toEqual(['Ubuntu', 'devspaces']);
+    const utf16 = Buffer.from('\uFEFFUbuntu\r\ndevspaces\r\n', 'utf16le').toString('utf8');
+    expect(parseWslList(utf16)).toEqual(['Ubuntu', 'devspaces']);
+    expect(parseWslList('')).toEqual([]);
+  });
+
+  it('reads the UTF-16 error output of an older wsl.exe as text, and leaves other text as it is', () => {
+    const utf16 = Buffer.from('\uFEFFsh: 1: docker: not found\r\n', 'utf16le').toString('utf8');
+    expect(wslText(utf16)).toBe('sh: 1: docker: not found\r\n');
+    expect(dockerHostProblem(utf16)).toBe('dockerMissing');
+    // The program that the Docker CLI did not find is docker, not ssh.
+    expect(dockerHostProblem('exec: "docker": executable file not found in $PATH')).toBe('dockerMissing');
+    expect(dockerHostProblem('exec: "ssh": executable file not found in $PATH')).toBe('sshMissing');
+    expect(dockerHostProblem('exec: "C:\\Windows\\System32\\OpenSSH\\ssh.exe": executable file not found in %PATH%')).toBe('sshMissing');
+    expect(dockerHostProblem('exec: "C:\\Program Files\\Git\\usr\\bin\\ssh.exe": executable file not found in %PATH%')).toBe('sshMissing');
+    // Without quotes, a path ends at a space: no match across other words.
+    expect(dockerHostProblem('exec: plugin failed\nfallback /home/u/.local/bin/ssh: executable file not found')).toBe('unknown');
+    expect(dockerHostProblem('exec: "/usr/local/bin/docker": executable file not found in $PATH')).toBe('dockerMissing');
+    expect(wslText('ssh: connect to host box port 22: Connection refused')).toBe('ssh: connect to host box port 22: Connection refused');
   });
 });
 
@@ -285,6 +340,11 @@ describe('dockerHostProblem (plain reasons of a failed connection)', () => {
     ],
     ['kex_exchange_identification: Connection closed by remote host\r\nConnection closed by 192.0.2.10 port 22', 'closedBeforeLogin'],
     ['kex_exchange_identification: read: Connection reset by peer\r\nConnection reset by 192.0.2.10 port 22', 'closedBeforeLogin'],
+    // wsl.exe for a distribution that is not registered (WSL 2.x, and the older text).
+    ['There is no distribution with the supplied name.\r\nError code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND', 'wslDistributionMissing'],
+    ['There is no distribution with the supplied name.', 'wslDistributionMissing'],
+    // The UTF-16 text of an older wsl.exe, read as UTF-8.
+    [Buffer.from('There is no distribution with the supplied name.', 'utf16le').toString('utf8'), 'wslDistributionMissing'],
     ['something else', 'unknown'],
   ])('%s → %s', (detail, problem) => {
     expect(dockerHostProblem(detail)).toBe(problem);
@@ -300,42 +360,5 @@ describe('isSshClosedBeforeLogin', () => {
     expect(isSshClosedBeforeLogin('root@box: Permission denied (publickey).\r\nConnection closed by 127.0.0.1 port 22')).toBe(false);
     expect(isSshClosedBeforeLogin('Connection to box closed by remote host.')).toBe(false);
     expect(isSshClosedBeforeLogin('ssh: connect to host box port 22: Connection refused')).toBe(false);
-  });
-});
-
-describe('the context names of a host are valid Docker context names', () => {
-  // The Docker CLI takes only names of at least 2 characters (`docker context create b` fails, docker 29.3.1).
-  const DOCKER_CONTEXT_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_.+-]+$/;
-  it.each(['b', 'user@b', 'b:2222', '[::1]', 'x_', 'htldvm'])('%s', (host) => {
-    for (const name of remoteContextNames(host)) expect(name).toMatch(DOCKER_CONTEXT_NAME);
-  });
-  it('prefixes a name of one character with remote-', () => {
-    expect(remoteContextNames('user@b')[0]).toBe('remote-b');
-  });
-});
-
-// The run of other characters at the end of the host name is trimmed, not
-// left as a trailing `-`.
-describe('the context name of a host name that ends in other characters', () => {
-  it('has no trailing dash', () => {
-    expect(remoteContextNames('dev_box!')[0]).toBe('dev_box');
-  });
-});
-
-// Only a name of one character gets the prefix; a name of two characters is a valid Docker context name as it is.
-describe('the context name of a host name of two characters', () => {
-  it('keeps a name of two characters without the prefix', () => {
-    expect(remoteContextNames('db')[0]).toBe('db');
-    expect(remoteContextNames('user@db:2222')[0]).toBe('db');
-  });
-});
-
-// A description that shares only a part of the prefix (for example a context of the user described as "Devspace
-// staging") is not one that Devspaces wrote.
-describe('isOwnContextDescription needs the whole prefix', () => {
-  it('is false for a description that shares only a part of the prefix', () => {
-    expect(isOwnContextDescription('Devspaces staging')).toBe(false);
-    expect(isOwnContextDescription('Devspaces: remote')).toBe(false);
-    expect(isOwnContextDescription(ownContextDescription('h'))).toBe(true);
   });
 });

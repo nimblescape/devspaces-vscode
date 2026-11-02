@@ -22,6 +22,9 @@ import { runWithBatchScope } from '../../src/core/helper/batchScope';
 import { helperImageTag } from '../../src/core/helper/helperImage';
 import type { HelperBatchSession } from '../../src/core/helperChannel/helperChannel';
 import { HelperChannels, openHelperChannel } from '../../src/core/helperChannel/helperChannels';
+import { NodeProcessRunner } from '../../src/core/process';
+import { RelayConnections, relayAccess } from '../../src/core/relay/connections';
+import { openRelayConnection, type RelayTransport } from '../../src/core/relay/transport';
 import { LABEL_CHANNEL_STEP, LABEL_HELPER_CHANNEL } from '../../src/core/names';
 import { LOCK_BUSY_EXIT, LOCK_STATE_DIR } from '../../src/core/helperChannel/protocol';
 import { workerBatchSession } from '../../src/helperChannel/batch';
@@ -72,23 +75,40 @@ export function workerLocks(
   targets: Pick<DockerTargets, 'current'>,
   name: string,
   socketPath: (target: DockerTarget) => Promise<string>,
-  /** `none` starts the workers without network (the offline scenarios). */
-  options: { network?: 'none' } = {},
+  /**
+   * `network: 'none'` starts the workers without network (the offline scenarios). `relay`: the transport of the
+   * connection of the relay for a target, as extension.ts (sshHostTransport); without it, every worker starts with the
+   * Docker CLI.
+   */
+  options: { network?: 'none'; relay?: (target: DockerTarget) => RelayTransport | undefined } = {},
 ): WorkerLocks {
   const { run, cli, log } = context;
   const helperTag = helperImageTag(fs.readFileSync(HELPER_DOCKERFILE, 'utf8'));
   const workerNames: string[] = [];
+  const runner = new NodeProcessRunner();
+  // The label of the run on each worker, the network of the options, and its name.
+  const testArgs = (args: readonly string[]): string[] => {
+    const all = [...args];
+    all.splice(all.indexOf(helperTag), 0, '--label', `${TEST_RUN_LABEL}=${run.runId}`);
+    if (options.network !== undefined) all[all.indexOf('--network') + 1] = options.network;
+    workerNames.push(all[all.indexOf('--name') + 1]);
+    return all;
+  };
+  // The connections of the relay of this window, as extension.ts.
+  const relayConnections = new RelayConnections({ logger: log });
   const channels = new HelperChannels({
     logger: log,
     open: (target) =>
       openHelperChannel(
         {
-          start: (args) => {
-            const all = [...args];
-            all.splice(all.indexOf(helperTag), 0, '--label', `${TEST_RUN_LABEL}=${run.runId}`);
-            if (options.network !== undefined) all[all.indexOf('--network') + 1] = options.network;
-            workerNames.push(all[all.indexOf('--name') + 1]);
-            return docker.start(all);
+          start: (args) => docker.start(testArgs(args)),
+          relay: (target) => {
+            const transport = options.relay?.(target);
+            if (transport === undefined) return undefined;
+            const start = () => ({ process: runner.startBytes(transport.file, transport.args, { env: transport.env }) });
+            return relayAccess(relayConnections, target.host, (command, bundle) =>
+              openRelayConnection(start, testArgs(command), bundle, { logger: log, name: target.host }),
+            );
           },
           runDirect: (args, options) => docker.run(args, options),
           logger: log,
@@ -119,6 +139,7 @@ export function workerLocks(
     refresh: async (devspaces) => channels.refresh(await targets.current(), devspaces),
     dispose: async () => {
       channels.dispose();
+      relayConnections.dispose();
       const deadline = Date.now() + 60_000;
       while (leftovers().length > 0 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
       return leftovers();

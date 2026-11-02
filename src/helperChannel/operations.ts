@@ -8,6 +8,7 @@
 // pipeline itself, under its own locks and batch helpers. Every operation acts on the engine through its port
 // (DockerEngine); the worker runs no Docker CLI of its own.
 import {
+  API_VERSION_PATTERN,
   OP_PROBE,
   OP_DELETE,
   OP_DELETE_CHECK,
@@ -47,8 +48,9 @@ import * as os from 'os';
 import type { OperationHandler } from './server';
 
 /**
- * `probe`: the version of the engine behind the socket of the worker, and the identity of that engine, which the
- * extension compares with the identity that its own Docker CLI reads without the worker. Over the port of the engine
+ * `probe`: the version of the engine behind the socket of the worker, its API versions (which the extension checks
+ * against the Docker CLI of Devspaces), and the identity of that engine, which the extension compares with the identity
+ * that its own Docker CLI reads without the worker. Over the port of the engine
  * (`GET /version`, `GET /info`), no Docker CLI of the worker. A version that cannot be read is the answer (its reason
  * as the detail: the extension closes the worker, "does not reach Docker"); an identity that cannot be read is left out
  * (the extension closes the worker too). The time limit is the one of the request (the extension sets it).
@@ -58,8 +60,9 @@ export function probeOperation(engineOf: EngineOfOperation): OperationHandler {
     context.progress('probe');
     const engine = engineOf(context);
     let version: string;
+    let api: { apiVersion: string; minApiVersion?: string };
     try {
-      version = (await engine.version(context.signal)).version;
+      ({ version, ...api } = await engine.version(context.signal));
     } catch (error) {
       cancelledIfAborted('probe', context);
       const failed: ProbeValue = { detail: errorMessage(error).slice(-MAX_PROBE_DETAIL_LENGTH) };
@@ -70,6 +73,9 @@ export function probeOperation(engineOf: EngineOfOperation): OperationHandler {
       return failed;
     }
     const value: ProbeValue = { serverVersion: version, detail: `Docker ${version}` };
+    // The API versions only in the form that the extension takes (parseProbeValue); another form is left out.
+    if (API_VERSION_PATTERN.test(api.apiVersion)) value.apiVersion = api.apiVersion;
+    if (api.minApiVersion !== undefined && API_VERSION_PATTERN.test(api.minApiVersion)) value.minApiVersion = api.minApiVersion;
     try {
       value.engine = await engine.identity(context.signal);
     } catch (error) {

@@ -35,11 +35,9 @@ export interface MonitorSettingsDeps {
 
 /** The settings of the monitor of the engine `host` of this computer (local and remote alike). Never rejects. */
 export async function monitorSettingsFor(deps: MonitorSettingsDeps, host: string): Promise<MonitorSettings> {
-  const answered = await answeredOf(deps, host);
-  const settings = deps.settings();
-  const permanent = monitorRunsPermanently(settings.stopMonitorWhenIdle, answered);
+  const permanent = await monitorPermanentFor(deps, host);
   return {
-    schedule: settings.cacheUpdateSchedule ?? DEFAULT_CACHE_UPDATE_SCHEDULE,
+    schedule: deps.settings().cacheUpdateSchedule ?? DEFAULT_CACHE_UPDATE_SCHEDULE,
     timeZone: deps.timeZone(),
     permanent,
     // This computer: the owner of a permanent monitor that it creates (LABEL_MONITOR_OWNER), and how an ensure tells
@@ -49,15 +47,35 @@ export async function monitorSettingsFor(deps: MonitorSettingsDeps, host: string
 }
 
 /**
- * Whether the engine `host` has an answer; false when it cannot be read (logged: the ensure then makes its Monitor one
- * that stops when idle, also in place of a permanent one of this computer).
+ * Whether the Monitor of the engine `host` runs permanently: the mode of monitorSettingsFor, without the other settings
+ * (the WSL distribution of Devspaces, WslLifetime). The setting is read after the answer, so that both are as new as
+ * possible. Never rejects.
  */
-async function answeredOf(deps: MonitorSettingsDeps, host: string): Promise<boolean> {
+export async function monitorPermanentFor(deps: MonitorSettingsDeps, host: string): Promise<boolean> {
+  // A failed read: the ensure makes the Monitor one that stops when idle, also in place of a permanent one of this
+  // computer.
+  const answered = await answeredOf(deps, host, 'the Monitor there stops when no devspace runs');
+  return monitorRunsPermanently(deps.settings().stopMonitorWhenIdle, answered ?? false);
+}
+
+/**
+ * As monitorPermanentFor, but undefined when the answer cannot be read (logged): for the start entry of the WSL
+ * distribution of Devspaces, which a failed read must not remove. With stopMonitorWhenIdle on, false without a read of
+ * the answer. Never rejects.
+ */
+export async function monitorPermanentIfKnown(deps: MonitorSettingsDeps, host: string): Promise<boolean | undefined> {
+  if (deps.settings().stopMonitorWhenIdle === true) return false;
+  const answered = await answeredOf(deps, host, 'its start entry stays as it is');
+  return answered === undefined ? undefined : monitorRunsPermanently(deps.settings().stopMonitorWhenIdle, answered);
+}
+
+/** Whether the engine `host` has an answer; undefined when it cannot be read (logged with `outcome`). */
+async function answeredOf(deps: MonitorSettingsDeps, host: string, outcome: string): Promise<boolean | undefined> {
   try {
     return await deps.answered(host);
   } catch (error) {
-    deps.logger?.warn(`The answer about the Monitor on ${describeDockerHost(host)} could not be read, so the Monitor there stops when no devspace runs: ${errorMessage(error)}`);
-    return false;
+    deps.logger?.warn(`The answer about the Monitor on ${describeDockerHost(host)} could not be read, so ${outcome}: ${errorMessage(error)}`);
+    return undefined;
   }
 }
 
@@ -77,9 +95,20 @@ function computerOf(deps: MonitorSettingsDeps): { computer?: string } {
 export function monitorSettingsOf(deps: MonitorSettingsDeps): {
   forOpen(dockerHost: string): Promise<MonitorSettings>;
   forTarget(target: Pick<DockerTarget, 'kind' | 'host'>): Promise<MonitorSettings>;
+  /**
+   * Whether the Monitor of the engine `host` runs permanently (monitorPermanentFor), for the checks in the background of
+   * WslLifetime: an answer that cannot be read is not logged here, because these checks run often; the open and the
+   * ensure of the Monitor log it.
+   */
+  permanent(host: string): Promise<boolean>;
+  /** monitorPermanentIfKnown: undefined when the answer cannot be read (logged). */
+  permanentIfKnown(host: string): Promise<boolean | undefined>;
 } {
+  const quiet: MonitorSettingsDeps = { ...deps, logger: undefined };
   return {
     forOpen: (dockerHost) => monitorSettingsFor(deps, dockerHost),
     forTarget: (target) => monitorSettingsFor(deps, target.host),
+    permanent: (host) => monitorPermanentFor(quiet, host),
+    permanentIfKnown: (host) => monitorPermanentIfKnown(deps, host),
   };
 }

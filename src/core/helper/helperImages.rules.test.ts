@@ -16,7 +16,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImageInfo } from '../docker/dockerObjects';
-import { LOCAL_DOCKER_TARGET, type DockerTarget } from '../docker/dockerHost';
+import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import { operationDockerTarget } from '../docker/dockerTargets';
 import { REMOTE_INFO_TIMEOUT_MS } from '../docker/remoteDocker';
 import { CommandError, UserFacingError, isUserFacingError } from '../errors';
@@ -887,6 +887,7 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
   });
 
   describe('dockerEngineAnswers', () => {
+    const WSL_TARGET = remoteDockerTarget(WSL_HOST);
     function sshRunner(result: Partial<RunResult>) {
       return { run: vi.fn(async (_file: string, _args: readonly string[], _options?: RunOptions): Promise<RunResult> => ({ exitCode: 0, stdout: '', stderr: '', timedOut: false, ...result })) };
     }
@@ -934,6 +935,33 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
       expect(await dockerEngineAnswers(odd, deps, new AbortController().signal)).toBe(false);
       expect(runner.run).not.toHaveBeenCalled();
       expect(daemonStatus).not.toHaveBeenCalled();
+    });
+
+    it('checks the WSL distribution with the start of its shell, never with ssh, then docker info with the remote time limit', async () => {
+      const runner = sshRunner({});
+      const daemonStatus = vi.fn(async (_signal: AbortSignal, _timeoutMs?: number) => ({ running: true }));
+      const shells = { login: vi.fn(async () => ({ ok: true }) as const), run: vi.fn(async () => undefined) };
+      const deps = { daemonStatus, ssh: { runner, sshPath: '/usr/bin/ssh', env: {}, shells }, logger };
+      expect(await dockerEngineAnswers(WSL_TARGET, deps, new AbortController().signal)).toBe(true);
+      expect(shells.login).toHaveBeenCalledTimes(1);
+      expect(runner.run).not.toHaveBeenCalled();
+      expect(daemonStatus).toHaveBeenCalledWith(expect.any(AbortSignal), REMOTE_INFO_TIMEOUT_MS);
+    });
+
+    // The shell of the check would start a WSL distribution that does not run (WslLifetime.leavesStopped).
+    it('answers false without the shell and without docker info while a call must leave the WSL distribution stopped', async () => {
+      const runner = sshRunner({});
+      const daemonStatus = vi.fn(async () => ({ running: true }));
+      const shells = { login: vi.fn(async () => ({ ok: true }) as const), run: vi.fn(async () => undefined) };
+      const leavesStopped = vi.fn(async (host: string) => host === WSL_HOST);
+      const deps = { daemonStatus, ssh: { runner, sshPath: '/usr/bin/ssh', env: {}, shells }, leavesStopped, logger };
+      expect(await dockerEngineAnswers(WSL_TARGET, deps, new AbortController().signal)).toBe(false);
+      expect(leavesStopped).toHaveBeenCalledWith(WSL_HOST);
+      expect(shells.login).not.toHaveBeenCalled();
+      expect(daemonStatus).not.toHaveBeenCalled();
+      // An SSH host is checked as before.
+      expect(await dockerEngineAnswers(REMOTE_TARGET, deps, new AbortController().signal)).toBe(true);
+      expect(leavesStopped).toHaveBeenCalledWith(REMOTE_TARGET.host);
     });
   });
 

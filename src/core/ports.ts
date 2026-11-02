@@ -112,6 +112,11 @@ export interface ProcessRunner {
    * throws; a program that cannot be started resolves `exited` with `error`.
    */
   start?(file: string, args: readonly string[], options?: StartOptions): StartedProcess;
+  /**
+   * The connection of the relay: starts a program whose standard input and output are bytes with their flow. Never
+   * throws; a program that cannot be started resolves `exited` with `error`.
+   */
+  startBytes?(file: string, args: readonly string[], options?: StartOptions): StartedByteProcess;
 }
 
 export interface StartOptions {
@@ -142,6 +147,36 @@ export interface StartedProcess {
   readonly exited: Promise<{ exitCode: number | null; error?: Error }>;
 }
 
+/** A program started with ProcessRunner.startBytes. */
+export interface StartedByteProcess {
+  /**
+   * Writes `chunk` to its standard input. False: it holds more than it wants, and the next write waits for onDrain.
+   * After the end of the program, the chunk is dropped (true).
+   */
+  write(chunk: Buffer): boolean;
+  /** `listener` is called once, when the standard input wants more after a write that returned false. */
+  onDrain(listener: () => void): void;
+  /** Closes its standard input. */
+  end(): void;
+  /** Stops it as StartedProcess.kill does. */
+  kill(): void;
+  /** Stops it at once, as StartedProcess.killNow does. */
+  killNow?(): void;
+  readonly pid?: number;
+  /** Its output as it comes, then `onEnd` at its end. One listener each. */
+  onStdout(listener: (chunk: Buffer) => void, onEnd: () => void): void;
+  /**
+   * Stops reading its output until resumeStdout: what it writes waits in the pipe, and the program waits when the pipe
+   * is full (for a reader that holds more than it wants).
+   */
+  pauseStdout(): void;
+  resumeStdout(): void;
+  /** Its error output, decoded as UTF-8, as it comes. One listener. */
+  onStderr(listener: (text: string) => void): void;
+  /** Resolves when it ended: its exit code (null after a signal), or the error of its start. */
+  readonly exited: Promise<{ exitCode: number | null; error?: Error }>;
+}
+
 /** Progress of one operation, shown in one notification. */
 export interface ProgressReporter {
   /** Starts a step. Steps that are not needed are not reported. */
@@ -151,6 +186,44 @@ export interface ProgressReporter {
 }
 
 export const silentProgress: ProgressReporter = { step() {}, detail() {} };
+
+/**
+ * Output of a started program (StartedProcess.onStdout, onStderr) that comes before its listener is set waits for it,
+ * in order. One listener.
+ */
+export function heldOutput<T>(): { deliver(value: T): void; listen(listener: (value: T) => void): void } {
+  let listener: ((value: T) => void) | undefined;
+  const held: T[] = [];
+  return {
+    deliver: (value) => {
+      if (listener) listener(value);
+      else held.push(value);
+    },
+    listen: (next) => {
+      listener = next;
+      for (const value of held.splice(0)) next(value);
+    },
+  };
+}
+
+/**
+ * Text output of a started program from its bytes (heldOutput): decoded as UTF-8 as it comes, so a character split
+ * between two chunks stays whole; `end` delivers the rest of an incomplete character. Empty text is not delivered.
+ * TextDecoder, not Node's string_decoder module: that fails in the extension host of VS Code 1.139 (Electron 43) with
+ * "StringDecoder is not a constructor".
+ */
+export function decodedOutput(): { push(chunk: Uint8Array): void; end(): void; listen(listener: (text: string) => void): void } {
+  const decoder = new TextDecoder('utf-8');
+  const output = heldOutput<string>();
+  const deliver = (text: string) => {
+    if (text !== '') output.deliver(text);
+  };
+  return {
+    push: (chunk) => deliver(decoder.decode(chunk, { stream: true })),
+    end: () => deliver(decoder.decode()),
+    listen: output.listen,
+  };
+}
 
 export interface Credentials {
   username: string;

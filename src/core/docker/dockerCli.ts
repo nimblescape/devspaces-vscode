@@ -30,6 +30,21 @@ export function envValue(env: NodeJS.ProcessEnv, name: string, platform: NodeJS.
   return undefined;
 }
 
+/** Removes a variable in every spelling of its name (names are case-insensitive on Windows); `name` in upper case. */
+export function deleteEnv(env: NodeJS.ProcessEnv, name: string): void {
+  for (const key of Object.keys(env)) {
+    if (key.toUpperCase() === name) delete env[key];
+  }
+}
+
+/** A copy of `base` with the variable `name` (in upper case) set to `value`, without its other spellings (deleteEnv). */
+export function withEnvValue(base: NodeJS.ProcessEnv, name: string, value: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  deleteEnv(env, name);
+  env[name] = value;
+  return env;
+}
+
 /**
  * Installation folders of Docker Desktop on Windows. First the folder of an installation for all users, for example
  * `C:\Program Files\Docker\Docker` (in `ProgramW6432` / `ProgramFiles` when set, then in the default folder). Then the
@@ -205,6 +220,18 @@ export function addDockerFolderToPath(env: NodeJS.ProcessEnv, platform: NodeJS.P
   const kept = current.replace(/;+\s*$/, '');
   env[key] = kept.trim() === '' ? folder : `${kept};${folder}`;
   return true;
+}
+
+/**
+ * Puts `folder` first in PATH of `env` (under the spelling of the key that `env` has on Windows, for example `Path`),
+ * and removes its other entries, so that a program started with `env` finds the `docker` in it first. Changes `env`.
+ */
+export function putFolderFirstInPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, folder: string): void {
+  const key = platform === 'win32' ? (Object.keys(env).find((name) => name.toLowerCase() === 'path' && env[name] !== undefined) ?? 'Path') : 'PATH';
+  const delimiter = pathDelimiter(platform);
+  const folderId = folderKey(folder, platform);
+  const others = (env[key] ?? '').split(delimiter).filter((entry) => entry.trim() !== '' && folderKey(entry, platform) !== folderId);
+  env[key] = [folder, ...others].join(delimiter);
 }
 
 // The words of a Docker command and the calls that only read, for the Docker CLI of the bootstrap.

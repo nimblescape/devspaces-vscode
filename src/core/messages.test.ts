@@ -83,6 +83,26 @@ describe('the messages of a remote Docker host', () => {
     expect(dockerHostReason(problem, 'box')).toContain(text);
   });
 
+  // The WSL distribution of Devspaces has no network and no SSH: never the advice of an SSH host.
+  it.each([
+    ['unreachable', 'WSL did not answer.'],
+    ['closedBeforeLogin', 'WSL could not start a shell in the WSL distribution devspaces.'],
+    ['login', 'WSL could not start a shell in the WSL distribution devspaces.'],
+    ['hostKey', 'WSL could not start a shell in the WSL distribution devspaces.'],
+    ['sshMissing', 'WSL could not start a shell in the WSL distribution devspaces.'],
+    ['dockerMissing', 'Docker is not installed in the WSL distribution devspaces.'],
+    ['dockerNotRunning', 'Docker is not running in the WSL distribution devspaces.'],
+    ['dockerPermission', 'Docker in the WSL distribution devspaces refused the call.'],
+    ['wslMissing', 'WSL (wsl.exe) was not found on this computer.'],
+    ['wslDistributionMissing', 'The WSL distribution devspaces is not installed on this computer.'],
+    ['pipeNotListening', 'The Docker pipe of Devspaces for it cannot listen'],
+    ['unknown', 'The details show why.'],
+  ] as const)('%s for the WSL distribution', (problem, text) => {
+    const reason = dockerHostReason(problem, 'wsl:devspaces');
+    expect(reason).toContain(text);
+    expect(reason).not.toMatch(/SSH|ssh|network|group docker/);
+  });
+
   it('never offers the Docker Desktop start or its installation for a remote host', () => {
     const text = Messages.dockerHostUnreachable('box', dockerHostReason('dockerNotRunning', 'box'));
     expect(text).not.toMatch(/Docker Desktop|install/i);
@@ -95,12 +115,11 @@ describe('the messages of a remote Docker host', () => {
   });
 
   // The texts before the window connects.
-  it('names both hosts and the commands to switch back when the context changed during a start', () => {
-    const text = Messages.otherDockerHostAfterStart('acme/api', 'build-box', '');
-    expect(text).toContain('runs on build-box');
-    expect(text).toContain('Docker is now set to the local Docker');
-    expect(text).toContain('Use a Remote Docker Host…');
-    expect(text).toContain('Use the Local Docker');
+  it('names the other host and the way back when the Docker context of this computer changed during a start of a local devspace', () => {
+    const text = Messages.otherDockerHostAfterStart('acme/api', 'tcp://192.0.2.7:2375');
+    expect(text).toContain('runs on the local Docker');
+    expect(text).toContain('is now set to tcp://192.0.2.7:2375');
+    expect(text).toContain('Set Docker on this computer back to its local engine, then start acme/api again.');
     expect(text).not.toContain('Nothing was changed');
   });
 
@@ -111,11 +130,19 @@ describe('the messages of a remote Docker host', () => {
     expect(text).not.toContain('yet');
   });
 
-  it('names the refused endpoint and the two commands', () => {
+  it('names the refused endpoint and the command for a remote host', () => {
     const text = Messages.dockerEndpointUnsupported('tcp://192.0.2.10:2376');
     expect(text).toContain('tcp://192.0.2.10:2376');
     expect(text).toContain('Use a Remote Docker Host…');
-    expect(text).toContain('Use the Local Docker');
+    expect(text).toContain('its local engine');
+  });
+
+  it('names the SSH host of the Docker context of the user, and how Devspaces uses it', () => {
+    expect(Messages.dockerContextHost('build-box', 'box')).toBe(
+      'Docker on this computer is set to build-box over SSH (Docker context box). Devspaces uses a remote host only from its own list: choose "Devspaces: Use a Remote Docker Host…" and build-box, or set Docker on this computer to its local engine (for example with "docker context use default" in a terminal).',
+    );
+    expect(Messages.dockerContextHost('me@192.0.2.10', undefined)).toContain('(DOCKER_HOST)');
+    expect(Messages.dockerContextHost('me@192.0.2.10', undefined)).not.toContain('docker context use');
   });
 });
 
