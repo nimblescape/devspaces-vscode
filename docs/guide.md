@@ -16,10 +16,10 @@ The complete guide to Devspaces. The short overview is the [README](../README.md
 Install **Devspaces** from the Visual Studio Marketplace: search for "Devspaces" in the Extensions view of VS Code, or run:
 
 ```sh
-code --install-extension nimblescape.nimblescape-devspaces-2
+code --install-extension nimblescape.nimblescape-devspaces
 ```
 
-VS Code installs the Dev Containers extension with it. To install a `.vsix` file instead, run **Extensions: Install from VSIX…** or `code --install-extension nimblescape-devspaces-2-<version>.vsix`; to create the file yourself, see [Build from source](#build-from-source).
+VS Code installs the Dev Containers extension with it. To install a `.vsix` file instead, run **Extensions: Install from VSIX…** or `code --install-extension nimblescape-devspaces-<version>.vsix`; to create the file yourself, see [Build from source](#build-from-source).
 
 ### Update from version 0.4.0 or older
 
@@ -70,13 +70,13 @@ VS Code can be signed in to several GitHub accounts at the same time, for exampl
 A link opens a repository in Devspaces, for example from a website or a course page:
 
 ```text
-vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name
+vscode://nimblescape.nimblescape-devspaces/open?repository=owner/name
 ```
 
 For VS Code Insiders, the link starts with `vscode-insiders://`. On a web page:
 
 ```html
-<a href="vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name">Open in Devspaces</a>
+<a href="vscode://nimblescape.nimblescape-devspaces/open?repository=owner/name">Open in Devspaces</a>
 ```
 
 When you select the link:
@@ -93,13 +93,13 @@ The devspace opens in the window that VS Code gives the link, usually the window
 A course link opens your own repository of a course, for example the repository that GitHub Classroom creates for you when you accept an assignment. GitHub Classroom names it after the assignment, with your GitHub login at the end: for the login `octocat`, the assignment `my-school/module-ts-2` gives the repository `my-school/module-ts-2-octocat`. One course link works for every student of the course:
 
 ```text
-vscode://nimblescape.nimblescape-devspaces-2/course?repository=owner/name-<username>
+vscode://nimblescape.nimblescape-devspaces/course?repository=owner/name-<username>
 ```
 
 On a web page:
 
 ```html
-<a href="vscode://nimblescape.nimblescape-devspaces-2/course?repository=my-school/module-ts-2-<username>">Open in Devspaces</a>
+<a href="vscode://nimblescape.nimblescape-devspaces/course?repository=my-school/module-ts-2-<username>">Open in Devspaces</a>
 ```
 
 A course link needs the GitHub sign-in, because only the sign-in tells Devspaces your login. When you are not signed in, Devspaces asks for the sign-in first; without it, the link opens nothing. Devspaces then puts the login of each of your accounts in place of `<username>` and opens the repository that exists, as a link `/open?repository=owner/name` does (see [Open from a link](#open-from-a-link)). It opens it with the account of the login in its name, also when another of your accounts has more rights on it, for example the account of a teacher who owns the organization of the course: the repository is the personal one of that login. When the repositories of two of your accounts exist, Devspaces asks which one to open. This also works when Devspaces is not installed yet: VS Code first offers to install it, as for a link `/open`.
@@ -453,7 +453,7 @@ Devspaces keeps a few things on each Docker engine that you used: the Monitor (`
 
 On Windows, when you set up the WSL distribution of Devspaces, run **Devspaces: Remove the WSL Distribution of Devspaces…** after these steps. It deletes the distribution with its Docker engine, its folder and its start entry (see [The WSL distribution of Devspaces](#the-wsl-distribution-of-devspaces-windows)). Without the extension, `wsl --unregister devspaces` in a terminal deletes it; then remove the folder `%LOCALAPPDATA%\nimblescape\devspaces\wsl` and the start entry: `reg delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v "nimblescape Devspaces WSL devspaces" /f` (an error that the value was not found means that there is none).
 
-Then uninstall Devspaces in the Extensions view of VS Code, or run `code --uninstall-extension nimblescape.nimblescape-devspaces-2`.
+Then uninstall Devspaces in the Extensions view of VS Code, or run `code --uninstall-extension nimblescape.nimblescape-devspaces`.
 
 What to know:
 
@@ -501,7 +501,7 @@ The objects of version 0.4.0 and older have other names: see [Update from versio
 ### Docker contexts and your computer
 
 - **Docker contexts.** Devspaces creates no Docker context, so there is none to remove.
-- **Files.** Devspaces keeps its records, also the list of remote hosts (`remote-docker.json`), in a folder of VS Code: `~/.config/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on Linux, `~/Library/Application Support/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on macOS, and `%APPDATA%\Code\User\globalStorage\nimblescape.nimblescape-devspaces-2` on Windows. For VS Code Insiders, the folder `Code - Insiders` takes the place of `Code`. You can delete this folder after the uninstall.
+- **Files.** Devspaces keeps its records, also the list of remote hosts (`remote-docker.json`), in a folder of VS Code: `~/.config/Code/User/globalStorage/nimblescape.nimblescape-devspaces` on Linux, `~/Library/Application Support/Code/User/globalStorage/nimblescape.nimblescape-devspaces` on macOS, and `%APPDATA%\Code\User\globalStorage\nimblescape.nimblescape-devspaces` on Windows. For VS Code Insiders, the folder `Code - Insiders` takes the place of `Code`. You can delete this folder after the uninstall.
 - **Settings.** The settings `devspaces.…` stay in your `settings.json` until you remove them.
 
 ## Build from source

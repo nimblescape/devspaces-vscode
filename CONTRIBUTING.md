@@ -48,10 +48,10 @@ later (`engines.vscode`) for the extension.
 | `npm run test:vscode:vsix` | Runs the same tests against the packaged VSIX of the version in `package.json`, as users install it: run `npm run package` first. VS Code installs the VSIX and the Dev Containers extension, and loads `test/vscode/host/` as development extension, so that the extension runs from the VSIX. Then the same tests and those of `test/vscode/untrusted/` run in a folder that VS Code does not trust: they check that the extension runs there and that the folder's values of the settings in `capabilities.untrustedWorkspaces.restrictedConfigurations` of `package.json` are ignored. On Linux without a display, run it under `xvfb-run -a`. On Windows, the path of the checkout must have no space: `@vscode/test-cli` passes the path of the VSIX to the VS Code command line without quotes. |
 | `npm run test:vscode:attach:prepare` and `npm run test:vscode:attach` | The attach tests, only on CI (the jobs "vscode attach", "vscode attach remote", whose preparation runs with `DEVSPACE_TEST_ATTACH_PREPARE=remote`, and "vscode update", with `DEVSPACE_TEST_ATTACH_PREPARE=update`): VS Code starts in the window of a container on the real Docker engine, through the real Dev Containers extension, and the extension creates its objects there with the names of a real installation. The preparation refuses to run without `CI=true`. It changes the test copies of VS Code and Dev Containers in `.vscode-test/`: VS Code lets the extension use the test sign-in without a question, and Dev Containers does not ask before the first attach (VS Code refuses every dialog in tests). `npm run test:vscode:attach` makes the same change of Dev Containers before each run, in every release of it in `.vscode-test/extensions`, because VS Code can install a newer release during a run. With `DEVSPACE_TEST_ATTACH_PREPARE=remote`, it prepares no devspace and no plain container on the local Docker; instead it starts a container with a Docker engine and an SSH server, puts the devspace on that engine, starts a container with the name of the devspace container on the local Docker (the window must not use it), and adds the host `devspaces-test-remote` to the SSH config in `~/.ssh`; the run `remote` starts with that host as the Docker host of Devspaces in its own list (`remote-docker.json` in the storage folder of the test VS Code, as after "Use a Remote Docker Host…"), and the current Docker context stays `default`. The SSH server there writes the command of each session into the log of its container, and the first test of the run `remote` counts the SSH logins of the open in that log and writes them, with the time of each session, to the log of the test and to the summary of the CI job. With `DEVSPACE_TEST_ATTACH_PREPARE=update`, it prepares no plain container; it installs the last released version of the extension into `.vscode-test/extensions` from the VSIX that the release workflow attached to the latest GitHub release (its publish job publishes this file to the Marketplace), and it builds the helper image as that version builds it (from its Dockerfile and its version of the Dev Container CLI). Before the runs `stopped` and `updated`, `node scripts/install-attach-extensions.mjs` packages the extension and the test sign-in provider and installs them from their VSIX files into `.vscode-test/extensions`, over an installed version too: the second VS Code of the run `stopped` loads them as users install them, because VS Code closes a window of development extensions when its remote connection is lost, and the run `updated` checks that VS Code loads the packaged build after the update. `npm run test:vscode:attach` fails when mocha reports no result, also when VS Code ends with exit code 0. After each run, it lists the programs that the test VS Code left running (on Linux, `scripts/leftoverPrograms.mjs`, also for the second VS Code of the run `stopped`) and fails when a program that started during the run still runs 10 seconds after VS Code quit. The `docker exec` programs of Dev Containers and their `ssh` programs do not count, and the run `previous`, with the last released version of the extension, only lists the programs. |
 | `npm run build` | Bundles `dist/extension.js`, `dist/groupsPreviewWorker.js` and `dist/helperChannel.js` as readable JavaScript, the first two with source maps. `npm run package` builds them without source maps. |
-| `npm run package` | Builds `nimblescape-devspaces-2-<version>.vsix` with vsce. vsce also validates the manifest and the README. |
+| `npm run package` | Builds `nimblescape-devspaces-<version>.vsix` with vsce. vsce also validates the manifest and the README. |
 | `npm run install-local` | Builds the package and installs it into every VS Code profile (`-- --profile <name>` into one). |
-| `npm run uninstall-local` | Removes `nimblescape.nimblescape-devspaces-2` from every VS Code profile (`-- --profile <name>` from one). |
-| `code --install-extension nimblescape-devspaces-2-<version>.vsix` | Installs the built package. Reload the window after an update of an active extension. |
+| `npm run uninstall-local` | Removes `nimblescape.nimblescape-devspaces` from every VS Code profile (`-- --profile <name>` from one). |
+| `code --install-extension nimblescape-devspaces-<version>.vsix` | Installs the built package. Reload the window after an update of an active extension. |
 | `bash scripts/purge-docker-context.sh --dry-run` | Shows what a reset of the engine of the current Docker context removes. Without `--dry-run`, it removes **everything** on that engine (all containers, volumes, images, unused networks and the build cache, not only those of Devspaces), after you type the name of the context, so that the next start begins like a fresh installation. Changes that are not pushed are lost. |
 
 ## Reviewing the package
@@ -67,7 +67,7 @@ and the locked versions of the tools, the build gives the same files.
 
 `package.json` is the extension manifest. It has these parts:
 
-- The name and the publisher define the extension ID `nimblescape.nimblescape-devspaces-2`; the section [Naming](#naming) explains the name.
+- The name and the publisher define the extension ID `nimblescape.nimblescape-devspaces`; the section [Naming](#naming) explains the name.
 - The version is the only source of the package version, and the tag of a release names it.
 - The engine range defines the compatible VS Code versions, and `extensionDependencies` the Dev Containers extension.
 - `main` selects the bundle `dist/extension.js`.
@@ -84,24 +84,38 @@ links.
 
 ## Naming
 
-Every extension of the publisher `nimblescape` uses one name,
-`nimblescape-<name>`, for the repository, the package and the extension:
+Every extension of the publisher `nimblescape` has a short name `<name>`,
+for example `devspaces` or `commentlinks`. The repository and the extension
+use it in different forms:
 
 | What | Form | This extension |
 | --- | --- | --- |
-| Repository | `nimblescape/nimblescape-<name>` | `nimblescape/nimblescape-devspaces-2` |
-| `name` in `package.json` | `nimblescape-<name>` | `nimblescape-devspaces-2` |
-| Extension ID | `nimblescape.nimblescape-<name>` | `nimblescape.nimblescape-devspaces-2` |
-| Package file | `nimblescape-<name>-<version>.vsix` | `nimblescape-devspaces-2-<version>.vsix` |
-| Display name | `nimblescape <Title>` | `nimblescape Devspaces 2` |
+| Repository | `nimblescape/<name>-vscode` | `nimblescape/devspaces-vscode` |
+| `name` in `package.json` | `nimblescape-<name>` | `nimblescape-devspaces` |
+| Extension ID | `nimblescape.nimblescape-<name>` | `nimblescape.nimblescape-devspaces` |
+| Package file | `nimblescape-<name>-<version>.vsix` | `nimblescape-devspaces-<version>.vsix` |
+| Display name | `nimblescape <Title>` | `nimblescape Devspaces` |
 
-The prefix keeps the name apart from the names of other publishers, because
-the Marketplace accepts a `name` only once. The Marketplace cannot rename an
-extension ID: another `name` publishes a new extension, and the old one stays
-with its installations. An extension that is no longer wanted is unpublished
-(More Actions > Unpublish; this can be undone), never removed: the Marketplace
-keeps the `name` of a removed extension reserved permanently, also for its own
-publisher.
+The organization `nimblescape` is the namespace of the repository, as the
+scope `@nimblescape` is the namespace of an npm package, so the name of the
+repository does not repeat `nimblescape`. The suffix `-vscode` says that the
+repository holds a VS Code extension. When the `name` ends with a number
+`-<n>`, the name of the repository leaves the number out: the `name`
+`nimblescape-<name>-<n>` has the repository `<name>-vscode`.
+
+The prefix `nimblescape-` keeps the `name` apart from the names of other
+publishers, because the Marketplace accepts a `name` only once. The
+Marketplace cannot rename an extension ID: another `name` publishes a new
+extension, and the old one stays with its installations. An extension that is
+no longer wanted is unpublished (More Actions > Unpublish; this can be
+undone), never removed: the Marketplace keeps the `name` of a removed
+extension reserved permanently, also for its own publisher.
+
+A repository can get a new name. GitHub forwards the links and the clones of
+the old name to the repository, as long as no other repository takes the old
+name, so a new repository never uses an old name. After a rename, the
+publishing needs a new federated credential (see
+[Setup of a repository](#setup-of-a-repository)).
 
 ## Release
 
@@ -195,8 +209,8 @@ grants the role of a member for the whole publisher.
 
 A new extension repository needs its federated credential and its
 environment. The script `scripts/marketplace-setup.sh` sets both up for the
-GitHub repository of the remote `origin` of the clone, whose name must be the
-`name` of `package.json`; it needs the Azure CLI, the GitHub CLI and Node.js,
+GitHub repository of the remote `origin` of the clone, whose name must follow
+[Naming](#naming); it needs the Azure CLI, the GitHub CLI and Node.js,
 the two CLIs signed in with an account that may change the app registration
 and the settings of the repository. It shows what it sets up and
 asks before it changes anything. It changes nothing that already exists, so it
@@ -217,14 +231,15 @@ The script gives the credential these values. For this repository:
 | Field of the federated credential | Value |
 | --- | --- |
 | Issuer | `https://token.actions.githubusercontent.com` |
-| Subject | `repo:nimblescape@156021698/nimblescape-devspaces-2@1434983344:environment:marketplace` |
+| Subject | `repo:nimblescape@156021698/devspaces-vscode@1434983344:environment:marketplace` |
 | Audience | `api://AzureADTokenExchange` |
 
 GitHub puts the owner ID and the repository ID into the subject of every
 repository created after 15 July 2026, so a new owner of a reused name gets no
 token. The subject also holds the name of the repository: after a rename of
-the repository, run the script again and delete the credential of the old
-name. One app accepts at most 20 federated credentials.
+the repository, run the script again. It adds the credential of the new name
+and shows the command that deletes the credential of the old name. One app
+accepts at most 20 federated credentials.
 
 ### Setup from scratch
 

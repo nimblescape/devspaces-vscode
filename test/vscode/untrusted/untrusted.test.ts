@@ -15,7 +15,7 @@ import * as path from 'path';
 import { isDeepStrictEqual } from 'util';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
+const EXTENSION_ID = 'nimblescape.nimblescape-devspaces';
 
 interface Manifest {
   capabilities: { untrustedWorkspaces: { supported: unknown; restrictedConfigurations: string[] } };

@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
-const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
+const EXTENSION_ID = 'nimblescape.nimblescape-devspaces';
 const DEV_CONTAINERS_ID = 'ms-vscode-remote.remote-containers';
 /** The name of the output channel of the extension (src/vscode/logger.ts, OUTPUT_CHANNEL_NAME). */
 const OUTPUT_CHANNEL_NAME = 'Devspaces';
