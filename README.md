@@ -1,4 +1,4 @@
-# nimblescape Devspaces
+# nimblescape Devspaces 2
 
 Open your GitHub repositories in dev containers with one click, on your own Docker.
 
