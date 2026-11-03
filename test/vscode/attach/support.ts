@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { DOCKER_CONFIG_FOLDER, GH_CONFIG_FOLDER, GITHUB_TOKEN_FILE } from '../../../src/core/names';
 
-export const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
+export const EXTENSION_ID = 'nimblescape.nimblescape-devspaces';
 
 /** The container of this start of VS Code (prepare.ts). */
 export interface Seed {
@@ -26,9 +26,13 @@ export interface Seed {
   /** The devspace only: the wait of its postStartCommand when the mark exists (prepare.ts, the run `longopen`). */
   longStartSeconds?: number;
   longStartMark?: string;
-  /** The run `remote` only: the Docker context of the other computer (in the folder URI) and its host of the SSH config. */
-  dockerContext?: string;
+  /**
+   * The run `remote` only: the host of the other computer in the SSH config, the Docker pipe of the window (in the
+   * folder URI), and the ID of the computer of the test VS Code, for which the pipe was made.
+   */
   remoteHost?: string;
+  dockerHost?: string;
+  computerId?: string;
   /**
    * The run `remote` only: the container of the other computer on the Docker engine of the runner, and the time (ISO
    * 8601) after the last SSH login of the preparation, from which remote.test.ts counts the logins of the open.

@@ -10,8 +10,9 @@
 //
 // The start (pipe loading): the container runs the pipe loader (src/core/loader/pipeLoader.ts) with
 // CHANNEL_SCRIPT_PATH, the hash of the script, and CHANNEL_ENTRY. The first line that the extension writes is the
-// script as a JSON string (encodeBundle); the loader checks its hash, stores it at CHANNEL_SCRIPT_PATH, and calls its
-// `startChannel` with the rest of the input. So the script has no length limit of the command line.
+// script as a JSON string (encodeBundle); the loader checks its hash, stores it at CHANNEL_SCRIPT_PATH, puts the rest of
+// the input that it read back in front of the standard input, and calls its `startChannel`. So the script has no length
+// limit of the command line.
 //
 // The container must end by itself when the connection is lost (nothing on the Docker host can clean up after it). Four
 // independent ways, each enough alone:
@@ -33,6 +34,7 @@ import type { ContainerState, DevspaceSource, GitSummary } from '../types';
 import { isGitSummary } from '../git/gitSummary';
 import { isUserErrorCode, type UserErrorCode } from '../errors';
 import { parseExtensionList } from '../vscodeExtensions';
+import { API_VERSION_SOURCE } from '../docker/dockerApiVersion';
 import { hasOnlyKeys, isRecord } from '../valueChecks';
 
 /**
@@ -649,6 +651,13 @@ export interface ProbeValue {
    * it), or undefined when it could not be read.
    */
   serverVersion?: string;
+  /**
+   * The newest API version of the engine (`ApiVersion` of `GET /version`, API_VERSION_PATTERN), and the oldest one that
+   * it accepts (`MinAPIVersion`); each undefined when the engine named none. The extension checks them against the API
+   * versions of the Docker CLI of Devspaces (dockerApiMismatch).
+   */
+  apiVersion?: string;
+  minApiVersion?: string;
   detail: string;
   /**
    * The identity of the engine behind the socket of the worker (the values of `GET /info`), or undefined when it could
@@ -703,17 +712,25 @@ export function sameEngine(a: EngineIdentity, b: EngineIdentity): boolean {
 /** The longest detail of a probe that did not reach the engine (the worker keeps the end of the reason). */
 export const MAX_PROBE_DETAIL_LENGTH = 2_000;
 
+/** An API version of Docker, as ProbeValue names it: `1.40`. */
+export const API_VERSION_PATTERN = new RegExp(`^${API_VERSION_SOURCE}$`);
+
 /** The check of ProbeValue (the extension). */
 export function parseProbeValue(value: unknown): ProbeValue | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['detail'], ['serverVersion', 'engine']) || typeof value.detail !== 'string') return undefined;
+  if (!isRecord(value) || !hasOnlyKeys(value, ['detail'], ['serverVersion', 'apiVersion', 'minApiVersion', 'engine']) || typeof value.detail !== 'string') return undefined;
   // The extension puts the detail into a message; the worker cuts it to this length.
   if (value.detail.length > MAX_PROBE_DETAIL_LENGTH) return undefined;
   if (value.serverVersion !== undefined && typeof value.serverVersion !== 'string') return undefined;
+  for (const api of [value.apiVersion, value.minApiVersion]) {
+    if (api !== undefined && (typeof api !== 'string' || !API_VERSION_PATTERN.test(api))) return undefined;
+  }
   // The identity of the engine as its checked values (parseEngineIdentity).
   const engine = value.engine === undefined ? undefined : parseEngineIdentity(value.engine);
   if (value.engine !== undefined && engine === undefined) return undefined;
   const probe: ProbeValue = { detail: value.detail };
   if (value.serverVersion !== undefined) probe.serverVersion = value.serverVersion as string;
+  if (value.apiVersion !== undefined) probe.apiVersion = value.apiVersion as string;
+  if (value.minApiVersion !== undefined) probe.minApiVersion = value.minApiVersion as string;
   if (engine !== undefined) probe.engine = engine;
   return probe;
 }

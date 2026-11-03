@@ -53,7 +53,8 @@ interface SetupOptions {
   wsl?: () => RunResult | Promise<RunResult>;
   download?: (options: DownloadOptions) => Promise<void>;
   startDocker?: DockerSetupDeps['startDocker'];
-  remoteDockerHost?: boolean;
+  /** Whether Devspaces uses a remote host (as last read); a function for one that changes. */
+  remoteDockerHost?: boolean | (() => boolean);
   /** Whether the sidebar view is visible; visible when not given. */
   viewVisible?: () => boolean;
 }
@@ -80,7 +81,7 @@ function setup(installed: boolean, options: SetupOptions = {}) {
     platform,
     env: {},
     onDidChangeInstalled: changed,
-    remoteDockerHostConfigured: () => options.remoteDockerHost ?? false,
+    remoteDockerHostConfigured: () => (typeof options.remoteDockerHost === 'function' ? options.remoteDockerHost() : (options.remoteDockerHost ?? false)),
     viewVisible: options.viewVisible ?? (() => true),
     planInput: async () => ({ platform, arch: 'arm64', has: (tool: SetupTool) => tools.includes(tool), userName: 'octo', ...options.input }),
     downloadFolder: path.join(os.tmpdir(), 'devspaces-downloads-test'),
@@ -135,6 +136,35 @@ describe('DockerSetup: context keys and CLI checks', () => {
     expect(contextCalls()).toContainEqual([DockerContextKeys.setupRequired, false]);
     expect(dockerSetup.dockerMissing).toBe(true);
     expect(dockerSetup.setupRequired).toBe(false);
+    dockerSetup.dispose();
+  });
+
+  // "Use a Remote Docker Host…" on a computer without Docker, or the choice of another window: the setup follows the
+  // Docker host of Devspaces (onDockerHostChanged), without a lookup of the CLI.
+  it('shows or hides the setup when the Docker host of Devspaces changes, and renders the sidebar again', () => {
+    let remote = false;
+    const { dockerSetup, docker, changed } = setup(false, { remoteDockerHost: () => remote });
+    dockerSetup.onDockerHostChanged();
+    expect(contextCalls()).toEqual([]);
+    dockerSetup.initialize();
+    fakeVscode.commands.executeCommand.mockClear();
+    const lookups = docker.isInstalled.mock.calls.length;
+    dockerSetup.onDockerHostChanged();
+    expect(contextCalls()).toEqual([]);
+    expect(changed).not.toHaveBeenCalled();
+    remote = true;
+    dockerSetup.onDockerHostChanged();
+    expect(contextCalls()).toEqual([[DockerContextKeys.setupRequired, false]]);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(dockerSetup.setupRequired).toBe(false);
+    remote = false;
+    dockerSetup.onDockerHostChanged();
+    expect(contextCalls()).toEqual([
+      [DockerContextKeys.setupRequired, false],
+      [DockerContextKeys.setupRequired, true],
+    ]);
+    expect(changed).toHaveBeenCalledTimes(2);
+    expect(docker.isInstalled.mock.calls.length).toBe(lookups);
     dockerSetup.dispose();
   });
 
@@ -923,8 +953,9 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     confirmWith(DockerSetupTexts.install);
     await dockerSetup.installWsl();
     expect(modalCalls()[0][0]).toBe(DockerSetupTexts.confirmWsl);
-    expect(modalCalls()[0][1].detail).toBe(`${DockerSetupTexts.confirmCommands}\n\nwsl --install\n\n${DockerSetupTexts.wslRestart}`);
-    expect(fakeVscode.terminals[0].lines).toEqual(['wsl --install']);
+    // Without the Ubuntu that `wsl --install` adds by default.
+    expect(modalCalls()[0][1].detail).toBe(`${DockerSetupTexts.confirmCommands}\n\nwsl --install --no-distribution\n\n${DockerSetupTexts.wslRestart}`);
+    expect(fakeVscode.terminals[0].lines).toEqual(['wsl --install --no-distribution']);
     // The first check, before the confirmation (no check ran before the click).
     expect(runner.run).toHaveBeenCalledTimes(1);
     exitCode = 0;

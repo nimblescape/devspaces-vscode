@@ -611,12 +611,20 @@ describe('the Docker setup in the sidebar welcome view', () => {
       .join('\n');
     expect(links).toContain(`(command:${Commands.dockerSetupInstall})`);
     expect(links).toContain(`(command:${Commands.dockerSetupInstallWsl})`);
+    expect(links).toContain(`(command:${Commands.setUpWslDistribution})`);
     expect(links).toContain(`(command:${Commands.signIn})`);
+    expect(links).toContain(`(command:${Commands.useRemoteDockerHost})`);
+  });
+
+  // A computer without Docker can use a remote host: the command downloads the Docker CLI of Devspaces.
+  it('offers a remote Docker host in the setup, on every platform', () => {
+    const remote = manifest().contributes.viewsWelcome.filter((view) => view.contents.includes(`(command:${Commands.useRemoteDockerHost})`));
+    expect(remote.map((view) => view.when)).toEqual([DockerContextKeys.setupRequired]);
   });
 
   it('names the license of Docker Desktop in the steps that install it', () => {
     const welcome = manifest().contributes.viewsWelcome;
-    const desktopSteps = welcome.filter((view) => view.contents.includes('Install Docker Desktop'));
+    const desktopSteps = welcome.filter((view) => /install Docker Desktop/i.test(view.contents));
     expect(desktopSteps.map((view) => view.when)).toEqual([
       `${DockerContextKeys.setupRequired} && isMac`,
       `${DockerContextKeys.setupRequired} && isWindows`,

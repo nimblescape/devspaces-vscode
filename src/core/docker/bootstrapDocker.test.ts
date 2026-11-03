@@ -20,7 +20,7 @@ import {
   sshDroppedReadCall,
 } from './bootstrapDocker';
 import { dockerCommandWords, isReadOnlyDockerCall } from './dockerCli';
-import { dockerTargetOf, remoteContextNames } from './dockerHost';
+import { remoteDockerTarget } from './dockerHost';
 import { runWithDockerTarget } from './dockerTargets';
 
 interface Call {
@@ -75,15 +75,14 @@ describe('BootstrapDocker: only the bootstrap', () => {
     expect(own).not.toContain('runDirect');
   });
 
-  it('runs a call directly, also within an operation, with the Docker context of the operation', async () => {
+  it('runs a call directly, also within an operation, with the Docker host of the operation', async () => {
     const runner = new FakeRunner();
     const docker = new BootstrapDocker(runner, DOCKER, { PATH: '/usr/bin', DOCKER_CONTEXT: 'default' }, silentLogger, 'linux');
-    const context = remoteContextNames('build-box')[0];
-    await runWithDockerTarget(dockerTargetOf('ssh://build-box', context), () => docker.run(['container', 'inspect', 'x']));
+    await runWithDockerTarget(remoteDockerTarget('build-box'), () => docker.run(['container', 'inspect', 'x']));
     expect(runner.calls).toHaveLength(1);
     expect(runner.calls[0].args).toEqual(['container', 'inspect', 'x']);
-    expect(runner.calls[0].options.env?.DOCKER_CONTEXT).toBe(context);
-    expect(runner.calls[0].options.env?.DOCKER_HOST).toBeUndefined();
+    expect(runner.calls[0].options.env?.DOCKER_HOST).toBe('ssh://build-box');
+    expect(runner.calls[0].options.env?.DOCKER_CONTEXT).toBeUndefined();
   });
 
   it('logs a call that does not only read with its command, never with its arguments', async () => {
@@ -801,12 +800,11 @@ describe('BootstrapDocker.start (the helper channel)', () => {
       },
     };
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin', DOCKER_CONTEXT: 'desktop-linux' }, silentLogger, 'linux');
-    // The Docker context of a host is named after it (remoteContextNames).
-    const target = dockerTargetOf('ssh://build-box', remoteContextNames('build-box')[0]);
+    const target = remoteDockerTarget('build-box');
     expect(await runWithDockerTarget(target, async () => docker.start(['run', '-i', 'img']))).toBe(fakeStarted);
     expect(starts[0]).toMatchObject({ file: '/usr/bin/docker', args: ['run', '-i', 'img'] });
-    expect(starts[0].env?.DOCKER_CONTEXT).toBe(remoteContextNames('build-box')[0]);
-    expect(starts[0].env?.DOCKER_HOST).toBeUndefined();
+    expect(starts[0].env?.DOCKER_HOST).toBe('ssh://build-box');
+    expect(starts[0].env?.DOCKER_CONTEXT).toBeUndefined();
     const withoutStart = new BootstrapDocker({ run: runner.run }, '/usr/bin/docker', {}, silentLogger, 'linux');
     expect(withoutStart.start(['ps'])).toBeUndefined();
     const withoutCli = new BootstrapDocker(runner, undefined, {}, silentLogger, 'linux');
@@ -825,7 +823,7 @@ describe('BootstrapDocker: every call runs directly', () => {
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', clock ? { clock } : {});
     return { docker, runner, lines };
   }
-  const REMOTE = dockerTargetOf('ssh://build-box', remoteContextNames('build-box')[0]);
+  const REMOTE = remoteDockerTarget('build-box');
 
   it('logs a direct call with only its command, never an argument; a call that only reads is not logged', async () => {
     expect(directCommandName(['pull', 'ghcr.io/o/private:1'])).toBe('pull');
@@ -880,11 +878,25 @@ describe('BootstrapDocker: every call runs directly', () => {
       'constructor',
       'dockerPath',
       'isInstalled',
-      // `run` is the one method of a call; runRepeated and runOnce run it.
+      // The choice of the Docker CLI of a call (the one of Devspaces for a remote engine, ownCli), no Docker call.
+      'canRunRemote',
+      'canRunOn',
+      'cliPath',
+      'ownCliPath',
+      // `run` is the one method of a call; runVia, runRepeated and runOnce run it, and runWithoutPipe passes it through.
+      'runVia',
       'runRepeated',
+      'runWithoutPipe',
       'runOnce',
       'start',
       'operationEnv',
+      'callEnv',
+      // The lookup of the Docker pipe of the extension (dockerPipe), no Docker call.
+      'pipeOf',
+      // Serves the Docker pipe of the extension (servePipe) before a call of `run`, no call of its own.
+      'servePipeOf',
+      // The same call of `run` on the shell before the relay (remoteShell), no call of its own.
+      'runOnShell',
       'processEnv',
       'lookUpCliNow',
       'reportCliLost',

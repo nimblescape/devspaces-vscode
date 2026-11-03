@@ -11,18 +11,46 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
 import { BootstrapDocker } from '../core/docker/bootstrapDocker';
-import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable } from '../core/docker/dockerCli';
-import { describeDockerHost, dockerHostOf, isOnDockerHost, type DockerTarget } from '../core/docker/dockerHost';
+import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
+import { LOCAL_CLI_VERSION_FORMAT, LOCAL_CLI_VERSION_TIMEOUT_MS, localDockerCliApi, type DockerCliApi } from '../core/docker/dockerApiVersion';
+import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
+import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
+import { WslKeeper } from '../core/docker/wslKeeper';
+import { WslLifetime } from '../core/docker/wslLifetime';
+import { WslUpgrade } from '../core/docker/wslUpgrade';
+import {
+  WSL_DISTRIBUTION,
+  WSL_HOST,
+  WSL_LIST_ARGS,
+  describeDockerHost,
+  devspacesOfHost,
+  dockerHostOf,
+  hostAccessOf,
+  parseWslList,
+  sshCommandArgs,
+  transportProgramOf,
+  wslCommandArgs,
+  wslEnv,
+  type DockerTarget,
+} from '../core/docker/dockerHost';
 import { RemovedEngineError, removedEngineImageNote, removedEngineNote } from '../core/docker/engineRemoval';
-import { ensureDockerRunning } from '../core/docker/dockerStart';
+import { ensureDockerRunning, launchDetachedProcess } from '../core/docker/dockerStart';
 import { DockerTargets, operationDockerTarget, outsideOperation, runWithDockerTarget } from '../core/docker/dockerTargets';
-import { SshLoginCache, findRemoteContext, startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
+import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
+import { RelayConnectionError } from '../core/relay/connection';
+import { openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
+import { RelayConnections, relayAccess } from '../core/relay/connections';
+import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
+import { HostPipes } from '../core/relay/hostPipes';
+import { RemoteShells, type RemoteShellStart } from '../core/relay/remoteShells';
+import { dockerPipeBase, dockerPipeId, parseDockerPipeHost } from '../core/relay/pipeAddress';
+import { sshPromptSignal, sshPromptsAllowed } from '../core/sshAskpass';
 import { DiscoveryService } from '../core/discovery/discoveryService';
 import { GitHubApi } from '../core/discovery/githubApi';
 import { sameScope } from '../core/discovery/scope';
 import { errorMessage, UserFacingError } from '../core/errors';
 import { helperImageTag, registryBaseDigest } from '../core/helper/helperImage';
-import { HelperPrebuild, dockerEngineAnswers } from '../core/helper/helperPrebuild';
+import { HelperPrebuild, dockerEngineAnswers, type DockerEngineAnswersDeps } from '../core/helper/helperPrebuild';
 import { MissingHelperBuild } from '../core/helper/missingHelperBuild';
 import { HelperImages, helperDockerSocket } from '../core/helper/helperImages';
 import { HelperChannels, openHelperChannel } from '../core/helperChannel/helperChannels';
@@ -31,7 +59,7 @@ import { Messages } from '../core/messages';
 import { nodeHttpsTransport, takeUserAgentVersion } from '../core/http';
 import { DockerCredentialStore } from '../core/imageCheck/credentials';
 import { RegistryClient } from '../core/imageCheck/registryClient';
-import { isoTime, systemClock } from '../core/ports';
+import { isoTime, systemClock, type RunResult, type StartedByteProcess } from '../core/ports';
 import { usableTimeZone } from '../core/remoteMonitor/cron';
 import { monitorSettingsOf } from './monitorSettings';
 import { REMOTE_MONITOR_VOLUME } from '../core/remoteMonitor/protocol';
@@ -42,7 +70,7 @@ import { NodeProcessRunner } from '../core/process';
 import { nodeSshConfigFiles, parseSshConfig } from '../core/sshConfig';
 import { ClosingWork } from '../core/session/closingWork';
 import { heartbeatWiring } from '../core/session/heartbeatWiring';
-import { WindowHeartbeats, resolveHeartbeatEngine } from '../core/session/windowHeartbeats';
+import { WindowHeartbeats, hostEngine, resolveHeartbeatEngine } from '../core/session/windowHeartbeats';
 import { isHandedOffStop, releaseDevspace } from '../core/session/windowRelease';
 import { readOrCreateComputerId } from '../core/storage/computerId';
 import { DockerEngineRecords } from '../core/storage/dockerEngineRecords';
@@ -62,12 +90,13 @@ import type { ExtensionSettings } from '../core/types';
 import { AccountOffers } from './accountOffers';
 import { VsCodeGitHubAuth, watchGitHubEnterpriseSettings } from './auth';
 import { ConnectionAdapter } from './connectionAdapter';
+import { installOwnDockerCliWithProgress, OwnDockerCliTexts } from './ownDockerCliWindow';
 import { Controller } from './controller';
 import { DisconnectRequests } from './disconnectRequests';
 import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerSetup } from './dockerSetup';
-import { MonitorQuestion } from './monitorQuestion';
+import { MonitorQuestion, STOP_MONITOR_WHEN_IDLE_SETTING } from './monitorQuestion';
 import { OutputChannelLogger } from './logger';
 import { updateOwnersContextKey } from './ownerSelector';
 import { updateDevspacesOnlyContextKey } from './devspacesOnly';
@@ -75,15 +104,19 @@ import { isProcessAlive } from '../core/session/sessionRules';
 import { extensionFlow, extensionHostSide, type HostSideDeps } from './hostSide';
 import { VsCodePipelineUi } from './pipelineUi';
 import { onDidChangeBusy } from './progress';
+import { SshAskpassServer, vscodeSshLoginDialogs, type SshLogin } from './sshLoginPrompts';
+import { SshKeyOffer, vscodeSshKeyDialogs } from './sshKeyOffer';
 import { GroupMatchWorkerRunner } from './groupMatcher';
 import { PreviewWorkerRunner } from './groupsPreviewRunner';
 import { RemoteDockerCommands } from './remoteDockerCommands';
+import { WslSetupCommands } from './wslSetupCommands';
 import { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import { SessionCoordinator } from './sessionCoordinator';
 import {
   affectsSettings,
   devContainersDefaultExtensionsValue,
   readSettings,
+  SETTINGS_SECTION,
   warnInvalidCacheUpdateSchedule,
   warnInvalidDefaultImage,
   warnInvalidHostAccessChecksOff,
@@ -95,6 +128,9 @@ import { REPOSITORIES_VIEW_ID, RepositoriesTreeProvider, expandAll, revealRow, t
 
 /** A window that gets the focus refreshes the sidebar at most this often. */
 const FOCUS_REFRESH_INTERVAL_MS = 15_000;
+
+/** Time limit of `wsl.exe --list --quiet`, which may start the WSL service; the choice of the host waits for it. */
+const WSL_LIST_TIMEOUT_MS = 5_000;
 
 /** Kept for deactivate(). */
 let coordinator: SessionCoordinator | undefined;
@@ -168,14 +204,70 @@ async function activateExtension(
   warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings);
 
   const runner = new NodeProcessRunner();
-  const dockerPath = findDockerCli(env, platform);
-  logger.info(dockerPath ? `Docker CLI: ${dockerPath}` : 'The Docker CLI was not found.');
+  // The window of an attached container, also in the names of its workers (ConnectionAdapter.windowName).
+  const connection = new ConnectionAdapter(logger);
+  const installedCli = findDockerCli(env, platform);
+  logger.info(installedCli ? `Docker CLI: ${installedCli}` : 'The Docker CLI was not found.');
+  // The Docker CLI of Devspaces, one tested version (docs/architecture.md "The Docker CLI of Devspaces"), where Docker
+  // publishes one that runs here. In every window, the Docker calls of Devspaces on a remote host take it when it is
+  // installed, also on a computer without a Docker CLI (BootstrapDocker option ownCli); the other calls keep the Docker
+  // CLI of this computer. The window of a devspace on another computer (its authority names a Docker pipe) runs the Dev
+  // Containers extension with it too: its folder goes first in PATH of this extension host, before the Dev Containers
+  // extension resolves the window. A CLI that this window needs and is not installed yet is downloaded below, before the
+  // window looks up its devspace and serves its pipe; "Use a Remote Docker Host…" downloads it on a computer without a
+  // Docker CLI.
+  const pipeWindow = connection.currentDockerHost() !== undefined;
+  const ownCliBuild = ownDockerCliDownload(platform, process.arch) !== undefined;
+  if (pipeWindow && !ownCliBuild) {
+    logger.info(`Docker publishes no Docker CLI for ${platform} on ${process.arch} that runs here, so this window uses the Docker CLI of this computer.`);
+  }
+  const presentOwnCli = (): string | undefined => (ownCliBuild ? presentOwnDockerCli(paths.dockerCliDir, platform, process.arch) : undefined);
+  // Whether this window put the Docker CLI of Devspaces first in PATH (useOwnDockerCli).
+  let ownCliInPath = false;
+  const useOwnDockerCli = (cli: string): void => {
+    ownCliInPath = true;
+    putFolderFirstInPath(process.env, platform, path.dirname(cli));
+    logger.info(`The Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces is first in PATH of this window: ${cli}`);
+  };
+  const ownCli = pipeWindow ? presentOwnCli() : undefined;
+  if (ownCli !== undefined) useOwnDockerCli(ownCli);
+  // The Docker CLI of this computer where the windows run it for a remote engine: in the window of a devspace without
+  // the Docker CLI of Devspaces in PATH (no build for this computer, or a failed download), and in the other windows
+  // where Docker publishes no such build. Read once, in the background: `docker version` prints the versions of the CLI
+  // also when it reaches no engine, so it gets an address that nobody serves (and no context). Only its newest API
+  // version (localDockerCliApi); undefined until it is read, and when it cannot be.
+  let localCliApi: DockerCliApi | undefined;
+  const readLocalCliApi = async (cli: string): Promise<void> => {
+    const noEngine = platform === 'win32' ? `npipe:////./pipe/devspaces-no-docker-engine-${process.pid}` : `unix://${path.join(paths.root, 'no-docker-engine.sock')}`;
+    const cliEnv: NodeJS.ProcessEnv = { ...dockerProcessEnv(env, platform, cli), DOCKER_HOST: noEngine };
+    delete cliEnv.DOCKER_CONTEXT;
+    const result = await runner.run(cli, ['version', '--format', LOCAL_CLI_VERSION_FORMAT], { env: cliEnv, timeoutMs: LOCAL_CLI_VERSION_TIMEOUT_MS });
+    localCliApi = localDockerCliApi(result.stdout);
+    if (localCliApi === undefined) {
+      logger.warn(`The API version of the Docker CLI of this computer could not be read, so it is not checked against remote engines: ${(result.stderr || result.stdout).trim().slice(-500) || 'no output'}`);
+    } else {
+      logger.info(`${localCliApi.name.charAt(0).toUpperCase()}${localCliApi.name.slice(1)} speaks the Docker API up to version ${localCliApi.range.max}.`);
+    }
+  };
+  if (installedCli !== undefined && (pipeWindow ? ownCli === undefined : !ownCliBuild)) {
+    void readLocalCliApi(installedCli).catch((error: unknown) => logger.warn(`The API version of the Docker CLI of this computer could not be read: ${errorMessage(error)}`));
+  }
+  // The Docker CLI whose API versions are checked against a remote engine (dockerApiVersion.ts): the Docker CLI of
+  // Devspaces in the window of a devspace when it put that CLI first in PATH, which its Dev Containers extension runs,
+  // and in another window where Docker publishes it for this computer, as the windows of devspaces download and run it,
+  // also the first one; else the Docker CLI of this computer.
+  const dockerCliApi = (): DockerCliApi | undefined =>
+    (pipeWindow ? ownCliInPath : ownCliBuild)
+      ? { name: `the Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces`, range: OWN_DOCKER_CLI_API, kind: 'devspaces' }
+      : localCliApi;
+  const dockerPath = installedCli ?? ownCli;
   // Windows: the Dev Containers extension, which connects the windows to the containers, runs in this extension host and
   // looks up `docker` in its PATH and in C:\Program Files\Docker\Docker\resources\bin only. A CLI that Devspaces found
   // elsewhere, for example of a per-user Docker Desktop installed after VS Code (or the browser that opened a link of
   // Devspaces) started, gets its folder at the end of PATH of this extension host, so that the Dev Containers extension
   // uses the same CLI. Devspaces activates before the Dev Containers extension resolves the window of a devspace
-  // (ATTACHED_CONTAINER_ACTIVATION_EVENT), and this runs before the first await of the activation.
+  // (ATTACHED_CONTAINER_ACTIVATION_EVENT), and this runs before the first await of the activation (the download of the
+  // Docker CLI of Devspaces comes later).
   const shareDockerFolder = (cli: string): void => {
     if (addDockerFolderToPath(process.env, platform, cli)) {
       logger.info(`The folder of the Docker CLI was added to PATH of the extension host: ${path.win32.dirname(cli)}`);
@@ -196,10 +288,33 @@ async function activateExtension(
   let backgroundPrebuild: HelperPrebuild | undefined;
   let daemonRunning = false;
   const adapterOptions = dockerAdapterOptions(() => dockerSetup);
+  // The Docker pipes of the extension, one per remote host, and the shells before the relay; both set below.
+  let hostPipes: HostPipes | undefined;
+  let remoteShells: RemoteShells | undefined;
+  // The key of Devspaces for its SSH logins (the key offer), set below; the `ssh` of the Docker CLI uses it too.
+  let keyOffer: SshKeyOffer | undefined;
+  // The idle sessions of this window in the WSL distribution of Devspaces, and the rule for the Docker calls in the
+  // background there (WslLifetime); set below, once the settings of the Monitor are known.
+  let wslLifetime: WslLifetime | undefined;
+  // WslLifetime.leavesStopped, for the checks whether an engine answers and for the refresh of the states.
+  const leavesStopped = (host: string): Promise<boolean> => wslLifetime?.leavesStopped(host) ?? Promise.resolve(false);
   // Docker Desktop installed, updated, uninstalled or moved while VS Code runs is found or lost without a reload. The
-  // Docker CLI of the extension is only the bootstrap's (BootstrapDocker).
+  // Docker CLI of the extension is only the bootstrap's (BootstrapDocker). Its calls of an operation on an SSH host go
+  // through the Docker pipe of the extension for the host while a connection of the relay to it is open; on the WSL
+  // distribution of Devspaces always through its pipe.
   const docker = new BootstrapDocker(runner, dockerPath, env, logger, platform, {
     ...adapterOptions,
+    dockerPipe: (target) => hostPipes?.dockerHost(target.host),
+    // The pipe of the WSL distribution listens from the first Docker call of an operation there.
+    servePipe: async (target) => {
+      if (hostAccessOf(target.host)?.kind === 'wsl') await hostPipes?.serve(target.host);
+    },
+    // A call of an operation that only reads, while the host has no pipe: on the shell before the relay of the host.
+    remoteShell: (target, args, options) => remoteShells?.docker(target.host, args, options) ?? Promise.resolve(undefined),
+    // A call with `ssh://<host>`: the `ssh` of the Docker CLI with the key of Devspaces when the host has it.
+    sshEnv: (host, callEnv) => keyOffer?.dockerSshEnv(host, callEnv),
+    // The calls of an operation on a remote host: the Docker CLI of Devspaces when it is installed.
+    ownCli: presentOwnCli,
     onCliFound: shareDockerFolder,
     onDaemonStatus: (running) => {
       if (running && !daemonRunning) helperChannels?.clearFailures();
@@ -207,9 +322,10 @@ async function activateExtension(
       adapterOptions.onDaemonStatus?.(running);
     },
   });
-  // The Docker host is the current Docker context, read at the start of each operation.
-  const targets = new DockerTargets(docker, env, logger, platform);
-  const remoteState = new RemoteDockerState(paths.remoteDocker);
+  // The Docker host of Devspaces (a host of its own list, or the local Docker, which the current Docker context names),
+  // read at the start of each operation.
+  const remoteState = new RemoteDockerState(paths.remoteDocker, logger);
+  const targets = new DockerTargets(docker, env, logger, platform, remoteState);
   // What this computer remembers about each Docker engine (docker-engines.json): the answer to the question about its
   // Monitor (MonitorQuestion), and the removal mark of "Remove Devspaces from This Docker Engine…".
   const engineRecords = new DockerEngineRecords(paths.dockerEngines, { logger });
@@ -226,9 +342,138 @@ async function activateExtension(
     }
   };
   const sshPath = (): string | undefined => findExecutable('ssh', env, platform);
-  // The SSH check before the Docker calls to a remote host; a success counts for a minute per host.
+  // `wsl.exe` for the WSL distribution of Devspaces (docs/architecture.md "The WSL distribution of Devspaces"); only on
+  // Windows.
+  const wslPath = (): string | undefined => (platform === 'win32' ? findExecutable('wsl', env, platform) : undefined);
+  /** `wsl.exe --list --quiet` (WSL_LIST_ARGS): the WSL distributions of this Windows user; undefined without `wsl.exe`. */
+  const runWslList = async (): Promise<RunResult | undefined> => {
+    const wsl = wslPath();
+    return wsl === undefined ? undefined : runner.run(wsl, WSL_LIST_ARGS, { env: wslEnv(env), timeoutMs: WSL_LIST_TIMEOUT_MS });
+  };
+  /** Whether the program of the transport of the remote host `host` is found (`ssh`, or `wsl.exe` for WSL). */
+  const transportFound = (host: string): boolean => {
+    const access = hostAccessOf(host);
+    if (access === undefined) return false;
+    return (access.kind === 'wsl' ? wslPath() : sshPath()) !== undefined;
+  };
+  // After a login with a password in a flow of the user, Devspaces offers once per host to log in with its own key
+  // (~/.ssh/devspaces_ed25519) next time; every later login of Devspaces to a host with the key uses it.
+  const sshKeys = new SshKeyOffer({
+    home: os.homedir(),
+    platform,
+    computerName: os.hostname(),
+    wrapperFolder: paths.sshWrapperDir,
+    runner,
+    sshPath,
+    sshKeygenPath: () => findExecutable('ssh-keygen', env, platform),
+    env,
+    state: remoteState,
+    dialogs: vscodeSshKeyDialogs(),
+    logger,
+  });
+  keyOffer = sshKeys;
+  void sshKeys.prepare();
+  // `ssh … docker system dial-stdio` on an SSH host, or `wsl.exe … docker system dial-stdio` in the WSL distribution,
+  // for a connection of a Docker pipe without the relay. The program is found once: a window that works without the
+  // relay makes many short Docker connections.
+  let dialSsh: string | undefined;
+  let dialWsl: string | undefined;
+  const dialStdio = (host: string): StartedByteProcess | undefined => {
+    const access = hostAccessOf(host);
+    if (access?.kind === 'wsl') {
+      dialWsl ??= wslPath();
+      if (dialWsl === undefined) return undefined;
+      wslLifetime?.use(host);
+      return wslProcess(runner.startBytes(dialWsl, wslCommandArgs(access.distribution, ['docker', 'system', 'dial-stdio']), { env: wslEnv(env) }));
+    }
+    dialSsh ??= sshPath();
+    if (dialSsh === undefined || access === undefined) return undefined;
+    return runner.startBytes(dialSsh, sshCommandArgs(access.address, 'docker system dial-stdio', undefined, { identity: sshKeys.identityFor(host) }), {
+      env: noPromptEnv(env),
+    });
+  };
+  // The connections of the relay of this window, one per remote host: its worker channel, its Docker pipe and the
+  // Docker pipe of the extension for the host share it. The pipe of the extension for a host listens from the first
+  // connection to the host that passed its checks until the window closes.
+  const relayConnections = new RelayConnections({ logger, onUse: (host) => void hostPipes?.serve(host) });
+  hostPipes = new HostPipes({
+    logger,
+    platform,
+    base: () => dockerPipeBase(env, os.tmpdir()),
+    relayConnection: (host) => relayConnections.get(host),
+    dialStdio,
+  });
+  // The questions of the SSH logins of the flows of the user in VS Code (a password, a host key): the helper of
+  // SSH_ASKPASS and the pipe that it asks, prepared in the background. Every other login asks nothing (BatchMode).
+  const askpass = new SshAskpassServer({
+    folder: paths.askpassDir,
+    platform,
+    nodePath: process.execPath,
+    base: () => dockerPipeBase(env, os.tmpdir()),
+    dialogs: vscodeSshLoginDialogs(),
+    logger,
+  });
+  context.subscriptions.push(askpass);
+  void askpass.prepare();
+  /**
+   * A new login `ssh … sh -s` to `host` (sshHostTransport), for a shell before the relay or a connection of the relay.
+   * Within a flow of the user (withSshPrompts), it may ask in VS Code until the Cancel of the flow; its questions end
+   * with its process. With the key of Devspaces when the host has it; after a login that asked for the password, the key
+   * offer runs on the shell (SshKeyOffer.afterLogin). For the WSL distribution of Devspaces `wsl.exe … sh -s`
+   * (wslHostTransport), which asks nothing. Undefined without the program of the transport and for a host that has
+   * none (hostAccessOf).
+   */
+  const startLogin = (host: string): RemoteShellStart | undefined => {
+    const access = hostAccessOf(host);
+    if (access?.kind === 'wsl') {
+      const wsl = wslPath();
+      if (wsl === undefined) return undefined;
+      wslLifetime?.use(host);
+      const transport = wslHostTransport(access.distribution, wsl, env);
+      return { process: wslProcess(runner.startBytes(transport.file, transport.args, { env: transport.env })) };
+    }
+    const ssh = sshPath();
+    if (ssh === undefined) return undefined;
+    const login: SshLogin | undefined = sshPromptsAllowed() ? askpass.login(host, sshPromptSignal()) : undefined;
+    const transport = sshHostTransport(host, ssh, env, { prompts: login, identity: sshKeys.identityFor(host) });
+    if (transport === undefined) {
+      login?.dispose();
+      return undefined;
+    }
+    const process = runner.startBytes(transport.file, transport.args, { env: transport.env });
+    if (login !== undefined) void process.exited.then(() => login.dispose());
+    return { process, prompts: login, afterLogin: login === undefined ? undefined : (shell) => sshKeys.afterLogin(host, login, shell) };
+  };
+  // The shells before the relay, one per remote host: the checks before a connection of the relay run on one login,
+  // which the connection then takes over (`ssh … sh -s` or `wsl.exe … sh -s`, as its transport).
+  remoteShells = new RemoteShells({ logger, start: startLogin });
+  const shells = remoteShells;
+  // The SSH check before the Docker calls to a remote host: the login of its shell before the relay. A success counts
+  // for a minute per host, and the Docker pipe of the extension for the host makes it needless while the calls go
+  // through it (they start no `ssh`).
   const sshLogins = new SshLoginCache();
-  const remoteDeps = (): RemoteReachabilityDeps => ({ docker, runner, state: remoteState, logger, sshPath: sshPath(), env, sshLogins });
+  const remoteDeps = (): RemoteReachabilityDeps => ({
+    docker,
+    runner,
+    state: remoteState,
+    logger,
+    sshPath: sshPath(),
+    env,
+    sshLogins,
+    viaDockerPipe: (host) => hostPipes?.dockerHost(host) !== undefined,
+    shells,
+    identityFor: (host) => sshKeys.identityFor(host),
+    dockerCliApi,
+  });
+  // What the checks whether an engine answers need (dockerEngineAnswers): Docker is never started (a WSL distribution
+  // only while its Monitor runs permanently or in a flow of the user, because `wsl.exe` starts it), and a remote host
+  // gets the SSH check without questions first.
+  const engineAnswersDeps = (): DockerEngineAnswersDeps => ({
+    daemonStatus: (s, timeoutMs) => docker.daemonStatus(s, timeoutMs),
+    ssh: remoteDeps(),
+    leavesStopped,
+    logger,
+  });
   const registry = new DevspaceRegistry(paths, systemClock, { logger });
   const needsRestore = (): Promise<boolean> => registry.needsRestore();
   const sessionFiles = new SessionFiles(paths);
@@ -271,8 +516,12 @@ async function activateExtension(
       heartbeats.imageBuilt();
       // A build (a Start, for example) also ends the wait after a failed background build.
       missingHelperBuild?.clearFailures();
-      // A Stop or a Delete of a devspace that the user kept on an engine with the removal mark builds it there again.
       const built = operationDockerTarget();
+      // The next worker on the engine starts in a new container of the relay, from the new image (the open connection
+      // keeps its streams); every remote engine when the engine of the build is not known.
+      if (built === undefined) relayConnections.retireAll();
+      else if (built.kind === 'remote') relayConnections.retireAll(built.host);
+      // A Stop or a Delete of a devspace that the user kept on an engine with the removal mark builds it there again.
       if (built !== undefined) void engineRemoved(built).then((removed) => (removed ? logger.info(removedEngineImageNote(describeDockerHost(built.host))) : undefined));
     },
   });
@@ -332,7 +581,7 @@ async function activateExtension(
   const helperBuilds = new MissingHelperBuild({
     engineAnswers: (target, signal) =>
       runWithDockerTarget(target, () =>
-        dockerEngineAnswers(target, { daemonStatus: (s, timeoutMs) => docker.daemonStatus(s, timeoutMs), ssh: remoteDeps(), logger }, signal),
+        dockerEngineAnswers(target, engineAnswersDeps(), signal),
       ),
     build: (target, signal) => heartbeats.prepareWorker(target, signal),
     progress: (target, work) =>
@@ -351,10 +600,9 @@ async function activateExtension(
   // Cancelled when the window closes, after the release of deactivate() (which may join its build), as the preparations
   // of the heartbeats.
   context.subscriptions.push(closingWork.deferred({ dispose: () => helperBuilds.dispose() }));
-  // The window of an attached container, also in the names of its workers (ConnectionAdapter.windowName).
-  const connection = new ConnectionAdapter(logger);
   const channels = new HelperChannels({
     logger,
+    dockerCliApi,
     // The refresh found no helper image (see helperBuilds above); never on an engine that Devspaces was removed from.
     onRefreshWithoutHelper: (target) => {
       void engineRemoved(target).then((removed) => (removed ? undefined : helperBuilds.request(target)));
@@ -377,7 +625,29 @@ async function activateExtension(
       openHelperChannel(
         {
           start: (args) => docker.start(args),
-          runDirect: (args, options) => docker.run(args, options),
+          // A remote engine: the worker behind the relay, on the open connection of the host, or with one login
+          // (`ssh … sh -s`, or `wsl.exe … sh -s` for the WSL distribution).
+          relay: (target) => {
+            if (target.kind !== 'remote') return undefined;
+            // An SSH host without `ssh` starts its worker with the Docker CLI (`ssh://`); the WSL distribution only
+            // behind the relay, whose open then says that wsl.exe is missing.
+            const access = hostAccessOf(target.host);
+            if (access === undefined || (access.kind === 'ssh' && sshPath() === undefined)) return undefined;
+            // The login of the shell before the relay, when its checks left one open; else a new one, which may ask
+            // within a flow of the user.
+            const start = () => {
+              const started = startLogin(target.host);
+              if (started === undefined) {
+                throw new RelayConnectionError(`The connection to ${target.host} could not be opened: ${transportProgramOf(target.host)} was not found.`);
+              }
+              return started;
+            };
+            return relayAccess(relayConnections, target.host, (command, bundle) =>
+              openRelayConnection(start, command, bundle, { logger, name: target.host, takeOver: () => shells.takeOver(target.host) }),
+            );
+          },
+          runDirect: (args, options, withoutPipe) => (withoutPipe === true ? docker.runWithoutPipe(args, options) : docker.run(args, options)),
+          dockerCliApi,
           logger,
           script: workerScript,
           helperTag: async () => helperImageTag(await fs.promises.readFile(helperDockerfile, 'utf8')),
@@ -400,6 +670,9 @@ async function activateExtension(
     closingWork.deferred({
       dispose: () => {
         channels.dispose();
+        relayConnections.dispose();
+        shells.dispose();
+        hostPipes?.dispose();
       },
     }),
   );
@@ -428,6 +701,59 @@ async function activateExtension(
     computerId,
     logger,
   });
+  // The WSL distribution of Devspaces runs while this window holds its idle session there (from its first `wsl.exe` for
+  // the distribution, until no devspace, no Monitor and no helper container of Devspaces runs there, or the window
+  // closes), and while its keeper runs (while a container runs there, also after VS Code closed; and from the logon to
+  // Windows while its Monitor runs permanently). A Docker call in the background starts a distribution that does not
+  // run only while its Monitor runs permanently (docs/architecture.md "The WSL distribution of Devspaces"). Its sessions
+  // end after the release of deactivate(), which may need them.
+  let listWarning: string | undefined;
+  const keeper = new WslKeeper({
+    runner,
+    wslPath,
+    env,
+    launch: (file, args, onExit) => launchDetachedProcess(file, args, onExit, { windowsHide: true }),
+    // Only WSL_E_DEFAULT_DISTRO_NOT_FOUND counts as a list without it; another failure tells nothing (logged once while
+    // it stays the same).
+    registered: async (distribution) => {
+      const result = await runWslList().catch(() => undefined);
+      const listed = result === undefined || result.timedOut ? undefined : listsDistribution(result, distribution);
+      const warning = listed !== undefined ? undefined : `WSL did not tell whether it lists the distribution ${distribution}, so its start entry stays as it is${result === undefined ? '' : ` (${endOf(result, WSL_LIST_TIMEOUT_MS)}: ${outputOf(result)})`}.`;
+      if (warning !== undefined && warning !== listWarning) logger.warn(warning);
+      listWarning = warning;
+      return listed;
+    },
+    monitorPermanent: (host) => monitorSettings.permanentIfKnown(host),
+    knows: async (host) => (await engineRecords.record(host)) !== undefined,
+    logger,
+  });
+  context.subscriptions.push({ dispose: () => keeper.dispose() });
+  // The setup of the WSL distribution of Devspaces (Windows): the distribution with Docker Engine in a folder of
+  // LOCALAPPDATA. About once a week, a window that uses it upgrades its packages (WslUpgrade), only when Devspaces set
+  // it up.
+  const wslFolder = platform === 'win32' ? wslSetupFolder(env) : undefined;
+  const wslSetupCore = wslFolder === undefined ? undefined : new WslSetup({ runner, wslPath, env, arch: process.arch, folder: wslFolder, logger, http: nodeHttpsTransport });
+  const upgrade = new WslUpgrade({
+    runner,
+    wslPath,
+    env,
+    logger,
+    own: async () => (await wslSetupCore?.registration()) === 'own',
+    locked: async (task) => wslSetupCore?.locked(task),
+    runs: async (distribution) => wslLifetime?.running(distribution),
+  });
+  context.subscriptions.push({ dispose: () => upgrade.dispose() });
+  const lifetime = new WslLifetime({
+    runner,
+    wslPath,
+    env,
+    monitorPermanent: (host) => monitorSettings.permanent(host),
+    keeper,
+    upgrade,
+    logger,
+  });
+  wslLifetime = lifetime;
+  context.subscriptions.push(closingWork.deferred({ dispose: () => lifetime.dispose() }));
   // The heartbeats of this window to the Monitor container of the engine of each devspace it uses, through
   // this window's worker of that engine (its operation `heartbeat`; the worker is made ready first); a missing monitor
   // is started again as the open starts it. `signal` aborts at the deadline of the heartbeat's attempt; it ends only
@@ -437,28 +763,19 @@ async function activateExtension(
   const repairSessionMonitor = heartbeats.repair(async (target, signal) => monitorCalls.monitorEnsure(target, await monitorSettings.forTarget(target), signal));
   // Set below (the coordinator makes the ID of this window).
   let windowCoordinator: SessionCoordinator | undefined;
+  // The engine of a devspace for its heartbeats and for the Docker pipe of its window (resolveHeartbeatEngine, hostEngine).
+  const engineSources = {
+    ofHost: (host: string) => targets.ofHost(host),
+    ofContext: (name: string) => outsideOperation(() => targets.ofContext(name)),
+  };
   const windowHeartbeats = new WindowHeartbeats({
     owner: () => ({ windowId: windowCoordinator?.windowId ?? '', pid: process.pid }),
     connected: () => windowCoordinator?.devspaceId ?? null,
     registry,
     settings: getSettings,
     sourceId: computerId,
-    // The engine of the connected devspace is the one of this window's own Docker context (its authority, which its
-    // status file records as dockerContext), also for a local devspace; never the global current context when the
-    // window has its own (resolveHeartbeatEngine).
-    engineFor: (devspace, use) =>
-      resolveHeartbeatEngine(devspace, use, {
-        windowContext: (shown) => (connection.currentContainerName() === shown.containerName ? connection.currentDockerContext() : undefined),
-        current: () => outsideOperation(() => targets.resolve()),
-        ofContext: (name) => outsideOperation(() => targets.ofContext(name)),
-        // Only an existing context; a heartbeat never creates one (a context that the user removed is not made again by
-        // a tick).
-        remoteContext: (host) =>
-          outsideOperation(() => findRemoteContext(docker, host)).catch((error: unknown) => {
-            logger.warn(`The Docker context of ${host} could not be had: ${errorMessage(error)}`);
-            return undefined;
-          }),
-      }),
+    // The engine of the Docker host of the devspace, whatever host Devspaces uses now (resolveHeartbeatEngine).
+    engineFor: (devspace, use) => resolveHeartbeatEngine(devspace, use, engineSources),
     // In the scope of a heartbeat, the worker's preparation runs with the long signal (heartbeatPreparation). The
     // operation `heartbeat` of the worker of that engine.
     send: (target, input, signal) => heartbeatPreparation.scope(() => monitorCalls.heartbeat(target, input, signal)),
@@ -494,6 +811,7 @@ async function activateExtension(
     logger,
     settings: getSettings,
     windowDockerContext: () => connection.currentDockerContext(),
+    windowDockerHost: () => connection.currentDockerHost(),
     windowHeartbeats,
     // The release of a devspace this window leaves.
     release: (devspaceId, bounds) =>
@@ -588,9 +906,13 @@ async function activateExtension(
       }
     },
     // Whether the Docker engine of the current target answers (Stop and the refresh do nothing without it).
-    dockerRunning: () => docker.isRunning(),
+    // As an operation on the current target: on an SSH host, the call goes through the connection of the relay when
+    // one is open (BootstrapDocker), not with an SSH login of its own.
+    dockerRunning: () => targets.withOperation(() => docker.isRunning()),
     // The refresh of the states asks nothing on an engine with the removal mark, also no `docker info`.
     engineRemoved: (host) => engineRemoved({ host }),
+    // Nor on a WSL distribution that does not run, unless its Monitor runs permanently or a flow of the user asks.
+    leavesStopped,
     ui,
     logger,
     clock: systemClock,
@@ -625,7 +947,11 @@ async function activateExtension(
   context.subscriptions.push(tree, view, statusBar);
   // The view's title and its first row name the Docker host (also the local Docker).
   const dockerHostIndicator = new DockerHostIndicator(view, logger, (host) => tree.setDockerHost(host));
-  context.subscriptions.push({ dispose: targets.onDidResolve((target) => dockerHostIndicator.update(target, docker.isInstalled())) });
+  // A remote host needs a Docker CLI for remote engines (the one of Devspaces or of this computer), the local Docker the
+  // Docker CLI of this computer.
+  context.subscriptions.push({
+    dispose: targets.onDidResolve((target) => dockerHostIndicator.update(target, docker.canRunOn(target))),
+  });
   // While no Docker CLI is found, the sidebar shows the Docker setup (welcome view) instead of the repositories: when
   // no remote Docker host is configured and the local Docker is not available, the repositories are not shown.
   const setup = new DockerSetup({
@@ -639,8 +965,8 @@ async function activateExtension(
     onDidChangeInstalled: () => {
       sidebar.render().catch((error: unknown) => logger.error('Could not update the sidebar.', error));
     },
-    // The current Docker context points to another computer (as last read). Without a Docker CLI no context can be
-    // read, so the setup shows.
+    // Devspaces uses a host of its list (as last read; onDockerHostChanged below). Without a Docker CLI for remote
+    // engines, the read gives the local Docker, so the setup shows.
     remoteDockerHostConfigured: () => targets.last?.kind === 'remote',
     // Windows: `wsl --status` only while the view shows the setup (also onViewShown below).
     viewVisible: () => view.visible,
@@ -655,6 +981,8 @@ async function activateExtension(
   });
   dockerSetup = setup;
   context.subscriptions.push(setup);
+  // A change of the Docker host of Devspaces, also by another window, shows or hides the Docker setup.
+  context.subscriptions.push({ dispose: targets.onDidResolve(() => setup.onDockerHostChanged()) });
   // The worker thread of the repository groups (the regular expressions of the setting run there, with a time limit).
   const groupsWorkerScript = context.asAbsolutePath(path.join('dist', 'groupsPreviewWorker.js'));
   const groupMatcher = new GroupMatchWorkerRunner(groupsWorkerScript);
@@ -688,6 +1016,68 @@ async function activateExtension(
     previewRunner: new PreviewWorkerRunner(groupsWorkerScript),
   });
   context.subscriptions.push(repositoryGroupsEditor);
+  // "Use a Remote Docker Host…", "Use the Local Docker", the choice of the first row of the view, and the offer of the
+  // SSH host of a Docker context of the user.
+  const remoteDocker = new RemoteDockerCommands({
+    docker,
+    runner,
+    targets,
+    state: remoteState,
+    logger,
+    showLog: () => logger.show(),
+    sshHosts: () => parseSshConfig(nodeSshConfigFiles, { home: os.homedir() }),
+    sshPath,
+    env,
+    sshLogins,
+    shells,
+    identityFor: (host) => sshKeys.identityFor(host),
+    sshEnv: (host, callEnv) => sshKeys.dockerSshEnv(host, callEnv),
+    // The WSL distributions of this Windows user, for the WSL distribution of Devspaces in the choice of the host. Without
+    // WSL, or without a distribution, `wsl.exe` says so with an exit code that is not 0: then there is none.
+    wslDistributions: async () => {
+      const result = await runWslList();
+      if (result === undefined) return [];
+      if (result.timedOut) throw new Error(`wsl.exe ${WSL_LIST_ARGS.join(' ')} did not answer within ${WSL_LIST_TIMEOUT_MS / 1000} seconds`);
+      if (result.exitCode !== 0) {
+        logger.info(`wsl.exe ${WSL_LIST_ARGS.join(' ')} lists no distribution (exit code ${result.exitCode}): ${parseWslList(result.stderr || result.stdout).join(' ')}`);
+        return [];
+      }
+      return parseWslList(result.stdout);
+    },
+    devspaceCount: async (host) => devspacesOfHost(await registry.list(), host).length,
+    onDidSwitch: async () => {
+      await sidebar.render();
+      if (view.visible) await sidebar.refreshStates();
+    },
+    // A computer without a Docker CLI: the Docker CLI of Devspaces for the remote host.
+    installOwnCli: ownCliBuild
+      ? () => installOwnDockerCliWithProgress({ folder: paths.dockerCliDir, platform, arch: process.arch, logger, fallback: undefined, failed: OwnDockerCliTexts.failedForRemoteHost })
+      : undefined,
+  });
+  // "Set Up Docker for Devspaces in WSL…" and "Remove the WSL Distribution of Devspaces…" (Windows): after its setup,
+  // the distribution is the Docker host of Devspaces.
+  const wslSetup = new WslSetupCommands({
+    setup: wslSetupCore,
+    folder: wslFolder,
+    dockerDesktopIntegrates: (isDefault) => dockerDesktopIntegrates(env, WSL_DISTRIBUTION, isDefault),
+    isWindows: platform === 'win32',
+    logger,
+    showLog: () => logger.show(),
+    useHost: (host) => remoteDocker.useHost(host),
+    forgetHost: (host) => remoteDocker.forgetHost(host),
+    // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes.
+    forgetDistribution: async () => {
+      await engineRecords.forgetMonitorAnswer(WSL_HOST).catch((error: unknown) => logger.warn(`The answer about the Monitor on ${describeDockerHost(WSL_HOST)} could not be forgotten: ${errorMessage(error)}`));
+      await keeper.removeStartEntry(WSL_DISTRIBUTION);
+    },
+  });
+  // A Docker context or DOCKER_HOST of the user that reaches a host over SSH while Devspaces uses the local Docker: its
+  // host is offered once for the list (in the background; the read that found it goes on).
+  context.subscriptions.push({
+    dispose: targets.onDidResolve((target) => {
+      remoteDocker.offerDockerContextHost(target).catch((error: unknown) => logger.error('Could not offer the host of the Docker context.', error));
+    }),
+  });
   const controller = new Controller({
     logger,
     registry,
@@ -712,23 +1102,31 @@ async function activateExtension(
     revealRow: (rowId) => revealRow(view, tree, rowId),
     development: context.extensionMode === vscode.ExtensionMode.Development,
     dockerTargets: targets,
-    remoteDocker: new RemoteDockerCommands({
-      docker,
-      runner,
-      targets,
-      state: remoteState,
-      logger,
-      showLog: () => logger.show(),
-      sshHosts: () => parseSshConfig(nodeSshConfigFiles, { home: os.homedir() }),
-      sshPath,
-      env,
-      platform,
-      sshLogins,
-      onDidSwitch: async () => {
-        await sidebar.render();
-        if (view.visible) await sidebar.refreshStates();
+    // The Docker pipe of the window of a devspace on a remote host (docs/architecture.md "The Docker pipe").
+    windowDockerHost: (devspace, shownContainer) =>
+      windowDockerHost(devspace, shownContainer, {
+        computerId,
+        platform,
+        env,
+        tmpdir: os.tmpdir(),
+        transportFound,
+        current: connection.currentDockerHost(),
+      }),
+    // The connection of the window of a devspace on an SSH host after a Start: through the worker of its engine, as the
+    // Docker pipe of the window opens it, but before the attach (Controller.connectAfterStart).
+    hostConnection: {
+      sshHostOf: (devspace) => {
+        const host = dockerHostOf(devspace);
+        return hostAccessOf(host)?.kind === 'ssh' ? host : undefined;
       },
-    }),
+      connect: async (host, options) => {
+        const target = await hostEngine(host, engineSources);
+        if (target === undefined) throw new Error(`${host} is no remote Docker host`);
+        await channels.ensure(target, options.signal, { again: options.again });
+      },
+    },
+    remoteDocker,
+    wslSetup,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.
     sessionMonitor: {
@@ -744,19 +1142,26 @@ async function activateExtension(
     startDocker,
     // The question about the Monitor of an engine, which a Start, a Rebuild and "Update All Images Now" of the user ask
     // there first (once per engine); its answer goes into the setting stopMonitorWhenIdle and the records of the engines.
-    monitorQuestion: new MonitorQuestion({ records: engineRecords, settings: getSettings, logger, showLog: () => logger.show() }),
+    monitorQuestion: new MonitorQuestion({ records: engineRecords, settings: getSettings, logger, showLog: () => logger.show(), answered: (host) => updateStartEntry(host) }),
     // The removal mark of the engines, which a Start, a Rebuild and "Update All Images Now" of the user clear there.
     engineRecords,
+    engineRemovalEnded: (host) => updateStartEntry(host),
     // "Remove Devspaces from This Docker Engine…": whether the engine answers (as for the background builds: Docker is
     // never started, a remote host gets the SSH check without questions first), the Docker CLI of the extension for the
     // inventory and the removal, the end of this window's worker there, and the ID of this computer.
     engineRemoval: {
       engineAnswers: (target, signal) =>
         runWithDockerTarget(target, () =>
-          dockerEngineAnswers(target, { daemonStatus: (s, timeoutMs) => docker.daemonStatus(s, timeoutMs), ssh: remoteDeps(), logger }, signal),
+          dockerEngineAnswers(target, engineAnswersDeps(), signal),
         ),
       docker,
-      closeWorker: (target) => channels.close(target),
+      // The connection of the relay too: the removal removes the container of its worker next. Its calls after this log
+      // in with the Docker context without a new SSH check: the connection was such a login without questions, and it
+      // carried the calls of the inventory a moment before.
+      closeWorker: (target) => {
+        channels.close(target);
+        if (target.kind === 'remote') relayConnections.close(target.host, 'Devspaces is removed from the engine');
+      },
       // Neither background build of the helper image makes it again after its removal.
       stopHelperBuilds: async (target) => {
         await Promise.all([backgroundPrebuild?.stop(target), helperBuilds.stop(target)]);
@@ -784,9 +1189,49 @@ async function activateExtension(
   const background = (promise: Promise<unknown>, what: string): void => {
     promise.catch((error: unknown) => logger.error(`Could not ${what}.`, error));
   };
+  // The start entry of the WSL distribution of Devspaces (only that one) follows the mode of its Monitor
+  // (WslKeeper.updateStartEntry): at the start of the window, after an answer to the question about its Monitor, after a
+  // change of stopMonitorWhenIdle, and after "Remove Devspaces from This Docker Engine…" there. Each reads the
+  // registry; another VS Code (for example VS Code Insiders, with its own storage and no answer there) only removes an
+  // entry of a distribution that WSL does not list (WslKeeperDeps.knows).
+  const updateStartEntry = (host: string): void => {
+    if (host !== WSL_HOST || wslPath() === undefined) return;
+    background(keeper.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION), 'update the start entry of the WSL distribution of Devspaces');
+  };
+  updateStartEntry(WSL_HOST);
+  // The distribution of Devspaces is never the default distribution of WSL, and Docker Desktop does not integrate it
+  // (only with its folder; WslSetupCommands.checkSeparation).
+  if (wslPath() !== undefined) background(wslSetup.checkSeparation(), 'check the WSL distribution of Devspaces');
+
+  // The Docker CLI of Devspaces that this window needs and does not have yet: downloaded now, with a progress notification
+  // (its link Show details needs the commands above), before the window looks up its devspace and serves its pipe, and
+  // before activate() returns. On a computer without a Docker CLI, the Docker calls of Devspaces and the Docker setup in
+  // the sidebar take it at once.
+  if (pipeWindow && ownCliBuild && ownCli === undefined) {
+    const cli = await installOwnDockerCliWithProgress({ folder: paths.dockerCliDir, platform, arch: process.arch, logger, fallback: installedCli });
+    if (cli !== undefined) {
+      useOwnDockerCli(cli);
+      if (installedCli === undefined) {
+        docker.lookUpCliNow();
+        dockerSetup?.checkCli();
+      }
+    }
+  }
 
   // The devspace of this window: the container of its folder URI, if the registry knows it.
   const containerName = connection.currentContainerName();
+  // Whether this window reaches its container through its Docker pipe for the Docker host `host` (the ID of the pipe in
+  // its authority, dockerPipeId): its window connects there, so it starts a WSL distribution there anyway, and the
+  // restore of a lost registry for it may start it too. False without an ID of this computer.
+  const windowPipeOn = (host: string): boolean => {
+    const address = parseDockerPipeHost(connection.currentDockerHost() ?? '', platform);
+    if (containerName === undefined || address === undefined) return false;
+    try {
+      return address.id === dockerPipeId(computerId(), host, containerName);
+    } catch {
+      return false;
+    }
+  };
   // Before the first use of Devspaces (no registry.json and no marker of it), the activation asks Docker nothing in the
   // background: no restore of lost devspaces, no prebuild of the helper image. The window of a devspace container does
   // both, so it finds its devspace also after the storage folder was lost (backgroundWorkAtStart).
@@ -795,7 +1240,7 @@ async function activateExtension(
   // mark, which this computer asks nothing by itself (the check of the worker for a passive read refuses it there too).
   const mayRestore = startWork ? async (): Promise<boolean> => !(await engineRemoved(await targets.current())) : false;
   const currentDevspace = containerName
-    ? await findWindowDevspace(containerName, { registry, needsRestore, docker, service, logger, mayRestore })
+    ? await findWindowDevspace(containerName, { registry, needsRestore, docker, current: () => targets.current(), service, logger, mayRestore, windowPipeOn })
     : undefined;
   // Nothing was restored from an engine with the removal mark: the labels of the container of this window still give its
   // devspace and its owner (one plain `docker container inspect`, no worker), so that the account rule holds there too.
@@ -810,9 +1255,44 @@ async function activateExtension(
   // closes the window of a devspace that the signed-in account may not use (Controller.workWithoutDevspaces), and the
   // window of a container whose owner cannot be read (Controller.leaveUnknownOwner).
   const onRemovedEngine = labeled.kind !== 'none' || (currentDevspace !== undefined && (await engineRemoved({ host: dockerHostOf(currentDevspace) })));
+  // The Docker pipe in the authority of this window (docs/architecture.md "The Docker pipe"): served before activate()
+  // returns, because the Dev Containers extension reaches the engine of the devspace through it once VS Code resolves
+  // the authority; and before the session starts, so that a window whose pipe is refused is never the window of its
+  // devspace in its status file.
+  let pipeRefused: string | undefined;
+  const pipeHost = connection.currentDockerHost();
+  if (pipeHost !== undefined && containerName) {
+    const served = await serveWindowPipe(pipeHost, containerName, windowDevspace, {
+      logger,
+      platform,
+      computerId,
+      // The hosts of the list of Devspaces, and the SSH hosts of the Docker contexts of the user.
+      knownHosts: async () => {
+        const [listed, contexts] = await Promise.all([remoteState.remoteHosts(), sshHostsOfContexts(docker).catch(() => [])]);
+        return [...new Set([...listed, ...contexts.map((entry) => entry.host)])];
+      },
+      engineRemoved: (host) => engineRemoved({ host }),
+      openRelayConnection: (host) => relayConnections.get(host),
+      relayConnection: async (host) => {
+        // The worker of the engine opens the connection, whatever host Devspaces uses now.
+        const target = await hostEngine(host, engineSources);
+        if (target === undefined) throw new Error(`${host} is no remote Docker host`);
+        await channels.ensure(target);
+        const opened = relayConnections.get(host);
+        if (opened === undefined) throw new Error(`the worker on ${host} runs without the connection of the relay`);
+        return opened;
+      },
+      dialStdio,
+    });
+    // Closed at once when the window closes (the release of deactivate() does not use it), so that the extension host of
+    // the window after a reload can serve the address.
+    if (served.kind === 'served') context.subscriptions.push({ dispose: () => served.pipe.close() });
+    if (served.kind === 'refused' && labeled.kind !== 'unreadable') pipeRefused = served.reason;
+  }
+
   // Writes the window status file and cleans up the storage folder. Its result is the pending connection file of this
   // window's devspace, which the first status write removes (role A).
-  const started = sessionCoordinator.start(onRemovedEngine ? null : (currentDevspace?.id ?? null));
+  const started = sessionCoordinator.start(onRemovedEngine || pipeRefused !== undefined ? null : (currentDevspace?.id ?? null));
   controller.setReady(started);
 
   const focusThrottle = new Throttle(FOCUS_REFRESH_INTERVAL_MS);
@@ -850,6 +1330,7 @@ async function activateExtension(
       if (!affectsSettings(event)) return;
       const previous = settings;
       settings = readSettings();
+      if (event.affectsConfiguration(`${SETTINGS_SECTION}.${STOP_MONITOR_WHEN_IDLE_SETTING}`)) updateStartEntry(WSL_HOST);
       warnInvalidHostAccessChecksOff(logger, hostAccessWarnings, event);
       warnInvalidDefaultImage(logger, defaultImageWarnings, event);
       warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings, event);
@@ -888,7 +1369,7 @@ async function activateExtension(
   const adopt = Boolean(containerName) && currentDevspace === undefined;
   const startEngine = startWork ? backgroundEngineAtStart({ current: () => targets.current(), removed: engineRemoved, logger }) : Promise.resolve(undefined);
   background(
-    startEngine.then((target) => (target === undefined ? undefined : controller.reconcileIfRegistryLost({ passive: true, adopt }))),
+    startEngine.then((target) => (target === undefined ? undefined : controller.reconcileIfRegistryLost({ passive: true, adopt, mayStart: windowPipeOn(target.host) }))),
     'restore the devspaces from the volumes',
   );
   // When helper.json does not know the current helper tag (after the installation, or an update that changed it; there
@@ -906,7 +1387,7 @@ async function activateExtension(
   const helperPrebuild = new HelperPrebuild({
     helper,
     dockerRunning: (target, signal) =>
-      dockerEngineAnswers(target, { daemonStatus: (s, timeoutMs) => docker.daemonStatus(s, timeoutMs), ssh: remoteDeps(), logger }, signal),
+      dockerEngineAnswers(target, engineAnswersDeps(), signal),
     dockerfilePath: context.asAbsolutePath(path.join('resources', 'helper', 'Dockerfile')),
     statePath: paths.helperState,
     // The setting decides the check of the base image and the rebuild, not the cleanup.
@@ -921,28 +1402,33 @@ async function activateExtension(
       const outcome = await helperPrebuild.start(target);
       // A lost registry is restored again once the helper image was built. A failed restore is logged as such, not as
       // a failed preparation.
-      await restoreAfterPrebuild(outcome, () => controller.reconcileIfRegistryLost({ passive: false, adopt })).catch((error: unknown) =>
+      await restoreAfterPrebuild(outcome, () => controller.reconcileIfRegistryLost({ passive: false, adopt, mayStart: windowPipeOn(target.host) })).catch((error: unknown) =>
         logger.error('Could not restore the devspaces from the volumes after the helper image was prepared.', error),
       );
     }),
     'prepare the workspace helper image in the background',
   );
 
-  if (currentDevspace && containerName && docker.isInstalled() && !onRemovedEngine) {
+  if (currentDevspace && containerName && docker.isInstalled() && !onRemovedEngine && connection.currentDockerHost() === undefined) {
     // Which Docker the Dev Containers extension asks when it resolves this window. Only for a devspace of this
-    // extension. Its context: the one in the authority of this window, through which the Dev Containers extension
-    // attaches; for a window without one, the current context when that is on the host of the devspace, else none
-    // for the local Docker.
-    const devspace = currentDevspace;
+    // extension, and not for a window whose authority names a Docker host: its Docker pipe logs the Docker calls that
+    // come through it, and serveWindowPipe logged any other address. Its context: the one in the authority of this
+    // window (a window of a remote devspace of the versions that made a Docker context for each host), through which
+    // the Dev Containers extension attaches; else the current context, which a window of a local devspace uses.
+    const own = connection.currentDockerContext();
     const logDocker = async (): Promise<void> => {
-      const host = dockerHostOf(devspace);
-      const own = connection.currentDockerContext();
-      const current = own === undefined ? await targets.resolve() : undefined;
-      const context = own ?? (current && isOnDockerHost(devspace, current.host) ? current.context : host === '' ? undefined : await findRemoteContext(docker, host));
-      const lines = await attachDiagnostics(docker, docker.processEnv(), containerName, context);
+      const lines = await attachDiagnostics(docker, docker.processEnv(), containerName, own);
       for (const line of lines) logger.info(`While this window connects: ${line}`);
     };
     background(logDocker(), 'log the Docker of this window');
+  }
+
+  // Without its Docker pipe, the window must not connect. The window of a container whose owner cannot be read leaves
+  // below, after the token left the container.
+  if (pipeRefused !== undefined && containerName) {
+    await started;
+    await controller.leaveWithoutDockerPipe(containerName, pipeRefused);
+    return;
   }
 
   if (windowDevspace && containerName) {

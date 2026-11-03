@@ -1,0 +1,367 @@
+// SPDX-License-Identifier: MIT
+// © 2026 Hannes Stauss (scalarion@nimblescape.com)
+// Licensed under the MIT License. See LICENSE in the repository root for details.
+
+// openHelperChannel with the connection of the relay (ChannelOpenDeps.relay): a remote engine with a transport starts
+// its worker behind the relay, never with the Docker CLI; the retries of the open (another name, no network) see the
+// refusals of `docker run` in the failure of the connection; the open connection of the engine is used again; a new
+// connection ends when the open fails.
+import { describe, expect, it, vi } from 'vitest';
+import { LOCAL_DOCKER_TARGET, remoteDockerTarget, type DockerTarget } from '../docker/dockerHost';
+import { PIPE_LOADER, bundleHash } from '../loader/pipeLoader';
+import { silentLogger, type RunOptions, type StartedProcess } from '../ports';
+import { RelayConnectionError, type RelayConnection } from '../relay/connection';
+import type { RelayAccess } from '../relay/connections';
+import { HelperChannelError, type HelperChannel } from './helperChannel';
+import { openHelperChannel, type ChannelOpenDeps } from './helperChannels';
+import { CHANNEL_PROTOCOL_VERSION, ENGINE_IDENTITY_ARGS, encodeMessage, parseClientMessage } from './protocol';
+
+const REMOTE: DockerTarget = remoteDockerTarget('build-box');
+const ENGINE = '"7b1c7a44-2f0e-4d38-9d1d-3a8f7b0e8c11" "/var/lib/docker"';
+const ENGINE_IDENTITY = { id: '7b1c7a44-2f0e-4d38-9d1d-3a8f7b0e8c11', rootDir: '/var/lib/docker' };
+
+/**
+ * A worker that answers `hello` and the probe (with the values `probe` in addition); its input lines are kept, and it
+ * ends at the end of its input or a kill.
+ */
+function fakeWorker(probe: Record<string, unknown> = {}) {
+  let stdout: ((text: string) => void) | undefined;
+  let finish: (result: { exitCode: number | null }) => void = () => {};
+  const lines: string[] = [];
+  const worker: StartedProcess & { lines: string[] } = {
+    lines,
+    write: (text) => {
+      for (const line of text.split('\n').filter((part) => part !== '')) {
+        lines.push(line);
+        const message = parseClientMessage(line);
+        if (message?.t === 'hello') queueMicrotask(() => stdout?.(encodeMessage({ t: 'hello', protocol: CHANNEL_PROTOCOL_VERSION, node: 'v24', ops: ['probe', 'sweep'] })));
+        if (message?.t === 'op' && message.op === 'probe') {
+          queueMicrotask(() => stdout?.(encodeMessage({ t: 'result', id: message.id, ok: true, value: { serverVersion: '27.1.0', detail: 'Docker 27.1.0', engine: ENGINE_IDENTITY, ...probe } })));
+        }
+      }
+      return true;
+    },
+    end: () => finish({ exitCode: 0 }),
+    kill: () => finish({ exitCode: null }),
+    onStdout: (listener) => (stdout = listener),
+    onStderr: () => {},
+    exited: new Promise((resolve) => (finish = resolve)),
+  };
+  return worker;
+}
+
+/** A connection whose worker is `worker`. */
+function fakeConnection(worker: StartedProcess) {
+  const closes: string[] = [];
+  const connection = {
+    closes,
+    openWorker: vi.fn(() => worker),
+    close: (reason = 'closed') => closes.push(reason),
+  };
+  return connection;
+}
+
+/** A RelayAccess with the open connection `current` (none by default), whose new connections come from `connect`. */
+function access(connect: RelayAccess['connect'], current?: unknown) {
+  return { current: () => current as RelayConnection | undefined, connect, use: vi.fn<RelayAccess['use']>(), retire: vi.fn<RelayAccess['retire']>() };
+}
+
+function deps(overrides: Partial<ChannelOpenDeps>): ChannelOpenDeps {
+  return {
+    start: () => {
+      throw new Error('the Docker CLI must not start the worker');
+    },
+    runDirect: async (args) => (args[0] === 'ps' ? { exitCode: 0, stdout: 'devspaces-api-worker1\n', stderr: '', timedOut: false } : { exitCode: 0, stdout: `${ENGINE}\n`, stderr: '', timedOut: false }),
+    logger: silentLogger,
+    script: async () => 'SCRIPT',
+    helperTag: async () => 'devspaces-worker:abc',
+    socketPath: async () => '/var/run/docker.sock',
+    stateVolume: 'devspaces-monitor',
+    vscodeVolume: 'devspaces-vscode',
+    windowName: () => 'api',
+    ...overrides,
+  };
+}
+
+describe('openHelperChannel with the connection of the relay', () => {
+  it('starts the worker behind the relay with the bundle, without a second bundle, and keeps the connection after the worker', async () => {
+    const worker = fakeWorker();
+    const connection = fakeConnection(worker);
+    const connects: { command: readonly string[]; bundle: string }[] = [];
+    const relayAccess = access(async (command, bundle) => {
+      connects.push({ command, bundle });
+      return connection as unknown as RelayConnection;
+    });
+    const relay = vi.fn(() => relayAccess);
+    const channel = await openHelperChannel(deps({ relay }), REMOTE);
+    expect(relay).toHaveBeenCalledWith(REMOTE);
+    expect(connects).toHaveLength(1);
+    // The engine uses the new connection only after the checks of the worker.
+    expect(relayAccess.use).toHaveBeenCalledWith(connection);
+    const [{ command, bundle }] = connects;
+    // `docker run` of the worker container, with the relay as its first program.
+    expect(command.slice(0, 3)).toEqual(['docker', 'run', '--rm']);
+    expect(command[command.indexOf('--name') + 1]).toBe('devspaces-api-worker1');
+    expect(command.slice(-6)).toEqual(['node', '-e', PIPE_LOADER, '/opt/devspace/channel.js', bundleHash('SCRIPT'), 'startRelay']);
+    expect(bundle).toBe('SCRIPT');
+    // The worker starts from the file that the relay stored: its first line is `hello`.
+    expect(parseClientMessage(worker.lines[0])).toMatchObject({ t: 'hello' });
+    expect(worker.lines.some((line) => line.includes('SCRIPT'))).toBe(false);
+    expect(channel.isOpen).toBe(true);
+    channel.close();
+    await worker.exited;
+    await new Promise((resolve) => setImmediate(resolve));
+    // RelayConnections closes it after a time without a stream.
+    expect(connection.closes).toEqual([]);
+  });
+
+  it('reads the engine identity of a new connection before it opens, so that the connection takes over the shell of that read', async () => {
+    const events: string[] = [];
+    const worker = fakeWorker();
+    const connection = fakeConnection(worker);
+    const relay = () =>
+      access(async () => {
+        events.push('connect');
+        return connection as unknown as RelayConnection;
+      });
+    const runDirect = vi.fn(async (args: readonly string[], _options?: RunOptions, withContext?: boolean) => {
+      events.push(`${args.join(' ')} ${withContext === true ? 'with the context' : 'through the pipe'}`);
+      return { exitCode: 0, stdout: `${ENGINE}\n`, stderr: '', timedOut: false };
+    });
+    const channel = await openHelperChannel(deps({ relay, runDirect }), REMOTE);
+    expect(events).toEqual([`${ENGINE_IDENTITY_ARGS.join(' ')} with the context`, 'connect']);
+    channel.close();
+  });
+
+  it('starts the worker on the open connection of the engine, without a new connection and without the checks of a start', async () => {
+    const worker = fakeWorker();
+    const connection = fakeConnection(worker);
+    const connect = vi.fn<RelayAccess['connect']>();
+    const socketPath = vi.fn(async () => '/var/run/docker.sock');
+    const runDirect = vi.fn<ChannelOpenDeps['runDirect']>(async () => ({ exitCode: 0, stdout: `${ENGINE}\n`, stderr: '', timedOut: false }));
+    const relay = () => access(connect, connection);
+    const channel = await openHelperChannel(deps({ relay, socketPath, runDirect }), REMOTE);
+    expect(connect).not.toHaveBeenCalled();
+    expect(connection.openWorker).toHaveBeenCalledTimes(1);
+    expect(socketPath).not.toHaveBeenCalled();
+    // No list of the names; only the engine identity, through the Docker pipe of the extension (the open connection).
+    expect(runDirect.mock.calls.map(([args, , withContext]) => [args[0], withContext === true])).toEqual([['info', false]]);
+    expect(channel.isOpen).toBe(true);
+    channel.close();
+  });
+
+  it('closes a new connection when the worker on it reaches another engine, and only retires the open connection of the engine', async () => {
+    const otherEngine = async () => ({ exitCode: 0, stdout: '"another-engine" "/var/lib/docker"\n', stderr: '', timedOut: false });
+    const fresh = fakeConnection(fakeWorker());
+    const freshAccess = access(async () => fresh as unknown as RelayConnection);
+    await expect(openHelperChannel(deps({ relay: () => freshAccess, runDirect: otherEngine }), REMOTE)).rejects.toMatchObject({
+      code: 'open',
+      message: expect.stringContaining('it reaches another Docker engine'),
+    });
+    expect(fresh.closes).toEqual(['the worker could not be opened']);
+    expect(freshAccess.use).not.toHaveBeenCalled();
+    // The open connection keeps its streams (the Docker pipe of the window) and is retired for workers; the worker
+    // tries a new connection at once, which the checks refuse here too.
+    const shared = fakeConnection(fakeWorker());
+    const next = fakeConnection(fakeWorker());
+    const connect = vi.fn<RelayAccess['connect']>(async () => next as unknown as RelayConnection);
+    const sharedAccess = access(connect, shared);
+    await expect(openHelperChannel(deps({ relay: () => sharedAccess, runDirect: otherEngine }), REMOTE)).rejects.toMatchObject({ code: 'open' });
+    expect(shared.closes).toEqual([]);
+    expect(sharedAccess.retire).toHaveBeenCalledWith(shared);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(next.closes).toEqual(['the worker could not be opened']);
+    expect(sharedAccess.use).not.toHaveBeenCalled();
+  });
+
+  // Mutation: an open without the check of the API versions gives a worker on an engine that the Docker CLI of the
+  // windows of devspaces cannot work with, and a window there fails in its attach without a reason.
+  it('refuses an engine whose API versions the Docker CLI of Devspaces does not speak, without a second login', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
+    const needsNewer = { apiVersion: '1.64', minApiVersion: '1.57' };
+    const message =
+      'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine needs the Docker API version 1.57 or later, and the ' +
+      'CLI speaks only up to version 1.56. A newer version of Devspaces brings a newer Docker CLI. Until then, that engine accepts the CLI when the ' +
+      'environment variable DOCKER_MIN_API_VERSION of dockerd is 1.56 or lower.';
+    // On a new connection: it ends, and the engine never uses it.
+    const connection = fakeConnection(fakeWorker(needsNewer));
+    const fresh = access(async () => connection as unknown as RelayConnection);
+    await expect(openHelperChannel(deps({ relay: () => fresh, dockerCliApi: () => cli }), REMOTE)).rejects.toMatchObject({ code: 'open', message });
+    expect(connection.closes).toEqual(['the worker could not be opened']);
+    expect(fresh.use).not.toHaveBeenCalled();
+    // A call of the identity before the start that fails with the error of the engine for that CLI (the WSL
+    // distribution, an SSH host without the shell before the relay): no login and no worker.
+    const unused = vi.fn<RelayAccess['connect']>();
+    const tooNew = async () => ({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', timedOut: false });
+    await expect(openHelperChannel(deps({ relay: () => access(unused), dockerCliApi: () => cli, runDirect: tooNew }), REMOTE)).rejects.toMatchObject({
+      code: 'open',
+      message: expect.stringContaining('the engine speaks the Docker API up to version 1.39, and the CLI needs version 1.40 or later.'),
+    });
+    expect(unused).not.toHaveBeenCalled();
+    // On the open connection of the engine: no new connection, whose worker would be refused for the same reason after
+    // one more login, and the open connection stays the one of the Docker pipe. The call of the identity goes through
+    // that connection with the same CLI, so it fails with the error of the engine: the API versions say why.
+    const connect = vi.fn<RelayAccess['connect']>();
+    const shared = access(connect, fakeConnection(fakeWorker({ apiVersion: '1.39' })));
+    const refused = async () => ({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: client version 1.56 is too new. Maximum supported API version is 1.39\n', timedOut: false });
+    await expect(openHelperChannel(deps({ relay: () => shared, dockerCliApi: () => cli, runDirect: refused }), REMOTE)).rejects.toMatchObject({
+      code: 'open',
+      message:
+        'The Docker CLI 29.9.2 of Devspaces cannot work with the Docker engine on build-box: the engine speaks the Docker API up to version 1.39, and the ' +
+        'CLI needs version 1.40 or later. Update that Docker engine.',
+    });
+    expect(connect).not.toHaveBeenCalled();
+    expect(shared.retire).not.toHaveBeenCalled();
+    // Without the Docker CLI of Devspaces for this computer, the open checks no API versions.
+    const other = fakeConnection(fakeWorker(needsNewer));
+    const channel = await openHelperChannel(deps({ relay: () => access(async () => other as unknown as RelayConnection), dockerCliApi: () => undefined }), REMOTE);
+    expect(channel.isOpen).toBe(true);
+    channel.close();
+  });
+
+  it('opens a worker on an engine whose API versions fit the Docker CLI of Devspaces', async () => {
+    const cli = { name: 'the Docker CLI 29.9.2 of Devspaces', range: { min: '1.40', max: '1.56' }, kind: 'devspaces' as const };
+    const dockerCliApi = vi.fn(() => cli);
+    const connection = fakeConnection(fakeWorker({ apiVersion: '1.52', minApiVersion: '1.40' }));
+    const channel = await openHelperChannel(deps({ relay: () => access(async () => connection as unknown as RelayConnection), dockerCliApi }), REMOTE);
+    expect(channel.isOpen).toBe(true);
+    expect(dockerCliApi).toHaveBeenCalledWith(REMOTE);
+    channel.close();
+  });
+
+  it('opens a new connection at once when the worker cannot be opened on the open connection of the engine', async () => {
+    const shared = fakeConnection(fakeWorker());
+    shared.openWorker.mockImplementation(() => {
+      throw new Error('The connection to build-box is closed (the transport ended).');
+    });
+    const next = fakeConnection(fakeWorker());
+    const relayAccess = access(async () => next as unknown as RelayConnection, shared);
+    const log: string[] = [];
+    const runDirect = vi.fn<ChannelOpenDeps['runDirect']>(async () => ({ exitCode: 0, stdout: `${ENGINE}\n`, stderr: '', timedOut: false }));
+    const channel = await openHelperChannel(deps({ relay: () => relayAccess, runDirect, logger: { ...silentLogger, warn: (message) => log.push(message) } }), REMOTE);
+    expect(channel.isOpen).toBe(true);
+    expect(relayAccess.retire).toHaveBeenCalledWith(shared);
+    expect(relayAccess.use).toHaveBeenCalledWith(next);
+    // The identity of the engine of the new connection is read with the Docker context, not through the Docker pipe
+    // of the extension, which still uses the open connection that failed.
+    expect(runDirect.mock.calls.map(([args, , withContext]) => [args[0], withContext])).toEqual([['info', true]]);
+    expect(log).toEqual([
+      'The worker on build-box could not be opened on the open connection of the relay, so it opens a new connection: The connection to build-box is closed (the transport ended).',
+    ]);
+    channel.close();
+  });
+
+  it('takes the next name when `docker run` refused the name in use, and starts without network on a daemon without bridge', async () => {
+    const worker = fakeWorker();
+    const commands: (readonly string[])[] = [];
+    const failures = [
+      'The connection to build-box could not be opened: it ended (docker: Error response from daemon: Conflict. The container name "/devspaces-api-worker1" is already in use by container "abc".)',
+      'The connection to build-box could not be opened: it ended (docker: Error response from daemon: network bridge not found.)',
+    ];
+    const relay = () =>
+      access(async (command) => {
+        commands.push(command);
+        const failure = failures.shift();
+        if (failure !== undefined) throw new RelayConnectionError(failure);
+        return fakeConnection(worker) as unknown as RelayConnection;
+      });
+    const runDirect = vi.fn(deps({}).runDirect);
+    const channel = await openHelperChannel(deps({ relay, runDirect }), REMOTE);
+    // The identity before the start (on the shell before the relay, which the connection takes over), and the list of
+    // the names after the refusal: with the Docker context.
+    expect(runDirect.mock.calls.map(([args, , withContext]) => [args[0], withContext])).toEqual([
+      ['info', true],
+      ['ps', true],
+    ]);
+    expect(commands.map((command) => [command[command.indexOf('--name') + 1], command[command.indexOf('--network') + 1]])).toEqual([
+      ['devspaces-api-worker1', 'bridge'],
+      ['devspaces-api-worker2', 'bridge'],
+      ['devspaces-api-worker2', 'none'],
+    ]);
+    expect(channel.isOpen).toBe(true);
+    channel.close();
+  });
+
+  it('gives the answer to hello what is left of the time of the open, at least 15 seconds', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    try {
+      // A worker that never answers.
+      const silent: StartedProcess = { write: () => true, end: () => {}, kill: () => {}, onStdout: () => {}, onStderr: () => {}, exited: new Promise(() => {}) };
+      const relay = () =>
+        access(async () => {
+          // The login and the start of the container took 110 seconds.
+          await new Promise((resolve) => setTimeout(resolve, 110_000));
+          return fakeConnection(silent) as unknown as RelayConnection;
+        });
+      let failure: unknown;
+      void openHelperChannel(deps({ relay }), REMOTE).catch((error: unknown) => (failure = error));
+      await vi.advanceTimersByTimeAsync(110_000 + 14_000);
+      expect(failure).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(failure).toMatchObject({ code: 'open', message: 'The helper channel to build-box could not be opened: no answer within 15 seconds' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for the answer to hello on the open connection of the engine only 15 seconds, then opens a new connection', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
+    try {
+      // The relay starts the worker only after the last worker of the connection ended: no answer meanwhile.
+      const silent: StartedProcess = { write: () => true, end: () => {}, kill: () => {}, onStdout: () => {}, onStderr: () => {}, exited: new Promise(() => {}) };
+      const shared = fakeConnection(silent);
+      const next = fakeConnection(fakeWorker());
+      const connect = vi.fn<RelayAccess['connect']>(async () => next as unknown as RelayConnection);
+      const relayAccess = access(connect, shared);
+      let channel: HelperChannel | undefined;
+      void openHelperChannel(deps({ relay: () => relayAccess }), REMOTE).then((opened) => (channel = opened));
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(connect).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(relayAccess.retire).toHaveBeenCalledWith(shared);
+      expect(connect).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(channel?.isOpen).toBe(true));
+      expect(relayAccess.use).toHaveBeenCalledWith(next);
+      channel?.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails the open with the reason of the connection', async () => {
+    const relay = () =>
+      access(async () => {
+        throw new RelayConnectionError('The connection to build-box could not be opened: it ended (ssh: connect to host build-box port 22: Connection refused)');
+      });
+    const opening = openHelperChannel(deps({ relay }), REMOTE);
+    await expect(opening).rejects.toBeInstanceOf(HelperChannelError);
+    await expect(opening).rejects.toMatchObject({ code: 'open', message: expect.stringContaining('Connection refused') });
+  });
+
+  it('closes the connection when no worker stream can be opened', async () => {
+    const connection = fakeConnection(fakeWorker());
+    connection.openWorker.mockImplementation(() => {
+      throw new Error('The connection to build-box is closed.');
+    });
+    const relay = () => access(async () => connection as unknown as RelayConnection);
+    await expect(openHelperChannel(deps({ relay }), REMOTE)).rejects.toMatchObject({ code: 'open', message: 'The connection to build-box is closed.' });
+    expect(connection.closes).toEqual(['the worker could not be opened']);
+  });
+
+  it('starts with the Docker CLI for the local engine and for a host without a transport', async () => {
+    for (const [target, relay] of [
+      [LOCAL_DOCKER_TARGET, vi.fn(() => undefined)],
+      [REMOTE, vi.fn(() => undefined)],
+    ] as const) {
+      const worker = fakeWorker();
+      // The worker of the Docker CLI gets the bundle as its first line.
+      const bundled: StartedProcess = { ...worker, write: (text) => (text.startsWith('"') ? true : worker.write(text)) };
+      const start = vi.fn((_args: readonly string[]) => bundled);
+      const channel = await openHelperChannel(deps({ start, relay }), target);
+      expect(relay).toHaveBeenCalledTimes(target.kind === 'remote' ? 1 : 0);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start.mock.calls[0][0].at(-1)).toBe('startChannel');
+      channel.close();
+    }
+  });
+});

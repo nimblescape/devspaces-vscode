@@ -44,7 +44,7 @@ function context(secrets: Record<string, string> = {}): { context: OperationCont
 }
 
 /** An engine of the probe: its version and identity as given, and the requests with their signals. */
-function probeEngine(answers: { version?: () => Promise<{ apiVersion: string; version: string }>; identity?: () => Promise<EngineIdentity> } = {}) {
+function probeEngine(answers: { version?: () => Promise<{ apiVersion: string; version: string; minApiVersion?: string }>; identity?: () => Promise<EngineIdentity> } = {}) {
   const requests: Array<{ request: string; signal?: AbortSignal }> = [];
   const engine: DockerEngine = {
     ...unusedEngine(),
@@ -60,7 +60,7 @@ describe('the probe operation', () => {
     const { engine, requests } = probeEngine();
     const { context: ctx, progress } = context();
     const value = parseProbeValue(await probeOperation(() => engine)({}, ctx));
-    expect(value).toEqual({ serverVersion: '27.1.0', detail: 'Docker 27.1.0', engine: IDENTITY });
+    expect(value).toEqual({ serverVersion: '27.1.0', apiVersion: '1.47', detail: 'Docker 27.1.0', engine: IDENTITY });
     expect(requests).toEqual([
       { request: 'version', signal: ctx.signal },
       { request: 'identity', signal: ctx.signal },
@@ -72,8 +72,29 @@ describe('the probe operation', () => {
   it('names no engine when its identity cannot be read, and logs why', async () => {
     const { engine } = probeEngine({ identity: async () => Promise.reject(new EngineError('The engine answered /info without its ID and root folder.', 200)) });
     const { context: ctx, logs } = context();
-    expect(parseProbeValue(await probeOperation(() => engine)({}, ctx))).toEqual({ serverVersion: '27.1.0', detail: 'Docker 27.1.0' });
+    expect(parseProbeValue(await probeOperation(() => engine)({}, ctx))).toEqual({ serverVersion: '27.1.0', apiVersion: '1.47', detail: 'Docker 27.1.0' });
     expect(logs).toEqual(['warn The identity of the Docker engine could not be read: The engine answered /info without its ID and root folder.']);
+  });
+
+  // The API versions of the engine, which the extension checks against the Docker CLI of Devspaces: only in the form
+  // that the extension takes (parseProbeValue), so an engine with another form still has a worker.
+  it('names the API versions of the engine, and leaves out a version of another form', async () => {
+    const both = probeEngine({ version: async () => ({ apiVersion: '1.52', version: '29.1.0', minApiVersion: '1.44' }) });
+    expect(parseProbeValue(await probeOperation(() => both.engine)({}, context().context))).toEqual({
+      serverVersion: '29.1.0',
+      apiVersion: '1.52',
+      minApiVersion: '1.44',
+      detail: 'Docker 29.1.0',
+      engine: IDENTITY,
+    });
+    for (const odd of ['', '1', 'v1.52', '1.52.0', '1.52 ', '12345.1']) {
+      const engine = probeEngine({ version: async () => ({ apiVersion: odd, version: '29.1.0', minApiVersion: odd }) }).engine;
+      expect(parseProbeValue(await probeOperation(() => engine)({}, context().context)), JSON.stringify(odd)).toEqual({
+        serverVersion: '29.1.0',
+        detail: 'Docker 29.1.0',
+        engine: IDENTITY,
+      });
+    }
   });
 
   // The reason of the port as the detail, its end within MAX_PROBE_DETAIL_LENGTH; an empty version is no version.

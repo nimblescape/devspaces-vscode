@@ -2,8 +2,10 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// Docker on another computer through SSH: the test of a host before the switch, the Docker context commands,
-// the reachability check that replaces the Docker Desktop start for a remote host, and the rootless socket.
+// Docker on another computer through SSH: the test of a host before it becomes the Docker host of Devspaces, the
+// list of the Docker contexts (to offer their SSH hosts), the reachability check that replaces the Docker Desktop start
+// for a remote host, and the rootless socket. Devspaces creates and changes no Docker context: the Docker calls of an
+// operation on a host of its list get DOCKER_HOST=ssh://<host> (BootstrapDocker), or go through its Docker pipe.
 //
 // No questions, ever: the Docker CLI starts `ssh` for an `ssh://` endpoint in a new session without a terminal
 // (docker/cli connhelper/commandconn, session_unix.go: Setsid), so ssh cannot ask for a password, a passphrase, or a host
@@ -19,45 +21,62 @@
 // (checkSshLogin), on every platform: BatchMode makes ssh fail at once instead of asking, and its error names the
 // reason (host key, login, unreachable, closed before the login). It is one connection instead of the several of the
 // Docker CLI, which also lowers the risk of a lock-out by PerSourcePenalties. A success is kept for SSH_CHECK_CACHE_MS
-// per host (SshLoginCache), a failure never.
+// per host (SshLoginCache), a failure never. Before an operation, the check is the login of the shell before the relay
+// (RemoteShellAccess: `ssh … sh -s` with the same options, which the next connection of the relay takes over), so that
+// the checks and the connection share one login; the test of a host before a switch (useCache false) keeps `true`.
+// While the Docker calls of the extension to the host go through its Docker pipe (HostPipes, BootstrapDocker), the
+// check is skipped: the Docker CLI starts no ssh for them, and the connection of the relay behind the pipe logged in
+// with the options of this check. The few calls of such an operation that still log in with `ssh://<host>` come right
+// after such a login to the same host: a build of the helper image, the calls that change something, and the calls
+// after the connection ended.
+//
+// The WSL distribution of Devspaces (hostAccessOf) has no SSH: its check is the start of the shell before the relay
+// (`wsl.exe … sh -s`), which needs no login and asks nothing, and its Docker calls go through the Docker pipe of the
+// extension (never `ssh://`).
 import { errorMessage, UserFacingError } from '../errors';
 import { Messages, dockerHostReason } from '../messages';
 import { isAbortError, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
 import type { RemoteDockerState } from '../storage/remoteDockerState';
-import { envValue } from './dockerCli';
 import {
-  DEFAULT_CONTEXT_NAME,
   RUNTIME_DIR_COMMAND,
   classifyDockerEndpoint,
   dockerHostProblem,
-  isOwnContextDescription,
-  ownContextDescription,
+  hostAccessOf,
+  isDockerContextHostTarget,
   isRootlessEngine,
   isPodmanDockerTarget,
   isUnreadableDockerTarget,
-  parseContextInspect,
-  remoteContextNames,
+  remoteDockerTarget,
   rootlessSocketPath,
   sshCommandArgs,
   sshEndpoint,
   sshTargetOf,
+  transportProgramOf,
   unsupportedTargetReason,
   type DockerHostProblem,
   type DockerTarget,
 } from './dockerHost';
+import { ShellGoneError, dockerShellCommand } from '../relay/remoteShell';
+import { dockerApiErrorText, type DockerCliApi } from './dockerApiVersion';
+import { deleteEnv, withEnvValue } from './dockerCli';
+import { runWithDockerTarget } from './dockerTargets';
 
 /** Time limit of `docker info` on a remote host: an SSH connection plus the question (the CLI gives ssh 30 s to connect). */
 export const REMOTE_INFO_TIMEOUT_MS = 45_000;
 /** Time limit of our own `ssh` call. */
 export const SSH_TIMEOUT_MS = 30_000;
-/** Time limit of `docker context create|update|use`, which only write files of the Docker CLI. */
+/** Time limit of `docker context ls`, which only reads files of the Docker CLI. */
 export const CONTEXT_COMMAND_TIMEOUT_MS = 15_000;
 /** `docker info` in one line of JSON: the server version and the security options (`name=rootless`). */
 export const ENGINE_INFO_FORMAT = '{"version":{{json .ServerVersion}},"securityOptions":{{json .SecurityOptions}}}';
+/** `docker info` with ENGINE_INFO_FORMAT as one command of the shell before the relay. */
+const ENGINE_INFO_COMMAND = dockerShellCommand(['info', '--format', ENGINE_INFO_FORMAT]) as string;
 
 /** The part of BootstrapDocker used here. */
 export interface RemoteDockerCli {
   isInstalled(): boolean;
+  /** Whether a Docker CLI runs the calls on a remote engine (BootstrapDocker.canRunRemote). Without it: isInstalled. */
+  canRunRemote?(): boolean;
   run(args: readonly string[], options?: RunOptions): Promise<RunResult>;
   /** The environment of the Docker calls outside of an operation. */
   processEnv(): NodeJS.ProcessEnv;
@@ -84,10 +103,7 @@ export function parseEngineInfo(stdout: string): { version: string; rootless: bo
 
 /** The environment of a Docker call that must never ask a question: SSH_ASKPASS_REQUIRE=never (see the module comment). */
 export function noPromptEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...base };
-  for (const key of Object.keys(env)) if (key.toUpperCase() === 'SSH_ASKPASS_REQUIRE') delete env[key];
-  env.SSH_ASKPASS_REQUIRE = 'never';
-  return env;
+  return withEnvValue(base, 'SSH_ASKPASS_REQUIRE', 'never');
 }
 
 function engineCheckOf(result: RunResult, timeoutMs: number): EngineCheck {
@@ -116,8 +132,11 @@ async function runEngineInfo(
 }
 
 /**
- * The test before the switch: the SSH check (checkSshLogin), then `docker -H ssh://<host> info`, without questions (see
- * the module comment). The current context is not used and not changed.
+ * The test before a host becomes the Docker host of Devspaces. With the shells before the relay (`ssh.shells`): one
+ * login, the shell of the host (in a flow of the user, it may ask for a password or an unknown host key in VS Code),
+ * and `docker info` of the Docker CLI of the host on it, which the start script of the relay uses too. Without them: the
+ * SSH check (checkSshLogin), then `docker -H ssh://<host> info`, without questions (see the module comment). The WSL
+ * distribution of Devspaces only on its shell (testWslHost). The current context is not used and not changed.
  */
 export async function testRemoteDockerHost(
   docker: RemoteDockerCli,
@@ -125,17 +144,103 @@ export async function testRemoteDockerHost(
   ssh: SshCheckDeps,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<EngineCheck> {
+  const timeoutMs = options.timeoutMs ?? REMOTE_INFO_TIMEOUT_MS;
+  if (hostAccessOf(host)?.kind === 'wsl') return testWslHost(host, ssh, options.signal, timeoutMs);
+  if (ssh.shells !== undefined && ssh.sshPath !== undefined && sshTargetOf(host) !== undefined) {
+    // Always a new login, as checkSshLogin without its cache: the test sees the SSH configuration and the host of now.
+    const shell = await shellLoginCheck(host, ssh, options.signal, { fresh: true });
+    if (shell !== undefined) {
+      if (!shell.ok) return shell;
+      const check = await engineInfoOnShell(ssh.shells, host, timeoutMs, options.signal);
+      if (check !== undefined) return check;
+    }
+  }
   // Our own ssh without questions first; it always connects (no cached success).
   const login = await checkSshLogin(host, ssh, { signal: options.signal, useCache: false });
   if (!login.ok) return login;
-  const timeoutMs = options.timeoutMs ?? REMOTE_INFO_TIMEOUT_MS;
   const env = noPromptEnv(docker.processEnv());
   // -H decides the endpoint; DOCKER_CONTEXT would conflict with it.
-  for (const key of Object.keys(env)) if (key.toUpperCase() === 'DOCKER_CONTEXT' || key.toUpperCase() === 'DOCKER_HOST') delete env[key];
-  return runEngineInfo(docker, ['-H', sshEndpoint(host), 'info', '--format', ENGINE_INFO_FORMAT], { env, signal: options.signal }, timeoutMs);
+  for (const name of ['DOCKER_CONTEXT', 'DOCKER_HOST']) deleteEnv(env, name);
+  // The `ssh` of the Docker CLI with the key of Devspaces when the host has it, as checkSshLogin logged in.
+  ssh.sshEnv?.(host, env);
+  // As a call on the remote engine: with the Docker CLI of Devspaces when it is installed (BootstrapDocker.ownCli).
+  return runWithDockerTarget(remoteDockerTarget(host), () =>
+    runEngineInfo(docker, ['-H', sshEndpoint(host), 'info', '--format', ENGINE_INFO_FORMAT], { env, signal: options.signal }, timeoutMs),
+  );
 }
 
-/** `docker info` of the current context (of the operation). */
+/**
+ * testRemoteDockerHost for the WSL distribution `host`: a new shell before the relay (`wsl.exe … sh -s`, which starts the
+ * distribution when it does not run), and `docker info` of the Docker CLI of the distribution on it.
+ */
+async function testWslHost(host: string, ssh: SshCheckDeps, signal: AbortSignal | undefined, timeoutMs: number): Promise<EngineCheck> {
+  const shell = await wslShellLogin(host, ssh, signal, { fresh: true });
+  if (!shell.ok) return shell;
+  return (ssh.shells === undefined ? undefined : await engineInfoOnShell(ssh.shells, host, timeoutMs, signal)) ?? WSL_NOT_FOUND;
+}
+
+/**
+ * `docker info` (ENGINE_INFO_COMMAND) on the shell before the relay of `host`, as an EngineCheck; undefined when the
+ * host has no shell. A shell that was closed or taken over twice before the command (ShellGoneError of RemoteShells.run):
+ * undefined for an SSH host, which then logs in with its own `ssh`, and shellGone for the WSL distribution, which has
+ * no other way. Rejects with any other error of `run`.
+ */
+async function engineInfoOnShell(shells: RemoteShellAccess, host: string, timeoutMs: number, signal: AbortSignal | undefined): Promise<EngineCheck | undefined> {
+  try {
+    const result = await shells.run(host, ENGINE_INFO_COMMAND, { timeoutMs, signal });
+    return result === undefined ? undefined : engineCheckOf(result, timeoutMs);
+  } catch (error) {
+    if (!(error instanceof ShellGoneError)) throw error;
+    return hostAccessOf(host)?.kind === 'wsl' ? shellGone(error) : undefined;
+  }
+}
+
+/** The check of the WSL distribution after its shell was closed or taken over twice before its command (ShellGoneError). */
+function shellGone(error: ShellGoneError): Extract<EngineCheck, { ok: false }> {
+  return { ok: false, problem: 'unreachable', detail: error.message };
+}
+
+/**
+ * The login of the shell before the relay of `host` as a check (RemoteShellAccess.login): a
+ * success is kept in `sshLogins`, a failure forgets the last one and names its reason. Undefined when the host has no
+ * shell (no transport). Rejects only with an AbortError.
+ */
+async function shellLoginCheck(
+  host: string,
+  deps: Pick<SshCheckDeps, 'shells' | 'sshLogins'>,
+  signal: AbortSignal | undefined,
+  options?: { fresh?: boolean },
+): Promise<{ ok: true } | { ok: false; problem: DockerHostProblem; detail: string } | undefined> {
+  const shell = await deps.shells?.login(host, signal, options);
+  if (shell === undefined) return undefined;
+  if (!shell.ok) {
+    deps.sshLogins?.forget(host);
+    return { ok: false, problem: shell.timedOut ? 'unreachable' : dockerHostProblem(shell.detail), detail: shell.detail };
+  }
+  deps.sshLogins?.remember(host);
+  return { ok: true };
+}
+
+/**
+ * The check of a WSL distribution without its shell (RemoteShells.run): there is no `wsl.exe` on this computer. After a
+ * shell started, the shells have none only when the window closes meanwhile, and then nobody reads this.
+ */
+const WSL_NOT_FOUND = { ok: false, problem: 'wslMissing', detail: 'wsl.exe was not found.' } as const;
+
+/**
+ * The start of the shell before the relay of the WSL distribution `host` as the check of the host (shellLoginCheck):
+ * WSL_NOT_FOUND without a shell. Rejects only with an AbortError.
+ */
+async function wslShellLogin(
+  host: string,
+  deps: Pick<SshCheckDeps, 'shells' | 'sshLogins'>,
+  signal: AbortSignal | undefined,
+  options?: { fresh?: boolean },
+): Promise<{ ok: true } | { ok: false; problem: DockerHostProblem; detail: string }> {
+  return (await shellLoginCheck(host, deps, signal, options)) ?? WSL_NOT_FOUND;
+}
+
+/** `docker info` of the Docker host of the operation. */
 export async function checkCurrentEngine(
   docker: Pick<RemoteDockerCli, 'run'>,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
@@ -155,25 +260,40 @@ export async function readRootlessSocket(
   host: string,
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
+  shells?: RemoteShellAccess,
+  identity?: string,
 ): Promise<{ ok: true; socket: string } | { ok: false; problem: DockerHostProblem; detail: string }> {
-  if (sshPath === undefined) return { ok: false, problem: 'sshMissing', detail: 'The SSH client (ssh) was not found.' };
-  const target = sshTargetOf(host);
-  if (!target) return { ok: false, problem: 'unknown', detail: `${host} is no SSH alias or address that Devspaces can use.` };
-  let result: RunResult;
+  const access = hostAccessOf(host);
+  if (access === undefined) return { ok: false, problem: 'unknown', detail: `${host} is no SSH alias or address that Devspaces can use.` };
+  if (access.kind === 'ssh' && sshPath === undefined) return { ok: false, problem: 'sshMissing', detail: 'The SSH client (ssh) was not found.' };
+  let result: RunResult | undefined;
   try {
-    result = await runner.run(sshPath, sshCommandArgs(target, RUNTIME_DIR_COMMAND), {
-      env: noPromptEnv(env),
-      timeoutMs: SSH_TIMEOUT_MS,
-      signal,
+    // On the shell before the relay when the host has one (`shells`), else with a login of its own (only over SSH; also
+    // when its shell was closed or taken over twice before the command, ShellGoneError).
+    const onShell = shells?.run(host, RUNTIME_DIR_COMMAND, { timeoutMs: SSH_TIMEOUT_MS, signal }).catch((error: unknown) => {
+      if (error instanceof ShellGoneError && access.kind === 'ssh') return undefined;
+      throw error;
     });
+    result =
+      (await onShell) ??
+      (access.kind === 'ssh' && sshPath !== undefined
+        ? await runner.run(sshPath, sshCommandArgs(access.address, RUNTIME_DIR_COMMAND, undefined, { identity }), {
+            env: noPromptEnv(env),
+            timeoutMs: SSH_TIMEOUT_MS,
+            signal,
+          })
+        : undefined);
   } catch (error) {
     if (isAbortError(error)) throw error;
+    if (error instanceof ShellGoneError) return shellGone(error);
     const detail = errorMessage(error);
     return { ok: false, problem: dockerHostProblem(detail), detail };
   }
-  if (result.timedOut) return { ok: false, problem: 'unreachable', detail: `ssh did not answer within ${SSH_TIMEOUT_MS / 1000} seconds.` };
+  if (result === undefined) return WSL_NOT_FOUND;
+  const program = transportProgramOf(host);
+  if (result.timedOut) return { ok: false, problem: 'unreachable', detail: `${program} did not answer within ${SSH_TIMEOUT_MS / 1000} seconds.` };
   if (result.exitCode !== 0) {
-    const detail = result.stderr.trim() || `ssh failed with exit code ${result.exitCode}.`;
+    const detail = result.stderr.trim() || `${program} failed with exit code ${result.exitCode}.`;
     return { ok: false, problem: dockerHostProblem(detail), detail };
   }
   const socket = rootlessSocketPath(result.stdout);
@@ -214,6 +334,22 @@ export class SshLoginCache {
   }
 }
 
+/**
+ * The shells before the relay (RemoteShells): one SSH login per host for the checks before a connection of the relay,
+ * which that connection then takes over.
+ */
+export interface RemoteShellAccess {
+  /**
+   * The login of the shell to `host` (the open shell, or a new one; with `fresh` always a new one): undefined when the
+   * host has no transport (then the caller uses its own `ssh`); a failure has the error output of `ssh`, or of `wsl.exe`
+   * as text (the UTF-16 of an older one too, wslText), `timedOut` when it did not answer in time. Rejects only with an
+   * AbortError.
+   */
+  login(host: string, signal?: AbortSignal, options?: { fresh?: boolean }): Promise<{ ok: true } | { ok: false; detail: string; timedOut: boolean } | undefined>;
+  /** `command` (one line for the shell) on the shell of `host`, as RemoteShells.run; undefined without a transport. */
+  run(host: string, command: string, options?: Pick<RunOptions, 'timeoutMs' | 'signal'>): Promise<RunResult | undefined>;
+}
+
 /** What the SSH check before a Docker call over SSH needs. */
 export interface SshCheckDeps {
   runner: ProcessRunner;
@@ -222,30 +358,61 @@ export interface SshCheckDeps {
   env: NodeJS.ProcessEnv;
   /** Keeps successes for a while; without it, every check opens a connection. */
   sshLogins?: SshLoginCache;
+  /**
+   * True while the Docker calls of the extension to `host` go through its Docker pipe (HostPipes.dockerHost): the
+   * Docker CLI starts no `ssh` then, so the check is skipped.
+   */
+  viaDockerPipe?(host: string): boolean;
+  /**
+   * The shells before the relay: the check is the login of the shell of the host (the checks after it run there, and
+   * the next connection of the relay takes it over), instead of `ssh … true`.
+   */
+  shells?: RemoteShellAccess;
+  /** The key of Devspaces for `host` when that host has it (sshKey.ts), for `-i`; else undefined. */
+  identityFor?(host: string): string | undefined;
+  /** Changes the environment of a Docker call with `ssh://<host>` for the key of Devspaces (SshKeyOffer.dockerSshEnv). */
+  sshEnv?(host: string, env: NodeJS.ProcessEnv): void;
 }
 
 export type SshLoginCheck =
-  | { ok: true; skipped?: 'cached' | 'notAnSshTarget' }
+  | { ok: true; skipped?: 'cached' | 'dockerPipe' | 'notAnSshTarget' }
   | { ok: false; problem: DockerHostProblem; detail: string };
 
 /**
- * The SSH check before a Docker call to `host` (see the module comment): `ssh -o BatchMode=yes -o ConnectTimeout=15 -T
- * [-p port] [-l user] -- <host> true`, without questions. `useCache`: a success of the last SSH_CHECK_CACHE_MS counts
- * (the test before a switch always connects). A host that is no usable alias or address (for example of a context of
- * the user with a path) is left to the Docker CLI.
+ * checkSshLogin of the WSL distribution `host`: a success of the last SSH_CHECK_CACHE_MS counts (with `useCache`), else
+ * the start of its shell before the relay (wslShellLogin). Its Docker pipe proves nothing: each of its connections
+ * starts `wsl.exe` anew.
+ */
+async function checkWslLogin(host: string, deps: SshCheckDeps, options: { signal?: AbortSignal; useCache?: boolean }): Promise<SshLoginCheck> {
+  if (options.useCache !== false && deps.sshLogins?.isFresh(host)) return { ok: true, skipped: 'cached' };
+  return wslShellLogin(host, deps, options.signal);
+}
+
+/**
+ * The SSH check before a Docker call to `host` (see the module comment; for the WSL distribution of Devspaces the start
+ * of its shell, checkWslLogin): `ssh -o BatchMode=yes -o ConnectTimeout=15 -T
+ * [-p port] [-l user] -- <host> true`, without questions, or the login of the shell before the relay with the same
+ * options (`deps.shells`, not for `useCache` false). `useCache`: a success of the last SSH_CHECK_CACHE_MS counts,
+ * and so do Docker calls that go through the Docker pipe of the extension (the test before a switch always connects). A
+ * host that is no usable alias or address (for example of a context of the user with a path) is left to the Docker CLI.
  */
 export async function checkSshLogin(
   host: string,
   deps: SshCheckDeps,
   options: { signal?: AbortSignal; useCache?: boolean } = {},
 ): Promise<SshLoginCheck> {
+  if (hostAccessOf(host)?.kind === 'wsl') return checkWslLogin(host, deps, options);
   if (options.useCache !== false && deps.sshLogins?.isFresh(host)) return { ok: true, skipped: 'cached' };
+  if (options.useCache !== false && deps.viaDockerPipe?.(host) === true) return { ok: true, skipped: 'dockerPipe' };
   const target = sshTargetOf(host);
   if (!target) return { ok: true, skipped: 'notAnSshTarget' };
   if (deps.sshPath === undefined) return { ok: false, problem: 'sshMissing', detail: 'The SSH client (ssh) was not found.' };
+  // The login of the shell before the relay is the check (not for the test before a switch, which always logs in anew).
+  const shell = options.useCache === false ? undefined : await shellLoginCheck(host, deps, options.signal);
+  if (shell !== undefined) return shell;
   let result: RunResult;
   try {
-    result = await deps.runner.run(deps.sshPath, sshCommandArgs(target, 'true'), {
+    result = await deps.runner.run(deps.sshPath, sshCommandArgs(target, 'true', undefined, { identity: deps.identityFor?.(host) }), {
       env: noPromptEnv(deps.env),
       timeoutMs: SSH_TIMEOUT_MS,
       signal: options.signal,
@@ -271,19 +438,21 @@ export function dockerHostUnreachable(host: string, problem: DockerHostProblem, 
 }
 
 /**
- * The message of a target that is not supported: an endpoint that is neither local nor SSH, a current Docker context
- * that could not be read (isUnreadableDockerTarget), or a docker command that is Podman (isPodmanDockerTarget).
+ * The message of a target that is not supported: an endpoint that is neither local nor SSH, a context or DOCKER_HOST of
+ * the user that reaches a host over SSH (isDockerContextHostTarget), a current Docker context that could not be read
+ * (isUnreadableDockerTarget), or a docker command that is Podman (isPodmanDockerTarget).
  */
-export function unsupportedTargetMessage(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman'>): string {
+export function unsupportedTargetMessage(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context'>): string {
   if (isPodmanDockerTarget(target)) return Messages.podmanNotSupported;
+  if (isDockerContextHostTarget(target)) return Messages.dockerContextHost(target.sshHost, target.context);
   return isUnreadableDockerTarget(target) ? Messages.dockerContextUnreadable : Messages.dockerEndpointUnsupported(target.endpoint);
 }
 
 /** UserFacingError('dockerEndpointUnsupported') for a target that is not supported (unsupportedTargetMessage). */
-export function dockerEndpointUnsupported(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman'>): UserFacingError {
+export function dockerEndpointUnsupported(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context'>): UserFacingError {
   const detail = isPodmanDockerTarget(target)
     ? target.podman
-    : isUnreadableDockerTarget(target)
+    : isUnreadableDockerTarget(target) || isDockerContextHostTarget(target)
       ? unsupportedTargetReason(target)
       : `Docker endpoint: ${target.endpoint}`;
   return new UserFacingError('dockerEndpointUnsupported', unsupportedTargetMessage(target), detail);
@@ -299,11 +468,19 @@ export interface RemoteReachabilityDeps {
   env: NodeJS.ProcessEnv;
   /** The successes of the SSH check, per host (one cache for the extension). */
   sshLogins?: SshLoginCache;
+  /** True while the Docker calls of the extension to `host` go through its Docker pipe (SshCheckDeps.viaDockerPipe). */
+  viaDockerPipe?(host: string): boolean;
+  /** The shells before the relay (SshCheckDeps.shells), also for the runtime folder of a rootless engine. */
+  shells?: RemoteShellAccess;
+  /** The key of Devspaces for `host` (SshCheckDeps.identityFor). */
+  identityFor?(host: string): string | undefined;
+  /** The Docker CLI of Devspaces whose API versions the engine may refuse (ChannelOpenDeps.dockerCliApi). */
+  dockerCliApi?(): DockerCliApi | undefined;
 }
 
 /**
- * The step "Docker start" for a remote host: the SSH check (checkSshLogin), then one `docker info` through the current context (no Docker Desktop start, no
- * setup, no "Starting Docker" step). Throws UserFacingError('dockerHostUnreachable') with the plain reason. A rootless
+ * The step "Docker start" for a remote host: the SSH check (checkSshLogin), then one `docker info` of the host (no Docker
+ * Desktop start, no setup, no "Starting Docker" step). Throws UserFacingError('dockerHostUnreachable') with the plain reason. A rootless
  * engine gets its socket recorded (read once with ssh), a rootful one has it forgotten, so the helper mounts the right
  * socket of that computer.
  */
@@ -312,15 +489,20 @@ export async function ensureDockerHostReachable(
   deps: RemoteReachabilityDeps,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
-  // Our own ssh without questions first (a success of the last minute counts).
+  // Our own ssh without questions first (a success of the last minute counts); for WSL the start of its shell.
   const login = await checkSshLogin(target.host, deps, { signal: options.signal });
   if (!login.ok) {
-    deps.logger.warn(`The Docker host ${target.host} cannot be reached over SSH: ${login.detail}`);
+    deps.logger.warn(`The Docker host ${target.host} cannot be reached ${hostAccessOf(target.host)?.kind === 'wsl' ? 'through wsl.exe' : 'over SSH'}: ${login.detail}`);
     throw dockerHostUnreachable(target.host, login.problem, login.detail);
   }
   const check = await checkCurrentEngine(deps.docker, options);
   if (!check.ok) {
     deps.logger.warn(`The Docker host ${target.host} cannot be reached: ${check.detail}`);
+    // `docker info` with the Docker CLI of Devspaces (on the WSL distribution, or through the Docker pipe of the
+    // extension), refused for its API version: the message with both versions and the way out.
+    const cli = deps.dockerCliApi?.();
+    const mismatch = cli === undefined ? undefined : dockerApiErrorText(check.detail, target.host, cli);
+    if (mismatch !== undefined) throw new UserFacingError('dockerHostUnreachable', mismatch, check.detail);
     throw dockerHostUnreachable(target.host, check.problem, check.detail);
   }
   deps.logger.info(`Docker host ${target.host}: Docker engine ${check.version}${check.rootless ? ' (rootless)' : ''}.`);
@@ -339,7 +521,7 @@ export async function recordRootlessSocket(
     return;
   }
   if ((await deps.state.rootlessSocket(host)) !== undefined) return;
-  const read = await readRootlessSocket(deps.runner, deps.sshPath, host, deps.env, signal);
+  const read = await readRootlessSocket(deps.runner, deps.sshPath, host, deps.env, signal, deps.shells, deps.identityFor?.(host));
   if (!read.ok) {
     deps.logger.warn(`The socket of the rootless Docker engine on ${host} could not be read: ${read.detail}`);
     throw dockerHostUnreachable(host, read.problem, read.detail);
@@ -348,29 +530,11 @@ export async function recordRootlessSocket(
   await deps.state.setRootlessSocket(host, read.socket);
 }
 
-/**
- * The environment of a Docker context command: without DOCKER_CONTEXT (the command names its context itself). The
- * caller refuses a switch while DOCKER_HOST or DOCKER_CONTEXT is set for VS Code (dockerVariableOverride).
- */
+/** The environment of `docker context ls`: without DOCKER_CONTEXT and DOCKER_HOST, which do not change the list. */
 function contextCommandEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
-  for (const key of Object.keys(env)) if (key.toUpperCase() === 'DOCKER_CONTEXT') delete env[key];
+  for (const name of ['DOCKER_CONTEXT', 'DOCKER_HOST']) deleteEnv(env, name);
   return env;
-}
-
-/** DOCKER_HOST or DOCKER_CONTEXT set for VS Code: a context switch would have no effect on it. */
-export function dockerVariableOverride(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): 'DOCKER_HOST' | 'DOCKER_CONTEXT' | undefined {
-  if ((envValue(env, 'DOCKER_HOST', platform) ?? '').trim() !== '') return 'DOCKER_HOST';
-  if ((envValue(env, 'DOCKER_CONTEXT', platform) ?? '').trim() !== '') return 'DOCKER_CONTEXT';
-  return undefined;
-}
-
-async function contextCommand(docker: RemoteDockerCli, args: readonly string[]): Promise<RunResult> {
-  return docker.run(['context', ...args], { env: contextCommandEnv(docker.processEnv()), timeoutMs: CONTEXT_COMMAND_TIMEOUT_MS });
-}
-
-function contextCommandError(args: readonly string[], result: RunResult): Error {
-  return new Error(`docker context ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim() || `exit code ${result.exitCode}`}`);
 }
 
 /** A Docker context as `docker context ls` lists it. */
@@ -383,9 +547,11 @@ export interface ContextInfo {
 
 /** The contexts of the Docker CLI (`docker context ls --format '{{json .}}'`, one object per line). */
 export async function listContextInfos(docker: RemoteDockerCli): Promise<ContextInfo[]> {
-  const args = ['ls', '--format', '{{json .}}'];
-  const result = await contextCommand(docker, args);
-  if (result.exitCode !== 0) throw contextCommandError(args, result);
+  const args = ['context', 'ls', '--format', '{{json .}}'];
+  const result = await docker.run(args, { env: contextCommandEnv(docker.processEnv()), timeoutMs: CONTEXT_COMMAND_TIMEOUT_MS });
+  if (result.exitCode !== 0) {
+    throw new Error(`docker ${args.join(' ')} failed: ${(result.stderr || result.stdout).trim() || `exit code ${result.exitCode}`}`);
+  }
   const contexts: ContextInfo[] = [];
   for (const line of result.stdout.split(/\r?\n/)) {
     if (line.trim() === '') continue;
@@ -393,7 +559,7 @@ export async function listContextInfos(docker: RemoteDockerCli): Promise<Context
     try {
       value = JSON.parse(line);
     } catch {
-      throw new Error(`docker context ${args.join(' ')} printed a line that is not JSON: ${line.trim().slice(0, 200)}`);
+      throw new Error(`docker ${args.join(' ')} printed a line that is not JSON: ${line.trim().slice(0, 200)}`);
     }
     if (typeof value !== 'object' || value === null) continue;
     const record = value as Record<string, unknown>;
@@ -408,103 +574,17 @@ export async function listContextInfos(docker: RemoteDockerCli): Promise<Context
 }
 
 /**
- * The endpoint of the context `name` (`docker context inspect <name> --format '{{json .}}'`); undefined when it cannot
- * be read.
+ * The SSH hosts of the Docker contexts of the user that Devspaces can use (sshTargetOf), each once with the name of the
+ * first context that reaches it (`docker context ls`). Throws when the contexts cannot be listed.
  */
-export async function contextEndpoint(docker: RemoteDockerCli, name: string): Promise<string | undefined> {
-  const args = ['inspect', name, '--format', '{{json .}}'];
-  const result = await contextCommand(docker, args);
-  if (result.exitCode !== 0) return undefined;
-  return parseContextInspect(result.stdout)?.endpoint;
-}
-
-/**
- * The context of `host` among `contexts`, by remoteContextNames: the first name whose context points to `ssh://<host>`
- * (one that the user made with that name and endpoint is taken as it is). `free`: the first name that no context has,
- * when no name points to the host. Neither: every name is taken by a context that points elsewhere.
- */
-export function remoteContextChoice(host: string, contexts: readonly ContextInfo[]): { existing?: string; free?: string } {
-  const endpoint = sshEndpoint(host);
-  let free: string | undefined;
-  for (const name of remoteContextNames(host)) {
-    const context = contexts.find((candidate) => candidate.name === name);
-    if (context === undefined) {
-      free ??= name;
-      continue;
-    }
-    if (context.endpoint === endpoint) return { existing: name };
+export async function sshHostsOfContexts(docker: RemoteDockerCli): Promise<Array<{ host: string; context: string }>> {
+  const hosts: Array<{ host: string; context: string }> = [];
+  for (const context of await listContextInfos(docker)) {
+    const endpoint = classifyDockerEndpoint(context.endpoint);
+    if (endpoint.kind !== 'remote' || sshTargetOf(endpoint.host) === undefined || hosts.some((known) => known.host === endpoint.host)) continue;
+    hosts.push({ host: endpoint.host, context: context.name });
   }
-  return free === undefined ? {} : { free };
-}
-
-/** The name of the existing context of `host` (remoteContextChoice), undefined when there is none. */
-export async function findRemoteContext(docker: RemoteDockerCli, host: string): Promise<string | undefined> {
-  return remoteContextChoice(host, await listContextInfos(docker)).existing;
-}
-
-/**
- * The context of `host` (remoteContextChoice: named after the alias of the SSH config or the host name, with the pair
- * of the host only on a clash): the existing one, else a new one with `ssh://<host>` and the description of Devspaces
- * (`docker context create`). An existing context is never changed: an operation of another window that runs on it keeps
- * its host. Throws when every name is taken by a context that points elsewhere. Returns the name of the context.
- */
-export async function ensureRemoteContext(docker: RemoteDockerCli, host: string): Promise<string> {
-  const choice = remoteContextChoice(host, await listContextInfos(docker));
-  if (choice.existing !== undefined) return choice.existing;
-  if (choice.free === undefined) {
-    const names = remoteContextNames(host);
-    throw new Error(`The Docker contexts ${names.join(' and ')} exist and point elsewhere than ${sshEndpoint(host)}. Remove or rename one of them (docker context rm <name>) and try again.`);
-  }
-  const args = ['create', choice.free, '--description', ownContextDescription(host), '--docker', `host=${sshEndpoint(host)}`];
-  const written = await contextCommand(docker, args);
-  if (written.exitCode === 0) return choice.free;
-  // Another window may have created it a moment ago; its context is taken as it is.
-  const again = remoteContextChoice(host, await listContextInfos(docker).catch(() => []));
-  if (again.existing !== undefined) return again.existing;
-  throw contextCommandError(args, written);
-}
-
-/** Makes the context of `host` (ensureRemoteContext) the current context (`docker context use`). Returns its name. */
-export async function useRemoteContext(docker: RemoteDockerCli, host: string): Promise<string> {
-  const name = await ensureRemoteContext(docker, host);
-  await useContext(docker, name);
-  return name;
-}
-
-/** Whether the context `name` is one that Devspaces created (its description, isOwnContextDescription). */
-export async function isOwnContext(docker: RemoteDockerCli, name: string): Promise<boolean> {
-  return isOwnContextDescription((await listContextInfos(docker)).find((context) => context.name === name)?.description);
-}
-
-/** `docker context use <name>`. */
-export async function useContext(docker: RemoteDockerCli, name: string): Promise<void> {
-  const args = ['use', name];
-  const result = await contextCommand(docker, args);
-  if (result.exitCode !== 0) throw contextCommandError(args, result);
-}
-
-/**
- * The context for "Use the Local Docker" by name: the remembered one (for example Docker Desktop's `desktop-linux`) when
- * it still exists and is not ours, else `default`. chooseLocalContext also checks where it points.
- */
-export function localContextChoice(remembered: string | undefined, existing: readonly ContextInfo[]): string {
-  const context = existing.find((candidate) => candidate.name === remembered);
-  if (context !== undefined && !isOwnContextDescription(context.description)) return context.name;
-  return DEFAULT_CONTEXT_NAME;
-}
-
-/**
- * The context for "Use the Local Docker": localContextChoice, and the remembered context only when its endpoint is the
- * local Docker (classifyDockerEndpoint); one that points to another computer (for example a context `mybox` with
- * `ssh://…` of the user) gives `default`.
- */
-export async function chooseLocalContext(docker: RemoteDockerCli, remembered: string | undefined, logger?: Logger): Promise<string> {
-  const name = localContextChoice(remembered, await listContextInfos(docker));
-  if (name === DEFAULT_CONTEXT_NAME) return name;
-  const endpoint = await contextEndpoint(docker, name);
-  if (endpoint !== undefined && classifyDockerEndpoint(endpoint).kind === 'local') return name;
-  logger?.info(`The remembered Docker context ${name} does not point to the local Docker (${endpoint ?? 'not readable'}); the context ${DEFAULT_CONTEXT_NAME} is used.`);
-  return DEFAULT_CONTEXT_NAME;
+  return hosts;
 }
 
 /**
