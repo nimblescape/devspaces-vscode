@@ -48,7 +48,7 @@ export function readConfigurationArgs(p: {
 }
 
 /**
- * Arguments of `devcontainer build`. `build` has no `--override-config` (CLI 0.89.0, devContainersSpecCLI.js, the
+ * Arguments of `devcontainer build`. `build` has no `--override-config` (CLI 0.90.0, devContainersSpecCLI.js, the
  * handler of `build`: `configFile:v,overrideConfigFile:J` with `J=void 0`), so a Docker Compose configuration is built
  * with `--config` naming our copy of the configuration (composeConfigOverride) in the helper.
  */
@@ -63,7 +63,7 @@ export function buildArgs(p: { workspaceFolder: string; configPath: string; imag
     p.imageName,
     '--user-data-folder',
     HELPER_CACHE_FOLDER,
-    // A prepare never writes the lockfile of the repository (CLI 0.89.0, `--frozen-lockfile`: "Ensure lockfile exists
+    // A prepare never writes the lockfile of the repository (CLI 0.90.0, `--frozen-lockfile`: "Ensure lockfile exists
     // and remains unchanged; fail otherwise"). WRITE_AND_RUN_SCRIPT replaces it with `--no-lockfile` when the
     // repository has no lockfile.
     ...(p.frozenLockfile === true ? [FROZEN_LOCKFILE_ARG] : []),
@@ -74,7 +74,7 @@ export function buildArgs(p: { workspaceFolder: string; configPath: string; imag
 export const FROZEN_LOCKFILE_ARG = '--frozen-lockfile';
 
 /**
- * Argument of `devcontainer up`: `up` runs no lifecycle command (CLI 0.89.0: `postCreateEnabled: !skipPostCreate`, and
+ * Argument of `devcontainer up`: `up` runs no lifecycle command (CLI 0.90.0: `postCreateEnabled: !skipPostCreate`, and
  * `lifecycleHook.enabled && await runLifecycleHooks(…)`: no onCreateCommand, updateContentCommand, postCreateCommand,
  * postStartCommand, postAttachCommand, no marker). They run afterwards with `devcontainer run-user-commands`
  * (runUserCommandsArgs), once the token is in the container.
@@ -119,7 +119,7 @@ export function upArgs(p: {
  * the same workspace folder, override configuration, and id label as `up`, so the CLI reads the same configuration
  * (merged with the label devcontainer.metadata of the container) and resolves `${devcontainerId}` the same way.
  * `--container-id`: the container of the result of `up` (with Docker Compose, the containers of the other services
- * carry the id label too). CLI 0.89.0 runs onCreateCommand, updateContentCommand, postCreateCommand (each once per
+ * carry the id label too). CLI 0.90.0 runs onCreateCommand, updateContentCommand, postCreateCommand (each once per
  * container: a marker with the creation time in ~/.devcontainer of the remote user), and postStartCommand (once per
  * start: a marker with the start time), and stops at the first that fails. SKIP_POST_ATTACH_ARG: postAttachCommand
  * stays with the Dev Containers extension, as for `up`. It has no option of the UID update (always `never`).
@@ -177,7 +177,7 @@ const LIFECYCLE_FAILURE =
 /**
  * Whether the result of `devcontainer up` (or of `run-user-commands`, whose result WorkspaceHelper.runUserCommands
  * completes with the container ID) reports a failed lifecycle command of a container that exists. Assumption: when a
- * lifecycle command exits with a code other than 0, CLI 0.89.0 skips the further commands, ends `up` with exit code 1
+ * lifecycle command exits with a code other than 0, CLI 0.90.0 skips the further commands, ends `up` with exit code 1
  * and the result `{ outcome: 'error', containerId, description: '… from … failed.' }`, and leaves the container
  * running. initializeCommand runs before the container starts, so it is not one of them.
  */
@@ -282,7 +282,7 @@ export function buildOverrideConfig(p: {
  * The configuration of a Docker Compose configuration for `read-configuration` (`--override-config`) and `build`
  * (`--config`, buildArgs): the repository configuration as written (`raw`, parsed devcontainer.json; the CLI resolves
  * its variables as usual), with `dockerComposeFile` naming only our model (an absolute path: the CLI resolves the paths
- * against the folder of `--config`, CLI 0.89.0 function `sg`), and without `initializeCommand`, which the host access
+ * against the folder of `--config`, CLI 0.90.0 function `gg`), and without `initializeCommand`, which the host access
  * policy refuses anyway (it would run in the helper, which has the Docker socket).
  */
 export function composeConfigOverride(raw: Readonly<Record<string, unknown>>, modelPath: string): Record<string, unknown> {
@@ -296,7 +296,7 @@ export function composeConfigOverride(raw: Readonly<Record<string, unknown>>, mo
  * `dockerComposeFile` names only our model (composeUpModel, an absolute path), `service`, `runServices` (when the
  * repository names them), `workspaceFolder`, and, as in buildOverrideConfig, containerEnv, remoteEnv, the settings of
  * the Dev Containers extension, and shutdownAction 'none'. No image, runArgs, appPort, or workspaceMount: the CLI
- * ignores them for Compose (CLI 0.89.0: `if("dockerComposeFile"in t)return{workspaceFolder:pp(t),workspaceMount:void 0,…}`;
+ * ignores them for Compose (CLI 0.90.0: `if("dockerComposeFile"in t)return{workspaceFolder:Sp(t),workspaceMount:void 0,…}`;
  * runArgs and appPort are read only for a single container); the model carries the image, the name, the labels, the
  * ports, and the workspace volume. The CLI writes containerEnv as `environment` of the dev service into its last compose
  * file, so these values win. `initializeCommand` is never passed.

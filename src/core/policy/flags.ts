@@ -68,7 +68,7 @@ const removeDetach: FlagRule = { kind: 'remove', value: false, reason: REMOVED_D
 // Assumption: with Docker Desktop on macOS, the outgoing traffic of containers goes through the network stack of the
 // computer, so VPN routes and the DNS of the computer apply; this must be checked on Windows (WSL 2) and on Linux with
 // Docker Engine (NAT through the routing table of the host).
-// Assumption: Dev Container CLI 0.89.0 puts the runArgs into `docker run --sig-proxy=false -a STDOUT -a STDERR` before
+// Assumption: Dev Container CLI 0.90.0 puts the runArgs into `docker run --sig-proxy=false -a STDOUT -a STDERR` before
 // its own `--entrypoint /bin/sh`, and runs it without a terminal (no node-pty in the workspace helper).
 export const RUN_FLAGS: Readonly<Record<string, FlagRule>> = {
   // Checked in runArgsFindings (networkProblems, with the labels of the networks).

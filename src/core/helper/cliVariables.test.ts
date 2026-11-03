@@ -30,39 +30,39 @@ import { batchRunSpec } from '../helperChannel/batch';
 import { batchStepCommand } from './batchSteps';
 import { composeMountVolumes } from '../pipeline/pipelineRules';
 
-// Guard: the substitution functions of Dev Container CLI 0.89.0, copied verbatim from
-// node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js (Fo, tg, Hr, za, a_, cN, lN, I_, C_, B_, E_,
-// hN, Q_). The first test fails when the installed CLI does not hold this text (another version, or another
+// Guard: the substitution functions of Dev Container CLI 0.90.0, copied verbatim from
+// node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js (Mo, ig, Pr, $a, v_, mb, yb, U_, x_, J_, K_,
+// Fb, H_). The first test fails when the installed CLI does not hold this text (another version, or another
 // substitution): then substituteCliVariables must be checked against the new CLI, and this copy replaced.
-const CLI_VERSION = '0.89.0';
+const CLI_VERSION = '0.90.0';
 const CLI_FOLDER = path.resolve(__dirname, '../../../node_modules/@devcontainers/cli');
 const CLI_SUBSTITUTION_SOURCE =
-  "function Fo(e,A){let t,i=e.platform===\"win32\",r={...e,get env(){return t||(t=cN(i,e.env))}},n=C_.bin" +
-  "d(void 0,i,r);return e.containerWorkspaceFolder&&(r.containerWorkspaceFolder=lN(n,e.containerWorkspa" +
-  "ceFolder)),za(n,A)}function tg(e,A){let t;return za(E_.bind(void 0,()=>t||e&&(t=Q_(e))),A)}function " +
-  "Hr(e,A,t,i){let r=e===\"win32\";return za(B_.bind(void 0,r,A,cN(r,t)),i)}function za(e,A){if(typeof A=" +
-  "=\"string\")return lN(e,A);if(Array.isArray(A))return A.map(t=>za(e,t));if(A&&typeof A==\"object\"&&!Fe." +
-  "isUri(A)){let t=Object.create(null);return Object.keys(A).forEach(i=>{t[i]=za(e,A[i])}),t}return A}v" +
-  "ar a_=/\\$\\{(.*?)\\}/g;function cN(e,A){if(e){let t=Object.create(null);return Object.keys(A).forEach(" +
-  "i=>{t[i.toLowerCase()]=A[i]}),t}return A}function lN(e,A){return A.replace(a_,I_.bind(void 0,e))}fun" +
-  "ction I_(e,A,t){let i=[],r=t.split(\":\");return r.length>1&&(t=r[0],i=r.slice(1)),e(A,t,i)}function C" +
-  "_(e,A,t,i,r){switch(i){case\"env\":case\"localEnv\":return hN(e,A.env,r,t,A.configFile);case\"localWorksp" +
+  "function Mo(e,A){let t,i=e.platform===\"win32\",r={...e,get env(){return t||(t=mb(i,e.env))}},n=x_.bin" +
+  "d(void 0,i,r);return e.containerWorkspaceFolder&&(r.containerWorkspaceFolder=yb(n,e.containerWorkspa" +
+  "ceFolder)),$a(n,A)}function ig(e,A){let t;return $a(K_.bind(void 0,()=>t||e&&(t=H_(e))),A)}function " +
+  "Pr(e,A,t,i){let r=e===\"win32\";return $a(J_.bind(void 0,r,A,mb(r,t)),i)}function $a(e,A){if(typeof A=" +
+  "=\"string\")return yb(e,A);if(Array.isArray(A))return A.map(t=>$a(e,t));if(A&&typeof A==\"object\"&&!Se." +
+  "isUri(A)){let t=Object.create(null);return Object.keys(A).forEach(i=>{t[i]=$a(e,A[i])}),t}return A}v" +
+  "ar v_=/\\$\\{(.*?)\\}/g;function mb(e,A){if(e){let t=Object.create(null);return Object.keys(A).forEach(" +
+  "i=>{t[i.toLowerCase()]=A[i]}),t}return A}function yb(e,A){return A.replace(v_,U_.bind(void 0,e))}fun" +
+  "ction U_(e,A,t){let i=[],r=t.split(\":\");return r.length>1&&(t=r[0],i=r.slice(1)),e(A,t,i)}function x" +
+  "_(e,A,t,i,r){switch(i){case\"env\":case\"localEnv\":return Fb(e,A.env,r,t,A.configFile);case\"localWorksp" +
   "aceFolder\":return A.localWorkspaceFolder!==void 0?A.localWorkspaceFolder:t;case\"localWorkspaceFolder" +
-  "Basename\":return A.localWorkspaceFolder!==void 0?(e?eg.win32:eg.posix).basename(A.localWorkspaceFold" +
+  "Basename\":return A.localWorkspaceFolder!==void 0?(e?tg.win32:tg.posix).basename(A.localWorkspaceFold" +
   "er):t;case\"containerWorkspaceFolder\":return A.containerWorkspaceFolder!==void 0?A.containerWorkspace" +
-  "Folder:t;case\"containerWorkspaceFolderBasename\":return A.containerWorkspaceFolder!==void 0?eg.posix." +
-  "basename(A.containerWorkspaceFolder):t;default:return t}}function B_(e,A,t,i,r,n){return r===\"contai" +
-  "nerEnv\"?hN(e,t,n,i,A):i}function E_(e,A,t){return t===\"devcontainerId\"&&e()||A}function hN(e,A,t,i,r" +
+  "Folder:t;case\"containerWorkspaceFolderBasename\":return A.containerWorkspaceFolder!==void 0?tg.posix." +
+  "basename(A.containerWorkspaceFolder):t;default:return t}}function J_(e,A,t,i,r,n){return r===\"contai" +
+  "nerEnv\"?Fb(e,t,n,i,A):i}function K_(e,A,t){return t===\"devcontainerId\"&&e()||A}function Fb(e,A,t,i,r" +
   "){if(t.length>0){let n=t[0];e&&(n=n.toLowerCase());let o=A[n];return typeof o==\"string\"?o:t.length>1" +
-  "?t[1]:\"\"}throw new kA({description:`'${i}'${r?` in ${eg.posix.basename(r.path)}`:\"\"} can not be reso" +
-  "lved because no environment variable name is given.`})}function Q_(e){let A=JSON.stringify(e,Object." +
-  "keys(e).sort()),t=Buffer.from(A,\"utf-8\"),i=uN.createHash(\"sha256\").update(t).digest();return BigInt(" +
+  "?t[1]:\"\"}throw new MA({description:`'${i}'${r?` in ${tg.posix.basename(r.path)}`:\"\"} can not be reso" +
+  "lved because no environment variable name is given.`})}function H_(e){let A=JSON.stringify(e,Object." +
+  "keys(e).sort()),t=Buffer.from(A,\"utf-8\"),i=wb.createHash(\"sha256\").update(t).digest();return BigInt(" +
   "`0x${i.toString(\"hex\")}`).toString(32).padStart(52,\"0\")}";
 
 interface CliSubstitution {
-  Fo: (context: Record<string, unknown>, value: unknown) => unknown;
-  tg: (idLabels: Record<string, string> | undefined, value: unknown) => unknown;
-  Q_: (idLabels: Record<string, string>) => string;
+  Mo: (context: Record<string, unknown>, value: unknown) => unknown;
+  ig: (idLabels: Record<string, string> | undefined, value: unknown) => unknown;
+  H_: (idLabels: Record<string, string>) => string;
 }
 
 /** The copied functions, with the modules that the bundle gives them (path, crypto, the URI check, the error class). */
@@ -72,7 +72,7 @@ function loadCli(): CliSubstitution {
       super(options.description);
     }
   }
-  const factory = new Function('eg', 'uN', 'Fe', 'kA', `${CLI_SUBSTITUTION_SOURCE}\nreturn { Fo, tg, Q_ };`) as (
+  const factory = new Function('tg', 'wb', 'Se', 'MA', `${CLI_SUBSTITUTION_SOURCE}\nreturn { Mo, ig, H_ };`) as (
     ...args: unknown[]
   ) => CliSubstitution;
   return factory(path, crypto, { isUri: () => false }, KA);
@@ -83,9 +83,9 @@ const REPOSITORY_FOLDER = '/workspaces/api';
 const ID_LABELS = { 'nimblescape.devspaces.id': '3f2a9c1e-0000-4000-8000-000000000001' };
 const ENV = { HOME: '/root', FOO: 'bar', EMPTY: '' };
 
-/** What `devcontainer up` does with an entry of the image metadata: Fo (local variables), then tg (${devcontainerId}). */
+/** What `devcontainer up` does with an entry of the image metadata: Mo (local variables), then ig (${devcontainerId}). */
 function cliUp(value: unknown, context: { localWorkspaceFolder?: string; containerWorkspaceFolder?: string; env: Record<string, string> }, idLabels?: Record<string, string>): unknown {
-  return JSON.parse(JSON.stringify(cli.tg(idLabels, cli.Fo({ platform: 'linux', ...context }, value))));
+  return JSON.parse(JSON.stringify(cli.ig(idLabels, cli.Mo({ platform: 'linux', ...context }, value))));
 }
 
 const CASES: Array<[string, unknown]> = [
@@ -126,7 +126,7 @@ describe(`cliVariables: as Dev Container CLI ${CLI_VERSION} substitutes`, () => 
   const context = { localWorkspaceFolder: REPOSITORY_FOLDER, containerWorkspaceFolder: REPOSITORY_FOLDER, env: ENV };
 
   it.each(CASES)('%s: as the CLI with a devcontainerId', (_name, value) => {
-    const devcontainerId = cli.Q_(ID_LABELS);
+    const devcontainerId = cli.H_(ID_LABELS);
     const ours = substituteCliVariables(value, { ...context, devcontainerId });
     expect(JSON.parse(JSON.stringify(ours))).toEqual(cliUp(value, context, ID_LABELS));
   });
@@ -244,7 +244,7 @@ describe('resolveCliVariables: the leftovers of the raw strings', () => {
 describe('the placeholder of ${devcontainerId}', () => {
   it('is shaped like the ID of the CLI, and named like no volume of Devspaces', () => {
     expect(DEVCONTAINER_ID_PLACEHOLDER).toMatch(/^[0-9a-v]{52}$/);
-    expect(cli.Q_(ID_LABELS)).toMatch(/^[0-9a-v]{52}$/);
+    expect(cli.H_(ID_LABELS)).toMatch(/^[0-9a-v]{52}$/);
     for (const name of [DEVCONTAINER_ID_PLACEHOLDER, `x-${DEVCONTAINER_ID_PLACEHOLDER}`, `devspaces-x-${DEVCONTAINER_ID_PLACEHOLDER}`]) {
       expect(isDevspaceResourceName(name)).toBe(false);
       expect(isDevContainersCloneVolumeName(name)).toBe(false);
@@ -255,8 +255,8 @@ describe('the placeholder of ${devcontainerId}', () => {
   it('replaces every expression named devcontainerId as the second pass of the CLI does', () => {
     const text = 'a${devcontainerId}b${devcontainerId:,type=bind}c${devcontainerId:x:y}${other}';
     expect(withDevcontainerIdPlaceholder(text)).toBe(`a${DEVCONTAINER_ID_PLACEHOLDER}b${DEVCONTAINER_ID_PLACEHOLDER}c${DEVCONTAINER_ID_PLACEHOLDER}\${other}`);
-    const id = cli.Q_(ID_LABELS);
-    expect(withDevcontainerIdPlaceholder(text).split(DEVCONTAINER_ID_PLACEHOLDER).join(id)).toBe(cli.tg(ID_LABELS, text));
+    const id = cli.H_(ID_LABELS);
+    expect(withDevcontainerIdPlaceholder(text).split(DEVCONTAINER_ID_PLACEHOLDER).join(id)).toBe(cli.ig(ID_LABELS, text));
   });
 
   it('leaves ${containerEnv:…} out of the names of the second pass', () => {
@@ -297,7 +297,7 @@ describe('variableMatches: the matches of the pattern of the CLI in linear time'
         // ${env} without a name: the CLI stops with an error (see above).
         continue;
       }
-      expect(substituteCliVariables(text, { ...context, devcontainerId: cli.Q_(ID_LABELS) }), JSON.stringify(text)).toBe(expected);
+      expect(substituteCliVariables(text, { ...context, devcontainerId: cli.H_(ID_LABELS) }), JSON.stringify(text)).toBe(expected);
     }
   });
 
@@ -349,35 +349,35 @@ describe('the known variables of the helper process', () => {
   });
 });
 
-// Guard: the workspace folder of Dev Container CLI 0.89.0 at `up`. read-configuration and build call Ri on the folder
+// Guard: the workspace folder of Dev Container CLI 0.90.0 at `up`. read-configuration and build call Ni on the folder
 // of `--workspace-folder` itself: a folder whose posix extension is `.code-workspace` (case-sensitive) is read as a
-// workspace file, and they use its parent folder. `up` (kW) calls Ri on `<folder>/<basename>` for such a folder, whose
+// workspace file, and they use its parent folder. `up` (oV) calls Ni on `<folder>/<basename>` for such a folder, whose
 // parent is the folder itself: at `up`, localWorkspaceFolder is the repository folder for every name. Both are sliced
 // from the bundle and must still read as below.
 const CLI_WORKSPACE_SOURCE =
-  'function Ri(e,A){if(Rp(A)){let t=e.dirname(A);return{isWorkspaceFile:!0,workspaceOrFolderPath:A,rootFolderPath:t,configFolderPath:t}}' +
-  'return{isWorkspaceFile:!1,workspaceOrFolderPath:A,rootFolderPath:A,configFolderPath:A}}function Rp(e){return TG.extname(e)===".code-workspace"}';
-// kW (`up`): a = cliHost.cwd, the resolved `--workspace-folder`; A = { hostPath } of the same folder.
-const CLI_UP_WORKSPACE_EXPRESSION = 'E=A&&Ri(g.path,Rp(A.hostPath)?g.path.join(a,OG.basename(A.hostPath)):a)';
+  'function Ni(e,A){if(Gp(A)){let t=e.dirname(A);return{isWorkspaceFile:!0,workspaceOrFolderPath:A,rootFolderPath:t,configFolderPath:t}}' +
+  'return{isWorkspaceFile:!1,workspaceOrFolderPath:A,rootFolderPath:A,configFolderPath:A}}function Gp(e){return XL.extname(e)===".code-workspace"}';
+// oV (`up`): a = cliHost.cwd, the resolved `--workspace-folder`; A = { hostPath } of the same folder.
+const CLI_UP_WORKSPACE_EXPRESSION = 'E=A&&Ni(g.path,Gp(A.hostPath)?g.path.join(a,zL.basename(A.hostPath)):a)';
 
 type WorkspaceOf = (folder: string) => { rootFolderPath: string };
 
 describe('helperCliVariables: the workspace folder as `devcontainer up` uses it', () => {
   const bundle = fs.readFileSync(path.join(CLI_FOLDER, 'dist', 'spec-node', 'devContainersSpecCLI.js'), 'utf8');
-  // Ri and Rp, sliced from the bundle.
-  const riStart = bundle.indexOf('function Ri(e,A)');
-  const riEnd = bundle.indexOf('}', bundle.indexOf('function Rp(e)', riStart)) + 1;
+  // Ni and Gp, sliced from the bundle.
+  const riStart = bundle.indexOf('function Ni(e,A)');
+  const riEnd = bundle.indexOf('}', bundle.indexOf('function Gp(e)', riStart)) + 1;
   const riSource = bundle.slice(riStart, riEnd);
-  const { Ri, Rp } = new Function('TG', `${riSource}\nreturn { Ri, Rp };`)(path.posix) as {
-    Ri: (pathModule: typeof path.posix, folder: string) => { rootFolderPath: string };
-    Rp: (folder: string) => boolean;
+  const { Ni, Gp } = new Function('XL', `${riSource}\nreturn { Ni, Gp };`)(path.posix) as {
+    Ni: (pathModule: typeof path.posix, folder: string) => { rootFolderPath: string };
+    Gp: (folder: string) => boolean;
   };
-  // The expression of kW, sliced from the bundle.
-  const kwStart = bundle.indexOf('E=A&&Ri(g.path,');
+  // The expression of oV, sliced from the bundle.
+  const kwStart = bundle.indexOf('E=A&&Ni(g.path,');
   const kwSource = bundle.slice(kwStart, bundle.indexOf(':a)', kwStart) + 3);
   const upWorkspace: WorkspaceOf = (folder) =>
-    new Function('Ri', 'Rp', 'OG', 'g', 'a', 'A', `let ${kwSource}; return E;`)(Ri, Rp, path.posix, { path: path.posix }, folder, { hostPath: folder });
-  const readConfigurationWorkspace: WorkspaceOf = (folder) => Ri(path.posix, folder);
+    new Function('Ni', 'Gp', 'zL', 'g', 'a', 'A', `let ${kwSource}; return E;`)(Ni, Gp, path.posix, { path: path.posix }, folder, { hostPath: folder });
+  const readConfigurationWorkspace: WorkspaceOf = (folder) => Ni(path.posix, folder);
 
   it('the slices are the code of the installed CLI', () => {
     expect(riSource).toBe(CLI_WORKSPACE_SOURCE);
@@ -415,13 +415,13 @@ describe('helperCliVariables: the workspace folder as `devcontainer up` uses it'
   });
 });
 
-describe('devcontainerIdOf: `${devcontainerId}` as Dev Container CLI 0.89.0 computes it', () => {
-  // The CLI's function `ht`, which makes the object of the `--id-label` values for Q_, copied verbatim (checked below).
-  const CLI_ID_LABELS_SOURCE = 'function ht(e){return(e||[]).reduce((A,t)=>{let i=t.indexOf("=");return i!==-1&&(A[t.substring(0,i)]=t.substring(i+1)),A},{})}';
-  const ht = new Function(`${CLI_ID_LABELS_SOURCE}\nreturn ht;`)() as (labels: readonly string[]) => Record<string, string>;
-  const cliId = (labels: readonly string[]): string => cli.Q_(ht(labels));
+describe('devcontainerIdOf: `${devcontainerId}` as Dev Container CLI 0.90.0 computes it', () => {
+  // The CLI's function `dt`, which makes the object of the `--id-label` values for H_, copied verbatim (checked below).
+  const CLI_ID_LABELS_SOURCE = 'function dt(e){return(e||[]).reduce((A,t)=>{let i=t.indexOf("=");return i!==-1&&(A[t.substring(0,i)]=t.substring(i+1)),A},{})}';
+  const dt = new Function(`${CLI_ID_LABELS_SOURCE}\nreturn dt;`)() as (labels: readonly string[]) => Record<string, string>;
+  const cliId = (labels: readonly string[]): string => cli.H_(dt(labels));
 
-  it('the copy of `ht` is the code of the installed CLI', () => {
+  it('the copy of `dt` is the code of the installed CLI', () => {
     const bundle = fs.readFileSync(path.join(CLI_FOLDER, 'dist', 'spec-node', 'devContainersSpecCLI.js'), 'utf8');
     expect(bundle.includes(CLI_ID_LABELS_SOURCE)).toBe(true);
   });
@@ -442,7 +442,7 @@ describe('devcontainerIdOf: `${devcontainerId}` as Dev Container CLI 0.89.0 comp
 
   it('devspaceDevcontainerId: the ID for the single id label that the pipeline passes', () => {
     const id = '3f2a9c1e-0000-4000-8000-000000000001';
-    expect(devspaceDevcontainerId(id)).toBe(cli.Q_(ID_LABELS));
+    expect(devspaceDevcontainerId(id)).toBe(cli.H_(ID_LABELS));
     expect(devspaceDevcontainerId(id)).toBe(cliId([`nimblescape.devspaces.id=${id}`]));
     expect(devspaceDevcontainerId(id)).not.toBe(DEVCONTAINER_ID_PLACEHOLDER);
     expect(devspaceDevcontainerId(id)).not.toBe(devspaceDevcontainerId('7c1d2e3f-1111-4222-8333-444444444444'));

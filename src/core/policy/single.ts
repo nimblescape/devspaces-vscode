@@ -308,7 +308,7 @@ function singleBuildProblems(config: Record<string, unknown>, input: HostAccessI
     const context = typeof build.context === 'string' ? build.context : typeof config.context === 'string' ? config.context : undefined;
     const dockerfile = typeof build.dockerfile === 'string' ? build.dockerfile : typeof config.dockerFile === 'string' ? config.dockerFile : undefined;
     for (const [what, value] of [['build context', context], ['Dockerfile', dockerfile]] as const) {
-      // No exception for a value that looks like a URL. The CLI 0.89.0 resolves it as a path (path.posix.resolve
+      // No exception for a value that looks like a URL. The CLI 0.90.0 resolves it as a path (path.posix.resolve
       // against the folder of the configuration), so `x://../../devspace-cache` is a folder.
       if (value === undefined || value.trim() === '') continue;
       const resolved = path.posix.resolve(input.configFolder, value.trim());
@@ -396,13 +396,13 @@ function textLengthProblems(input: HostAccessInput): Problem[] {
 }
 
 /**
- * `input` as Dev Container CLI 0.89.0 passes it to Docker at `up`: each entry of the image metadata with the variables
+ * `input` as Dev Container CLI 0.90.0 passes it to Docker at `up`: each entry of the image metadata with the variables
  * `${…}` resolved (resolveCliVariables), because the CLI substitutes every entry of the label devcontainer.metadata
  * once at `up`, also one that the Dockerfile of the repository set with LABEL. A variable of the process whose value is
  * not known stays as written (a leftover, mountEntries). The configuration and the merged configuration are the output
  * of read-configuration, which the CLI has substituted already: they stay as they are. Their runArgs and appPort, which
  * the CLI substitutes again at `up`, may hold no variable (secondPassProblems). Then, in all of them, every expression
- * named `devcontainerId` (also with arguments) is DEVCONTAINER_ID_PLACEHOLDER, as the second pass of the CLI (tg) makes
+ * named `devcontainerId` (also with arguments) is DEVCONTAINER_ID_PLACEHOLDER, as the second pass of the CLI (ig) makes
  * it the ID of the container.
  */
 function resolvedInput(input: HostAccessInput): HostAccessInput {
@@ -506,8 +506,8 @@ const COMPOSE_TEXT = 'the Dev Container CLI writes it into its compose file as i
 
 /**
  * The values of `source` (the configuration, the merged configuration, or an entry of the image metadata, substituted
- * as the CLI substitutes it) that the Dev Container CLI 0.89.0 writes as text into the compose file that it generates
- * for the dev service of a Docker Compose configuration (function `iW`), without escaping them:
+ * as the CLI substitutes it) that the Dev Container CLI 0.90.0 writes as text into the compose file that it generates
+ * for the dev service of a Docker Compose configuration (function `GW`), without escaping them:
  * `user: <containerUser>`, the names of `containerEnv` inside `- '<name>=<value>'` (the values are escaped), each
  * `entrypoint` (the `entrypoints` of the merged configuration) inside a double-quoted string, and each `capAdd` and
  * `securityOpt` as `- <value>`. A value that is not a plain token could add keys to the dev service (for example
@@ -598,7 +598,7 @@ function mountTypeProblems(mount: MountSpec, type: string, source: string, volum
 }
 
 /**
- * The keys of a `mounts` text that the Dev Container CLI 0.89.0 renames (table `cj` of its function `lQ`); every other
+ * The keys of a `mounts` text that the Dev Container CLI 0.90.0 renames (table `jj` of its function `dQ`); every other
  * key keeps its spelling.
  */
 const CLI_MOUNT_KEYS: ReadonlyMap<string, string> = new Map([
@@ -607,7 +607,7 @@ const CLI_MOUNT_KEYS: ReadonlyMap<string, string> = new Map([
   ['dst', 'target'],
 ]);
 
-/** The properties of a mount that the CLI writes into its compose file (function `nW`) or that decide how (`type`). */
+/** The properties of a mount that the CLI writes into its compose file (function `UW`) or that decide how (`type`). */
 const CLI_MOUNT_PROPERTIES: ReadonlySet<string> = new Set(['source', 'target', 'type']);
 
 /**
@@ -624,7 +624,7 @@ const YAML_INDICATOR = /^[-?:,[\]{}#&*!|>'"%@`]/;
 const COMPOSE_SHORT_SYNTAX_SPECIAL = /[\s"'`#:]/;
 
 /**
- * A `mounts` entry as the Dev Container CLI 0.89.0 reads it for Docker Compose (function `iW` with `lQ`): a text is
+ * A `mounts` entry as the Dev Container CLI 0.90.0 reads it for Docker Compose (function `GW` with `dQ`): a text is
  * split at `,` and each field at `=` (only the part before a second `=` is the value), the keys are case-sensitive, and
  * only `src`, `dst`, and `destination` are renamed; an object is taken as it is. `undefined` when the text does not
  * round-trip safely: a field of `source`, `target`, or `type` (also a variant by case or space, for example `SRC` or
@@ -658,9 +658,9 @@ function roundTrips(text: string): boolean {
 }
 
 /**
- * A `mounts` entry of a Docker Compose configuration as it reaches the dev container. The Dev Container CLI 0.89.0
+ * A `mounts` entry of a Docker Compose configuration as it reaches the dev container. The Dev Container CLI 0.90.0
  * reads it with its own parser (cliComposeMount) and writes it unquoted as the list item `- <source>:<target>`
- * (function `nW`, the type is dropped) into the `volumes` of the dev service of the compose file that it generates,
+ * (function `UW`, the type is dropped) into the `volumes` of the dev service of the compose file that it generates,
  * which Compose reads (and interpolates) in the short syntax. mountProblems checks the entry as `docker run --mount`
  * would read it; this checks the CLI's reading:
  * - not supported (whatever the switch says), when it does not round-trip safely: a text that the CLI cannot read as

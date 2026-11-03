@@ -354,7 +354,7 @@ export function isRootUser(user: string): boolean {
 }
 
 /**
- * The user part of `user[:group]`, as the Dev Container CLI 0.89.0 reads the user of a container
+ * The user part of `user[:group]`, as the Dev Container CLI 0.90.0 reads the user of a container
  * (`/([^:]*)(:(.*))?/`), with `0` as `root`. An empty user part (`:1000`) counts as root here: the CLI would ask the
  * container (`id -un`), and root only skips the ownership fix.
  */
@@ -365,7 +365,7 @@ export function containerUserName(user: string): string {
 
 /**
  * The user that `devcontainer up` gives a container of a devspace image, by the rule of the Dev Container CLI
- * 0.89.0 (image metadata merged last-wins; `docker run -u <containerUser> …runArgs`; then the user of the container):
+ * 0.90.0 (image metadata merged last-wins; `docker run -u <containerUser> …runArgs`; then the user of the container):
  * the container runs as the last `--user`/`-u` of `runArgs` (Docker takes the last one, and the CLI puts the runArgs
  * after its own `-u <containerUser>`), else the last `containerUser` of the label devcontainer.metadata, else the user
  * of the image. The remote user is the last `remoteUser` of the metadata, else that container user, else root; of
@@ -452,7 +452,7 @@ export function sharedNamespaceServices(model: { services: Record<string, unknow
 
 /**
  * Recreate offer: the other services (not `devService`) with a `build:` section that the `up` of the Dev Container CLI
- * builds when the dev container does not exist (CLI 0.89.0: `docker compose build` of every service, or of
+ * builds when the dev container does not exist (CLI 0.90.0: `docker compose build` of every service, or of
  * `runServices` and the dev service, before `up -d` without `--no-recreate`): all of them without `runServices`, else
  * those that `runServices` names. A new image of such a service, for example of a changed build context or a pruned
  * build cache, makes Compose create its container again, after the direct check.

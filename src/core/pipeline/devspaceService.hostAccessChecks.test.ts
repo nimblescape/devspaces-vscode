@@ -499,7 +499,7 @@ describe('variables of the Dev Container CLI in the image metadata', () => {
   });
 });
 
-// Dev Container CLI 0.89.0 substitutes the runArgs and appPort of the override configuration again at `up`, so what
+// Dev Container CLI 0.90.0 substitutes the runArgs and appPort of the override configuration again at `up`, so what
 // read-configuration returns must hold no variable that the CLI resolves there; and it substitutes the label
 // devcontainer.metadata once at `up`.
 describe('what the Dev Container CLI substitutes again at up', () => {

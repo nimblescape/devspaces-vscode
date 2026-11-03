@@ -3,11 +3,11 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The variables `${…}` of devcontainer.json and of the label devcontainer.metadata, resolved as Dev Container CLI
-// 0.89.0 resolves them at `up`: the CLI substitutes every entry of the image metadata, the configuration, and the
+// 0.90.0 resolves them at `up`: the CLI substitutes every entry of the image metadata, the configuration, and the
 // override configuration before it passes the mounts to `docker run`, so the host access policy checks the values that
 // Docker gets, not the text that the configuration writes. Pure functions, no I/O.
 //
-// How the CLI substitutes (devContainersSpecCLI.js of 0.89.0, functions Fo, za, lN, I_, C_, hN, tg, E_):
+// How the CLI substitutes (devContainersSpecCLI.js of 0.90.0, functions Mo, $a, yb, U_, x_, Fb, ig, K_):
 // - The pattern /\$\{(.*?)\}/g, applied to the string values (not the keys) of objects and arrays, recursively. The
 //   result of a replacement is not read again in the same pass. This module finds the same matches with a linear scan
 //   (variableMatches): the pattern itself takes quadratic time on a text such as `${${${…` without `}`.
@@ -17,17 +17,17 @@
 // - The text between the braces is split at every `:`: the first part is the name, the others are the arguments.
 // - `env` and `localEnv`: the variable of the CLI process named by the first argument; when it is not set, the second
 //   argument (the default, which cannot hold a `:`), otherwise ''. Without an argument, the CLI stops with an error.
-// - `localWorkspaceFolder`: at `up`, the folder of `--workspace-folder`, for every name (kW: for a folder whose
+// - `localWorkspaceFolder`: at `up`, the folder of `--workspace-folder`, for every name (oV: for a folder whose
 //   extension is `.code-workspace` it reads `<folder>/<basename>` as the workspace file, whose parent is the folder
 //   itself). read-configuration and build read such a folder itself as a workspace file and use its parent folder,
-//   `/workspaces` in the helper (Ri, Rp). `localWorkspaceFolderBasename`: its posix basename.
+//   `/workspaces` in the helper (Ni, Gp). `localWorkspaceFolderBasename`: its posix basename.
 // - `containerWorkspaceFolder`: the workspaceFolder of the configuration (for `up` with an override configuration: the
 //   one of the override configuration, itself substituted first); `containerWorkspaceFolderBasename`: its basename.
 // - Other names (also `containerEnv` for a new container) stay as they are written.
-// - A second pass (tg) replaces `${devcontainerId}` (any expression with that name) by the ID of the container, a hash
+// - A second pass (ig) replaces `${devcontainerId}` (any expression with that name) by the ID of the container, a hash
 //   of its id labels (52 characters of base 32). The checks use DEVCONTAINER_ID_PLACEHOLDER in its place, because the
 //   ID is not known before `up`.
-// - `${containerEnv:…}` is resolved only for the lifecycle commands of an existing container (Hr), never in the
+// - `${containerEnv:…}` is resolved only for the lifecycle commands of an existing container (Pr), never in the
 //   arguments of `docker run`.
 import * as crypto from 'crypto';
 import * as path from 'path';
@@ -110,9 +110,9 @@ export interface CliVariables {
  * HELPER_PROCESS_ENV_NAMES may be set, every other one is not.
  *
  * localWorkspaceFolder is the repository folder for every repository name, as `up` uses it: for a `--workspace-folder`
- * whose extension is `.code-workspace`, `up` (kW) reads `<folder>/<basename>` as the workspace file, whose parent is
+ * whose extension is `.code-workspace`, `up` (oV) reads `<folder>/<basename>` as the workspace file, whose parent is
  * the folder itself, so the label, the user of the image, and the volumes that `up` mounts use the repository folder.
- * Only read-configuration and build read such a folder itself as a workspace file and use `/workspaces` (Ri, Rp); their
+ * Only read-configuration and build read such a folder itself as a workspace file and use `/workspaces` (Ni, Gp); their
  * output is checked as they return it.
  *
  * `env`: the variables that the pipeline passes to the CLI run besides HELPER_KNOWN_ENV, with their values:
@@ -278,7 +278,7 @@ export function resolveCliVariables<T>(value: T, variables: CliVariables): { val
     }
   };
   // The CLI substitutes the workspaceFolder of the configuration itself first, with its unsubstituted value for
-  // `${containerWorkspaceFolder}` (Fo); an empty one is used as it is.
+  // `${containerWorkspaceFolder}` (Mo); an empty one is used as it is.
   const raw = variables.containerWorkspaceFolder;
   const containerFolder = raw ? substituteText(raw, (match, name, args) => local(match, name, args, raw)) : raw;
   folderLeftovers = [...leftovers];
@@ -288,15 +288,15 @@ export function resolveCliVariables<T>(value: T, variables: CliVariables): { val
   return { value: (id ? devcontainerIdPass(first, id) : first) as T, leftovers: [...leftovers] };
 }
 
-/** The second pass of the CLI (tg): every expression named `devcontainerId`, with or without arguments, becomes `id`. */
+/** The second pass of the CLI (ig): every expression named `devcontainerId`, with or without arguments, becomes `id`. */
 function devcontainerIdPass(value: unknown, id: string): unknown {
   return mapStrings(value, (text) => substituteText(text, (match, name) => (name === DEVCONTAINER_ID_VARIABLE ? id : match)));
 }
 
 /**
- * The ID of the container that the Dev Container CLI 0.89.0 puts in place of `${devcontainerId}` for the id labels
- * `idLabels` (`--id-label`, each `<name>=<value>`), as its function `Q_` computes it from the object that its function
- * `ht` makes of them (a label without `=` is dropped; a later label of the same name wins): the SHA-256 of the JSON of
+ * The ID of the container that the Dev Container CLI 0.90.0 puts in place of `${devcontainerId}` for the id labels
+ * `idLabels` (`--id-label`, each `<name>=<value>`), as its function `H_` computes it from the object that its function
+ * `dt` makes of them (a label without `=` is dropped; a later label of the same name wins): the SHA-256 of the JSON of
  * that object with its keys sorted, as a number in base 32, padded to 52 characters with `0`.
  */
 export function devcontainerIdOf(idLabels: readonly string[]): string {
@@ -338,7 +338,7 @@ export function withDevcontainerIdPlaceholder<T>(value: T): T {
 
 /**
  * The names of the variables that the CLI resolves in its second pass over the runArgs and appPort of the override
- * configuration at `up` (Fo): not `containerEnv`, which it resolves only for the lifecycle commands of an existing
+ * configuration at `up` (Mo): not `containerEnv`, which it resolves only for the lifecycle commands of an existing
  * container, never in the arguments of `docker run`.
  */
 export const SECOND_PASS_VARIABLE_NAMES: readonly string[] = CLI_VARIABLE_NAMES.filter((name) => name !== 'containerEnv');

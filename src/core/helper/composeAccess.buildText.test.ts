@@ -2,7 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The Dev Container CLI 0.89.0 writes a compose file for the build of the dev service (function `Dp`), with the build
+// The Dev Container CLI 0.90.0 writes a compose file for the build of the dev service (function `Rp`), with the build
 // arguments of its Dockerfile of Features as text: `- _DEV_CONTAINERS_BASE_IMAGE=<stage>` (the target of the build, or
 // the name of the last stage of the Dockerfile). A line break there adds keys to the build (for example `ssh` or
 // `secrets` with a file of the workspace helper) or to the dev service.
@@ -70,7 +70,7 @@ describe('the build of the dev service as the Dev Container CLI writes it', () =
     const items = report({}, dockerfile).unsupported;
     expect(items).toContain(`service app: the last stage ${JSON.stringify('a\u0085')} of the Dockerfile (the Dev Container CLI writes it into its compose file for the build as it is: only a plain stage name is supported)`);
     expect(items).toContain('service app: the Dockerfile, which holds the character U+0085 (the Dev Container CLI writes it into its compose file for the build as it is: a line break in a name or value is not supported)');
-    // The target wins over the last stage (`if(X=EA,pA)Z=pA`).
+    // The target wins over the last stage (`if(V=uA,pA)W=pA`).
     expect(report({ target: 'base' }, 'FROM alpine AS base\nFROM alpine AS b#x\n')).toEqual(NONE);
     expect(report({}, 'FROM alpine AS base\nFROM alpine AS b#x\n').unsupported.length).toBe(1);
     expect(report({}, 'FROM alpine\n')).toEqual(NONE);
@@ -79,14 +79,14 @@ describe('the build of the dev service as the Dev Container CLI writes it', () =
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Guard: the parts of `Dp` and the functions that it uses in the vendored CLI that the rules above follow, and the text
+// Guard: the parts of `Rp` and the functions that it uses in the vendored CLI that the rules above follow, and the text
 // of the compose file for the build with the values that the rules allow, read as YAML.
 
 const CLI_FILE = require.resolve('@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js');
 const yaml = createRequire(__filename)('js-yaml') as { load(text: string): unknown };
 
 /**
- * The compose file that `Dp` writes for the build of the dev service `app` with Features, BuildKit, and no context of its
+ * The compose file that `Rp` writes for the build of the dev service `app` with Features, BuildKit, and no context of its
  * own (the lines of `q`, with `a` = '' and no cache_from): a copy of the template of the CLI (see the guard below).
  */
 function buildOverride(stage: string, user: string): string {
@@ -111,17 +111,17 @@ describe('guard: the compose file of the vendored CLI for the build', () => {
   it('the template and the values of the copy are those of the vendored CLI', () => {
     const cli = readFileSync(CLI_FILE, 'utf8');
     // The arguments, as text; the target stage and the base image; the user of the target stage.
-    expect(cli).toContain('for(let EA in uA.buildArgs)q+=`        - ${EA}=${uA.buildArgs[EA]}\n`');
+    expect(cli).toContain('for(let uA in BA.buildArgs)q+=`        - ${uA}=${BA.buildArgs[uA]}\n`');
     expect(cli).toContain('q+=`      args:\n`,t.buildKitVersion&&(q+=`        - BUILDKIT_INLINE_CACHE=1\n`)');
-    expect(cli).toContain('(dA=N.build)!=null&&dA.target&&(q+=`      target: ${uA.overrideTarget}\n`)');
+    expect(cli).toContain('(hA=M.build)!=null&&hA.target&&(q+=`      target: ${BA.overrideTarget}\n`)');
     expect(cli).toContain('buildArgs:{_DEV_CONTAINERS_BASE_IMAGE:i,_DEV_CONTAINERS_IMAGE_USER:r.user,_DEV_CONTAINERS_FEATURE_CONTENT_SOURCE:I}');
     expect(cli).toContain('overrideTarget:"dev_containers_target_stage",dockerfilePrefixContent:');
     expect(cli).toContain('buildArgs:{_DEV_CONTAINERS_BASE_IMAGE:i},buildKitContexts:{},securityOpts:[]');
-    expect(cli).toContain('if(X=EA,pA)Z=pA;else{let{lastStageName:UA,modifiedDockerfile:SA}=DQ(EA,Z);Z=UA,SA&&(X=SA)}');
-    expect(cli).toContain('B=QG(C,t,ht(Q==null?void 0:Q.Config.Env),a,i)||(Q==null?void 0:Q.Config.User)||"root"');
+    expect(cli).toContain('if(V=uA,pA)W=pA;else{let{lastStageName:yA,modifiedDockerfile:FA}=yQ(uA,W);W=yA,FA&&(V=FA)}');
+    expect(cli).toContain('B=DL(C,t,dt(Q==null?void 0:Q.Config.Env),a,i)||(Q==null?void 0:Q.Config.User)||"root"');
     expect(cli).toContain('r=i.Config.User||"root"');
-    expect(cli).toContain('yj=new RegExp(/^(?<line>\\s*FROM.*)/,"gmi"),Fj=/FROM\\s+(?<platform>--platform=\\S+\\s+)?(?<image>"?[^\\s]+"?)(\\s+AS\\s+(?<label>[^\\s]+))?/i');
-    // The first compose file is our model, as JSON: no line of it starts with `version:` (`wp`).
+    expect(cli).toContain('tW=new RegExp(/^(?<line>\\s*FROM.*)/,"gmi"),iW=/FROM\\s+(?<platform>--platform=\\S+\\s+)?(?<image>"?[^\\s]+"?)(\\s+AS\\s+(?<label>[^\\s]+))?/i');
+    // The first compose file is our model, as JSON: no line of it starts with `version:` (`kp`).
     expect(cli).toContain('i=(/^\\s*(version:.*)$/m.exec(t)||[])[1]');
   });
 

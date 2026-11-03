@@ -68,8 +68,8 @@ export const COMPOSE_DEV_DOCKERFILE = `${OVERRIDE_FOLDER}/dev.Dockerfile`;
 
 /**
  * The compose files of `dockerComposeFile` as absolute paths in the helper. The Dev Container CLI resolves them against
- * the folder of the configuration (CLI 0.89.0, devContainersSpecCLI.js: `function sg(e,A,t){return
- * rj(e,A.configFilePath,t)}` with `nQ.posix.resolve(i.path,…t)`), also when an override configuration replaces it, so
+ * the folder of the configuration (CLI 0.90.0, devContainersSpecCLI.js: `function gg(e,A,t){return
+ * vj(e,A.configFilePath,t)}` with `gQ.posix.resolve(i.path,…t)`), also when an override configuration replaces it, so
  * the check reads them the same way here, and the override names our model by an absolute path. Each file must be in the
  * repository folder. A missing or empty `dockerComposeFile` is not supported: the CLI would then read `COMPOSE_FILE` of
  * the repository's `.env` or a default file name. `configPath` is relative to the repository folder.
@@ -287,9 +287,9 @@ export function composeServiceVolumeNames(model: ComposeModel, project: string, 
 
 /**
  * The Docker name of a named volume of a `mounts` entry of devcontainer.json or a Feature in a Compose configuration:
- * the Dev Container CLI adds it to the top-level `volumes` of its generated compose file (CLI 0.89.0, function `oW`:
+ * the Dev Container CLI adds it to the top-level `volumes` of its generated compose file (CLI 0.90.0, function `xW`:
  * `${e.source}:` plus `external: true` only when the mount object says so, for the mounts with `b.type==="volume"&&b.source`
- * of function `iW`), so Compose names it `<project>_<source>`. `undefined` for other mounts.
+ * of function `GW`), so Compose names it `<project>_<source>`. `undefined` for other mounts.
  */
 export function composeMountVolumeName(project: string, mount: unknown): string | undefined {
   let type: string | undefined;
@@ -890,7 +890,7 @@ export interface ComposeBuildModelRewrite extends ComposeModelRewrite {
 /**
  * The model of `devcontainer build --image-name <devspace image>` (and of `read-configuration`): the rewrites of
  * composeUpModel for every service, and for the dev service a build of its own image `<project>-<service>`, which the
- * CLI then tags as the devspace image (CLI 0.89.0, `build`: `OA=mA||RA.image||mp(…)` … `Oe(q,"tag",OA,bA)`):
+ * CLI then tags as the devspace image (CLI 0.90.0, `build`: `ZA=wA||RA.image||Mp(…)` … `qe(q,"tag",ZA,kA)`):
  * - with a `build` in the repository: that build (with `dockerfile_inline` written to COMPOSE_DEV_DOCKERFILE, because
  *   the CLI reads the Dockerfile itself and knows only `build.dockerfile`: function `lp`,
  *   `dockerfilePath:r.dockerfile??"Dockerfile"`). A Dockerfile file too: its checked text (`p.dockerfiles`) is written
@@ -901,7 +901,7 @@ export interface ComposeBuildModelRewrite extends ComposeModelRewrite {
  * - image-only: a synthesized build `FROM <image>`. Otherwise the CLI names the image of the Features
  *   `vsc-<repository folder name>-<hash of the folder>` (function `Go`), the same name for every devspace of a
  *   repository with that name, and a concurrent build of another devspace could move the tag.
- * The CLI resolves a relative `dockerfile` against the context (`f.path.isAbsolute(CA)?CA:SG.default.resolve(uA,CA)`);
+ * The CLI resolves a relative `dockerfile` against the context (`f.path.isAbsolute(CA)?CA:vL.default.resolve(BA,CA)`);
  * ours are absolute. With `prepared` (a prepare), the dev service builds the prepared devspace image and the other
  * built services carry prepared names (ComposePreparedImages). Throws like composeUpModel.
  */

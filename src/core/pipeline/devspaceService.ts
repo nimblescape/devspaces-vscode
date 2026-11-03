@@ -3812,7 +3812,7 @@ export class DevspaceService extends OperationBase {
   /**
    * Recreate offer: whether the `up` that creates the removed dev container again leaves the containers of the other
    * services as they are. Without its dev container, the Dev Container CLI runs `docker compose up` without
-   * `--no-recreate` (CLI 0.89.0: `(s||e.expectExistingContainer)&&b.push("--no-recreate")`, `s` the existing dev
+   * `--no-recreate` (CLI 0.90.0: `(s||e.expectExistingContainer)&&b.push("--no-recreate")`, `s` the existing dev
    * container; `--expect-existing-container` fails without it: "The expected container does not exist."), so Compose
    * recreates each other service whose configuration hash or image differs (label com.docker.compose.image). So the
    * offer needs: the model of this run is the one of the build record (modelOfContainers: no changed configuration, no
@@ -5136,7 +5136,7 @@ export class DevspaceService extends OperationBase {
    * gets, and the image metadata) and that does not exist yet is created with the labels of the devspace
    * (additionalVolumeLabels), so that it is the devspace's own; then the own volumes and the existing additional
    * volumes of other devspaces of the same owner are recorded (recordedVolumes). An existing volume keeps its labels
-   * (Docker does not change them). A name with `${devcontainerId}` is not among them: the Dev Container CLI 0.89.0
+   * (Docker does not change them). A name with `${devcontainerId}` is not among them: the Dev Container CLI 0.90.0
    * resolves it only at `up` (read-configuration substitutes it only for an existing container), so Docker creates that
    * volume without labels, and it is never the devspace's (for a single container; the volumes of the `mounts` of
    * Docker Compose come with the real ID, composeMountVolumes). A volume that cannot be created is logged: Docker
