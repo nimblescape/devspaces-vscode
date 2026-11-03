@@ -3,9 +3,13 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
+## 0.6.1
+
+**Extension ID and display name:** Devspaces keeps the extension ID `nimblescape.nimblescape-devspaces-2` of the versions 0.1.0 and 0.2.0, and its display name is now **nimblescape Devspaces**, without the 2. VS Code updates an installation of 0.2.0 to this version, and your settings `devspaces.*` and the links stay as they are: `vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name` and `vscode://nimblescape.nimblescape-devspaces-2/course?repository=owner/name-<username>`. Version 0.6.0 had the extension ID `nimblescape.nimblescape-devspaces` and was not published on the Marketplace, so this version brings its changes, which the section 0.6.0 lists. The repository is now [nimblescape/devspaces-vscode](https://github.com/nimblescape/devspaces-vscode).
+
 ## 0.6.0
 
-**Back to the first extension ID:** Devspaces is again `nimblescape.nimblescape-devspaces` with the display name **nimblescape Devspaces**, after the versions 0.1.0 and 0.2.0 below as nimblescape Devspaces 2 (`nimblescape.nimblescape-devspaces-2`). VS Code does not move an installation from one ID to the other: install nimblescape Devspaces and uninstall nimblescape Devspaces 2, because both use the same commands and views. Your settings `devspaces.*` stay. Links use the ID of the new installation: `vscode://nimblescape.nimblescape-devspaces/open?repository=owner/name` and `vscode://nimblescape.nimblescape-devspaces/course?repository=owner/name-<username>`. The repository is now [nimblescape/devspaces-vscode](https://github.com/nimblescape/devspaces-vscode).
+**Extension ID:** this version had the extension ID `nimblescape.nimblescape-devspaces` with the display name **nimblescape Devspaces**. It was not published on the Marketplace; version 0.6.1 brings its changes with the extension ID `nimblescape.nimblescape-devspaces-2`.
 
 **Several GitHub accounts:** Devspaces uses every GitHub account of VS Code that you allowed for Devspaces, and the view shows one list for all of them. Each account loads its own list with its own token. A devspace belongs to the account that created it and always opens with that account; a new devspace uses the account with the highest permission on the repository. The tooltip of a row names the account, and with more than one account the row of a devspace starts with its login. **Start with Account…** in the context menu of a repository that two or more accounts can access starts the devspace of the account that you select. **Add GitHub Account…** in the title bar of the view adds an account, and Devspaces asks once about a GitHub account of VS Code that it does not use yet. A link asks GitHub with each account, and a course link opens the repository of the login in its name with that account. When an account leaves, only the windows of its devspaces close. **Remove Devspaces from This Docker Engine…** deletes the devspaces of all your accounts in Devspaces, if you agree. See [Several GitHub accounts](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#several-github-accounts).
 
@@ -31,7 +35,7 @@ takes the section of a version as the notes of its GitHub release.
 
 ## 0.2.0
 
-**Course links:** a course link `vscode://nimblescape.nimblescape-devspaces/course?repository=owner/name-<username>` opens your own repository of a course, for example the repository that GitHub Classroom creates for you when you accept an assignment. Devspaces asks for the GitHub sign-in first if you are not signed in, puts the login of the signed-in account in place of `<username>`, and then opens the repository as a link `/open?repository=owner/name` does. A course link without `<username>` gets `-<username>` at the end of the name. When Devspaces is not installed, VS Code first offers to install it from the Visual Studio Marketplace. The section [Course links](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#course-links) of the user guide shows the link for a web page.
+**Course links:** a course link `vscode://nimblescape.nimblescape-devspaces-2/course?repository=owner/name-<username>` opens your own repository of a course, for example the repository that GitHub Classroom creates for you when you accept an assignment. Devspaces asks for the GitHub sign-in first if you are not signed in, puts the login of the signed-in account in place of `<username>`, and then opens the repository as a link `/open?repository=owner/name` does. A course link without `<username>` gets `-<username>` at the end of the name. When Devspaces is not installed, VS Code first offers to install it from the Visual Studio Marketplace. The section [Course links](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#course-links) of the user guide shows the link for a web page.
 
 ## 0.1.0
 
@@ -45,7 +49,7 @@ The first version.
 
 **Safe updates:** when a newer image is available, Devspaces tells you before it updates the container (setting devspaces.updateContainer). The files in the workspace are kept.
 
-**Open from a link:** a link `vscode://nimblescape.nimblescape-devspaces/open?repository=owner/name`, for example on a website, opens the repository in its devspace. Devspaces asks before a link creates a devspace.
+**Open from a link:** a link `vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name`, for example on a website, opens the repository in its devspace. Devspaces asks before a link creates a devspace.
 
 **Switch and reopen:** **Switch Devspace…** and the status bar switch between your devspaces. When the window that you closed last was connected to a devspace, the next start of VS Code opens that devspace again.
 

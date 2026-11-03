@@ -13,7 +13,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { DOCKER_CONFIG_FOLDER, GH_CONFIG_FOLDER, GITHUB_TOKEN_FILE } from '../../../src/core/names';
 
-export const EXTENSION_ID = 'nimblescape.nimblescape-devspaces';
+export const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
 
 /** The container of this start of VS Code (prepare.ts). */
 export interface Seed {
