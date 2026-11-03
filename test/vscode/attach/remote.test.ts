@@ -245,4 +245,13 @@ describe('the window of a devspace on a Docker engine over SSH', () => {
     assert.strictEqual(local(['ps', '-aq', '--filter', `label=${LABEL_HELPER}`]), '', 'A container of the helper image on the local Docker');
     assert.strictEqual(local(['volume', 'ls', '-q', '--filter', `label=${LABEL_DEVSPACE_ID}`]), '', 'A devspace volume on the local Docker');
   });
+
+  // The last test: the filters of both Docker pipes (src/core/relay/dockerPipeRules.ts) let every request of this run
+  // through, of the Dev Containers extension and of Devspaces.
+  it('refuses no Docker request of the window or of the extension', () => {
+    const refused = channelLog('Devspaces')
+      .split('\n')
+      .filter((line) => /The Docker pipe of .* refused /.test(line));
+    assert.deepStrictEqual(refused, [], 'A Docker pipe refused a request that is needed: add it to its list in dockerPipeRules.ts');
+  });
 });

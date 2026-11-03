@@ -10,14 +10,17 @@
 // that connection (relayDockerDial); when it ended meanwhile, the connection runs its own `ssh … docker system
 // dial-stdio`. For the WSL distribution of Devspaces, from the first Docker call of an operation there (BootstrapDocker,
 // servePipe), and every Docker call of the extension there uses it: each connection runs its own `wsl.exe …
-// docker system dial-stdio`, which needs no login, so the pipe never depends on a connection of the relay. No `vscode`.
+// docker system dial-stdio`, which needs no login, so the pipe never depends on a connection of the relay. The pipe
+// lets through only the requests that the Docker calls of the extension need (extensionPipeRule, dockerPipeRules.ts).
+// No `vscode`.
 import { randomBytes } from 'crypto';
-import type * as net from 'net';
+import type { Duplex } from 'stream';
 import { hostAccessOf, transportProgramOf } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import type { Logger, StartedByteProcess } from '../ports';
 import type { RelayConnection } from './connection';
 import { DockerPipe, processDockerDial, relayDockerDial } from './dockerPipe';
+import { extensionPipeRule } from './dockerPipeRules';
 import { dockerPipeAddress } from './pipeAddress';
 
 /**
@@ -105,7 +108,7 @@ export class HostPipes {
       logger,
       host,
     );
-    const connect = async (socket: net.Socket): Promise<void> => {
+    const connect = async (socket: Duplex): Promise<void> => {
       // The WSL distribution: always its own `dial-stdio`, so that the calls never depend on a connection of the relay.
       const connection = access.kind === 'wsl' ? undefined : this.deps.relayConnection(host);
       if (connection !== undefined) {
@@ -123,7 +126,7 @@ export class HostPipes {
       try {
         // A new random address for each pipe: no other window and no other user knows it beforehand.
         const address = dockerPipeAddress((this.deps.randomId ?? (() => randomBytes(8).toString('hex')))(), platform, platform === 'win32' ? '' : this.deps.base());
-        const pipe = await DockerPipe.listen({ address, connect, logger, name, platform, inUseWaitMs: 0 });
+        const pipe = await DockerPipe.listen({ address, connect, requests: extensionPipeRule, logger, name, platform, inUseWaitMs: 0 });
         this.wslFailedAt.delete(host);
         if (this.disposed) pipe.close();
         else entry.pipe = pipe;

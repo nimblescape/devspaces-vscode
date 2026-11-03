@@ -102,6 +102,11 @@ function echoRelay(): RelayConnection {
   return { openDocker: () => extension.open('docker') } as unknown as RelayConnection;
 }
 
+/** A Docker request that `name` tells apart from the others (its query): the pipe lets only HTTP requests through. */
+function ping(name: string): string {
+  return `GET /_ping?${name} HTTP/1.1\r\n\r\n`;
+}
+
 /** Sends `text` through the socket, ends it, and resolves with what came back once it closed. */
 function roundTrip(socketPath: string, text: string): Promise<string> {
   return new Promise((resolve) => {
@@ -183,7 +188,7 @@ describe('serveWindowPipe', () => {
     const recovered = await serve(address.dockerHost, undefined, deps({ logger: found, knownHosts: async () => ['other-box', 'build-box'], relayConnection }));
     expect(recovered.kind).toBe('served');
     expect(found.lines[0]).toBe(`info The devspace of the container ${CONTAINER} is not known. Its Docker pipe goes to build-box, for which this computer made the address.`);
-    await expect(roundTrip(address.path, 'x')).resolves.toBe('relay: x');
+    await expect(roundTrip(address.path, ping('x'))).resolves.toBe(`relay: ${ping('x')}`);
     expect(relayConnection).toHaveBeenCalledWith('build-box');
     if (recovered.kind === 'served') recovered.pipe.close();
     expect((await serve(address.dockerHost, devspace('build-box'), deps({ logger: log }))).kind).toBe('served');
@@ -206,7 +211,7 @@ describe('serveWindowPipe', () => {
     expect(relayConnection).toHaveBeenCalledWith('build-box');
     expect(dialStdio).not.toHaveBeenCalled();
     // The answer about the removal mark holds for the connections of the next 2 seconds.
-    await expect(roundTrip(address.path, 'x')).resolves.toBe('relay: x');
+    await expect(roundTrip(address.path, ping('x'))).resolves.toBe(`relay: ${ping('x')}`);
     expect(engineRemoved).toHaveBeenCalledTimes(1);
     // A pipe that is served while the engine has the removal mark: each connection runs its own dial-stdio.
     removed = true;
@@ -217,7 +222,7 @@ describe('serveWindowPipe', () => {
     expect(relayConnection).toHaveBeenCalledTimes(2);
     // Without ssh, the connection ends with the reason.
     dialStdio.mockReturnValue(undefined);
-    await expect(roundTrip(marked.path, 'x')).resolves.toBe('');
+    await expect(roundTrip(marked.path, ping('x'))).resolves.toBe('');
     expect(log.lines.at(-1)).toBe(`warn The Docker pipe of ${CONTAINER} could not reach the Docker engine: the program of its transport (ssh or wsl.exe) was not found, or marked-box has no transport`);
   });
 
@@ -230,27 +235,27 @@ describe('serveWindowPipe', () => {
     const relayConnection = vi.fn<WindowPipeDeps['relayConnection']>(() => new Promise((resolve) => (open = resolve)));
     await serve(address.dockerHost, devspace('build-box'), deps({ logger: log, relayConnection, dialStdio, relayWaitMs: 1_000 }));
     // Two connections while the worker opens the connection: one open, and each logs in itself after the wait.
-    await expect(Promise.all([roundTrip(address.path, 'first'), roundTrip(address.path, 'second')])).resolves.toEqual(['first', 'second']);
+    await expect(Promise.all([roundTrip(address.path, ping('first')), roundTrip(address.path, ping('second'))])).resolves.toEqual([ping('first'), ping('second')]);
     expect(relayConnection).toHaveBeenCalledTimes(1);
     expect(log.lines.filter((line) => line.includes('is not open'))).toEqual([
       `info The connection of the relay to build-box is not open after 1 s. Until it is, each Docker connection of ${CONTAINER} logs in itself.`,
     ]);
     // The next one logs in itself at once while the open goes on.
     const startedAt = Date.now();
-    await expect(roundTrip(address.path, 'between')).resolves.toBe('between');
+    await expect(roundTrip(address.path, ping('between'))).resolves.toBe(ping('between'));
     expect(Date.now() - startedAt).toBeLessThan(900);
     expect(relayConnection).toHaveBeenCalledTimes(1);
     // The open goes on; the next connections go through the connection that it opened (as relayConnections.get).
     const opened = echoRelay();
     open(opened);
     relayConnection.mockResolvedValue(opened);
-    await expect(roundTrip(address.path, 'third')).resolves.toBe('relay: third');
+    await expect(roundTrip(address.path, ping('third'))).resolves.toBe(`relay: ${ping('third')}`);
     // A connection that the relay cannot carry (it has no stream left) logs in itself; the next one tries the relay again.
     const full = { openDocker: () => { throw new Error('The connection to build-box has no stream left.'); } } as unknown as RelayConnection;
     relayConnection.mockResolvedValueOnce(full).mockResolvedValue(echoRelay());
-    await expect(roundTrip(address.path, 'fourth')).resolves.toBe('fourth');
+    await expect(roundTrip(address.path, ping('fourth'))).resolves.toBe(ping('fourth'));
     expect(log.lines.filter((line) => line.startsWith('warn'))).toEqual([`warn A Docker connection of ${CONTAINER} goes without the connection of the relay: The connection to build-box has no stream left.`]);
-    await expect(roundTrip(address.path, 'fifth')).resolves.toBe('relay: fifth');
+    await expect(roundTrip(address.path, ping('fifth'))).resolves.toBe(`relay: ${ping('fifth')}`);
   });
 
   it('goes without the connection of the relay after an open that failed when no connection waited for it any more', async () => {
@@ -261,14 +266,14 @@ describe('serveWindowPipe', () => {
     let fail: (error: Error) => void = () => {};
     const relayConnection = vi.fn<WindowPipeDeps['relayConnection']>(() => new Promise((_, reject) => (fail = reject)));
     await serve(address.dockerHost, devspace('build-box'), deps({ logger: log, relayConnection, dialStdio, relayWaitMs: 50 }));
-    await expect(roundTrip(address.path, 'first')).resolves.toBe('first');
+    await expect(roundTrip(address.path, ping('first'))).resolves.toBe(ping('first'));
     fail(new Error('the helper image could not be prepared: it is missing'));
     await vi.waitFor(() =>
       expect(log.lines).toContain(
         `warn The Docker pipe of ${CONTAINER} goes without the connection of the relay, with an SSH login for each Docker connection: the helper image could not be prepared: it is missing`,
       ),
     );
-    await expect(roundTrip(address.path, 'second')).resolves.toBe('second');
+    await expect(roundTrip(address.path, ping('second'))).resolves.toBe(ping('second'));
     expect(relayConnection).toHaveBeenCalledTimes(1);
   });
 
@@ -284,8 +289,8 @@ describe('serveWindowPipe', () => {
       throw failure;
     });
     await serve(address.dockerHost, devspace('build-box'), deps({ logger: log, relayConnection, dialStdio }));
-    await expect(roundTrip(address.path, 'first')).resolves.toBe('first');
-    await expect(roundTrip(address.path, 'second')).resolves.toBe('second');
+    await expect(roundTrip(address.path, ping('first'))).resolves.toBe(ping('first'));
+    await expect(roundTrip(address.path, ping('second'))).resolves.toBe(ping('second'));
     expect(relayConnection).toHaveBeenCalledTimes(1);
     expect(dialStdio).toHaveBeenCalledTimes(2);
     expect(log.lines.filter((line) => line.startsWith('warn'))).toEqual([without]);
@@ -294,12 +299,12 @@ describe('serveWindowPipe', () => {
     const retried = dockerPipeAddress(dockerPipeId(COMPUTER, 'other-box', CONTAINER), 'linux', base());
     relayConnection.mockRejectedValueOnce(failure).mockResolvedValue(echoRelay());
     await serve(retried.dockerHost, devspace('other-box'), deps({ logger: again, relayConnection, dialStdio, relayRetryAfterMs: 0 }));
-    await expect(roundTrip(retried.path, 'first')).resolves.toBe('first');
-    await expect(roundTrip(retried.path, 'second')).resolves.toBe('relay: second');
+    await expect(roundTrip(retried.path, ping('first'))).resolves.toBe(ping('first'));
+    await expect(roundTrip(retried.path, ping('second'))).resolves.toBe(`relay: ${ping('second')}`);
     expect(again.lines.filter((line) => !line.includes('listens on'))).toEqual([
-      `info Docker pipe of ${CONTAINER}: a connection`,
+      `info Docker pipe of ${CONTAINER}: GET /_ping`,
       without,
-      `info Docker pipe of ${CONTAINER}: a connection`,
+      `info Docker pipe of ${CONTAINER}: GET /_ping`,
       `info The Docker pipe of ${CONTAINER} goes through the connection of the relay again.`,
     ]);
   });
@@ -314,13 +319,13 @@ describe('serveWindowPipe', () => {
     });
     let open: RelayConnection | undefined;
     await serve(address.dockerHost, devspace('build-box'), deps({ logger: log, relayConnection, dialStdio, openRelayConnection: () => open }));
-    await expect(roundTrip(address.path, 'first')).resolves.toBe('first');
+    await expect(roundTrip(address.path, ping('first'))).resolves.toBe(ping('first'));
     // The worker of an operation opened the connection (relayConnections.get): the next connection uses it, within RELAY_RETRY_AFTER_MS.
     open = echoRelay();
-    await expect(roundTrip(address.path, 'second')).resolves.toBe('relay: second');
+    await expect(roundTrip(address.path, ping('second'))).resolves.toBe(`relay: ${ping('second')}`);
     expect(relayConnection).toHaveBeenCalledTimes(1);
     expect(dialStdio).toHaveBeenCalledTimes(1);
-    expect(log.lines.filter((line) => !line.includes('listens on') && !line.includes(': a connection'))).toEqual([
+    expect(log.lines.filter((line) => !line.includes('listens on') && !line.includes(': GET /_ping'))).toEqual([
       `warn The Docker pipe of ${CONTAINER} goes without the connection of the relay, with an SSH login for each Docker connection: the worker on build-box is still being opened`,
       `info The Docker pipe of ${CONTAINER} goes through the connection of the relay again.`,
     ]);

@@ -369,7 +369,7 @@ flowchart TD
 
 - When no connection of the relay can be had, the window still works: each connection of the pipe runs its own `docker system dial-stdio`, with one SSH login each, and the log says so once. The relay is tried again for the first connection after 60 seconds.
 - The removal mark comes from **Remove Devspaces from This Docker Engine…**: a window of a devspace that the user kept on such an engine starts no worker there.
-- The pipe passes the bytes unchanged. For the log, it reads only the method and the path of the first request of the first 50 connections, without the query; after them, it counts the connections each hour.
+- The pipe lets only the requests through that the Dev Containers extension needs ([The request filter](#the-request-filter)). It does not change the bytes of a request that it lets through. For the log, it names the method and the path of the first request of the first 50 connections, without the query; after them, it counts the connections each hour.
 
 ### The Docker pipe of the extension
 
@@ -377,6 +377,28 @@ The Docker calls of Devspaces itself (`BootstrapDocker` in [`src/core/docker/boo
 
 - **SSH host:** the pipe listens from the first time that a connection of the relay to the host passed its checks, until the window closes. A Docker call of an operation on the host gets `DOCKER_HOST` with this pipe only while the connection is open and the pipe listens. Otherwise a call that only reads runs on the shell before the relay, and any other call gets `ssh://<host>`, with one login. Each connection of the pipe is a stream of the open connection, or its own `ssh … docker system dial-stdio` when that connection ended meanwhile.
 - **WSL distribution:** the pipe listens from the first Docker call of an operation there until the window closes. Each of its connections runs its own `wsl.exe -d devspaces -u root --cd / --exec docker system dial-stdio`, also while a connection of the relay is open, so that these calls never depend on that connection. `ssh://` is never used for the distribution.
+- This pipe also lets only the requests through that Devspaces needs ([The request filter](#the-request-filter)).
+
+### The request filter
+
+Each Docker pipe has a list of the requests of the Docker API that it lets through ([`src/core/relay/dockerPipeRules.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/dockerPipeRules.ts), [`src/core/relay/dockerRequests.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/dockerRequests.ts)). A request is a method and a path, without the version of the API and without the query. The pipe refuses every other request.
+
+| Pipe | Program | Allowed requests |
+| --- | --- | --- |
+| The Docker pipe of the window | The Dev Containers extension: it attaches the window to the container of the devspace | `HEAD` and `GET /_ping`, `GET /version`, `GET /info`, `GET /events`; `GET /containers/json`, `GET /containers/<id>/json`, `POST /containers/<id>/start`; `POST /containers/<id>/exec`, `POST /exec/<id>/start`, `POST /exec/<id>/resize`, `GET /exec/<id>/json`; `GET /images/<name>/json` |
+| The Docker pipe of the extension | Devspaces itself: the checks of the engine and of the helper image, the build of the helper image, and **Remove Devspaces from This Docker Engine…** | `HEAD` and `GET /_ping`, `GET /version`, `GET /info`, `GET /system/df`; `GET /containers/json`, `GET /containers/<id>/json`, `DELETE /containers/<id>`; `GET /images/json`, `GET /images/<name>/json`, `DELETE /images/<name>`; `POST /build`, `POST /session`, `POST /grpc` (the build, with BuildKit or the classic builder); `GET /volumes`, `GET /volumes/<name>`, `DELETE /volumes/<name>` |
+
+So the Dev Containers extension cannot create, build, or remove anything through the pipe of the window: **Rebuild Container** fails there with the message of the refusal. The worker of Devspaces never starts through the pipe of the extension: it starts behind the relay, or with `ssh://<host>`.
+
+**How a pipe reads the requests.** A connection can carry several requests one after the other (keep-alive). The pipe reads the head of each request (at most 64 KiB) and decides before it lets any byte of the request go on. It follows the body of a request by its `Content-Length`, or by its chunks (`Transfer-Encoding: chunked`), to find the next request. A request with two lengths, with a length and a transfer coding, with another transfer coding, with trailer fields after its chunks, or with a CR, an LF or a NUL character alone in its head is refused, because the engine could read another body or another next request than the pipe.
+
+**Exec and attach.** A request with `Upgrade` (for example `POST /exec/<id>/start`, or `POST /session` of BuildKit) takes the connection over: after the answer `101` of the engine, the bytes are the input and the output of a program, and the pipe passes them unchanged. Until that answer, the pipe holds the next bytes of the client. After any other answer (for example `404` for an exec that does not exist), the pipe ends the direction of the client to the engine, so that no further request reaches the engine on that connection. `POST /exec/<id>/start` and `POST /containers/<id>/attach` without `Upgrade` are refused: the engine would take the connection over after the answer `200`. A request with `Upgrade` must be the first request of its connection, with a length (not chunked): the Docker CLI opens a new connection for each of them, and so the first answer on the connection is the answer to it.
+
+**A refused request.** The client gets the answer `403` with the message of the Docker API (`{"message": "Devspaces does not allow <method> <path> through the Docker pipe of <name>: <reason>."}`), and the Docker CLI shows that message. Nothing of the request reaches the engine, and the connection closes. The log of Devspaces has a warning with the method, the path, and the reason.
+
+**Limits.** The filter checks the method and the path only. It does not check the query or the body: for example, the options of an exec (such as `Privileged`), or which container a request names. Paths with other characters than those of names, IDs and image references (for example `%`, `..`, or `//`) are refused.
+
+**Tests.** Unit tests for the parser, the lists, and the pipes. The Docker test builds an image through the pipe of the extension, also through a fake `wsl.exe`, and checks that nothing is refused. The CI job "vscode attach remote" fails when a pipe refused a request during the run ([`test/vscode/attach/remote.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/vscode/attach/remote.test.ts)). The lists come from these runs: in the attach, the Dev Containers extension sent `HEAD /_ping`, `GET /version`, `GET /containers/<id>/json`, `POST /containers/<id>/exec`, `POST /exec/<id>/start`, `GET /exec/<id>/json`, and `POST /exec/<id>/resize`. The other requests of the list of the window are reads and the start of a stopped container, which the Dev Containers extension may send in other cases.
 
 More rules: [architecture.md, The Docker pipe](architecture.md#the-docker-pipe).
 
@@ -597,7 +619,6 @@ The CI job "vscode attach remote" counts the logins of the open of a restored wi
 ## Not implemented
 
 - **The oldest API version of the Docker CLI of this computer.** A Docker CLI does not name it, so an engine that is older than that version is not refused before the attach; its Docker calls fail with the message of Docker. The reads on the shell before the relay run the Docker CLI of the SSH host, which is not checked either.
-- **Filter of Docker API requests.** The Docker pipes pass every request. They log the method and the path of the first requests, but refuse none.
 
 ## Where the code differs from the design
 
@@ -610,12 +631,13 @@ The design [design/remote-devspaces-one-ssh-login.md](design/remote-devspaces-on
 | The name of the Docker pipe is random and kept in the local records. | The id of the pipe is a hash of the ID of this computer, the Docker host, and the container. So each open of a devspace gives the same window URI. |
 | The start script adds the public key to `authorized_keys` before it starts the worker. | After a modal question, one command on the shell before the relay adds the key, and a separate login checks it. |
 | The Docker CLI of Devspaces is for the window of a remote devspace. | It is also used for the Docker calls of Devspaces itself on a remote host, in every window. |
+| The first version of the pipe only logs the requests. | Each Docker pipe refuses every request that is not on its list, also the pipe of the extension ([The request filter](#the-request-filter)). |
 
 ## Tests
 
 - **Unit tests** (`npm test`): the frames, the streams and the flow control, the start script, the shell before the relay, the connections, the Docker pipes and their addresses, and the relay itself, also behind a local `sh -s` with the start script ([`src/helperChannel/relay.e2e.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/helperChannel/relay.e2e.test.ts)). The WSL parts with fake processes.
 - **Docker tests** (`npm run test:docker`): a remote host through an SSH server in a container ([`test/docker/sshd/Dockerfile`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/docker/sshd/Dockerfile)), whose worker runs behind the relay ([`test/docker/remoteHost.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/docker/remoteHost.test.ts)); the login with a password and an unknown host key through the real `ssh` and `SSH_ASKPASS`, and the key of Devspaces ([`test/docker/sshLogin.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/docker/sshLogin.test.ts)); the WSL distribution through a fake `wsl.exe`, which takes exactly the arguments of the transport and runs the command on the runner ([`test/docker/helperChannel.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/docker/helperChannel.test.ts)); and the setup and upgrade scripts of the distribution as root in a container of Debian 13 ([`test/docker/wslProvision.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/docker/wslProvision.test.ts), [`test/docker/wslUpgrade.test.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/test/docker/wslUpgrade.test.ts)).
-- **VS Code test** (CI job "vscode attach remote" in [`.github/workflows/ci.yml`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/.github/workflows/ci.yml)): VS Code opens the window of a devspace on a Docker engine over SSH. The window downloads the Docker CLI of Devspaces, the Dev Containers extension attaches through the Docker pipe, and the test allows one SSH login for the open.
+- **VS Code test** (CI job "vscode attach remote" in [`.github/workflows/ci.yml`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/.github/workflows/ci.yml)): VS Code opens the window of a devspace on a Docker engine over SSH. The window downloads the Docker CLI of Devspaces, the Dev Containers extension attaches through the Docker pipe, and the test allows one SSH login for the open. It fails when a Docker pipe refused a request.
 - CI has no Windows computer with WSL 2, so the WSL distribution is tested only through the fake `wsl.exe` and the scripts in a Debian container.
 
 ## Source files
@@ -643,6 +665,8 @@ The design [design/remote-devspaces-one-ssh-login.md](design/remote-devspaces-on
 | [`src/core/relay/dockerPipe.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/dockerPipe.ts) | The server of a Docker pipe, `dial-stdio` as a way without the relay |
 | [`src/core/relay/windowPipe.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/windowPipe.ts) | The Docker pipe of the window |
 | [`src/core/relay/hostPipes.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/hostPipes.ts) | The Docker pipe of the extension for each host |
+| [`src/core/relay/dockerRequests.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/dockerRequests.ts) | The parser of the requests of a connection, and the filtered connection |
+| [`src/core/relay/dockerPipeRules.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/relay/dockerPipeRules.ts) | The lists of the requests that each pipe lets through |
 | [`src/core/docker/bootstrapDocker.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/docker/bootstrapDocker.ts) | The Docker CLI calls of the extension, and how each one reaches its host |
 | [`src/core/docker/dockerCliPin.json`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/docker/dockerCliPin.json) | The pin of the Docker CLI of Devspaces |
 | [`src/core/docker/ownDockerCli.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/docker/ownDockerCli.ts), [`dockerDownload.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/docker/dockerDownload.ts), [`archive.ts`](https://github.com/nimblescape/nimblescape-devspaces-2/blob/main/src/core/docker/archive.ts) | The download, the check, and the unpack of the Docker CLI of Devspaces |
