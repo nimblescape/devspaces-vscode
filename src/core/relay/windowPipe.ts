@@ -6,8 +6,9 @@
 // names (`settings.host`) is served when it is the pipe that this computer made for the devspace of the window
 // (pipeAddress.ts). Each connection goes through the connection of the relay to the host of the devspace; on an engine
 // with the removal mark, through its own `docker system dial-stdio` over SSH, so that no worker sets Devspaces up there
-// again. No `vscode`.
-import type * as net from 'net';
+// again. The pipe lets through only the requests that the Dev Containers extension needs (windowPipeRule,
+// dockerPipeRules.ts). No `vscode`.
+import type { Duplex } from 'stream';
 import * as path from 'path';
 import { dockerHostOf, hostAccessOf } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
@@ -15,6 +16,7 @@ import type { Logger, StartedByteProcess } from '../ports';
 import type { Devspace } from '../types';
 import type { RelayConnection } from './connection';
 import { DockerPipe, processDockerDial, relayDockerDial } from './dockerPipe';
+import { windowPipeRule } from './dockerPipeRules';
 import { dockerPipeAddress, dockerPipeBase, dockerPipeId, existingFolder, parseDockerPipeHost } from './pipeAddress';
 
 /** How long the answer of WindowPipeDeps.engineRemoved holds for the next connections of the pipe. */
@@ -178,7 +180,7 @@ export async function serveWindowPipe(dockerHost: string, containerName: string,
       return opening;
     };
     const waitMs = deps.relayWaitMs ?? RELAY_WAIT_MS;
-    const throughRelay = async (connection: RelayConnection, socket: net.Socket): Promise<void> => {
+    const throughRelay = async (connection: RelayConnection, socket: Duplex): Promise<void> => {
       try {
         relayDockerDial(connection, socket);
       } catch (error) {
@@ -187,7 +189,7 @@ export async function serveWindowPipe(dockerHost: string, containerName: string,
         return direct(socket);
       }
     };
-    const connect = async (socket: net.Socket): Promise<void> => {
+    const connect = async (socket: Duplex): Promise<void> => {
       if (await engineRemoved()) return direct(socket);
       const open = deps.openRelayConnection(host);
       if (open !== undefined) {
@@ -215,7 +217,7 @@ export async function serveWindowPipe(dockerHost: string, containerName: string,
       if ('error' in outcome) return direct(socket);
       return throughRelay(outcome.connection, socket);
     };
-    const pipe = await DockerPipe.listen({ address, connect, logger, name: containerName, platform: deps.platform, inUseWaitMs: deps.inUseWaitMs });
+    const pipe = await DockerPipe.listen({ address, connect, requests: windowPipeRule, logger, name: containerName, platform: deps.platform, inUseWaitMs: deps.inUseWaitMs });
     return { kind: 'served', pipe };
   } catch (error) {
     return refuse(errorMessage(error));

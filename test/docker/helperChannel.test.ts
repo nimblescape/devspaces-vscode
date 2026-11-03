@@ -40,7 +40,7 @@ import {
 import { PIPE_LOADER, bundleHash, encodeBundle } from '../../src/core/loader/pipeLoader';
 import { LABEL_HELPER_CHANNEL, LABEL_HELPER_RUN } from '../../src/core/names';
 import { helperDockerSocket } from '../../src/core/helper/helperImages';
-import type { StartedByteProcess, StartedProcess } from '../../src/core/ports';
+import type { Logger, StartedByteProcess, StartedProcess } from '../../src/core/ports';
 import { NodeProcessRunner } from '../../src/core/process';
 import type { RelayConnection } from '../../src/core/relay/connection';
 import { RelayConnections, relayAccess } from '../../src/core/relay/connections';
@@ -361,7 +361,15 @@ describe('the helper channel with the real Docker engine', () => {
     let hostPipes: HostPipes | undefined;
     const connections = new RelayConnections({ logger: log, onUse: (host) => void hostPipes?.serve(host) });
     const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'host-pipe-'));
-    hostPipes = new HostPipes({ logger: log, platform: process.platform, base: () => folder, relayConnection: (host) => connections.get(host), dialStdio: () => undefined });
+    // The filter of the pipe (dockerPipeRules.ts) must let every request of the query and the build through.
+    const refusals: string[] = [];
+    const pipeLog: Logger = Object.assign(Object.create(log) as Logger, {
+      warn: (message: string) => {
+        if (message.includes(' refused ')) refusals.push(message);
+        log.warn(message);
+      },
+    });
+    hostPipes = new HostPipes({ logger: pipeLog, platform: process.platform, base: () => folder, relayConnection: (host) => connections.get(host), dialStdio: () => undefined });
     const pipes = hostPipes;
     const viaPipe = new BootstrapDocker(byteRunner, run.dockerPath, env, log, process.platform, { dockerPipe: (pipeTarget) => pipes.dockerHost(pipeTarget.host) });
     const context = fs.mkdtempSync(path.join(os.tmpdir(), 'host-pipe-build-'));
@@ -381,6 +389,7 @@ describe('the helper channel with the real Docker engine', () => {
       expect(built).toBe(cli.ok(['image', 'inspect', '--format', '{{.Id}}', tag]));
       // The inspect, the build, and the list of the image by its build label went over Docker streams of the connection.
       expect(connection.streamsOpened - opened).toBeGreaterThanOrEqual(3);
+      expect(refusals).toEqual([]);
       channel.close();
       await endRelay(connections, transport, name);
     } finally {
@@ -422,8 +431,17 @@ describe('the helper channel with the real Docker engine', () => {
     const shells = new RemoteShells({ logger: log, start: startShell });
     const connections = new RelayConnections({ logger: log });
     const pipeFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'wsl-pipe-'));
+    const context = fs.mkdtempSync(path.join(os.tmpdir(), 'wsl-build-'));
+    const buildTag = `devspaces-wsl-build-test:${run.runId}`;
+    const refusals: string[] = [];
+    const pipeLog: Logger = Object.assign(Object.create(log) as Logger, {
+      warn: (message: string) => {
+        if (message.includes(' refused ')) refusals.push(message);
+        log.warn(message);
+      },
+    });
     const hostPipes = new HostPipes({
-      logger: log,
+      logger: pipeLog,
       platform: process.platform,
       base: () => pipeFolder,
       relayConnection: (host) => connections.get(host),
@@ -455,15 +473,23 @@ describe('the helper channel with the real Docker engine', () => {
       expect(probe?.engine).toEqual(engineIdentity(cli.ok([...ENGINE_IDENTITY_ARGS])));
 
       // The Docker calls of the extension in an operation there: through its pipe, each connection with its own
-      // dial-stdio (never through the connection of the relay); the end of standard input of `run -i` reaches `cat`.
+      // dial-stdio (never through the connection of the relay); a build, whose BuildKit session takes its connection
+      // over. The filter of the pipe (dockerPipeRules.ts) refuses a call that the extension does not make.
       const opened = connections.get(WSL_HOST)!.streamsOpened;
       const wslTarget = remoteDockerTarget(WSL_HOST);
       const version = await runWithDockerTarget(wslTarget, () => extensionDocker.run(['version', '--format', '{{.Server.Version}}']));
       expect({ exitCode: version.exitCode, stdout: version.stdout.trim() }).toEqual({ exitCode: 0, stdout: cli.ok(['version', '--format', '{{.Server.Version}}']) });
-      const ran = await runWithDockerTarget(wslTarget, () =>
-        extensionDocker.run(['run', '--rm', '-i', ...runLabelArgs, '--entrypoint', 'sh', helperTag, '-c', 'cat; echo " and the end"'], { input: 'the input', timeoutMs: 120_000 }),
+      fs.writeFileSync(path.join(context, 'Dockerfile'), `FROM ${helperTag}\nLABEL ${TEST_RUN_LABEL}=${run.runId}\n`);
+      const built = await runWithDockerTarget(wslTarget, () =>
+        timings.measure('docker build through the Docker pipe of the WSL distribution', () =>
+          extensionDocker.buildImage({ tag: buildTag, dockerfile: path.join(context, 'Dockerfile'), context, labels: { [TEST_RUN_LABEL]: run.runId } }),
+        ),
       );
-      expect({ exitCode: ran.exitCode, stdout: ran.stdout }).toEqual({ exitCode: 0, stdout: 'the input and the end\n' });
+      expect(built).toBe(cli.ok(['image', 'inspect', '--format', '{{.Id}}', buildTag]));
+      const ran = await runWithDockerTarget(wslTarget, () => extensionDocker.run(['run', '--rm', ...runLabelArgs, '--entrypoint', 'true', helperTag], { timeoutMs: 120_000 }));
+      expect(ran.exitCode).not.toBe(0);
+      expect(ran.stderr).toContain(`Devspaces does not allow POST /containers/create through the Docker pipe of the extension on ${WSL_HOST}: Devspaces does not need it.`);
+      expect(refusals).toEqual([`The Docker pipe of the extension on ${WSL_HOST} refused POST /containers/create: Devspaces does not need it.`]);
       expect(connections.get(WSL_HOST)!.streamsOpened).toBe(opened);
       expect(calls().filter((line) => line.endsWith('--exec docker system dial-stdio')).length).toBeGreaterThanOrEqual(2);
       expect(hostPipes.dockerHost(WSL_HOST)).toMatch(/^unix:\/\/.*\/docker\.sock$/);
@@ -478,6 +504,7 @@ describe('the helper channel with the real Docker engine', () => {
       connections.dispose();
       fs.rmSync(folder, { recursive: true, force: true });
       fs.rmSync(pipeFolder, { recursive: true, force: true });
+      fs.rmSync(context, { recursive: true, force: true });
     }
   });
 

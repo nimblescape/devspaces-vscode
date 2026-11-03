@@ -79,6 +79,11 @@ function echoRelay(): RelayConnection {
   return { openDocker: () => extension.open('docker') } as unknown as RelayConnection;
 }
 
+/** A Docker request that `name` tells apart from the others (its query): the pipe lets only HTTP requests through. */
+function ping(name: string): string {
+  return `GET /_ping?${name} HTTP/1.1\r\n\r\n`;
+}
+
 /** Sends `text` through the socket, ends it, and resolves with what came back once it closed. */
 function roundTrip(socketPath: string, text: string): Promise<string> {
   return new Promise((resolve) => {
@@ -161,13 +166,13 @@ describe('HostPipes', () => {
         throw new Error('the connection has no stream left');
       },
     } as unknown as RelayConnection;
-    await expect(roundTrip(address.path, 'x')).resolves.toBe('x');
+    await expect(roundTrip(address.path, ping('x'))).resolves.toBe(ping('x'));
     expect(dialStdio).toHaveBeenCalledTimes(2);
     expect(log.lines).toContain('info A Docker connection of the extension on build-box goes without the connection of the relay: the connection has no stream left');
     // Without ssh, the connection is closed, and the log says why.
     dialStdio.mockReturnValue(undefined);
     connection = undefined;
-    await expect(roundTrip(address.path, 'y')).resolves.toBe('');
+    await expect(roundTrip(address.path, ping('y'))).resolves.toBe('');
     expect(log.lines.at(-1)).toBe('warn The Docker pipe of the extension on build-box could not reach the Docker engine: ssh was not found');
   });
 
@@ -188,7 +193,7 @@ describe('HostPipes', () => {
     // A pipe that serves stays.
     await hostPipes.serve('build-box');
     expect(hostPipes.dockerHost('build-box')).toBe(second.dockerHost);
-    await expect(roundTrip(second.path, 'z')).resolves.toBe('relay: z');
+    await expect(roundTrip(second.path, ping('z'))).resolves.toBe(`relay: ${ping('z')}`);
   });
 
   it('logs a pipe that cannot listen, and tries again at the next serve', async () => {
@@ -236,7 +241,7 @@ describe('HostPipes', () => {
     expect(relayConnection).not.toHaveBeenCalled();
     // Without wsl.exe, the connection is closed, and the log says why.
     dialStdio.mockReturnValue(undefined);
-    await expect(roundTrip(address.path, 'y')).resolves.toBe('');
+    await expect(roundTrip(address.path, ping('y'))).resolves.toBe('');
     expect(log.lines.at(-1)).toBe(`warn The Docker pipe of the extension on ${WSL_HOST} could not reach the Docker engine: wsl.exe was not found`);
   });
 
