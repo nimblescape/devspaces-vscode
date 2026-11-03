@@ -16,8 +16,8 @@
 # The repository is the GitHub repository of the remote `origin` of the clone
 # that holds the script, with its current name on GitHub, and the extension ID
 # is publisher.name of its package.json. By the naming scheme, the name
-# nimblescape-<name>[-<n>] of the extension has the repository
-# <name>-vscode[-<n>]. The script shows what it sets up and asks before it
+# nimblescape-<name>[-<n>] of the extension has the repository <name>-vscode,
+# without the number. The script shows what it sets up and asks before it
 # changes anything. It changes nothing that already exists, so it can run
 # again; after a rename of the repository, it adds the credential of the new
 # name and names the credentials of the old names. The app is the one of the
