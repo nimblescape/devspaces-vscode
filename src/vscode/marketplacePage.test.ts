@@ -152,7 +152,7 @@ describe('the behaviors of Devspaces at the top of the Marketplace page', () => 
     expect(text).toContain(`**Devspaces: ${REMOVE_COMMAND}**`);
     for (const volume of SHARED_VOLUMES) expect(text).toContain(`\`${volume}\``);
     for (const command of uninstallCommands()) expect(text).toContain(command);
-    for (const words of ['Devspaces creates no Docker context', 'globalStorage/nimblescape.nimblescape-devspaces']) expect(text).toContain(words);
+    for (const words of ['Devspaces creates no Docker context', 'globalStorage/nimblescape.nimblescape-devspaces-2']) expect(text).toContain(words);
   });
 
   it('names the scopes, Docker, the Dev Containers CLI and the background container in the description', () => {

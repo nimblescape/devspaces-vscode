@@ -597,7 +597,7 @@ export class HelperChannels {
         wait.signal?.removeEventListener('abort', onAbort);
         settle();
       };
-      opening.then((channel) => done(() => resolve(channel)));
+      void opening.then((channel) => done(() => resolve(channel)));
     });
   }
 

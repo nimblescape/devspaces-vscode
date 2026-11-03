@@ -6302,7 +6302,6 @@ describe('the Docker host of Devspaces', () => {
   /** The local Docker of the current context while Devspaces uses a host of its list. */
   let localTarget: DockerTarget;
   let operations: DockerTarget[];
-  let resolves: number;
   let depth = 0;
   let windowDockerHost: Mock<NonNullable<ControllerDeps['windowDockerHost']>>;
   // The Docker targets of the harness of each test, for a harness of a nested describe.
@@ -6325,7 +6324,6 @@ describe('the Docker host of Devspaces', () => {
     current = dockerTargetOf('unix:///var/run/docker.sock', 'default');
     localTarget = current;
     operations = [];
-    resolves = 0;
     depth = 0;
     remote = {
       useRemoteHost: vi.fn(async () => {}),
@@ -6333,10 +6331,7 @@ describe('the Docker host of Devspaces', () => {
       chooseDockerHost: vi.fn(async () => {}),
     };
     const dockerTargets = {
-      resolve: vi.fn(async () => {
-        resolves++;
-        return current;
-      }),
+      resolve: vi.fn(async () => current),
       // As DockerTargets.current: the target of the running operation, else a fresh read.
       current: vi.fn(async () => operationDockerTarget() ?? current),
       // As DockerTargets.withOperation: a nested operation keeps the target of the outer one, and the calls of the
@@ -7379,7 +7374,7 @@ describe('Double-click on a repository row', () => {
 });
 
 describe('A link to Devspaces', () => {
-  /** The link vscode://nimblescape.nimblescape-devspaces/open?repository=<repository>, as vscode.Uri gives it. */
+  /** The link vscode://nimblescape.nimblescape-devspaces-2/open?repository=<repository>, as vscode.Uri gives it. */
   const link = (repository: string) => ({ path: '/open', query: `repository=${repository}` });
   /** The question before a link creates a devspace: linkStartConfirm, or for another owner untrustedRepository. */
   const isLinkQuestion = (message: string) => message.includes(' from a link? ') || message.endsWith(Messages.untrustedRepository(''));
@@ -7723,7 +7718,7 @@ describe('A link to Devspaces', () => {
 // The course link opens the repository of the signed-in account in a course, as GitHub Classroom names it: the name
 // of the course repository and the GitHub login of the account (ACCOUNT, octo).
 describe('A course link to Devspaces', () => {
-  /** The link vscode://nimblescape.nimblescape-devspaces/course?repository=<repository>, as vscode.Uri gives it. */
+  /** The link vscode://nimblescape.nimblescape-devspaces-2/course?repository=<repository>, as vscode.Uri gives it. */
   const courseLink = (repository: string) => ({ path: '/course', query: `repository=${repository}` });
   const isLinkQuestion = (message: string) => message.includes(' from a link? ') || message.endsWith(Messages.untrustedRepository(''));
 
