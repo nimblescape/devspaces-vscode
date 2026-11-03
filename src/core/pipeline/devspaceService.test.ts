@@ -2751,7 +2751,7 @@ describe('open: existing devspace', () => {
       const statusOfB = (ageMs = 0): WindowStatus => ({ windowId: WINDOW_B, pid: PID_B, devspaceId: ENV_ID, state: 'active', updatedAt: new Date(T0 - ageMs).toISOString() });
       const touched = (): string[] => h.docker.log.filter((line) => line.startsWith('stop ') || line.startsWith('rm '));
       const outdated = { [LABEL_CONTAINER_VERSION]: '0' };
-      /** `devcontainer up` of CLI 0.89.0 when /etc/passwd of the container lacks the user (a damaged container). */
+      /** `devcontainer up` of CLI 0.90.0 when /etc/passwd of the container lacks the user (a damaged container). */
       const damagedUp = (): DevcontainerCommandError => {
         const message = 'An error occurred setting up the container.';
         const result = { outcome: 'error' as const, message, description: message, containerId: 'container-1' };
@@ -5725,7 +5725,7 @@ describe('host access policy in the pipeline', () => {
       expect(h.helper.ups).toHaveLength(1);
     });
 
-    it('are not recorded when only `up` names them: a name with ${devcontainerId} gets no labels (Dev Container CLI 0.89.0)', async () => {
+    it('are not recorded when only `up` names them: a name with ${devcontainerId} gets no labels (Dev Container CLI 0.90.0)', async () => {
       await seedDevspace(h, { container: null });
       h.helper.config = { image: BASE_IMAGE, mounts: ['source=${devcontainerId}-history,target=/h,type=volume'] };
       h.helper.containerVolumes = ['0k5q7r2m-history', 'ab'.repeat(32), 'vscode'];

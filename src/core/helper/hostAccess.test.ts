@@ -1805,7 +1805,7 @@ describe('volumeFlagTarget', () => {
   });
 });
 
-// Dev Container CLI 0.89.0 substitutes the variables of every entry of the image metadata (and of the
+// Dev Container CLI 0.90.0 substitutes the variables of every entry of the image metadata (and of the
 // configuration and the override configuration) at `up`, before it passes the mounts to `docker run`. The policy checks
 // the resolved values (./cliVariables.ts), in the image metadata, the configuration, and the merged configuration.
 describe('host access policy: variables of the Dev Container CLI in mounts', () => {
@@ -2001,7 +2001,7 @@ describe('host access policy: names of variables', () => {
   });
 });
 
-// Dev Container CLI 0.89.0 substitutes the runArgs and the appPort of the override configuration a second time at
+// Dev Container CLI 0.90.0 substitutes the runArgs and the appPort of the override configuration a second time at
 // `up` (read-configuration substituted them once already), and it substitutes the image metadata at `up`.
 describe('host access policy: what the Dev Container CLI substitutes again at up', () => {
   const variables = helperCliVariables('acme/api');

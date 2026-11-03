@@ -924,7 +924,7 @@
     "uninstall-local": "node scripts/uninstall-local.mjs"
   },
   "devDependencies": {
-    "@devcontainers/cli": "0.89.0",
+    "@devcontainers/cli": "0.90.0",
     "@eslint/js": "^10.0.1",
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.19.2",

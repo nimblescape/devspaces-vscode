@@ -18,19 +18,19 @@ const OWN = resourceName('acme/api', ID);
 /** The name of a devspace of another repository and ID. */
 const OTHER = resourceName('acme/web', '11111111-2222-4333-8444-555555555555');
 
-// A copy of the functions `lQ` (with its table `cj`) and `nW` of the Dev Container CLI 0.89.0
+// A copy of the functions `dQ` (with its table `jj`) and `UW` of the Dev Container CLI 0.90.0
 // (node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js): how the CLI reads a `mounts` text for Docker
 // Compose, and the text that it writes for a mount into the `volumes` of the dev service of its generated compose file.
-const CLI_LQ = 'function lQ(e){return e.split(",").map(A=>A.split("=")).reduce((A,[t,i])=>({...A,[cj[t]||t]:i}),{})}';
-const CLI_NW = 'function nW(e){let A="";return e.source&&(A=`${e.source}:`),A+=e.target,A}';
-const cj: Record<string, string> = { src: 'source', destination: 'target', dst: 'target' };
-function lQ(e: string): Record<string, string | undefined> {
+const CLI_LQ = 'function dQ(e){return e.split(",").map(A=>A.split("=")).reduce((A,[t,i])=>({...A,[jj[t]||t]:i}),{})}';
+const CLI_NW = 'function UW(e){let A="";return e.source&&(A=`${e.source}:`),A+=e.target,A}';
+const jj: Record<string, string> = { src: 'source', destination: 'target', dst: 'target' };
+function dQ(e: string): Record<string, string | undefined> {
   return e
     .split(',')
     .map((A) => A.split('='))
-    .reduce((A, [t, i]) => ({ ...A, [cj[t] || t]: i }), {});
+    .reduce((A, [t, i]) => ({ ...A, [jj[t] || t]: i }), {});
 }
-function nW(e: Record<string, unknown>): string {
+function UW(e: Record<string, unknown>): string {
   let A = '';
   if (e.source) A = `${String(e.source)}:`;
   A += String(e.target);
@@ -186,11 +186,11 @@ describe('Compose `mounts` as the Dev Container CLI writes them', () => {
     expect(r).toEqual({ hostAccess: [], unsupported: [] });
   });
 
-  it('guard: the copy of lQ and nW is the code of the vendored CLI', () => {
+  it('guard: the copy of dQ and UW is the code of the vendored CLI', () => {
     const cli = readFileSync(require.resolve('@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js'), 'utf8');
     expect(cli).toContain(CLI_LQ);
     expect(cli).toContain(CLI_NW);
-    expect(cli).toContain('cj={src:"source",destination:"target",dst:"target"}');
+    expect(cli).toContain('jj={src:"source",destination:"target",dst:"target"}');
   });
 
   it('guard: whatever the CLI writes as a bind, or at the internal folder, is refused', () => {
@@ -203,8 +203,8 @@ describe('Compose `mounts` as the Dev Container CLI writes them', () => {
       { type: 'image', source: '/x', target: '/s' },
     ];
     for (const mount of vectors) {
-      const read = typeof mount === 'string' ? lQ(mount) : (mount as Record<string, unknown>);
-      const text = nW(read);
+      const read = typeof mount === 'string' ? dQ(mount) : (mount as Record<string, unknown>);
+      const text = UW(read);
       const colon = text.indexOf(':');
       const source = colon < 0 ? '' : text.slice(0, colon);
       const target = colon < 0 ? text : text.slice(colon + 1);

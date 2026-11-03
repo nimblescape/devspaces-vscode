@@ -268,22 +268,22 @@ describe('text of a failed lifecycle command in the CLI bundle', () => {
 describe('the lifecycle commands in the CLI bundle', () => {
   const bundle = fs.readFileSync(CLI_BUNDLE, 'utf8');
 
-  // What `up --skip-post-create` and `run-user-commands` do in CLI 0.89.0 (devcontainerCli.ts, runUserCommandsArgs).
+  // What `up --skip-post-create` and `run-user-commands` do in CLI 0.90.0 (devcontainerCli.ts, runUserCommandsArgs).
   it.each<[string, string]>([
     // up: --skip-post-create switches the lifecycle hooks off, so no lifecycle command runs and no marker is written.
     ['the option of up', '"skip-post-create":S'],
-    ['up without the lifecycle hooks', 'postCreateEnabled:!S,skipNonBlocking:M,prebuild:x'],
-    ['the lifecycle hooks only when enabled', 'e.lifecycleHook.enabled&&await Sd(e,r,A,s,g,C,!1)'],
+    ['up without the lifecycle hooks', 'postCreateEnabled:!S,skipNonBlocking:k,prebuild:x'],
+    ['the lifecycle hooks only when enabled', 'e.lifecycleHook.enabled&&await Nd(e,r,A,s,g,C,!1)'],
     // run-user-commands: always with the lifecycle hooks; they are its result.
-    ['run-user-commands with the lifecycle hooks', 'postCreateEnabled:!0,skipNonBlocking:l,prebuild:f'],
-    ['the result of run-user-commands', 'return{outcome:"success",result:await Sd('],
+    ['run-user-commands with the lifecycle hooks', 'postCreateEnabled:!0,skipNonBlocking:h,prebuild:f'],
+    ['the result of run-user-commands', 'return{outcome:"success",result:await Nd('],
     // Its error result names no container: WorkspaceHelper.runUserCommands adds the container of `up`.
-    ['the error result of run-user-commands', '{outcome:"error",message:L.message,description:L.description,dispose:H}'],
+    ['the error result of run-user-commands', '{outcome:"error",message:G.message,description:G.description,dispose:K}'],
     // The markers: onCreate, updateContent, postCreate once per container, postStart once per start.
     ['the markers of the create commands', '`.${i}Marker`'],
     ['the marker of postStartCommand', '".postStartCommandMarker"'],
     // postAttachCommand stays with the Dev Containers extension (--skip-post-attach).
-    ['postAttachCommand only without --skip-post-attach', 'e.skipPostAttach||await S_(e,A,t,r,n)'],
+    ['postAttachCommand only without --skip-post-attach', 'e.skipPostAttach||await $_(e,A,t,r,n)'],
   ])('%s', (_name, text) => {
     expect(bundle.split(text).length - 1, text).toBe(1);
   });
@@ -292,50 +292,50 @@ describe('the lifecycle commands in the CLI bundle', () => {
 describe('Docker Compose in the CLI bundle', () => {
   const bundle = fs.readFileSync(CLI_BUNDLE, 'utf8');
 
-  // The texts of CLI 0.89.0 that the Compose support relies on. A CLI version that changes one of them fails here, and
+  // The texts of CLI 0.90.0 that the Compose support relies on. A CLI version that changes one of them fails here, and
   // the rule that depends on it must be checked again (compose.ts, devcontainerCli.ts).
   it.each<[string, string]>([
-    // The project name: COMPOSE_PROJECT_NAME of the CLI process first (function yp), passed to Compose as --project-name.
-    ['the project name from COMPOSE_PROJECT_NAME first', 'o=cg(r.env.COMPOSE_PROJECT_NAME||"",n);if(o)return o;'],
+    // The project name: COMPOSE_PROJECT_NAME of the CLI process first (function bp), passed to Compose as --project-name.
+    ['the project name from COMPOSE_PROJECT_NAME first', 'o=lg(r.env.COMPOSE_PROJECT_NAME||"",n);if(o)return o;'],
     ['the project name passed to Compose', 'let P=["--project-name",A,...n]'],
     // The override configuration replaces the configuration, whose path stays the base of relative paths.
     ['the override configuration replaces the configuration', 'readDocument(s??t)'],
     ['the configuration path stays', 'B.configFilePath=t'],
-    ['dockerComposeFile relative to the configuration', 'function sg(e,A,t){return rj(e,A.configFilePath,t)}'],
+    ['dockerComposeFile relative to the configuration', 'function gg(e,A,t){return vj(e,A.configFilePath,t)}'],
     // workspaceMount is ignored for Compose (the model mounts the workspace volume).
-    ['no workspaceMount for Compose', 'if("dockerComposeFile"in t)return{workspaceFolder:pp(t),workspaceMount:void 0'],
+    ['no workspaceMount for Compose', 'if("dockerComposeFile"in t)return{workspaceFolder:Sp(t),workspaceMount:void 0'],
     // The model of `config` with all profiles.
     ['config with all profiles', 'push("--profile","*")'],
     // The dev container is found by the project and the service.
-    ['the project label', 'kG="com.docker.compose.project"'],
+    ['the project label', 'xL="com.docker.compose.project"'],
     ['the generated compose file of the container', '"docker-compose.devcontainer.containerFeatures"'],
     ['an existing dev container is started without recreating', '"--no-recreate"'],
     // The result of `up` names the project, which the pipeline compares with the project of the devspace.
     ['the project name in the result of up', '{containerId:g,composeProjectName:C,'],
     // `build --image-name` tags the built dev service image.
-    ['the image name of the built dev service', 'OA=mA||RA.image||mp('],
-    ['the tag of the built dev service', 'Oe(q,"tag",OA,bA)'],
+    ['the image name of the built dev service', 'ZA=wA||RA.image||Mp('],
+    ['the tag of the built dev service', 'qe(q,"tag",ZA,kA)'],
     // The CLI reads the Dockerfile of the dev service itself (no dockerfile_inline), relative to the context.
     ['the build of a service', 'dockerfilePath:r.dockerfile??"Dockerfile"'],
-    ['an absolute Dockerfile', 'f.path.isAbsolute(CA)?CA:SG.default.resolve(uA,CA)'],
+    ['an absolute Dockerfile', 'f.path.isAbsolute(CA)?CA:vL.default.resolve(BA,CA)'],
     // The image of the Features of an image-only service: vsc-<folder name>-<hash>.
-    ['the shared image name of an image-only service', 'return HN(`vsc-${i}-${t}`)'],
+    ['the shared image name of an image-only service', 'return Wb(`vsc-${i}-${t}`)'],
     // Named volumes of `mounts` become volumes of the project (composeMountVolumeName).
     ['the top-level volumes of mounts', 'c=u.filter(b=>b.type==="volume"&&b.source)'],
     // `build` has no override configuration.
     ['build without --override-config', 'configFile:v,overrideConfigFile:J'],
     // The only label (imageLabelItems) that the CLI puts on the images that it builds; the other `devcontainer.` labels
     // of the CLI are labels of containers.
-    ['the metadata label of images', 'var EI="devcontainer.metadata"'],
-    ['the labels of containers', 'var hg="devcontainer.local_folder",lI="devcontainer.config_file"'],
+    ['the metadata label of images', 'var uI="devcontainer.metadata"'],
+    ['the labels of containers', 'var fg="devcontainer.local_folder",fI="devcontainer.config_file"'],
     // With `--id-label`, the id labels replace devcontainer.local_folder and devcontainer.config_file, so the
     // containers of the extension do not name their configuration.
-    ['the id labels replace the labels of the folder and the configuration', 'if(t)return{container:A?await Dr(e,A):await Tr(e,t),idLabels:t}'],
+    ['the id labels replace the labels of the folder and the configuration', 'if(t)return{container:A?await mr(e,A):await qr(e,t),idLabels:t}'],
   ])('%s', (_name, text) => {
     expect(bundle.split(text).length - 1, text).toBe(1);
   });
 
   it('the build handler sets no override configuration', () => {
-    expect(bundle).toMatch(/v=r\?Fe\.file\(Le\.resolve\(process\.cwd\(\),r\)\):void 0,J=void 0,/);
+    expect(bundle).toMatch(/v=r\?Se\.file\(ve\.resolve\(process\.cwd\(\),r\)\):void 0,J=void 0,/);
   });
 });

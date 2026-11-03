@@ -199,7 +199,7 @@ export const EXTENSION_LABEL_KEYS: ReadonlySet<string> = new Set([
 export const HELPER_CACHE_VOLUME = 'devspaces-worker-cache';
 /**
  * Mount point of the cache volume HELPER_CACHE_VOLUME in the workspace helper (`--user-data-folder` of the CLI).
- * Assumption: the CLI keeps data there that is useful across helper runs. CLI 0.89.0 downloads Features into a new
+ * Assumption: the CLI keeps data there that is useful across helper runs. CLI 0.90.0 downloads Features into a new
  * folder below os.tmpdir() for each build, so the Features themselves are not cached there.
  */
 export const HELPER_CACHE_FOLDER = '/devspace-cache';
@@ -443,7 +443,7 @@ export function preparedImageName(repository: string, devspaceId: string): strin
  * `<resourceName>:prepared-<service>` (the service name lower case, only `[a-z0-9-]`, as composeServiceImage), never
  * `<project>-<service>`, whose image a later `up` of the existing setup would use. In the repository of the devspace
  * image, so that the removal of the devspace images (each update, Delete) removes it too. The Dev Container CLI
- * 0.89.0 builds only the dev service in `devcontainer build`, so no image of this name is made today; the name keeps
+ * 0.90.0 builds only the dev service in `devcontainer build`, so no image of this name is made today; the name keeps
  * any build of another service by a prepare away from the names of the setup.
  */
 export function preparedServiceImageName(repository: string, devspaceId: string, service: string): string {

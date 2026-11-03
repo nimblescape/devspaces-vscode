@@ -33,7 +33,7 @@ const MARKED_FOR_REMOVAL = 'Error response from daemon: container is marked for 
 /** `docker exec` when the shell of the container is no longer executable. */
 const SHELL_NOT_EXECUTABLE = 'OCI runtime exec failed: exec failed: unable to start container process: exec: "/bin/sh": permission denied';
 
-/** The error of `devcontainer up` of CLI 0.89.0 after its setup of the started container failed. */
+/** The error of `devcontainer up` of CLI 0.90.0 after its setup of the started container failed. */
 function upFailure(stderr: string, containerId = 'container-1'): DevcontainerCommandError {
   const result: DevcontainerResult = {
     outcome: 'error',

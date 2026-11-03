@@ -194,7 +194,7 @@ export function imageInvalidReferenceItem(reference: string, what = 'image'): st
  * The labels of an image that a container created from it would carry, and that Devspaces, the Dev Container CLI, and
  * Docker Compose use to find and set up containers: the labels of the extension (EXTENSION_LABEL_KEYS),
  * `devcontainer.…`, and `com.docker.compose.…`, except `devcontainer.metadata`, the only label that the Dev Container
- * CLI puts on the images that it builds (CLI 0.89.0: `var EI="devcontainer.metadata"`; `devcontainer.local_folder` and
+ * CLI puts on the images that it builds (CLI 0.90.0: `var uI="devcontainer.metadata"`; `devcontainer.local_folder` and
  * `devcontainer.config_file` are labels of containers). For example `LABEL nimblescape.devspaces.compose-service=x` in a
  * Dockerfile would hide the container from the lookups of the extension. Refused whatever the switch says
  * (HostAccessClass `protected`). The labels of the extension are all those with LABEL_PREFIX (isReservedLabel); labels

@@ -2,7 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// In a Docker Compose configuration, the Dev Container CLI 0.89.0 (function `iW`)
+// In a Docker Compose configuration, the Dev Container CLI 0.90.0 (function `GW`)
 // writes values of the merged configuration into the compose file that it generates for the dev service as text,
 // without escaping them: `user: <containerUser>`, the names of `containerEnv` inside `- '<name>=<value>'` (only the
 // value is escaped), each `entrypoint` of the image metadata inside a double-quoted string, and each `capAdd` and
@@ -150,7 +150,7 @@ describe('Compose values that the Dev Container CLI writes as text', () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Guard: the function `iW` of the vendored Dev Container CLI (with `lQ`, `nW`, and `oW`), which
+// Guard: the function `GW` of the vendored Dev Container CLI (with `dQ`, `UW`, and `xW`), which
 // writes the compose file of `up`, runs on every value that the policy allows; its text, read as YAML, must give the dev
 // service exactly the expected keys, with the values as given. A change of the CLI that the policy does not follow
 // fails here.
@@ -168,17 +168,17 @@ function cliFunction(bundle: string, name: string, keyword = 'function '): strin
 type Iw = (...args: unknown[]) => Promise<string>;
 function vendoredIw(): Iw {
   const bundle = readFileSync(CLI_FILE, 'utf8');
-  // The table `cj` of lQ, a stand-in for the shell parser `dp` (only for the entrypoint of a compose service, not used
+  // The table `jj` of dQ, a stand-in for the shell parser `Fp` (only for the entrypoint of a compose service, not used
   // here), and no GPU (the policy refuses hostRequirements.gpu).
   const source = [
-    'var cj={src:"source",destination:"target",dst:"target"};',
-    'var dp={parse:(s)=>s.split(" ")};',
-    'async function NQ(){return false};',
-    cliFunction(bundle, 'lQ'),
-    cliFunction(bundle, 'nW'),
-    cliFunction(bundle, 'oW'),
-    cliFunction(bundle, 'iW', 'async function '),
-    'return iW;',
+    'var jj={src:"source",destination:"target",dst:"target"};',
+    'var Fp={parse:(s)=>s.split(" ")};',
+    'async function GQ(){return false};',
+    cliFunction(bundle, 'dQ'),
+    cliFunction(bundle, 'UW'),
+    cliFunction(bundle, 'xW'),
+    cliFunction(bundle, 'GW', 'async function '),
+    'return GW;',
   ].join('\n');
   return new Function(source)() as Iw;
 }
@@ -186,7 +186,7 @@ function vendoredIw(): Iw {
 // js-yaml is a devDependency of its own (until @vscode/vsce 4 it came with @vscode/vsce).
 const yaml = createRequire(__filename)('js-yaml') as { load(text: string): unknown };
 
-/** The compose file that the CLI writes for the merged configuration `merged`, as `up` calls iW. */
+/** The compose file that the CLI writes for the merged configuration `merged`, as `up` calls GW. */
 async function composeText(iw: Iw, merged: Record<string, unknown>): Promise<string> {
   return iw(`${OWN}-image`, `${OWN}-image`, merged, { service: 'app' }, '', async () => ({ Config: { Entrypoint: [], Cmd: [] } }), {}, [], [], {});
 }

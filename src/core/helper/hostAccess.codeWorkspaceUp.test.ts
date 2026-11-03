@@ -15,26 +15,26 @@ import { hostAccessReport, mountedVolumeNames } from '../policy';
 
 const bundle = fs.readFileSync(path.resolve(__dirname, '../../../node_modules/@devcontainers/cli/dist/spec-node/devContainersSpecCLI.js'), 'utf8');
 
-/** Fo (the first pass of the CLI), Ri and Rp, and the workspace expression of kW, sliced from the bundle. */
+/** Mo (the first pass of the CLI), Ni and Gp, and the workspace expression of oV, sliced from the bundle. */
 function loadCli() {
   class KA extends Error {
     constructor(options: { description: string }) {
       super(options.description);
     }
   }
-  const foStart = bundle.indexOf('function Fo(e,A)');
-  const foSource = bundle.slice(foStart, bundle.indexOf('async function fN(', foStart));
-  const { Fo } = new Function('eg', 'uN', 'Fe', 'kA', `${foSource}\nreturn { Fo };`)(path, crypto, { isUri: () => false }, KA) as {
-    Fo: (context: Record<string, unknown>, value: unknown) => unknown;
+  const foStart = bundle.indexOf('function Mo(e,A)');
+  const foSource = bundle.slice(foStart, bundle.indexOf('async function Sb(', foStart));
+  const { Mo } = new Function('tg', 'wb', 'Se', 'MA', `${foSource}\nreturn { Mo };`)(path, crypto, { isUri: () => false }, KA) as {
+    Mo: (context: Record<string, unknown>, value: unknown) => unknown;
   };
-  const riStart = bundle.indexOf('function Ri(e,A)');
-  const riSource = bundle.slice(riStart, bundle.indexOf('}', bundle.indexOf('function Rp(e)', riStart)) + 1);
-  const { Ri, Rp } = new Function('TG', `${riSource}\nreturn { Ri, Rp };`)(path.posix);
-  const kwStart = bundle.indexOf('E=A&&Ri(g.path,');
+  const riStart = bundle.indexOf('function Ni(e,A)');
+  const riSource = bundle.slice(riStart, bundle.indexOf('}', bundle.indexOf('function Gp(e)', riStart)) + 1);
+  const { Ni, Gp } = new Function('XL', `${riSource}\nreturn { Ni, Gp };`)(path.posix);
+  const kwStart = bundle.indexOf('E=A&&Ni(g.path,');
   const kwSource = bundle.slice(kwStart, bundle.indexOf(':a)', kwStart) + 3);
   const upWorkspace = (folder: string): { rootFolderPath: string } =>
-    new Function('Ri', 'Rp', 'OG', 'g', 'a', 'A', `let ${kwSource}; return E;`)(Ri, Rp, path.posix, { path: path.posix }, folder, { hostPath: folder });
-  return { Fo, upWorkspace };
+    new Function('Ni', 'Gp', 'zL', 'g', 'a', 'A', `let ${kwSource}; return E;`)(Ni, Gp, path.posix, { path: path.posix }, folder, { hostPath: folder });
+  return { Mo, upWorkspace };
 }
 
 describe('a repository named *.code-workspace at `up`', () => {
@@ -51,7 +51,7 @@ describe('a repository named *.code-workspace at `up`', () => {
   };
 
   it('the checks see the mount that Docker gets', () => {
-    const docker = cli.Fo(
+    const docker = cli.Mo(
       { platform: 'linux', env: { HOME: '/root' }, localWorkspaceFolder: cli.upWorkspace(folder).rootFolderPath, containerWorkspaceFolder: folder },
       mount,
     );

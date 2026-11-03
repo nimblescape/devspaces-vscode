@@ -342,7 +342,7 @@ describe('imageRemoteUser', () => {
     expect(imageRemoteUser(undefined)).toBe('root');
   });
 
-  // Dev Container CLI 0.89.0: `docker run -u <containerUser> …runArgs`, so the last --user of the runArgs is the user of
+  // Dev Container CLI 0.90.0: `docker run -u <containerUser> …runArgs`, so the last --user of the runArgs is the user of
   // the container; remoteUser = last remoteUser, else that user, else root; `user:group` → user; `0` → root.
   it.each<[string, unknown, readonly unknown[] | undefined, string]>([
     ['runArgs --user with a root image', { User: 'root', Labels: {} }, ['--user', 'node'], 'node'],

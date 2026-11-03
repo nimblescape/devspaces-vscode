@@ -767,13 +767,13 @@ function buildProblems(value: unknown, ctx: ServiceContext): Problem[] {
  * dev service, or the name of its last stage): Docker takes only such names anyway.
  */
 const BUILD_STAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
-/** The last FROM line of a Dockerfile, and its stage name, read as the CLI 0.89.0 reads them (`yj`, `Fj`). */
+/** The last FROM line of a Dockerfile, and its stage name, read as the CLI 0.90.0 reads them (`tW`, `iW`). */
 const CLI_FROM_LINE = /^(?<line>\s*FROM.*)/gim;
 const CLI_FROM = /FROM\s+(?<platform>--platform=\S+\s+)?(?<image>"?[^\s]+"?)(\s+AS\s+(?<label>[^\s]+))?/i;
 const BUILD_TEXT = 'the Dev Container CLI writes it into its compose file for the build as it is';
 
 /**
- * The stage name of the last FROM line of `dockerfile`, as the Dev Container CLI 0.89.0 reads it (function `DQ`), or
+ * The stage name of the last FROM line of `dockerfile`, as the Dev Container CLI 0.90.0 reads it (function `yQ`), or
  * `undefined` without one.
  */
 function lastStageName(dockerfile: string): string | undefined {
@@ -783,9 +783,9 @@ function lastStageName(dockerfile: string): string | undefined {
 }
 
 /**
- * The Dev Container CLI 0.89.0 writes a compose file for the build of the dev service (function `Dp`) with
+ * The Dev Container CLI 0.90.0 writes a compose file for the build of the dev service (function `Rp`) with
  * `- _DEV_CONTAINERS_BASE_IMAGE=<stage>` in `build.args`, as text: the stage is `build.target`, or the name of the last
- * stage of the Dockerfile (`DQ`). It writes it with and without Features, so a stage name that is no plain name and a
+ * stage of the Dockerfile (`yQ`). It writes it with and without Features, so a stage name that is no plain name and a
  * Dockerfile with a line break of YAML that the CLI reads as part of a name or value (NEL) are refused, whatever the
  * switch says. A line break in such a text would add keys to the build or to the dev service (for example `ssh` with a
  * file of the workspace helper). A Dockerfile longer than MAX_DOCKERFILE_LENGTH is refused too: the model run reads at
@@ -1215,8 +1215,8 @@ export function composeConfigurationReport(config: Readonly<Record<string, unkno
 
 /**
  * The properties of devcontainer.json that the Dev Container CLI ignores for Docker Compose, for a log line: `runArgs`
- * and `appPort` (read only for a single container), `workspaceMount` (CLI 0.89.0: `if("dockerComposeFile"in
- * t)return{workspaceFolder:pp(t),workspaceMount:void 0,…}`), and `build.options`. The policy does not check them.
+ * and `appPort` (read only for a single container), `workspaceMount` (CLI 0.90.0: `if("dockerComposeFile"in
+ * t)return{workspaceFolder:Sp(t),workspaceMount:void 0,…}`), and `build.options`. The policy does not check them.
  */
 export function composeIgnoredProperties(config: Readonly<Record<string, unknown>>): string[] {
   const ignored: string[] = [];
