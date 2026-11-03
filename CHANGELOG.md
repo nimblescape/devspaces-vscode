@@ -3,7 +3,7 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
-## 0.6.1
+## 0.3.0
 
 **Display name:** the display name of Devspaces is now **nimblescape Devspaces**, without the 2. The extension ID stays `nimblescape.nimblescape-devspaces-2`, so VS Code updates an installation of 0.2.0 to this version, and your settings `devspaces.*` and the links stay as they are. The repository is now [nimblescape/devspaces-vscode](https://github.com/nimblescape/devspaces-vscode).
 
