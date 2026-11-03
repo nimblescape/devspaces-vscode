@@ -6302,7 +6302,6 @@ describe('the Docker host of Devspaces', () => {
   /** The local Docker of the current context while Devspaces uses a host of its list. */
   let localTarget: DockerTarget;
   let operations: DockerTarget[];
-  let resolves: number;
   let depth = 0;
   let windowDockerHost: Mock<NonNullable<ControllerDeps['windowDockerHost']>>;
   // The Docker targets of the harness of each test, for a harness of a nested describe.
@@ -6325,7 +6324,6 @@ describe('the Docker host of Devspaces', () => {
     current = dockerTargetOf('unix:///var/run/docker.sock', 'default');
     localTarget = current;
     operations = [];
-    resolves = 0;
     depth = 0;
     remote = {
       useRemoteHost: vi.fn(async () => {}),
@@ -6333,10 +6331,7 @@ describe('the Docker host of Devspaces', () => {
       chooseDockerHost: vi.fn(async () => {}),
     };
     const dockerTargets = {
-      resolve: vi.fn(async () => {
-        resolves++;
-        return current;
-      }),
+      resolve: vi.fn(async () => current),
       // As DockerTargets.current: the target of the running operation, else a fresh read.
       current: vi.fn(async () => operationDockerTarget() ?? current),
       // As DockerTargets.withOperation: a nested operation keeps the target of the outer one, and the calls of the

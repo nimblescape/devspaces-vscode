@@ -182,7 +182,9 @@ async function installNow(options: InstallOwnDockerCliOptions, current: DockerCl
       });
     } catch (error) {
       if (stall.signal.aborted && options.signal?.aborted !== true) {
-        throw new Error(`The download of ${download.url} received no bytes for ${Math.round(stalledAfterMs / 1000)} seconds.`);
+        throw new Error(`The download of ${download.url} received no bytes for ${Math.round(stalledAfterMs / 1000)} seconds.`, {
+          cause: error,
+        });
       }
       throw error;
     } finally {
