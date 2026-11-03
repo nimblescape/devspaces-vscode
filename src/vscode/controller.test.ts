@@ -7379,7 +7379,7 @@ describe('Double-click on a repository row', () => {
 });
 
 describe('A link to Devspaces', () => {
-  /** The link vscode://nimblescape.nimblescape-devspaces/open?repository=<repository>, as vscode.Uri gives it. */
+  /** The link vscode://nimblescape.nimblescape-devspaces-2/open?repository=<repository>, as vscode.Uri gives it. */
   const link = (repository: string) => ({ path: '/open', query: `repository=${repository}` });
   /** The question before a link creates a devspace: linkStartConfirm, or for another owner untrustedRepository. */
   const isLinkQuestion = (message: string) => message.includes(' from a link? ') || message.endsWith(Messages.untrustedRepository(''));
@@ -7723,7 +7723,7 @@ describe('A link to Devspaces', () => {
 // The course link opens the repository of the signed-in account in a course, as GitHub Classroom names it: the name
 // of the course repository and the GitHub login of the account (ACCOUNT, octo).
 describe('A course link to Devspaces', () => {
-  /** The link vscode://nimblescape.nimblescape-devspaces/course?repository=<repository>, as vscode.Uri gives it. */
+  /** The link vscode://nimblescape.nimblescape-devspaces-2/course?repository=<repository>, as vscode.Uri gives it. */
   const courseLink = (repository: string) => ({ path: '/course', query: `repository=${repository}` });
   const isLinkQuestion = (message: string) => message.includes(' from a link? ') || message.endsWith(Messages.untrustedRepository(''));
 

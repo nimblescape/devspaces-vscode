@@ -46,7 +46,7 @@ import { answerAttachQuestion } from '../../../scripts/attachQuestion.mjs';
 
 /** The checkout: the bundle runs from out/test/vscode/attach/. */
 const ROOT = path.resolve(__dirname, '../../../..');
-const EXTENSION_ID = 'nimblescape.nimblescape-devspaces';
+const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
 /** The account of the fake sign-in provider (test/vscode/github/extension.js). */
 const TEST_ACCOUNT_ID = '4242';
 const REPOSITORY = 'devspaces-test/attach';
