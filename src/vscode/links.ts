@@ -2,9 +2,9 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The links to Devspaces, for example on a website: `vscode://nimblescape.nimblescape-devspaces/open?repository=owner/name`
+// The links to Devspaces, for example on a website: `vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name`
 // starts the repository owner/name (Controller.openLink). The course link
-// `vscode://nimblescape.nimblescape-devspaces/course?repository=owner/name-<username>` starts the repository of the
+// `vscode://nimblescape.nimblescape-devspaces-2/course?repository=owner/name-<username>` starts the repository of the
 // signed-in account in a course: `<username>` becomes the GitHub login of the account, as GitHub Classroom names the
 // repository of each student. VS Code hands such a link to the extension of its authority, and installs that extension
 // from the Marketplace first when it is missing. No `vscode` import, so the rules are unit-tested.
