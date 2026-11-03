@@ -97,7 +97,7 @@ use it in different forms:
 | `name` in `package.json` | `nimblescape-<name>` | `nimblescape-devspaces-2` |
 | Extension ID | `nimblescape.nimblescape-<name>` | `nimblescape.nimblescape-devspaces-2` |
 | Package file | `nimblescape-<name>-<version>.vsix` | `nimblescape-devspaces-2-<version>.vsix` |
-| Display name | `nimblescape <Title>` | `nimblescape Devspaces` |
+| Display name | `nimblescape <Title>` | `nimblescape Devspaces 2` |
 
 The organization `nimblescape` is the namespace of the repository, as the
 scope `@nimblescape` is the namespace of an npm package, so the name of the

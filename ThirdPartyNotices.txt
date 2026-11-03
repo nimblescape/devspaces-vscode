@@ -1,4 +1,4 @@
-nimblescape Devspaces: third-party notices
+nimblescape Devspaces 2: third-party notices
 
 This extension contains material from the project below. Its license applies to that material only.
 The rest of the extension is under the MIT License in the file LICENSE

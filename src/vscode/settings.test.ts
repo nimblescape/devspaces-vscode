@@ -253,12 +253,12 @@ describe('settings', () => {
 
   // The Settings editor lists the settings of an extension under Extensions with the title of its configuration. As
   // the other nimblescape extensions, Devspaces uses its display name as this title.
-  it('lists the settings in the Settings editor under the display name nimblescape Devspaces', () => {
+  it('lists the settings in the Settings editor under the display name nimblescape Devspaces 2', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       displayName: string;
       contributes: { configuration: { title: string } };
     };
-    expect(manifest.displayName).toBe('nimblescape Devspaces');
+    expect(manifest.displayName).toBe('nimblescape Devspaces 2');
     expect(manifest.contributes.configuration.title).toBe(manifest.displayName);
   });
 
