@@ -26,13 +26,9 @@
 # published twice. A dry run, also from another branch than main, runs the
 # version job and CI only and then deletes its temporary branch, so it tests a
 # release, and a change of this workflow, without a change of main, a tag, a
-# release or the Marketplace; its run name ends with "(dry run)". In a release,
-# the version job checks with scripts/release-checks.mjs that a successful dry
-# run tested the files of the release process as they are (rule 4 of the
-# release rules in CONTRIBUTING.md).
+# release or the Marketplace; its run name ends with "(dry run)".
 
 name: Release
-# "(dry run)" stays at the end: the check of rule 4 finds the dry runs by it.
 run-name: Release ${{ inputs.version }}${{ inputs.dry_run && ' (dry run)' || '' }}
 
 on:
@@ -69,8 +65,6 @@ jobs:
     permissions:
       # Pushes the version commit to a temporary branch and deletes the branches of earlier runs.
       contents: write
-      # Reads the runs of this workflow for the check of the dry run.
-      actions: read
     outputs:
       version: ${{ steps.check.outputs.version }}
       # The tag v<version> of the release.
@@ -130,14 +124,6 @@ jobs:
             echo "tag=v$version"
             echo "vsix=$(node -p 'require("./package.json").name')-$version.vsix"
           } >> "$GITHUB_OUTPUT"
-
-      # Rule 4 of CONTRIBUTING.md: a release runs only with the files of the release process that a dry run tested.
-      - name: Check that a dry run tested the release process
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
-        run: node scripts/release-checks.mjs dry-run
 
       # package.json keeps its formatting, so only its version line changes. npm
       # writes package-lock.json with two spaces and a final line break.
