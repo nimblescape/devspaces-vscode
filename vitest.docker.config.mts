@@ -19,7 +19,7 @@ const TEST_FILES = 'test/docker/**/*.test.ts';
  */
 const TEST_GROUPS = new Map<string, string[]>([
   ['monitor', ['test/docker/remoteMonitor.test.ts', 'test/docker/workerBatch.test.ts']],
-  ['pipeline', ['test/docker/pipeline.test.ts', 'test/docker/compose.test.ts', 'test/docker/helperImage.test.ts']],
+  ['pipeline', ['test/docker/pipeline.test.ts', 'test/docker/compose.test.ts', 'test/docker/helperImage.test.ts', 'test/docker/workerLock.test.ts']],
 ]);
 const GROUP_NAMES = [...TEST_GROUPS.keys(), 'other'];
 
