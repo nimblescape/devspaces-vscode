@@ -246,6 +246,8 @@ describe('ensureHelperImageUse', () => {
     expect(content).toMatch(/^FROM \$\{BASE_IMAGE\}$/m);
     expect(content).toMatch(/^ARG DEVCONTAINER_CLI_VERSION$/m);
     expect(content).toMatch(/^LABEL nimblescape\.devspaces\.worker=true$/m);
+    // The image holds its own Dockerfile, for the rebuild of the Monitor (src/remoteMonitor/helperRefresh.ts).
+    expect(content).toMatch(/^COPY Dockerfile \/usr\/local\/share\/devspaces\/helper\/Dockerfile$/m);
     // The Docker CLI with the buildx and the Compose plugins from download.docker.com (Compose configurations).
     expect(content).toMatch(/apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin docker-compose-plugin;/);
     expect(content).toMatch(/^\s*docker compose version; \\$/m);
@@ -337,7 +339,9 @@ describe('ensureHelperImageUse with a state file: new helper image', () => {
     expect(await h.ensure()).toBe(h.tag);
     expect(h.lookups.map((lookup) => lookup.reference)).toEqual([BASE]);
     expect(h.docker.builds).toHaveLength(1);
-    expect(h.docker.builds[0]).toMatchObject({ tag: h.tag, pull: true, labels: { 'nimblescape.devspaces.worker': 'true' } });
+    // With the digest that the build pulls as its label, for the check of the Monitor.
+    expect(h.docker.builds[0]).toMatchObject({ tag: h.tag, pull: true });
+    expect(h.docker.builds[0].labels).toEqual({ 'nimblescape.devspaces.worker': 'true', 'nimblescape.devspaces.worker-base-digest': DIGEST_A });
     expect(h.docker.builds[0].noCache).toBeUndefined();
     // The ID of the image that this build made, found by its build label (for diagnosis). The build records the helper
     // generation.
@@ -363,6 +367,8 @@ describe('ensureHelperImageUse with a state file: new helper image', () => {
     h.answer = async () => 'unreachable';
     await h.ensure();
     expect(h.docker.builds[0].pull).toBe(false);
+    // No label of a base digest: the Monitor builds such an image again (helperRefresh.ts).
+    expect(h.docker.builds[0].labels).toEqual({ 'nimblescape.devspaces.worker': 'true' });
     // No digest and no checkedAt, but the mark: the image may come from an old local base image. The ID of the image
     // that this build made, found by its build label (for diagnosis). The build records the helper generation.
     expect(h.state().images[h.tag]).toEqual({
@@ -499,6 +505,8 @@ describe('ensureHelperImageUse with a state file: new helper image', () => {
     };
     expect(await h.ensure()).toBe(h.tag);
     expect(h.docker.builds.map((build) => build.pull)).toEqual([true, false]);
+    // Only the build with --pull names the digest of the registry; the build from the local base image names none.
+    expect(h.docker.builds.map((build) => build.labels?.['nimblescape.devspaces.worker-base-digest'])).toEqual([DIGEST_A, undefined]);
     expect(h.docker.idOf(h.tag)).toBeDefined();
     expect(h.warnings().join('\n')).toMatch(/could not be built with a fresh base image\. It is built from the local base image: .*toomanyrequests/);
     // The digest of the registry is not the digest of the image, so it is not recorded; the mark asks for a rebuild.
@@ -710,7 +718,9 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     expect(await h.ensure({ onOutput: (text) => output.push(text), onBuild: (kind) => builds.push(kind) })).toBe(h.tag);
 
     expect(h.docker.builds).toHaveLength(1);
-    expect(h.docker.builds[0]).toMatchObject({ tag: h.tag, pull: true, noCache: true, labels: { 'nimblescape.devspaces.worker': 'true' } });
+    expect(h.docker.builds[0]).toMatchObject({ tag: h.tag, pull: true, noCache: true });
+    // With the new digest as the label of the base image, for the check of the Monitor.
+    expect(h.docker.builds[0].labels).toEqual({ 'nimblescape.devspaces.worker': 'true', 'nimblescape.devspaces.worker-base-digest': DIGEST_B });
     // The build output reaches onOutput, and onBuild tells that an existing helper is updated.
     expect(output).toEqual(['#1 building\n']);
     expect(builds).toEqual(['refresh']);

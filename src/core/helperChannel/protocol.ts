@@ -36,6 +36,7 @@ import { isUserErrorCode, type UserErrorCode } from '../errors';
 import { parseExtensionList } from '../vscodeExtensions';
 import { API_VERSION_SOURCE } from '../docker/dockerApiVersion';
 import { hasOnlyKeys, isRecord } from '../valueChecks';
+import { parseHelperCheck, type HelperCheck } from '../remoteMonitor/helperCheck';
 
 /**
  * The version of the messages. The extension closes a channel whose script answers with another one; there is no
@@ -1388,8 +1389,12 @@ export interface HeartbeatParams {
   heartbeat: HeartbeatInput;
 }
 
-/** `missing`: the monitor container does not exist or does not run (the window starts it again). */
-export type HeartbeatValue = { ok: true } | { ok: false; missing: boolean; detail: string };
+/**
+ * `missing`: the monitor container does not exist or does not run (the window starts it again). `helperCheck`: the last
+ * check of the Monitor that found its helper image current (helperCheck.ts), from the volume of the Monitor, when it
+ * has one; the window takes it into its state of the helper image (recordEngineHelperCheck).
+ */
+export type HeartbeatValue = { ok: true; helperCheck?: HelperCheck } | { ok: false; missing: boolean; detail: string };
 
 /** The longest detail of a failed heartbeat or monitor command. */
 export const MAX_MONITOR_DETAIL_LENGTH = 2000;
@@ -1404,7 +1409,12 @@ export function parseHeartbeatParams(value: unknown): HeartbeatParams | undefine
 /** The check of HeartbeatValue (the extension). */
 export function parseHeartbeatValue(value: unknown): HeartbeatValue | undefined {
   if (!isRecord(value)) return undefined;
-  if (hasOnlyKeys(value, ['ok']) && value.ok === true) return { ok: true };
+  if (value.ok === true && hasOnlyKeys(value, ['ok'], ['helperCheck'])) {
+    if (value.helperCheck === undefined) return { ok: true };
+    // Strictly (parseHelperCheck); a value with an invalid check is invalid.
+    const helperCheck = parseHelperCheck(value.helperCheck);
+    return helperCheck === undefined ? undefined : { ok: true, helperCheck };
+  }
   if (!hasOnlyKeys(value, ['ok', 'missing', 'detail']) || value.ok !== false || typeof value.missing !== 'boolean') return undefined;
   if (typeof value.detail !== 'string' || value.detail.length > MAX_MONITOR_DETAIL_LENGTH) return undefined;
   return { ok: false, missing: value.missing, detail: value.detail };

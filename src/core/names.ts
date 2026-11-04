@@ -143,6 +143,12 @@ export const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
  */
 export const COMPOSE_CLEARED_LABELS: readonly string[] = ['com.docker.compose.project=', 'com.docker.compose.service='];
 export const LABEL_HELPER = 'nimblescape.devspaces.worker';
+/**
+ * The registry digest of the base image that a build of the helper image pulled (docs/architecture.md "The helper
+ * image"): set by each build that pulled the base image with a known digest, of a window or of the Monitor. The Monitor
+ * builds the image of its helper tag again when this label is missing or differs from the digest of the registry.
+ */
+export const LABEL_HELPER_BASE_DIGEST = 'nimblescape.devspaces.worker-base-digest';
 export const LABEL_HELPER_RUN = 'nimblescape.devspaces.worker-run';
 /**
  * A label with a random nonce per build of BootstrapDocker.buildImage, by which it finds the ID of the image that the
@@ -186,6 +192,7 @@ export const EXTENSION_LABEL_KEYS: ReadonlySet<string> = new Set([
   LABEL_DEFAULT_IMAGE,
   LABEL_HOST_ACCESS,
   LABEL_HELPER,
+  LABEL_HELPER_BASE_DIGEST,
   LABEL_HELPER_RUN,
   LABEL_BUILD_ID,
   LABEL_BUILD_RECORD,

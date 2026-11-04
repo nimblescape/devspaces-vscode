@@ -20,12 +20,14 @@ import {
   currentHelperImageTag,
   ensureHelperImageUse,
   helperRefreshDue,
+  recordEngineHelperCheck,
   recordHelperImageUse,
   type BaseDigestLookup,
   type HelperBuildKind,
   type HelperImageUse,
 } from './helperImage';
 import { readHelperState } from './helperState';
+import type { HelperCheck } from '../remoteMonitor/helperCheck';
 
 /** The part of BootstrapDocker that the helper image uses. */
 export type HelperImageDocker = Pick<BootstrapDocker, 'imageExists' | 'imageId' | 'buildImage' | 'listImagesByLabel' | 'removeImage'>;
@@ -512,6 +514,20 @@ export class HelperImages {
         : `The workspace helper image ${tag} has another image now. It is prepared again.`,
     );
     return false;
+  }
+
+  /**
+   * Takes the last check of the helper image by the Monitor of the engine with the key `engineKey` (from the answer of
+   * a heartbeat there) into the state file of that engine (recordEngineHelperCheck), so that the maintaining ensure and
+   * the background prebuild do not check the base image while the Monitor did, and do not build the image again after
+   * the Monitor did (docs/requirements.md R-DS-003). Nothing without a state file. Never throws.
+   */
+  async recordEngineCheck(engineKey: string, check: HelperCheck): Promise<void> {
+    const statePath = this.statePathFor({ key: engineKey });
+    if (statePath === undefined) return;
+    if (await recordEngineHelperCheck(statePath, check, { clock: this.clock, logger: this.deps.logger })) {
+      this.deps.logger.info(`The Monitor checked the workspace helper image ${check.tag} at ${check.checkedAt}: it is built from the current base image ${check.baseImage}.`);
+    }
   }
 
   /** `lastUsedAt` of the tag in the state file, at most once per hour per instance. Never throws. */

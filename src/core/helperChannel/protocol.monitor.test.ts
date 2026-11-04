@@ -40,6 +40,12 @@ describe('the operations of the Monitor in the worker', () => {
     expect(parseHeartbeatValue({ ok: true })).toEqual({ ok: true });
     expect(parseHeartbeatValue({ ok: false, missing: true, detail: 'gone' })).toEqual({ ok: false, missing: true, detail: 'gone' });
     expect(parseHeartbeatValue({ ok: false, missing: false, detail: 'x'.repeat(MAX_MONITOR_DETAIL_LENGTH) })).toBeDefined();
+    // With the last check of the helper image by the Monitor (helperCheck.ts), strictly.
+    const helperCheck = { tag: 'devspaces-worker:0123456789ab', baseImage: 'node:24-trixie-slim', baseDigest: `sha256:${'a'.repeat(64)}`, checkedAt: '2026-11-04T06:08:00.000Z' };
+    expect(parseHeartbeatValue({ ok: true, helperCheck })).toEqual({ ok: true, helperCheck });
+    for (const odd of [{ ok: true, helperCheck: { ...helperCheck, builtAt: helperCheck.checkedAt } }, { ok: true, helperCheck: { ...helperCheck, baseDigest: 'sha256:x' } }, { ok: true, helperCheck: null }, { ok: false, missing: false, detail: 'x', helperCheck }]) {
+      expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
+    }
     for (const odd of [null, { ok: true, missing: false }, { ok: false, detail: 'x' }, { ok: false, missing: 'no', detail: 'x' }, { ok: false, missing: false, detail: 'x'.repeat(MAX_MONITOR_DETAIL_LENGTH + 1) }, { ok: 'yes' }]) {
       expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
     }

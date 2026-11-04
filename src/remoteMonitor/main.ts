@@ -92,6 +92,8 @@ import { CLOCK_RESET_MS, parseCacheRunState, runRetryDelay, runRetryDue, type Ca
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
+import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
+import { refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
 import { VERSION_ENV, takeUserAgentVersion, type HttpTransport } from '../core/http';
 import { proxiedHttpsTransport } from '../core/proxyTransport';
 import { storeLock, storeTryLock, unpackServer } from '../core/worker/vscodeServerStore';
@@ -881,6 +883,8 @@ export interface MainDeps {
    * MONITOR_WORKER_HASH_ENV in the volume, run as a child process); the tests give their own.
    */
   prepareWorker?: () => PrepareWorker | { reason: string };
+  /** The Dockerfile and the build of the part "the workspace helper image" (refreshHelperImage); the tests give their own. */
+  helperRefresh?: Pick<HelperRefreshDeps, 'dockerfile' | 'build'>;
   /** The monotonic clock of the idle time, and the wait between two ticks (the tests). */
   monotonic?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -985,11 +989,11 @@ export async function readImagesInUse(stateDir: string, now: number): Promise<Re
 /**
  * The temporary files of writeStateFile (`<name>.<pid>.<count>.tmp`) that a killed write left behind: of
  * image-settings.json, replaced-images.json, pulled-over-images.json, cache-run.json (written at the end of every
- * background run), registry-digests.json (REGISTRY_ANSWERS_FILE), last-use.json (LAST_USE_FILE) and the files of the
- * images in use (`images-in-use.<source>.json`). images.json is not written by this monitor; the leftovers of an older
- * monitor are removed too.
+ * background run), registry-digests.json (REGISTRY_ANSWERS_FILE), last-use.json (LAST_USE_FILE), helper-image.json
+ * (HELPER_CHECK_FILE) and the files of the images in use (`images-in-use.<source>.json`). images.json is not written by
+ * this monitor; the leftovers of an older monitor are removed too.
  */
-export const STATE_TEMPORARY_FILE = /^(images|image-settings|replaced-images|pulled-over-images|cache-run|registry-digests|last-use|images-in-use\.[0-9a-f]{32})\.json\.\d+\.\d+\.tmp$/;
+export const STATE_TEMPORARY_FILE = /^(images|image-settings|replaced-images|pulled-over-images|cache-run|registry-digests|last-use|helper-image|images-in-use\.[0-9a-f]{32})\.json\.\d+\.\d+\.tmp$/;
 /**
  * Such a file whose modification time is more than this from now is removed at the start of `run` (only then: a younger
  * one stays until the next start).
@@ -1527,7 +1531,21 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
           lastUsed: () => lastUsedTimes(dir),
           worker: deps.prepareWorker ?? storedPrepareWorker(deps.env[MONITOR_WORKER_HASH_ENV], stateDir, now),
         });
-      const background = new BackgroundRun({ log, now, images: () => images.pass(), vscode: vscodeOf, state, prepares });
+      // The workspace helper image of the monitor, after the images in use: its check and its rebuild when its base
+      // image changed, with the record of the check in the volume, which the windows read through their heartbeats.
+      const helperImage = () =>
+        refreshHelperImage({
+          log,
+          now,
+          engine,
+          registryTransport: deps.registryTransport ?? (() => daemonProxyTransport(engine)),
+          record: {
+            read: () => fs.promises.readFile(path.join(stateDir, HELPER_CHECK_FILE), 'utf8').catch(() => undefined),
+            write: (text) => writeStateFile(stateDir, HELPER_CHECK_FILE, text),
+          },
+          ...deps.helperRefresh,
+        });
+      const background = new BackgroundRun({ log, now, images: () => images.pass(), helperImage, vscode: vscodeOf, state, prepares });
       // With the request of "Update All Images Now" (`run-now`).
       const runRequest = runRequestStore(stateDir, log);
       const permanent = permanentFromEnv(deps.env);

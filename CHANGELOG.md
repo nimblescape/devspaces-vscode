@@ -3,6 +3,12 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
+## 0.4.0
+
+**Helper image in the background:** the Monitor on each Docker engine also keeps the helper image of Devspaces (`devspaces-worker`) up to date in its background run. When the base image `node` of the helper image has a newer version, the Monitor builds the helper image again on that engine, so that a start does not need to build it. A window of Devspaces checks the base image itself only when the Monitor has not done it for a week, and a start no longer builds the helper image again after the Monitor did. When the Monitor cannot reach the registry or cannot build the image, the windows check and build it as before. See [The background run](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run).
+
+**Remote Docker host without SSH setup:** on another computer, the work of Devspaces in the background on its helper image (its build, its build from a newer base image, and the removal of old helper images) waits for the SSH connection of a window to that computer and runs through it, without an SSH login of its own. So the SSH server of that computer needs no setup for Devspaces, and the user guide no longer asks for `ControlMaster` or `MaxStartups`. See [What to know](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#what-to-know).
+
 ## 0.3.0
 
 **Repository:** the repository of Devspaces is now [nimblescape/devspaces-vscode](https://github.com/nimblescape/devspaces-vscode).

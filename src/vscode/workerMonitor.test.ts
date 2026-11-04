@@ -43,6 +43,19 @@ describe('the calls of a window to the Monitor, as operations of the worker', ()
     expect(await monitorWith(() => new Error('the worker could not be reached')).monitor.heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: false, missing: false, detail: 'the worker could not be reached' });
   });
 
+  it('a heartbeat that carries the last check of the helper image by the Monitor hands it on, and answers ok', async () => {
+    const helperCheck = { tag: 'devspaces-worker:0123456789ab', baseImage: 'node:24-trixie-slim', baseDigest: `sha256:${'a'.repeat(64)}`, checkedAt: '2026-11-04T06:08:00.000Z' };
+    const checks: unknown[][] = [];
+    const flow: TargetFlow = async () => ({ ok: true, helperCheck });
+    const monitor = workerMonitor({ flow, owner: () => ({ windowId: 'window-1', pid: 7 }), logger: silentLogger, onHelperCheck: (...args) => checks.push(args) });
+    expect(await monitor.heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: true });
+    expect(checks).toEqual([[TARGET, helperCheck]]);
+    // Without it, and without the hand-on, nothing else changes.
+    expect(await monitorWith(() => ({ ok: true, helperCheck })).monitor.heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: true });
+    expect(await workerMonitor({ flow: async () => ({ ok: true }), owner: () => ({ windowId: 'w', pid: 7 }), logger: silentLogger, onHelperCheck: (...args) => checks.push(args) }).heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: true });
+    expect(checks).toHaveLength(1);
+  });
+
   it('the container of a devspace exists unless the worker reads it as missing; a failure counts as not there', async () => {
     for (const [state, exists] of [['running', true], ['stopped', true], ['missing', false]] as const) {
       const { monitor, calls } = monitorWith(() => ({ state }));
