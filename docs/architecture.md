@@ -9,18 +9,11 @@ Devspaces opens a GitHub repository in a dev container, a *devspace*, on a Docke
 ```mermaid
 flowchart LR
   subgraph PC["Your computer"]
-    DC["Dev Containers extension"]
-    CLI["Docker CLI of Devspaces"]
-    WP["Docker pipe of the window<br/>request filter"]
-    EP["Docker pipe of the extension<br/>request filter"]
     EXT["Extension<br/>(VS Code window)"]
-    AP["Pipe of the SSH questions"]
-    TR["Transport<br/>ssh or wsl.exe"]
+    DC["Dev Containers extension"]
   end
-  subgraph ENG["Docker engine (local, SSH host, or WSL distribution)"]
-    R["Relay<br/>first program of the worker container"]
+  subgraph ENG["Docker engine"]
     W["Worker<br/>…-worker…"]
-    SOCK["Docker engine<br/>/var/run/docker.sock"]
     B["Batch helper<br/>devspaces-batch-…"]
     SM["Monitor<br/>devspaces-monitor"]
     DEV["Dev container"]
@@ -30,20 +23,9 @@ flowchart LR
   end
   GH["GitHub API"]
   REG["Image registries"]
+  EXT -- "operations, one per flow" --> W
   EXT --> GH
-  DC -- "runs docker" --> CLI
-  CLI -- "calls of Dev Containers" --> WP
-  EXT -- "own Docker calls" --> EP
-  WP -- "one stream per connection" --> EXT
-  EP -- "one stream per connection" --> EXT
-  EXT -- "connection of the relay:<br/>streams in frames" --> TR
-  TR -. "questions of ssh" .-> AP
-  AP -.-> EXT
-  TR == "one login per window and engine" ==> R
-  R -- "stream worker:<br/>operations" --> W
-  R -- "streams docker" --> SOCK
-  W -- "Engine API" --> SOCK
-  SOCK -- "runs" --> DEV
+  W -- "Engine API" --> DEV
   W -- "starts, one per operation" --> B
   B --> V
   DEV --> V
@@ -55,6 +37,39 @@ flowchart LR
   W --> REG
   SM --> REG
   SM -- "stops" --> DEV
+  DC -- "attaches" --> DEV
+```
+
+On a remote engine (an SSH host, or the WSL distribution of Devspaces on Windows), more parts carry the operations and the Docker connections from your computer to the engine:
+
+```mermaid
+flowchart TB
+  subgraph PC["Your computer"]
+    DC["Dev Containers extension"]
+    CLI["Docker CLI of Devspaces"]
+    WP["Docker pipe of the window<br/>request filter"]
+    EXT["Extension<br/>(VS Code window)"]
+    EP["Docker pipe of the extension<br/>request filter"]
+    AP["Pipe of the SSH questions"]
+    TR["Transport<br/>ssh or wsl.exe"]
+  end
+  subgraph ENG["Remote engine"]
+    R["Relay<br/>first program of the worker container"]
+    W["Worker"]
+    SOCK["Docker engine<br/>/var/run/docker.sock"]
+  end
+  DC -- "runs docker" --> CLI
+  CLI -- "calls of Dev Containers" --> WP
+  WP -- "one stream per connection" --> EXT
+  EXT -- "own Docker calls" --> EP
+  EP -- "one stream per connection" --> EXT
+  EXT -- "connection of the relay:<br/>streams in frames" --> TR
+  TR -. "questions of ssh" .-> AP
+  AP -.-> EXT
+  TR == "one login per window and engine" ==> R
+  R -- "stream worker:<br/>operations" --> W
+  R -- "streams docker" --> SOCK
+  W -- "Engine API" --> SOCK
 ```
 
 The diagram shows a remote engine: an SSH host, or the WSL distribution of Devspaces on Windows. One process of the transport per window and engine (on an SSH host, one SSH login) carries the worker channel and the Docker connections of the window (see [The connection of the relay](#the-connection-of-the-relay)). The relay splits it into streams: one stream to the worker, and one stream for each Docker connection.

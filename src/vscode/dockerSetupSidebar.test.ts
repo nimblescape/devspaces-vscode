@@ -303,6 +303,15 @@ describe('nothing before the first use of Devspaces', () => {
   }
 
   /**
+   * The processes that the activation of this test started, without the late ones of the activation of an earlier test:
+   * those run the fake Docker CLI of that test (its folder `devspaces-first-use-cli-…`, already removed). Under CPU load,
+   * a read of the Docker context that the earlier activation began in the background can start after its test ended.
+   */
+  function spawnedBy(docker: string): string[][] {
+    return spawned.filter(([command]) => command === docker || !path.basename(path.dirname(command)).startsWith('devspaces-first-use-cli-'));
+  }
+
+  /**
    * Activates the extension with the sidebar visible, as a window without a folder, or with `containerName` as the
    * window of that container (role A); `prepare` fills the storage first. `running`: the Docker engine answers.
    */
@@ -380,7 +389,7 @@ describe('nothing before the first use of Devspaces', () => {
         await new Promise((resolve) => setTimeout(resolve, 500));
         // No `docker info`, image, build or run, no worker, no credential helper, no ssh, no wsl.exe: nothing but the
         // context.
-        expect(spawned.filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([]);
+        expect(spawnedBy(docker).filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([]);
         for (const name of ['registry.json', 'helper.json', 'used']) expect(fs.existsSync(path.join(storage, name)), name).toBe(false);
       },
     );
@@ -410,7 +419,7 @@ describe('nothing before the first use of Devspaces', () => {
         await waitFor(() => log().includes('No Docker work in the background at the start: Devspaces was removed from the local Docker.'), 'the log of the mark');
         await new Promise((resolve) => setTimeout(resolve, 500));
         // No `docker info`: no preparation of the helper image and no reconcile of the registry.
-        expect(spawned.filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([]);
+        expect(spawnedBy(docker).filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([]);
       },
     );
   }, 20_000);
@@ -458,7 +467,7 @@ describe('nothing before the first use of Devspaces', () => {
         expect(fakeVscode.commands.executeCommand.mock.calls.filter(([command]) => command === CLOSE_REMOTE_COMMAND)).toEqual([]);
         // Not even `docker info` for the states in the sidebar. No heartbeat (whose repair would start the Monitor), no
         // worker, no open pipeline.
-        expect(spawned.filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([]);
+        expect(spawnedBy(docker).filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([]);
       },
       { containerName: kept.containerName, running: true },
     );
@@ -504,7 +513,7 @@ describe('nothing before the first use of Devspaces', () => {
         await waitFor(() => fakeVscode.commands.executeCommand.mock.calls.some(([command]) => command === CLOSE_REMOTE_COMMAND), 'the close of the connection');
         await new Promise((resolve) => setTimeout(resolve, 500));
         // Not even `docker info`: no restore is tried there; only one plain inspect of the container (it fails here).
-        expect(spawned.filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([inspect(docker)]);
+        expect(spawnedBy(docker).filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([inspect(docker)]);
         expect(log()).not.toContain('could not be restored from the volumes');
         expect(log()).toContain(
           `The window closes its remote connection: the owner of the devspace of the container ${kept.containerName} cannot be read (Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?).`,
@@ -533,7 +542,7 @@ describe('nothing before the first use of Devspaces', () => {
         expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
         expect(fakeVscode.commands.executeCommand.mock.calls.filter(([command]) => command === CLOSE_REMOTE_COMMAND)).toEqual([]);
         // No restore, no heartbeat, no worker: only the inspect.
-        expect(spawned.filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([inspect(docker)]);
+        expect(spawnedBy(docker).filter(([command, sub]) => !(command === docker && sub === 'context'))).toEqual([inspect(docker)]);
         expect(fs.existsSync(path.join(storage, 'registry.json'))).toBe(false);
       },
       { containerName: kept.containerName, running: true, labels: keptLabels('1001') },
