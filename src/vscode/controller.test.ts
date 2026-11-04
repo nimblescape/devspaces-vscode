@@ -36,13 +36,13 @@ import { availableDevspaces } from '../core/ownership';
 import { WSL_HOST, dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
 import { DockerTargets, operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { silentLogger } from '../core/ports';
-import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, ReadyVscodeUpdate, RepositoryInfo, WindowStatus } from '../core/types';
+import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, RepositoryInfo, StartAfterUpdate, WindowStatus } from '../core/types';
 import { GITHUB_ENTERPRISE_CONTEXT_KEY, SIGNED_IN_CONTEXT_KEY } from './auth';
 import { Commands } from './commands';
 import { CONNECTED_CONTEXT_KEY, Controller, HELPER_BUILDS_STOP_WAIT_MS, type ControllerDeps } from './controller';
 import { placeholderRepositoryInfo } from './targets';
 import { ControllerTexts } from './controllerTexts';
-import type { RestartOutcome } from './vscodeUpdate';
+import type { UpdateOutcome, UpdatePlan, UpdateRunOptions } from './vscodeUpdate';
 import { DisconnectRequests } from './disconnectRequests';
 import { DOUBLE_CLICK_INTERVAL_MS, type ListOpenMode } from './rowActivation';
 import { DEFAULT_SETTINGS, SETTINGS_SECTION } from './settings';
@@ -230,7 +230,7 @@ interface Harness {
   };
   coordinator: {
     windowId: string;
-    writePending: ReturnType<typeof vi.fn<(id: string, vscodeUpdate?: ReadyVscodeUpdate) => Promise<void>>>;
+    writePending: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
     otherActiveWindows: ReturnType<typeof vi.fn<() => Promise<WindowStatus[]>>>;
     setDevspace: ReturnType<typeof vi.fn>;
     setPlainDevspace: ReturnType<typeof vi.fn>;
@@ -307,7 +307,7 @@ function createHarness(
     startDocker?: ControllerDeps['startDocker'];
     /** The longest wait of a removal for the background builds of the helper image (default 60 s). */
     helperBuildsStopWaitMs?: number;
-    /** The update of VS Code before a new window of a devspace connects. Default: none. */
+    /** The update of VS Code before a devspace starts. Default: none. */
     vscodeUpdate?: ControllerDeps['vscodeUpdate'];
   } = {},
 ): Harness {
@@ -414,7 +414,7 @@ function createHarness(
   };
   const coordinator: Harness['coordinator'] = {
     windowId: WINDOW_ID,
-    writePending: vi.fn((id: string, vscodeUpdate?: ReadyVscodeUpdate) => sessionFiles.writePending(id, WINDOW_ID, vscodeUpdate)),
+    writePending: vi.fn((id: string) => sessionFiles.writePending(id, WINDOW_ID)),
     otherActiveWindows: vi.fn(async () => []),
     setDevspace: vi.fn(async () => {}),
     setPlainDevspace: vi.fn(async () => {}),
@@ -6836,14 +6836,13 @@ describe('the Docker host of Devspaces', () => {
     let connects: { host: string; again: boolean; asks: boolean }[];
     let failWithoutQuestions: boolean;
     let failWithQuestions: boolean;
-    let hostConnection: NonNullable<ControllerDeps['hostConnection']>;
 
     beforeEach(() => {
       fs.rmSync(h.root, { recursive: true, force: true });
       connects = [];
       failWithoutQuestions = false;
       failWithQuestions = false;
-      hostConnection = {
+      const hostConnection: NonNullable<ControllerDeps['hostConnection']> = {
         // As extension.ts: only an SSH host, never the WSL distribution of Devspaces or the local Docker.
         sshHostOf: (shown) => (shown.dockerHost !== undefined && !shown.dockerHost.startsWith('wsl:') ? shown.dockerHost : undefined),
         connect: async (host, options) => {
@@ -6887,28 +6886,6 @@ describe('the Docker host of Devspaces', () => {
       expect(connects).toHaveLength(2);
       expect(fakeVscode.window.showErrorMessage).toHaveBeenCalled();
       expect(h.statusBar.showConnectionLost).toHaveBeenCalled();
-    });
-
-    it('opens no connection while VS Code restarts for its update, and opens it when VS Code keeps running', async () => {
-      // The login to the host may ask questions, which must not appear while VS Code closes its windows (R-DS-006).
-      let kept: (() => void) | undefined;
-      const vscodeUpdate = {
-        readyToInstall: vi.fn(async () => undefined),
-        restartToInstall: vi.fn(async (_update: ReadyVscodeUpdate, onKept?: () => void): Promise<RestartOutcome> => {
-          kept = onKept;
-          return 'restarting';
-        }),
-      };
-      h.controller.dispose();
-      h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, hostConnection, vscodeUpdate });
-      const env = remoteDevspace();
-      await h.registry.add(env);
-      await h.controller.openAttachedWindow(env, env.containerName, { ...fresh(), vscodeUpdate: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273' } });
-      expect(vscodeUpdate.restartToInstall).toHaveBeenCalledTimes(1);
-      expect(connects).toEqual([]);
-      kept?.();
-      await settle(() => connects.length === 1, 'the connection to the host');
-      expect(connects).toEqual([{ host: 'build-box', again: false, asks: false }]);
     });
 
     it('opens no connection for a devspace on the WSL distribution, nor when the pipeline did not just run', async () => {
@@ -8272,97 +8249,177 @@ describe('Several GitHub accounts', () => {
   });
 });
 
-describe('the update of VS Code before a new window connects (R-DS-006)', () => {
-  const UPDATE: ReadyVscodeUpdate = { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' };
-  const fresh = (vscodeUpdate?: ReadyVscodeUpdate) => ({ devspaceId: ENV_ID, windowId: 'old', createdAt: iso(NOW - 30_000), ...(vscodeUpdate ? { vscodeUpdate } : {}) });
+describe('the update of VS Code before a devspace starts (R-DS-006)', () => {
+  const PLAN: UpdatePlan = { first: 'restart', update: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' } };
   let vscodeUpdate: {
-    readyToInstall: Mock<(enabled: boolean) => Promise<ReadyVscodeUpdate | undefined>>;
-    restartToInstall: Mock<(update: ReadyVscodeUpdate, kept?: () => void) => Promise<RestartOutcome>>;
+    planBeforeStart: Mock<(enabled: boolean) => Promise<UpdatePlan | undefined>>;
+    updateAndRestart: Mock<(plan: UpdatePlan, options?: UpdateRunOptions) => Promise<UpdateOutcome>>;
+    runningVersion: string;
   };
+  const newRepository = () => {
+    h.service.openInWorker.mockImplementation(async () => {
+      const env = devspace();
+      await h.registry.add(env);
+      return openResult(env);
+    });
+  };
+  const record = (overrides: Partial<StartAfterUpdate> = {}): StartAfterUpdate => ({
+    repository: 'acme/api',
+    newWindow: false,
+    window: 'empty',
+    from: '1.145.0',
+    createdAt: iso(NOW - 60_000),
+    ...overrides,
+  });
 
   beforeEach(() => {
     vscodeUpdate = {
-      readyToInstall: vi.fn(async (enabled: boolean) => (enabled ? UPDATE : undefined)),
-      restartToInstall: vi.fn(async (_update: ReadyVscodeUpdate, _kept?: () => void): Promise<RestartOutcome> => 'notStarted'),
+      planBeforeStart: vi.fn(async (enabled: boolean) => (enabled ? PLAN : undefined)),
+      // Like VscodeUpdate.updateAndRestart: the record is written right before Restart to Update.
+      updateAndRestart: vi.fn(async (_plan: UpdatePlan, options?: UpdateRunOptions): Promise<UpdateOutcome> => (options?.beforeRestart !== undefined && !(await options.beforeRestart()) ? 'failed' : 'restarting')),
+      runningVersion: '1.145.0',
     };
     recreateHarness({ vscodeUpdate });
+    h.connection.isEmptyWindow.mockReturnValue(true);
   });
 
-  it('a Start names the update in the pending connection file, and then opens the window as usual', async () => {
-    h.service.openInWorker.mockImplementation(async () => {
-      const env = devspace();
-      await h.registry.add(env);
-      return openResult(env);
-    });
+  it('a Start updates VS Code first, and the devspace does not start while VS Code restarts', async () => {
+    newRepository();
     await run('start', row('acme/api'));
-    expect(vscodeUpdate.readyToInstall).toHaveBeenCalledWith(true);
-    expect(h.coordinator.writePending).toHaveBeenCalledWith(ENV_ID, UPDATE);
-    expect((await h.sessionFiles.readPendings()).map((pending) => pending.vscodeUpdate)).toEqual([UPDATE]);
-    expect(h.connection.open).toHaveBeenCalledWith(CONTAINER, '/workspaces/api');
-    // The window that runs the Start installs nothing itself: the window of the devspace does.
-    expect(vscodeUpdate.restartToInstall).not.toHaveBeenCalled();
+    expect(vscodeUpdate.planBeforeStart).toHaveBeenCalledWith(true);
+    expect(vscodeUpdate.updateAndRestart).toHaveBeenCalledWith(PLAN, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    expect(h.progressTitles[0]).toContain(ControllerTexts.updatingVscode('1.146.0', 'acme/api'));
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
+    expect(h.connection.open).not.toHaveBeenCalled();
+    // The record for the window after the restart: an empty window connects itself.
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toEqual({ repository: 'acme/api', newWindow: false, window: 'empty', from: '1.145.0', createdAt: iso(NOW) });
   });
 
-  it('a Start names no update when the setting installVsCodeUpdateFirst is off', async () => {
-    h.settings.installVsCodeUpdateFirst = false;
-    h.service.openInWorker.mockImplementation(async () => {
-      const env = devspace();
-      await h.registry.add(env);
-      return openResult(env);
-    });
-    await run('start', row('acme/api'));
-    expect(vscodeUpdate.readyToInstall).toHaveBeenCalledWith(false);
-    expect(h.coordinator.writePending).toHaveBeenCalledWith(ENV_ID);
-    expect((await h.sessionFiles.readPendings())[0]).not.toHaveProperty('vscodeUpdate');
-    expect(h.connection.open).toHaveBeenCalled();
-  });
-
-  const branchRead = () => h.service.windowStateInWorker.mock.calls.some(([, , options]) => options?.branch === true);
-
-  it('the window of the devspace restarts VS Code for the update, and its activation ends without a connection', async () => {
+  it('names the devspace, its source, and a new window in the record', async () => {
     const env = devspace();
     await h.registry.add(env);
-    vscodeUpdate.restartToInstall.mockResolvedValueOnce('restarting');
-    // VS Code closes the window only after the end of its activation, so the activation must end now.
-    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
-    expect(vscodeUpdate.restartToInstall).toHaveBeenCalledWith(UPDATE, expect.any(Function));
-    expect(h.progressTitles[0]).toContain(ControllerTexts.installingVscodeUpdate('1.146.0', 'acme/api'));
+    h.connection.isEmptyWindow.mockReturnValue(false);
+    h.settings.openInNewWindow = true;
+    await run('start', row('acme/api', env));
+    const written = await h.sessionFiles.readStartAfterUpdate();
+    expect(written).toMatchObject({ repository: 'acme/api', devspaceId: ENV_ID, source: ROOT_SOURCE, newWindow: true });
+    expect(written?.window.startsWith('folder:')).toBe(true);
     expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
-    await pause(20);
-    expect(branchRead()).toBe(false);
   });
 
-  it('the window connects when VS Code keeps running after the restart began (Cancel on unsaved files)', async () => {
-    const env = devspace();
-    await h.registry.add(env);
+  it('a Start with the setting off starts at once, without a record', async () => {
+    h.settings.installVsCodeUpdateFirst = false;
+    newRepository();
+    await run('start', row('acme/api'));
+    expect(vscodeUpdate.planBeforeStart).toHaveBeenCalledWith(false);
+    expect(vscodeUpdate.updateAndRestart).not.toHaveBeenCalled();
+    expect(h.service.openInWorker).toHaveBeenCalledTimes(1);
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toBeUndefined();
+  });
+
+  it('starts the devspace with the running version when VS Code does not update, and removes the record', async () => {
+    for (const outcome of ['notReady', 'notStarted', 'unknown', 'failed'] as const) {
+      vscodeUpdate.updateAndRestart.mockResolvedValueOnce(outcome);
+      h.service.openInWorker.mockClear();
+      newRepository();
+      await run('start', row('acme/api'));
+      expect(h.service.openInWorker, outcome).toHaveBeenCalledTimes(1);
+      await expect(h.sessionFiles.readStartAfterUpdate(), outcome).resolves.toBeUndefined();
+      await h.registry.remove(ENV_ID);
+    }
+  });
+
+  it('the Cancel of the progress during the download ends the Start, and removes the record', async () => {
+    vscodeUpdate.updateAndRestart.mockResolvedValueOnce('cancelled');
+    newRepository();
+    await run('start', row('acme/api'));
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toBeUndefined();
+  });
+
+  it('the Start goes on in this window when VS Code keeps running after the restart began (Cancel on unsaved files)', async () => {
     let kept: (() => void) | undefined;
-    vscodeUpdate.restartToInstall.mockImplementationOnce(async (_update, onKept) => {
-      kept = onKept;
+    vscodeUpdate.updateAndRestart.mockImplementationOnce(async (_plan, options) => {
+      await options?.beforeRestart?.();
+      kept = options?.kept;
       return 'restarting';
     });
-    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
-    expect(branchRead()).toBe(false);
+    newRepository();
+    await run('start', row('acme/api'));
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
     kept?.();
-    await settle(branchRead, 'the read of the branch');
-    await settle(() => h.statusBar.showConnected.mock.calls.some(([, branch]) => branch === 'main'), 'the branch in the status bar');
+    await settle(() => h.connection.open.mock.calls.length === 1, 'the connection of the window');
+    expect(h.service.openInWorker).toHaveBeenCalledTimes(1);
+    // The Start after Cancel does not update VS Code again.
+    expect(vscodeUpdate.planBeforeStart).toHaveBeenCalledTimes(1);
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toBeUndefined();
+  });
+
+  it('a Reconnect of the devspace of this window writes no record: VS Code opens this window again, and it connects then', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    h.connection.isEmptyWindow.mockReturnValue(false);
+    await connectHere(env);
+    h.docker.containerState.mockResolvedValue('stopped');
+    await run('start', { devspaceId: ENV_ID });
+    expect(vscodeUpdate.updateAndRestart).toHaveBeenCalledTimes(1);
+    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toBeUndefined();
+  });
+
+  it('after the restart, a window of the same kind goes on with the Start, and only once', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    await h.sessionFiles.writeStartAfterUpdate(record({ devspaceId: ENV_ID, source: ROOT_SOURCE }));
+    vscodeUpdate.runningVersion = '1.146.0';
+    pipelineStartsContainer();
+    await expect(h.controller.startAfterUpdate()).resolves.toBe(true);
+    expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
+    expect(h.connection.open).toHaveBeenCalledWith(CONTAINER, '/workspaces/api');
+    // The Start after the update does not update VS Code again.
+    expect(vscodeUpdate.planBeforeStart).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('VS Code was updated from 1.145.0 to 1.146.0: the Start of acme/api goes on in this window.');
+    await expect(h.controller.startAfterUpdate()).resolves.toBe(false);
+  });
+
+  it('a new repository goes on with the Start after the restart too, in a new window when the record says so', async () => {
+    await h.sessionFiles.writeStartAfterUpdate(record({ newWindow: true }));
+    vscodeUpdate.runningVersion = '1.146.0';
+    newRepository();
+    await expect(h.controller.startAfterUpdate()).resolves.toBe(true);
+    expect(h.service.openInWorker).toHaveBeenCalledTimes(1);
+    expect(h.connection.openInNewWindow).toHaveBeenCalled();
+    expect(h.connection.open).not.toHaveBeenCalled();
+  });
+
+  it('another kind of window, or a window of the version before the update, leaves the record; an old record is removed', async () => {
+    vscodeUpdate.runningVersion = '1.146.0';
+    await h.sessionFiles.writeStartAfterUpdate(record({ window: 'devspace:6b1f0c2e-1d4a-4f5e-9a8b-7c6d5e4f3a2b' }));
+    await expect(h.controller.startAfterUpdate()).resolves.toBe(false);
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toBeDefined();
+
+    await h.sessionFiles.writeStartAfterUpdate(record({ createdAt: iso(NOW - 16 * 60_000) }));
+    await expect(h.controller.startAfterUpdate()).resolves.toBe(false);
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toBeUndefined();
+
+    // A window of the version before the update (the restart has not happened yet, or VS Code kept running):
+    // nothing goes on by itself, and the record stays for the window after the restart.
+    await h.sessionFiles.writeStartAfterUpdate(record({ from: '1.146.0' }));
+    await expect(h.controller.startAfterUpdate()).resolves.toBe(false);
+    await expect(h.sessionFiles.readStartAfterUpdate()).resolves.toMatchObject({ from: '1.146.0' });
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
     expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
   });
 
-  it('the window connects with the running version when VS Code does not restart', async () => {
+  it('an empty window goes on with the Start instead of the reopen of the last devspace', async () => {
     const env = devspace();
     await h.registry.add(env);
-    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
-    expect(vscodeUpdate.restartToInstall).toHaveBeenCalledTimes(1);
-    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
-    await settle(() => h.statusBar.showConnected.mock.calls.some(([, branch]) => branch === 'main'), 'the branch in the status bar');
-  });
-
-  it('installs nothing without an update in the pending connection file, and in a restored or reloaded window', async () => {
-    const env = devspace();
-    await h.registry.add(env);
-    await h.controller.openAttachedWindow(env, CONTAINER, fresh());
-    await h.controller.openAttachedWindow(env, CONTAINER, undefined);
-    expect(vscodeUpdate.restartToInstall).not.toHaveBeenCalled();
+    await h.sessionFiles.writeStartAfterUpdate(record({ devspaceId: ENV_ID, source: ROOT_SOURCE }));
+    vscodeUpdate.runningVersion = '1.146.0';
+    pipelineStartsContainer();
+    await h.controller.runEmptyWindowTasks();
+    expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
+    expect(h.logger.info).not.toHaveBeenCalledWith(expect.stringContaining('The last devspace is not opened'));
   });
 
   it('reads the setting as a user setting only, on by default (package.json)', () => {
@@ -8372,15 +8429,5 @@ describe('the update of VS Code before a new window connects (R-DS-006)', () => 
     const properties = manifest.contributes.configuration.properties;
     expect(properties[`${SETTINGS_SECTION}.installVsCodeUpdateFirst`]).toMatchObject({ type: 'boolean', default: true, scope: 'application' });
     expect(DEFAULT_SETTINGS.installVsCodeUpdateFirst).toBe(true);
-  });
-
-  it('installs nothing when the setting was turned off after the Start', async () => {
-    const env = devspace();
-    await h.registry.add(env);
-    h.settings.installVsCodeUpdateFirst = false;
-    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
-    expect(vscodeUpdate.restartToInstall).not.toHaveBeenCalled();
-    expect(h.logger.info).toHaveBeenCalledWith('The update 1.146.0 of VS Code is not installed first: the setting installVsCodeUpdateFirst is off.');
-    expect(h.statusBar.showConnected).toHaveBeenCalled();
   });
 });

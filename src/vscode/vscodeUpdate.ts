@@ -2,66 +2,90 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The update of VS Code before a new window connects to a devspace (docs/requirements.md R-DS-006, setting
-// devspaces.installVsCodeUpdateFirst): when VS Code has downloaded an update and waits for its restart ("Restart to
-// Update"), VS Code restarts first, so that the devspace gets the VS Code Server of the new version.
+// The update of VS Code before a devspace starts (docs/requirements.md R-DS-006, setting
+// devspaces.installVsCodeUpdateFirst): while VS Code shows its button Update in the title bar, a Start updates VS Code
+// first, so that the devspace starts with the VS Code Server of the new version. The Controller continues the Start
+// after the restart (Controller.startAfterUpdate).
 //
-// VS Code has no API for its own updates. Two commands of its workbench serve here (VS Code 1.125 to 1.145 have both;
-// the tests in a real VS Code check them, test/vscode/extension.test.ts):
+// VS Code has no API for its own updates. These commands of its workbench serve here (VS Code 1.125 to 1.145 have all of
+// them; the tests in a real VS Code check them, test/vscode/extension.test.ts):
 // - `_update.state`, an internal command (UpdateContribution in src/vs/workbench/contrib/update/browser/update.ts of
 //   VS Code), returns the state of the update service, for example `{ type: 'ready', update: { version: '<commit>',
-//   productVersion: '1.146.0' } }`. The workbench registers it in its phase "Restored". In a window that VS Code opens
-//   for a remote authority, the extensions of that authority activate before this phase, and VS Code connects the
-//   window only after their activation. A command whose ID is not registered yet waits for the extensions of the
-//   window, which in such a window wait for the end of this activation, so the code first looks for the ID in
-//   `vscode.commands.getCommands()` and runs the command only when it is there.
-// - `update.restartToUpdate` ("Restart to Update") runs `quitAndInstall` of the update service, which does nothing
-//   unless the state is `ready`. Else the state becomes `restarting`, and VS Code closes all its windows: each window
-//   may ask about unsaved files, and Cancel there keeps every window and gives the state `ready` back. Then VS Code
-//   installs the update and starts again with all windows of the last session (also when the setting
-//   `window.restoreWindows` says otherwise). VS Code closes a window for a remote authority only after the activation
-//   of its extensions, so the window that asks for the restart must end its activation while VS Code closes: a test
-//   in VS Code 1.145 showed that the quit waits for the end of the activation (VscodeUpdate.restartToInstall).
-// Only an update in the state `ready` is installed. The states before it (the download, the installation in the
-// background on Windows) can take minutes, and on Linux VS Code installs no update itself: the state stays
-// `available for download`, and the package manager of the system updates VS Code.
+//   productVersion: '1.146.0' } }`. The workbench registers it in its phase "Restored".
+// - The button Update (UpdateTitleBarEntry in updateTitleBarEntry.ts of VS Code) shows in the states `available for
+//   download`, `downloaded` and `ready`, and runs the step of the state. The same steps as commands:
+//   `update.downloadUpdate` (Download Update), `update.installUpdate` (Install Update), and `update.restartToUpdate`
+//   (Restart to Update). Each does nothing in any other state.
+// - Download Update downloads the update only on macOS. On Windows and Linux, the state `available for download` means
+//   an installation that VS Code does not update itself (a ZIP archive, a package of Linux): the command opens the
+//   download page in the browser, so Devspaces does not run it.
+// - Restart to Update sets the state `restarting`, and VS Code closes all its windows: each window may ask about unsaved
+//   files, and Cancel there keeps VS Code running and gives the state `ready` back. VS Code closes each window without
+//   unsaved files at once. Then VS Code installs the update and starts again with all windows of the last session (also
+//   when the setting `window.restoreWindows` says otherwise).
+// A command whose ID is not registered yet waits for the extensions of the window, so a command runs only when
+// `vscode.commands.getCommands()` lists it.
 import type * as vscode from 'vscode';
 import { errorMessage } from '../core/errors';
 import { sleep, systemClock, type Clock, type Logger } from '../core/ports';
-import type { ReadyVscodeUpdate } from '../core/types';
 
 /** The internal command of the workbench that returns the state of the update service. */
 export const UPDATE_STATE_COMMAND = '_update.state';
-/** "Restart to Update": installs an update in the state `ready`, and does nothing in any other state. */
+/** "Download Update": in the state `available for download`. */
+export const DOWNLOAD_UPDATE_COMMAND = 'update.downloadUpdate';
+/** "Install Update": in the state `downloaded`. */
+export const INSTALL_UPDATE_COMMAND = 'update.installUpdate';
+/** "Restart to Update": in the state `ready`. */
 export const RESTART_TO_UPDATE_COMMAND = 'update.restartToUpdate';
 
 /** The key in the global state of the extension: the last restart of VS Code for an update (UpdateRestartRecord). */
 export const UPDATE_RESTART_KEY = 'vscodeUpdateRestart';
 
-/** The state of an update that VS Code installs at its next restart. */
+const AVAILABLE = 'available for download';
+const DOWNLOADED = 'downloaded';
 const READY = 'ready';
-/** The state while VS Code closes its windows for the restart to update. */
 const RESTARTING = 'restarting';
 /** The states without an update, about which nothing is logged. */
 const QUIET_STATES: ReadonlySet<string> = new Set(['uninitialized', 'idle', 'disabled', 'checking for updates']);
+/** The states while VS Code downloads or installs an update, through which the wait for `ready` goes on. */
+const WORKING_STATES: ReadonlySet<string> = new Set(['checking for updates', 'downloading', DOWNLOADED, 'updating', 'overwriting']);
 
-/** The longest wait of a window for the registration of `_update.state`, before it reads the state of the update. */
-export const STATE_COMMAND_WAIT_MS = 3_000;
+/** The longest wait for the registration of a command of the update. */
+export const COMMAND_WAIT_MS = 3_000;
 /** The longest wait for the answer of `_update.state`. */
 export const STATE_READ_TIMEOUT_MS = 2_000;
-/** The pause between two looks at the commands, and between two reads of the state around the restart. */
+/** The pause between two looks at the commands, and between two reads of the state. */
 export const UPDATE_POLL_MS = 500;
 /**
- * Without the state `restarting` this long after "Restart to Update", VS Code does not restart: it found a newer update
- * first (it downloads that one and does not restart), or the update was no longer ready. Before the state changes,
- * VS Code asks the update service for a newer update for at most 2 seconds.
+ * Without a change of the state this long after the command of a step, VS Code does not do the step: for example, it
+ * found a newer update first, or the update was no longer in that state. Before `restarting`, VS Code asks the update
+ * service for a newer update for at most 2 seconds.
  */
-export const RESTART_START_MS = 10_000;
+export const STEP_START_MS = 10_000;
+/** The longest wait for the download and the installation of an update, until the state is `ready`. */
+export const UPDATE_PREPARE_MS = 15 * 60_000;
 /**
- * How long the window watches the state `restarting` after the end of its activation, for example while another window
- * asks about unsaved files: when the state changes back, VS Code keeps running (VscodeUpdate.restartToInstall).
+ * How long the window watches the state `restarting`, for example while another window asks about unsaved files: when
+ * the state changes back, VS Code keeps running (VscodeUpdate.updateAndRestart, `kept`).
  */
 export const RESTART_WATCH_MS = 10 * 60_000;
+
+/** An update of VS Code. */
+export interface VscodeUpdateVersion {
+  /** The commit of the new build (`update.version` of the update service; a Snap package names no commit). */
+  version: string;
+  /** Its version number, for example `1.146.0`, when the update service named it. */
+  productVersion?: string;
+}
+
+/** The step that the button Update would run: download, install, or restart. */
+export type UpdateStep = 'download' | 'install' | 'restart';
+
+/** What a Start does before the devspace starts: the first step, and the update. */
+export interface UpdatePlan {
+  first: UpdateStep;
+  update: VscodeUpdateVersion;
+}
 
 /**
  * The last restart of VS Code for an update, in the global state of the extension (shared by the windows of this
@@ -73,21 +97,25 @@ export interface UpdateRestartRecord {
   at: string;
 }
 
-/** What "Restart to Update" did (VscodeUpdate.restartToInstall). */
-export type RestartOutcome =
-  /** The state is `restarting`: VS Code closes its windows, and this window must not connect. */
+/** How the update before a Start ended (VscodeUpdate.updateAndRestart). */
+export type UpdateOutcome =
+  /** The state is `restarting`: VS Code closes its windows. */
   | 'restarting'
-  /** VS Code did not begin to restart (no state `restarting` within RESTART_START_MS). */
+  /** The user cancelled the progress notification during the download or the installation. */
+  | 'cancelled'
+  /** The update did not become `ready` (VS Code did not do a step, a step ended in another state, or the time ran out). */
+  | 'notReady'
+  /** VS Code did not begin to restart (no state `restarting` within STEP_START_MS). */
   | 'notStarted'
   /** The state could not be read, so it is not known whether VS Code restarts. */
   | 'unknown'
-  /** The command "Restart to Update" is missing or failed. */
+  /** A command is missing or failed. */
   | 'failed';
 
-/** The ReadyVscodeUpdate of a value of `_update.state`, or `undefined` for any other state or value. */
-export function readyUpdateOf(state: unknown): ReadyVscodeUpdate | undefined {
-  if (updateStateType(state) !== READY) return undefined;
-  const update = (state as { update?: unknown }).update;
+/** The update of a value of `_update.state` in the states that name one, or `undefined`. */
+export function updateOf(state: unknown): VscodeUpdateVersion | undefined {
+  if (!isRecord(state)) return undefined;
+  const update = state.update;
   if (!isRecord(update)) return undefined;
   const { version, productVersion } = update;
   if (typeof version !== 'string' || version.trim() === '') return undefined;
@@ -108,7 +136,7 @@ export function updateRestartRecordOf(value: unknown): UpdateRestartRecord | und
 }
 
 /** The name of an update in the log and in the texts: its version number, else its commit. */
-export function updateLabel(update: ReadyVscodeUpdate): string {
+export function updateLabel(update: VscodeUpdateVersion): string {
   return update.productVersion ?? update.version;
 }
 
@@ -121,25 +149,29 @@ export interface UpdateFirstInput {
   runningVersion: string;
   /** The last restart for an update (UPDATE_RESTART_KEY). */
   record: UpdateRestartRecord | undefined;
+  /** `process.platform`: only VS Code on macOS downloads an update in the state `available for download`. */
+  platform: NodeJS.Platform;
 }
 
 /** `reason`: one line for the log, or `undefined` when there is nothing to say (no update, or the setting is off). */
-export type UpdateFirstDecision = { install: true; update: ReadyVscodeUpdate } | { install: false; reason?: string };
+export type UpdateFirstDecision = { install: true; plan: UpdatePlan } | { install: false; reason?: string };
 
 /**
- * Whether a new window of a devspace installs the update of VS Code first: only an update in the state `ready`, and not
- * one that VS Code restarted for before from the same version (the restart did not install it, for example because
- * the installation needs the rights of an administrator).
+ * Whether a Start updates VS Code first, and with which step: in the states of the button Update, when VS Code can do
+ * the steps itself, and not for an update that VS Code restarted for before from the same version (the restart did not
+ * install it, for example because the installation needs the rights of an administrator, or the user chose Cancel).
  */
 export function decideUpdateFirst(input: UpdateFirstInput): UpdateFirstDecision {
   if (!input.enabled) return { install: false };
   if (input.state === undefined) return { install: false, reason: 'the state of the update of VS Code could not be read' };
-  const update = readyUpdateOf(input.state);
-  if (update === undefined) {
-    const type = updateStateType(input.state);
-    if (type === undefined) return { install: false, reason: 'the state of the update of VS Code has an unknown form' };
-    if (QUIET_STATES.has(type)) return { install: false };
-    return { install: false, reason: `the update of VS Code is in the state "${type}", not "${READY}"` };
+  const type = updateStateType(input.state);
+  if (type === undefined) return { install: false, reason: 'the state of the update of VS Code has an unknown form' };
+  if (QUIET_STATES.has(type)) return { install: false };
+  const update = updateOf(input.state);
+  const first: UpdateStep | undefined = type === READY ? 'restart' : type === DOWNLOADED ? 'install' : type === AVAILABLE ? 'download' : undefined;
+  if (first === undefined || update === undefined) return { install: false, reason: `the update of VS Code is in the state "${type}"` };
+  if (first === 'download' && (input.platform !== 'darwin' || (input.state as { canInstall?: unknown }).canInstall === false)) {
+    return { install: false, reason: `VS Code does not install the update ${updateLabel(update)} itself here (its button Update opens the download page)` };
   }
   const record = input.record;
   if (record !== undefined && record.version === update.version && record.from === input.runningVersion) {
@@ -148,7 +180,7 @@ export function decideUpdateFirst(input: UpdateFirstInput): UpdateFirstDecision 
       reason: `VS Code restarted for the update ${updateLabel(update)} at ${record.at} and still runs ${input.runningVersion}, so it does not restart for that update again`,
     };
   }
-  return { install: true, update };
+  return { install: true, plan: { first, update } };
 }
 
 export interface VscodeUpdateDeps {
@@ -160,91 +192,172 @@ export interface VscodeUpdateDeps {
   state: Pick<vscode.Memento, 'get' | 'update'>;
   /** The version of the running VS Code (`vscode.version`). */
   runningVersion: string;
+  /** `process.platform`. */
+  platform: NodeJS.Platform;
   logger: Logger;
   clock?: Clock;
   /** For tests. Default: `sleep`. */
   delay?: (ms: number) => Promise<void>;
 }
 
-/** The update of VS Code before a window connects to a devspace. */
+export interface UpdateRunOptions {
+  /** The Cancel of the progress notification: it ends the wait for the download or the installation. */
+  signal?: AbortSignal;
+  /** Each step when it begins, for the progress notification. */
+  onStep?: (step: UpdateStep) => void;
+  /**
+   * Right before "Restart to Update", after the download or the installation: false stops the update (outcome
+   * `failed`), for example when the Start after the restart could not be recorded.
+   */
+  beforeRestart?: () => Promise<boolean>;
+  /** After `restarting`, when VS Code keeps running while this window is still there (Cancel on unsaved files). */
+  kept?: () => void;
+}
+
+/** The update of VS Code before a devspace starts. */
 export class VscodeUpdate {
   private readonly clock: Clock;
   private readonly delay: (ms: number) => Promise<void>;
+
+  /**
+   * The watch of the state after the outcome `restarting` (updateAndRestart). For tests: it settles when the state left
+   * `restarting` or after RESTART_WATCH_MS; when VS Code closes the window first, it never settles.
+   */
+  restartWatch: Promise<void> | undefined;
 
   constructor(private readonly deps: VscodeUpdateDeps) {
     this.clock = deps.clock ?? systemClock;
     this.delay = deps.delay ?? ((ms) => sleep(ms));
   }
 
+  /** The version of the running VS Code. */
+  get runningVersion(): string {
+    return this.deps.runningVersion;
+  }
+
   /**
-   * In the window that runs a Start, right before it opens the window of the devspace: the update that the new window
-   * installs first (decideUpdateFirst), or `undefined`. Logs the decision when there is something to say. Never rejects.
+   * At a Start, before the devspace starts: what the Start does first (decideUpdateFirst), or `undefined`. Logs the
+   * decision when there is something to say. Never rejects.
    */
-  async readyToInstall(enabled: boolean): Promise<ReadyVscodeUpdate | undefined> {
+  async planBeforeStart(enabled: boolean): Promise<UpdatePlan | undefined> {
     if (!enabled) return undefined;
     try {
-      const state = await this.readState(STATE_COMMAND_WAIT_MS);
+      const state = await this.readState(COMMAND_WAIT_MS);
       const decision = decideUpdateFirst({
         enabled,
         state,
         runningVersion: this.deps.runningVersion,
         record: updateRestartRecordOf(this.deps.state.get<unknown>(UPDATE_RESTART_KEY)),
+        platform: this.deps.platform,
       });
       if (decision.install) {
         this.deps.logger.info(
-          `VS Code ${this.deps.runningVersion} has downloaded the update ${updateLabel(decision.update)} and waits for its restart: the window of the devspace installs it before it connects (setting installVsCodeUpdateFirst).`,
+          `VS Code ${this.deps.runningVersion} shows its button Update for the update ${updateLabel(decision.plan.update)}: the Start updates VS Code first (setting installVsCodeUpdateFirst).`,
         );
-        return decision.update;
+        return decision.plan;
       }
-      if (decision.reason !== undefined) this.deps.logger.info(`The window of the devspace connects without an update of VS Code: ${decision.reason}.`);
+      if (decision.reason !== undefined) this.deps.logger.info(`The Start does not update VS Code first: ${decision.reason}.`);
       return undefined;
     } catch (error) {
-      this.deps.logger.warn(`The window of the devspace connects without an update of VS Code: ${errorMessage(error)}`);
+      this.deps.logger.warn(`The Start does not update VS Code first: ${errorMessage(error)}`);
       return undefined;
     }
   }
 
   /**
-   * The watch of the state after the outcome `restarting` (restartToInstall). For tests: it settles when the state left
-   * `restarting` or after RESTART_WATCH_MS; when VS Code closes the window first, it never settles.
+   * The steps of the button Update from the first step of the plan: download (macOS), install, and then "Restart to
+   * Update". Resolves with `restarting` as soon as the state says that VS Code closes its windows; then a watch
+   * (restartWatch) reads the state on: when it leaves `restarting` while this window is still there (a window asked
+   * about unsaved files, and the user chose Cancel), VS Code keeps running, and `kept` runs. VS Code closes each window
+   * without unsaved files at once, so this window is often closed before the answer. The record of the restart
+   * (UPDATE_RESTART_KEY) is written before "Restart to Update" and removed again when VS Code surely did not begin to
+   * restart; it stays after Cancel, so that VS Code does not restart for that update again. Never rejects.
    */
-  restartWatch: Promise<void> | undefined;
+  async updateAndRestart(plan: UpdatePlan, options: UpdateRunOptions = {}): Promise<UpdateOutcome> {
+    let update = plan.update;
+    if (plan.first !== 'restart') {
+      const prepared = await this.prepare(plan, options);
+      if (typeof prepared === 'string') return prepared;
+      update = prepared;
+    }
+    if (options.signal?.aborted) return 'cancelled';
+    options.onStep?.('restart');
+    return this.restart(update, options);
+  }
 
-  /**
-   * In the new window of a devspace, during its activation and before it connects: "Restart to Update". Resolves with
-   * `restarting` as soon as the state says that VS Code closes its windows: the activation of the window must end then,
-   * without a connection, because VS Code closes the window only after it. VS Code opens the window again after the
-   * update, and it connects then (as a restored window). With any other outcome, the window connects with the running
-   * version. The record of the restart (UPDATE_RESTART_KEY) is written first and removed again when VS Code surely did
-   * not begin to restart. After `restarting`, a watch (restartWatch) reads the state on: when it leaves `restarting`
-   * while this window is still there (a window asked about unsaved files, and the user chose Cancel), VS Code keeps
-   * running, and `kept` runs, so that the window connects with the running version. VS Code closes each window without
-   * unsaved files at once, so this window is often closed before the answer. The record stays after Cancel: Devspaces
-   * does not restart VS Code for that update again, and VS Code installs it at its next restart. Never rejects.
-   */
-  async restartToInstall(update: ReadyVscodeUpdate, kept?: () => void): Promise<RestartOutcome> {
+  /** Download (macOS) or install, until the state is `ready`: the update in the state `ready`, or the outcome. */
+  private async prepare(plan: UpdatePlan, options: UpdateRunOptions): Promise<VscodeUpdateVersion | UpdateOutcome> {
+    const { logger } = this.deps;
+    const label = updateLabel(plan.update);
+    const command = plan.first === 'download' ? DOWNLOAD_UPDATE_COMMAND : INSTALL_UPDATE_COMMAND;
+    const startState = plan.first === 'download' ? AVAILABLE : DOWNLOADED;
+    if (!(await this.commandListed(command, COMMAND_WAIT_MS))) {
+      logger.warn(`VS Code has no command "${command}", so the Start does not update VS Code.`);
+      return 'failed';
+    }
+    options.onStep?.(plan.first);
+    logger.info(`VS Code ${plan.first === 'download' ? 'downloads' : 'installs'} the update ${label} before the devspace starts.`);
+    // Not awaited: the installation on Windows answers only at its end, and the wait below has its own limits and Cancel.
+    const run: { failed: boolean; error?: unknown } = { failed: false };
+    Promise.resolve(this.deps.execute(command)).then(undefined, (error: unknown) => {
+      run.failed = true;
+      run.error = error;
+    });
+    const started = this.clock.now();
+    for (;;) {
+      if (options.signal?.aborted) {
+        logger.info(`The Start was cancelled while VS Code prepared the update ${label}. VS Code goes on with the update.`);
+        return 'cancelled';
+      }
+      if (run.failed) {
+        logger.warn(`VS Code could not ${plan.first} the update ${label}, so the Start does not update VS Code: ${errorMessage(run.error)}`);
+        return 'failed';
+      }
+      const state = await this.readState(0);
+      const type = updateStateType(state);
+      if (type === READY) return updateOf(state) ?? plan.update;
+      const waited = this.clock.now() - started;
+      if (type === startState) {
+        if (waited >= STEP_START_MS) {
+          logger.info(`VS Code did not begin to ${plan.first} the update ${label} (state "${type}"), so the Start does not update VS Code.`);
+          return 'notReady';
+        }
+      } else if (type !== undefined && !WORKING_STATES.has(type)) {
+        logger.info(`The update ${label} of VS Code did not become ready (state "${type}"), so the Start does not update VS Code.`);
+        return 'notReady';
+      }
+      if (waited >= UPDATE_PREPARE_MS) {
+        logger.warn(`The update ${label} of VS Code was not ready after ${UPDATE_PREPARE_MS / 60_000} minutes, so the Start does not update VS Code.`);
+        return 'notReady';
+      }
+      await this.delay(UPDATE_POLL_MS);
+    }
+  }
+
+  /** "Restart to Update" for an update in the state `ready` (updateAndRestart). */
+  private async restart(update: VscodeUpdateVersion, options: UpdateRunOptions): Promise<UpdateOutcome> {
     const { logger } = this.deps;
     const label = updateLabel(update);
     const running = this.deps.runningVersion;
+    if (!(await this.commandListed(RESTART_TO_UPDATE_COMMAND, COMMAND_WAIT_MS))) {
+      logger.warn(`VS Code has no command "${RESTART_TO_UPDATE_COMMAND}", so the Start does not update VS Code.`);
+      return 'failed';
+    }
+    if (options.beforeRestart !== undefined && !(await options.beforeRestart())) return 'failed';
     const record: UpdateRestartRecord = { version: update.version, from: running, at: new Date(this.clock.now()).toISOString() };
     try {
       await this.deps.state.update(UPDATE_RESTART_KEY, record);
     } catch (error) {
       logger.warn(`The restart for the update ${label} could not be recorded: ${errorMessage(error)}`);
     }
-    if (!(await this.commandListed(RESTART_TO_UPDATE_COMMAND, STATE_COMMAND_WAIT_MS))) {
-      logger.warn(`VS Code has no command "${RESTART_TO_UPDATE_COMMAND}", so this window connects with VS Code ${running}.`);
-      await this.forgetRestart();
-      return 'failed';
-    }
     logger.info(
-      `VS Code restarts to install the update ${label} before this window connects. A window may ask about unsaved files; Cancel there keeps VS Code ${running} running, and this window connects with it if VS Code did not close it.`,
+      `VS Code restarts to install the update ${label}, and the devspace starts after the restart. A window may ask about unsaved files; Cancel there keeps VS Code ${running} running.`,
     );
     const started = this.clock.now();
     try {
       await this.deps.execute(RESTART_TO_UPDATE_COMMAND);
     } catch (error) {
-      logger.warn(`VS Code could not restart for the update ${label}, so this window connects with VS Code ${running}: ${errorMessage(error)}`);
+      logger.warn(`VS Code could not restart for the update ${label}, so the devspace starts with VS Code ${running}: ${errorMessage(error)}`);
       await this.forgetRestart();
       return 'failed';
     }
@@ -252,17 +365,17 @@ export class VscodeUpdate {
     for (;;) {
       const type = updateStateType(await this.readState(0));
       if (type === RESTARTING) {
-        logger.info(`VS Code closes its windows to install the update ${label}. This window connects after the restart.`);
-        this.restartWatch = this.watchRestart(label, kept);
+        logger.info(`VS Code closes its windows to install the update ${label}.`);
+        this.restartWatch = this.watchRestart(label, options.kept);
         return 'restarting';
       }
       if (type !== undefined) readable = true;
-      if (this.clock.now() - started >= RESTART_START_MS) {
+      if (this.clock.now() - started >= STEP_START_MS) {
         if (!readable) {
-          logger.warn(`The state of the update of VS Code could not be read after "Restart to Update", so this window connects with VS Code ${running}.`);
+          logger.warn(`The state of the update of VS Code could not be read after "Restart to Update", so the devspace starts with VS Code ${running}.`);
           return 'unknown';
         }
-        logger.info(`VS Code did not begin to restart for the update ${label} (state "${type ?? 'not readable'}"), so this window connects with VS Code ${running}.`);
+        logger.info(`VS Code did not begin to restart for the update ${label} (state "${type ?? 'not readable'}"), so the devspace starts with VS Code ${running}.`);
         await this.forgetRestart();
         return 'notStarted';
       }
@@ -282,12 +395,12 @@ export class VscodeUpdate {
       const type = updateStateType(await this.readState(0));
       if (type === undefined || type === RESTARTING) continue;
       logger.info(
-        `VS Code did not restart for the update ${label} (a window kept it running, for example after Cancel on unsaved files), so this window connects with VS Code ${this.deps.runningVersion}. Devspaces does not restart VS Code for this update again; VS Code installs it at its next restart.`,
+        `VS Code did not restart for the update ${label} (a window kept it running, for example after Cancel on unsaved files), so the devspace starts with VS Code ${this.deps.runningVersion}. Devspaces does not restart VS Code for this update again; VS Code installs it at its next restart.`,
       );
       try {
         kept?.();
       } catch (error) {
-        logger.warn(`The window could not connect after VS Code kept running: ${errorMessage(error)}`);
+        logger.warn(`The devspace could not start after VS Code kept running: ${errorMessage(error)}`);
       }
       return;
     }
@@ -314,8 +427,7 @@ export class VscodeUpdate {
 
   /**
    * Whether VS Code lists the command, looked for until `waitMs` passed. A command whose ID is not registered yet waits
-   * for the extensions of the window, which in a window for a remote authority wait for the end of this activation, so
-   * a command runs only when it is listed.
+   * for the extensions of the window, so a command runs only when it is listed.
    */
   private async commandListed(command: string, waitMs: number): Promise<boolean> {
     const deadline = this.clock.now() + waitMs;

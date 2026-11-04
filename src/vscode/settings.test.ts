@@ -64,7 +64,7 @@ describe('settings', () => {
       startWithDefaultImage: true,
       // A link asks before it creates a devspace.
       confirmOpenFromLink: true,
-      // A new window of a devspace installs a downloaded update of VS Code first.
+      // A Start updates VS Code first while VS Code shows its button Update.
       installVsCodeUpdateFirst: true,
     });
   });

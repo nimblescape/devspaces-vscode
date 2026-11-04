@@ -904,7 +904,7 @@
           "type": "boolean",
           "scope": "application",
           "default": true,
-          "markdownDescription": "Install an update of VS Code that waits for its restart (**Restart to Update**) before a new window connects to a devspace: VS Code restarts, and the window then connects with the new version. **Cancel** on unsaved files keeps VS Code running. Off: VS Code installs the update at its next restart.\n\n[The update of VS Code in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-of-vs-code)"
+          "markdownDescription": "While VS Code shows its button **Update**, a Start updates VS Code first (download, installation, **Restart to Update**), and the devspace starts after the restart. **Cancel** on unsaved files keeps VS Code running. Off: the devspace starts at once, and VS Code installs the update at its next restart.\n\n[The update of VS Code in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-of-vs-code)"
         }
       }
     }

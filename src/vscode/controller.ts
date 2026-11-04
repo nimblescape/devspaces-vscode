@@ -39,8 +39,8 @@ import type {
   PendingConnection,
   PendingOperation,
   PendingOperationKind,
-  ReadyVscodeUpdate,
   RepositoryInfo,
+  StartAfterUpdate,
   WindowStatus,
 } from '../core/types';
 import { possibleSources, sourceOf, sourceOperationKey } from '../core/devspaceSource';
@@ -79,7 +79,14 @@ import { CoalescingTask, OperationGate } from './tasks';
 import { parseCommandArgument, repositoryTarget, sourceChoices, type CommandArgument } from './targets';
 import { TreeTexts, devspaceName, nonEmpty, recentDevspaces, repositoryRows, stateIcon } from './treeModel';
 import { opensNewWindow, type WindowRequest } from './windowChoice';
-import { updateLabel, type VscodeUpdate } from './vscodeUpdate';
+import { updateLabel, type UpdateOutcome, type UpdateStep, type VscodeUpdate } from './vscodeUpdate';
+
+/**
+ * The longest time from a Start that VS Code restarts for its update to the window after the restart that goes on with
+ * it (startAfterUpdate): the installation on Windows runs before the restart, and the window of a devspace runs its own
+ * open first.
+ */
+export const START_AFTER_UPDATE_MAX_AGE_MS = 15 * 60_000;
 
 /**
  * After "Close Remote Connection", the window reloads and this extension host ends. If it still runs after this time,
@@ -235,12 +242,11 @@ export interface ControllerDeps {
    */
   engineRemovalEnded?: (host: string) => void;
   /**
-   * The update of VS Code before a new window of a devspace connects (vscodeUpdate.ts, docs/requirements.md R-DS-006):
-   * the window that runs a Start asks for the update that waits for the restart of VS Code before it opens the window of
-   * the devspace (connect), and names it in the pending connection file; that window installs it before it connects
-   * (openAttachedDevspace). Default: none (no update first).
+   * The update of VS Code before a devspace starts (vscodeUpdate.ts, docs/requirements.md R-DS-006): while VS Code shows
+   * its button Update, a Start updates VS Code first (updateVscodeFirst), and the Start goes on after the restart
+   * (startAfterUpdate). Default: none (no update first).
    */
-  vscodeUpdate?: Pick<VscodeUpdate, 'readyToInstall' | 'restartToInstall'>;
+  vscodeUpdate?: Pick<VscodeUpdate, 'planBeforeStart' | 'updateAndRestart' | 'runningVersion'>;
   /** The VS Code setting `workbench.list.openMode` (double-click on a row, rowActivation.ts). Default: `readListOpenMode`. */
   listOpenMode?: () => ListOpenMode;
   /** True in an Extension Development Host (a debug run of this extension): the reopen rule is relaxed. */
@@ -375,6 +381,11 @@ interface StartOptions {
    * pipeline asks no question about the owner. Without it, the trust is read at the first open (firstOpenTrust).
    */
   confirmed?: boolean;
+  /**
+   * A Start that goes on after the update of VS Code (startAfterUpdate), or after VS Code kept running: it does not
+   * update VS Code again.
+   */
+  afterUpdate?: boolean;
 }
 
 /** The devspace that this window is attached to. A window changes its devspace only by reloading. */
@@ -749,10 +760,11 @@ export class Controller implements vscode.Disposable {
     const repository = this.displayName({ repository: devspace.repository });
     if (pipelineJustRan(pending, devspace.id, this.clock.now())) {
       this.logger.info(`The open pipeline of ${repository} has just run for this window.`);
-      // The update of VS Code first, before the login to an SSH host. When VS Code restarts, the activation ends here
-      // without a connection: VS Code closes this window only after it.
-      if (pending?.vscodeUpdate !== undefined && (await this.installVscodeUpdateFirst(pending.vscodeUpdate, devspace, repository))) return;
-      await this.connectStartedWindow(devspace, repository);
+      // The window shows its own connection error; the status bar offers Reconnect.
+      if (!(await this.connectAfterStart(devspace, repository)) && this.current?.devspace.id === devspace.id) {
+        this.current.lost = true;
+        this.updateStatusBar();
+      }
     } else {
       this.logger.info(`This window was restored or reloaded. The open pipeline of ${repository} runs before it connects.`);
       // Assumption: activation through ATTACHED_CONTAINER_ACTIVATION_EVENT blocks the connection until activate()
@@ -804,59 +816,6 @@ export class Controller implements vscode.Disposable {
       }
     }
     this.background(this.readWindowBranch(), 'read the branch of the devspace');
-  }
-
-  /**
-   * Role A after a Start whose window found an update of VS Code that waits for the restart of VS Code (the pending
-   * connection file names it, connect): VS Code restarts to install it before this window connects
-   * (docs/requirements.md R-DS-006). True when VS Code closes its windows for the restart: this window must not
-   * connect, and its activation must end, because VS Code closes a window only after the activation of its extensions.
-   * VS Code opens the window again with the new version, and it connects then as a restored window: its open flow runs
-   * again and links the VS Code Server of the new version. False when VS Code does not restart (a newer update, the
-   * setting turned off meanwhile): this window connects with the running version. When a window asks about unsaved
-   * files during the restart and the user chooses Cancel, VS Code keeps running, and this window connects then, unless
-   * VS Code closed it before the answer (VscodeUpdate.restartToInstall, `kept`). Never throws.
-   */
-  private async installVscodeUpdateFirst(update: ReadyVscodeUpdate, devspace: Devspace, repository: string): Promise<boolean> {
-    const vscodeUpdate = this.deps.vscodeUpdate;
-    if (vscodeUpdate === undefined) return false;
-    if (this.deps.settings().installVsCodeUpdateFirst === false) {
-      this.logger.info(`The update ${updateLabel(update)} of VS Code is not installed first: the setting installVsCodeUpdateFirst is off.`);
-      return false;
-    }
-    const kept = (): void => {
-      if (this.disposed || this.current?.devspace.id !== devspace.id) return;
-      this.background(
-        (async () => {
-          await this.connectStartedWindow(devspace, repository);
-          await this.readWindowBranch();
-        })(),
-        'connect the window after VS Code kept running',
-      );
-    };
-    const shown = this.shownName(this.devspaceTarget(devspace));
-    try {
-      const outcome = await runWithProgress({
-        title: ControllerTexts.installingVscodeUpdate(updateLabel(update), shown),
-        repository: shown,
-        task: () => vscodeUpdate.restartToInstall(update, kept),
-      });
-      return outcome === 'restarting';
-    } catch (error) {
-      this.logger.warn(`The update of VS Code could not be installed first: ${errorMessage(error)}`);
-      return false;
-    }
-  }
-
-  /**
-   * Role A after a Start: the connection to an SSH host (connectAfterStart). When it fails, the window shows its own
-   * connection error, and the status bar offers Reconnect.
-   */
-  private async connectStartedWindow(devspace: Devspace, repository: string): Promise<void> {
-    if (!(await this.connectAfterStart(devspace, repository)) && this.current?.devspace.id === devspace.id) {
-      this.current.lost = true;
-      this.updateStatusBar();
-    }
   }
 
   /**
@@ -963,6 +922,8 @@ export class Controller implements vscode.Disposable {
     }
     // Not known whether an operation is pending: the window is not opened again.
     if (runnable.length > 0 || known.unreadable.length > 0) return;
+    // A Start that waited for the update of VS Code goes on in this window, instead of the reopen of the last devspace.
+    if (await this.startAfterUpdate()) return;
 
     await this.delay(this.deps.timing?.reopenCheckDelayMs ?? REOPEN_CHECK_DELAY_MS);
     if (this.disposed) return;
@@ -1008,6 +969,141 @@ export class Controller implements vscode.Disposable {
     // The progress notification "Opening owner/name…" has Cancel: the user can stay in the empty window. The user did
     // not start it, so it asks nothing about the Monitor of the engine.
     await this.startTarget(this.devspaceTarget(devspace), { automatic: true });
+  }
+
+  /**
+   * A Start that waits for the restart of VS Code for its update (start-after-update.json, updateVscodeFirst): the
+   * window of the same kind as the window that ran the Start (windowKey) goes on with it after the restart, once
+   * VS Code runs another version. True when this window took the Start. A record that is older than
+   * START_AFTER_UPDATE_MAX_AGE_MS is removed. Never throws.
+   */
+  async startAfterUpdate(): Promise<boolean> {
+    const vscodeUpdate = this.deps.vscodeUpdate;
+    if (vscodeUpdate === undefined || this.disposed) return false;
+    const { sessionFiles } = this.deps;
+    try {
+      const record = await sessionFiles.readStartAfterUpdate();
+      if (record === undefined) return false;
+      const age = this.clock.now() - Date.parse(record.createdAt);
+      if (age < -START_AFTER_UPDATE_MAX_AGE_MS || age > START_AFTER_UPDATE_MAX_AGE_MS) {
+        this.logger.info(`The Start of ${record.repository} after the update of VS Code does not go on: it is too old.`);
+        await sessionFiles.removeStartAfterUpdate();
+        return false;
+      }
+      // The same version: VS Code has not restarted yet (the window of the Start waits for it), or the restart did not
+      // install the update. The record stays until it is too old.
+      if (record.from === vscodeUpdate.runningVersion || record.window !== this.windowKey()) return false;
+      const claimed = await sessionFiles.claimStartAfterUpdate(this.deps.coordinator.windowId);
+      if (claimed === undefined) return false;
+      this.logger.info(`VS Code was updated from ${claimed.from} to ${vscodeUpdate.runningVersion}: the Start of ${claimed.repository} goes on in this window.`);
+      const target = await this.targetAfterUpdate(claimed);
+      if (target === undefined) return true;
+      const window: WindowRequest = claimed.newWindow ? 'newWindow' : 'currentWindow';
+      await this.withTargetOf(target.devspace, () =>
+        this.startTarget(target, { window, afterUpdate: true, ...(claimed.source !== undefined ? { source: claimed.source } : {}), ...(claimed.confirmed === true ? { confirmed: true } : {}) }),
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn(`The Start after the update of VS Code could not go on: ${errorMessage(error)}`);
+      return false;
+    }
+  }
+
+  /**
+   * The kind of this window for the Start after the update of VS Code: `devspace:<devspace id>`, `empty`, or
+   * `folder:<URI of its workspace>`. VS Code opens the windows of the last session again after its update.
+   */
+  private windowKey(): string {
+    const devspace = this.current?.devspace ?? this.withoutDevspaces?.devspace;
+    if (devspace !== undefined) return `devspace:${devspace.id}`;
+    if (this.deps.connection.isEmptyWindow()) return 'empty';
+    const workspace = vscode.workspace.workspaceFile ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+    return `folder:${workspace?.toString() ?? ''}`;
+  }
+
+  /** The target of a Start after the update of VS Code: its devspace when the registry has it, else its repository. */
+  private async targetAfterUpdate(record: StartAfterUpdate): Promise<Target | undefined> {
+    const devspace = record.devspaceId === undefined ? undefined : await this.deps.registry.get(record.devspaceId);
+    if (devspace !== undefined) return this.devspaceTarget(devspace);
+    const target = await this.repositoryTargetFor(record.repository, 'start', record.source, record.account !== undefined ? { account: record.account } : {});
+    return target && (record.account !== undefined ? { ...target, chosenAccount: true } : target);
+  }
+
+  /**
+   * At a Start, before the devspace starts: while VS Code shows its button Update (VscodeUpdate.planBeforeStart),
+   * VS Code downloads (macOS) or installs the update and restarts, with a progress notification. True when the Start
+   * ends here: VS Code restarts (the Start goes on after the restart, startAfterUpdate), or the user cancelled. False
+   * when the devspace starts now with the running version. A Reconnect of the devspace of this window writes no record:
+   * VS Code opens this window again, and its open runs then. When VS Code keeps running after the restart began (Cancel
+   * on unsaved files) while this window is still there, the Start goes on here. Never throws.
+   */
+  private async updateVscodeFirst(target: Target, options: StartOptions, newWindow: boolean): Promise<boolean> {
+    const vscodeUpdate = this.deps.vscodeUpdate;
+    if (vscodeUpdate === undefined) return false;
+    const plan = await vscodeUpdate.planBeforeStart(this.deps.settings().installVsCodeUpdateFirst !== false);
+    if (plan === undefined) return false;
+    const { sessionFiles } = this.deps;
+    const devspace = target.devspace;
+    const repository = this.displayName(target);
+    const shown = this.shownName(target);
+    const handOver = !(devspace !== undefined && this.isConnectedHere(devspace));
+    const source = devspace !== undefined ? sourceOf(devspace) : (target.source ?? options.source);
+    // Written right before "Restart to Update", after a download or an installation that may take minutes.
+    const record = async (): Promise<boolean> => {
+      if (!handOver) return true;
+      const start: StartAfterUpdate = {
+        repository: devspace?.repository ?? target.repository,
+        ...(devspace !== undefined && target.named === true ? { devspaceId: devspace.id } : {}),
+        ...(source !== undefined ? { source } : {}),
+        ...(target.chosenAccount === true && target.account !== undefined ? { account: { id: target.account.id, login: target.account.login } } : {}),
+        newWindow,
+        ...(options.confirmed === true ? { confirmed: true } : {}),
+        window: this.windowKey(),
+        from: vscodeUpdate.runningVersion,
+        createdAt: new Date(this.clock.now()).toISOString(),
+      };
+      try {
+        await sessionFiles.writeStartAfterUpdate(start);
+        return true;
+      } catch (error) {
+        this.logger.warn(`${repository} starts without the update of VS Code: the Start after the restart could not be recorded: ${errorMessage(error)}`);
+        return false;
+      }
+    };
+    const forget = async (): Promise<void> => {
+      if (handOver) await sessionFiles.removeStartAfterUpdate().catch((error: unknown) => this.logger.warn(`The record of the Start after the update could not be removed: ${errorMessage(error)}`));
+    };
+    const window: WindowRequest = newWindow ? 'newWindow' : 'currentWindow';
+    const kept = (): void => {
+      if (this.disposed) return;
+      this.background(
+        (async () => {
+          await forget();
+          await this.withTargetOf(devspace, () => this.startTarget(target, { ...options, window, afterUpdate: true }));
+        })(),
+        `start ${repository} after VS Code kept running`,
+      );
+    };
+    const steps: Record<UpdateStep, string> = {
+      download: ControllerTexts.updateStepDownload,
+      install: ControllerTexts.updateStepInstall,
+      restart: ControllerTexts.updateStepRestart,
+    };
+    let outcome: UpdateOutcome;
+    try {
+      outcome = await runWithProgress({
+        title: ControllerTexts.updatingVscode(updateLabel(plan.update), shown),
+        repository: shown,
+        cancellable: true,
+        task: (progress, signal) => vscodeUpdate.updateAndRestart(plan, { signal, kept, beforeRestart: record, onStep: (step) => progress.detail(steps[step]) }),
+      });
+    } catch (error) {
+      this.logger.warn(`The update of VS Code before the Start of ${repository} failed: ${errorMessage(error)}`);
+      outcome = 'failed';
+    }
+    if (outcome === 'restarting') return true;
+    await forget();
+    return outcome === 'cancelled';
   }
 
   /**
@@ -2472,6 +2568,9 @@ export class Controller implements vscode.Disposable {
       }
     }
     const newWindow = this.opensNewWindow(options.window ?? 'default', reconnecting);
+    // While VS Code shows its button Update, VS Code updates first, and the Start goes on after the restart
+    // (docs/requirements.md R-DS-006). Not for the reopen at startup, nor for a Start that goes on after the update.
+    if (options.automatic !== true && options.afterUpdate !== true && (await this.updateVscodeFirst(target, options, newWindow))) return;
     // A Start in this window takes its connect request now, before the question below: a flow that connects this window
     // meanwhile (the automatic reopen) is then older, and does not connect over it (connect: the newest request wins).
     const reserved = newWindow ? undefined : this.reserveConnectRequest();
@@ -2676,10 +2775,6 @@ export class Controller implements vscode.Disposable {
     // Cancel also ends this wait.
     await Promise.race([diagnostics, this.delay(ATTACH_DIAGNOSTICS_WAIT_MS, AbortSignal.any([waited.signal, signal]))]);
     waited.abort();
-    // An update of VS Code that VS Code has downloaded and that waits for its restart: the window of the devspace
-    // installs it before it connects (openAttachedDevspace, docs/requirements.md R-DS-006). This window only names it in
-    // the pending connection file. Read before the checks below, so that Cancel during the read still counts.
-    const vscodeUpdate = await this.deps.vscodeUpdate?.readyToInstall(this.deps.settings().installVsCodeUpdateFirst !== false);
     if (!request.newWindow && [...this.activeConnectRequests].some((other) => other > request.number)) {
       this.logger.info(`${result.devspace.repository} is not connected: another devspace is opening in this window.`);
       return;
@@ -2722,8 +2817,7 @@ export class Controller implements vscode.Disposable {
         .catch((error: unknown) => this.logger.warn(`The pending connection file could not be removed: ${errorMessage(error)}`));
       throw notReady;
     }
-    if (vscodeUpdate === undefined) await this.deps.coordinator.writePending(result.devspace.id);
-    else await this.deps.coordinator.writePending(result.devspace.id, vscodeUpdate);
+    await this.deps.coordinator.writePending(result.devspace.id);
     if (request.newWindow) {
       await this.deps.connection.openInNewWindow(...this.windowArgs(result.devspace, result.containerName, result.remoteWorkspaceFolder));
       return;

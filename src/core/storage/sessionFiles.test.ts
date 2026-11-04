@@ -9,7 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Clock } from '../ports';
-import type { PendingOperation, WindowStatus } from '../types';
+import type { PendingOperation, StartAfterUpdate, WindowStatus } from '../types';
 import { StoragePaths } from './paths';
 import {
   DEFAULT_CLAIM_MAX_AGE_MS,
@@ -17,6 +17,7 @@ import {
   isPendingConnection,
   isPendingOperation,
   isReopenRecord,
+  isStartAfterUpdate,
   isWindowStatus,
 } from './sessionFiles';
 
@@ -146,17 +147,6 @@ describe('pending connection files', () => {
     await expect(files.readPendings()).resolves.toEqual([
       { devspaceId: ENV_B, windowId: WIN_2, createdAt: '2026-09-24T17:40:16.000Z' },
     ]);
-  });
-
-  it('writes and reads the update of VS Code that the new window installs first', async () => {
-    await files.writePending(ENV_A, WIN_1, { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' });
-    // A Snap package names no version number: the field is left out, not written as undefined.
-    await files.writePending(ENV_B, WIN_2, { version: 'something', productVersion: undefined });
-    await expect(files.readPendings()).resolves.toEqual([
-      { devspaceId: ENV_A, windowId: WIN_1, createdAt: '2026-09-24T17:40:15.000Z', vscodeUpdate: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' } },
-      { devspaceId: ENV_B, windowId: WIN_2, createdAt: '2026-09-24T17:40:15.000Z', vscodeUpdate: { version: 'something' } },
-    ]);
-    expect(JSON.parse(fs.readFileSync(path.join(paths.pendingDir, `${ENV_B}.json`), 'utf8')).vscodeUpdate).toEqual({ version: 'something' });
   });
 
   it('skips invalid pending files', async () => {
@@ -362,6 +352,61 @@ describe('reopen record', () => {
   });
 });
 
+describe('the record of a Start after the update of VS Code', () => {
+  const record: StartAfterUpdate = {
+    repository: 'acme/api',
+    devspaceId: ENV_A,
+    source: { kind: 'configuration', configPath: '.devcontainer/devcontainer.json' },
+    account: { id: '1001', login: 'alice' },
+    newWindow: true,
+    window: 'empty',
+    from: '1.145.0',
+    createdAt: '2026-09-24T17:40:15.000Z',
+  };
+
+  it('writes, reads, and removes it', async () => {
+    await expect(files.readStartAfterUpdate()).resolves.toBeUndefined();
+    await files.writeStartAfterUpdate(record);
+    await expect(files.readStartAfterUpdate()).resolves.toEqual(record);
+    await files.removeStartAfterUpdate();
+    await files.removeStartAfterUpdate();
+    await expect(files.readStartAfterUpdate()).resolves.toBeUndefined();
+  });
+
+  it('gives it to one window only, and removes the file', async () => {
+    await files.writeStartAfterUpdate(record);
+    const [first, second] = await Promise.all([files.claimStartAfterUpdate(WIN_1), files.claimStartAfterUpdate(WIN_2)]);
+    expect([first, second].filter((value) => value !== undefined)).toEqual([record]);
+    expect(fs.readdirSync(paths.root).filter((name) => name.startsWith('start-after-update'))).toEqual([]);
+  });
+
+  it('claims nothing from a record that is not valid, and removes it', async () => {
+    fs.mkdirSync(paths.root, { recursive: true });
+    fs.writeFileSync(paths.startAfterUpdate, JSON.stringify({ ...record, newWindow: 'yes' }));
+    await expect(files.readStartAfterUpdate()).resolves.toBeUndefined();
+    await expect(files.claimStartAfterUpdate(WIN_1)).resolves.toBeUndefined();
+    expect(fs.existsSync(paths.startAfterUpdate)).toBe(false);
+  });
+
+  it('accepts a record with the needed fields only, and refuses wrong values', () => {
+    const minimal = { repository: 'acme/api', newWindow: false, window: 'folder:file:///home/alice/api', from: '1.145.0', createdAt: '2026-09-24T17:40:15Z' };
+    expect(isStartAfterUpdate(record)).toBe(true);
+    expect(isStartAfterUpdate(minimal)).toBe(true);
+    for (const wrong of [
+      { ...minimal, repository: '' },
+      { ...minimal, devspaceId: '../x' },
+      { ...minimal, source: { kind: 'configuration' } },
+      { ...minimal, account: { login: 'alice' } },
+      { ...minimal, confirmed: 'yes' },
+      { ...minimal, window: '' },
+      { ...minimal, from: '' },
+      { ...minimal, createdAt: 'yesterday' },
+    ]) {
+      expect(isStartAfterUpdate(wrong), JSON.stringify(wrong)).toBe(false);
+    }
+  });
+});
+
 describe('validators', () => {
   it('check the shapes', () => {
     expect(isWindowStatus(status(WIN_1))).toBe(true);
@@ -382,12 +427,6 @@ describe('validators', () => {
     for (const plainDevspaceId of ['', '../x', 3, null]) expect(isWindowStatus({ ...status(WIN_1), plainDevspaceId })).toBe(false);
     expect(isPendingConnection({ devspaceId: ENV_A, windowId: WIN_1, createdAt: '2026-09-24T17:40:15Z' })).toBe(true);
     expect(isPendingConnection({ devspaceId: ENV_A, windowId: '', createdAt: '2026-09-24T17:40:15Z' })).toBe(false);
-    const pending = { devspaceId: ENV_A, windowId: WIN_1, createdAt: '2026-09-24T17:40:15Z' };
-    expect(isPendingConnection({ ...pending, vscodeUpdate: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' } })).toBe(true);
-    expect(isPendingConnection({ ...pending, vscodeUpdate: { version: 'something' } })).toBe(true);
-    for (const vscodeUpdate of [{ version: '' }, { productVersion: '1.146.0' }, { version: 'x', productVersion: 7 }, 'a717861c', null]) {
-      expect(isPendingConnection({ ...pending, vscodeUpdate }), JSON.stringify(vscodeUpdate)).toBe(false);
-    }
     expect(isPendingOperation(operation(ENV_A))).toBe(true);
     expect(isPendingOperation({ ...operation(ENV_A), reason: 'whim' })).toBe(false);
     expect(isPendingOperation({ ...operation(ENV_A), additionalVolumesToRemove: 'yes' })).toBe(false);

@@ -71,13 +71,15 @@ describe('the extension in VS Code', () => {
     assert.ok(registered.has('notifications.hideToasts'), 'VS Code has no command notifications.hideToasts');
   });
 
-  // The update of VS Code before a new window of a devspace connects (src/vscode/vscodeUpdate.ts, docs/requirements.md
-  // R-DS-006) uses two commands of the workbench of VS Code, one of them internal. The weekly run against other versions
-  // of VS Code finds it early when VS Code removes or renames one of them. VS Code runs here with --disable-updates, so
-  // the state is `disabled`, and "Restart to Update" is not run.
+  // The update of VS Code before a devspace starts (src/vscode/vscodeUpdate.ts, docs/requirements.md R-DS-006) uses
+  // commands of the workbench of VS Code, one of them internal. The weekly run against other versions of VS Code finds it
+  // early when VS Code removes or renames one of them. VS Code runs here with --disable-updates, so the state is
+  // `disabled`, and no step of the update is run.
   it('finds the commands of VS Code for its update', async () => {
     const all = new Set(await vscode.commands.getCommands(false));
-    assert.ok(all.has('update.restartToUpdate'), 'VS Code has no command update.restartToUpdate');
+    for (const command of ['update.downloadUpdate', 'update.installUpdate', 'update.restartToUpdate']) {
+      assert.ok(all.has(command), `VS Code has no command ${command}`);
+    }
     // The workbench registers _update.state in its phase "Restored", which may come after the start of the tests.
     const deadline = Date.now() + 30_000;
     while (!(await vscode.commands.getCommands(false)).includes('_update.state')) {

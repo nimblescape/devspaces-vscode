@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Coordination files in the global storage folder: window status files, pending connection files, pending operations,
-// and the reopen record. The window reads the settings itself. Every write is atomic. Reads skip files that are
+// the reopen record, and the record of a Start after the update of VS Code. The window reads the settings itself. Every write is atomic. Reads skip files that are
 // missing, unreadable, or invalid.
 import * as fs from 'fs';
 import * as path from 'path';
@@ -12,10 +12,11 @@ import type {
   PendingConnection,
   PendingOperation,
   PendingOperationKind,
-  ReadyVscodeUpdate,
   ReopenRecord,
+  StartAfterUpdate,
   WindowStatus,
 } from '../types';
+import { parseDevspaceSource } from '../helperChannel/protocol';
 import { listJsonFiles, removeFile, removeFileSync, writeJsonAtomic, writeJsonAtomicSync } from './atomicJson';
 import {
   CLAIM_MARKER,
@@ -66,15 +67,9 @@ export class SessionFiles {
 
   // --- Pending connection files (pending/<devspace-id>.json) ----------------------------------------------------
 
-  /**
-   * Writes the pending connection file with `createdAt` = now, and with the update of VS Code that the new window
-   * installs before it connects, if any (Controller.connect).
-   */
-  async writePending(devspaceId: string, windowId: string, vscodeUpdate?: ReadyVscodeUpdate): Promise<void> {
+  /** Writes the pending connection file with `createdAt` = now. */
+  async writePending(devspaceId: string, windowId: string): Promise<void> {
     const pending: PendingConnection = { devspaceId, windowId, createdAt: isoTime(this.clock) };
-    if (vscodeUpdate !== undefined) {
-      pending.vscodeUpdate = vscodeUpdate.productVersion === undefined ? { version: vscodeUpdate.version } : { version: vscodeUpdate.version, productVersion: vscodeUpdate.productVersion };
-    }
     const file = this.paths.pendingFile(devspaceId);
     await retryTransient(() => writeJsonAtomic(file, pending));
   }
@@ -213,6 +208,44 @@ export class SessionFiles {
   async removeReopenOf(devspaceId: string): Promise<void> {
     if ((await this.readReopen())?.devspaceId === devspaceId) await this.removeReopen();
   }
+
+  // --- Start after the update of VS Code (start-after-update.json) ----------------------------------------------------
+
+  /** Writes the record of a Start that waits for the restart of VS Code for its update; it replaces an older one. */
+  async writeStartAfterUpdate(record: StartAfterUpdate): Promise<void> {
+    await retryTransient(() => writeJsonAtomic(this.paths.startAfterUpdate, record));
+  }
+
+  /** The record, or `undefined` when it is missing or not valid. */
+  async readStartAfterUpdate(): Promise<StartAfterUpdate | undefined> {
+    const value = await readJsonTolerant(this.paths.startAfterUpdate);
+    return isStartAfterUpdate(value) ? value : undefined;
+  }
+
+  /**
+   * Takes the record for this window: only one window gets it (an atomic rename), and the file is gone afterwards.
+   * `undefined` when another window took it first, or when it is not valid.
+   */
+  async claimStartAfterUpdate(windowId: string): Promise<StartAfterUpdate | undefined> {
+    const claimed = this.paths.claimedStartAfterUpdateFile(windowId);
+    try {
+      await retryTransient(() => fs.promises.rename(this.paths.startAfterUpdate, claimed));
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return undefined;
+      throw error;
+    }
+    try {
+      const text = await readTextFile(claimed);
+      const value = text === undefined ? undefined : parseJson(text);
+      return isStartAfterUpdate(value) ? value : undefined;
+    } finally {
+      await retryTransient(() => removeFile(claimed)).catch(() => {});
+    }
+  }
+
+  async removeStartAfterUpdate(): Promise<void> {
+    await retryTransient(() => removeFile(this.paths.startAfterUpdate));
+  }
 }
 
 /** Reads all `*.json` files of a folder, in name order. Keeps a value only if it is valid and its key matches the file name. */
@@ -285,13 +318,8 @@ export function isPendingConnection(value: unknown): value is PendingConnection 
     isRecord(value) &&
     isStorageId(value.devspaceId) &&
     isNonEmptyString(value.windowId) &&
-    isTime(value.createdAt) &&
-    (value.vscodeUpdate === undefined || isReadyVscodeUpdate(value.vscodeUpdate))
+    isTime(value.createdAt)
   );
-}
-
-function isReadyVscodeUpdate(value: unknown): value is ReadyVscodeUpdate {
-  return isRecord(value) && isNonEmptyString(value.version) && (value.productVersion === undefined || isNonEmptyString(value.productVersion));
 }
 
 // Records over the union types of types.ts, so that the compiler reports a kind or reason that is missing here.
@@ -317,6 +345,21 @@ export function isPendingOperation(value: unknown): value is PendingOperation {
     isKeyOf(OPERATION_REASONS, value.reason) &&
     (value.additionalVolumesToRemove === undefined ||
       (Array.isArray(value.additionalVolumesToRemove) && value.additionalVolumesToRemove.every(isNonEmptyString)))
+  );
+}
+
+export function isStartAfterUpdate(value: unknown): value is StartAfterUpdate {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.repository) &&
+    (value.devspaceId === undefined || isStorageId(value.devspaceId)) &&
+    (value.source === undefined || parseDevspaceSource(value.source) !== undefined) &&
+    (value.account === undefined || (isRecord(value.account) && isNonEmptyString(value.account.id) && typeof value.account.login === 'string')) &&
+    typeof value.newWindow === 'boolean' &&
+    (value.confirmed === undefined || typeof value.confirmed === 'boolean') &&
+    isNonEmptyString(value.window) &&
+    isNonEmptyString(value.from) &&
+    isTime(value.createdAt)
   );
 }
 

@@ -32,7 +32,7 @@ import { atomicTemporaryPath } from '../core/storage/atomicJson';
 import { retryTransient, retryTransientSync, type StoragePaths } from '../core/storage/paths';
 import type { SessionFiles } from '../core/storage/sessionFiles';
 import { STORAGE_SWEEP_INTERVAL_MS, sweepStorage } from '../core/storage/storageSweep';
-import type { Devspace, ExtensionSettings, PendingConnection, ReadyVscodeUpdate, WindowStatus } from '../core/types';
+import type { Devspace, ExtensionSettings, PendingConnection, WindowStatus } from '../core/types';
 
 /** Interval of the window status file updates. */
 export const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -267,11 +267,9 @@ export class SessionCoordinator implements vscode.Disposable {
   /**
    * Writes the pending connection file of a devspace, so that another window does not take the devspace for
    * unused while this window connects. Throws if the file cannot be written: the caller relies on the protection.
-   * `vscodeUpdate`: the update of VS Code that the new window installs before it connects (docs/requirements.md
-   * R-DS-006).
    */
-  async writePending(devspaceId: string, vscodeUpdate?: ReadyVscodeUpdate): Promise<void> {
-    await this.sessionFiles.writePending(devspaceId, this.windowId, vscodeUpdate);
+  async writePending(devspaceId: string): Promise<void> {
+    await this.sessionFiles.writePending(devspaceId, this.windowId);
   }
 
   /** Status files of OTHER windows whose process exists, whose state is `active`, and that were updated ≤ 60 s ago. */
