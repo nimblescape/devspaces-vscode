@@ -5,10 +5,14 @@
 // The operations `heartbeat` and `recordGitState` of the worker, and the image settings that come with the open
 // (giveMonitorImages), with a small engine in memory; `recordGitState` with a fake extension behind its handler (the
 // requests that it may send, for its devspace only).
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { OP_RECORD_GIT_STATE, type AskKind } from '../core/helperChannel/protocol';
 import { LABEL_DEVSPACE_ID } from '../core/names';
 import { silentLogger } from '../core/ports';
+import { HELPER_CHECK_FILE, engineHelperRecordText } from '../core/remoteMonitor/helperCheck';
 import { REMOTE_MONITOR_CONTAINER } from '../core/remoteMonitor/protocol';
 import type { Devspace } from '../core/types';
 import { scriptCommand } from '../core/worker/containerScripts';
@@ -74,6 +78,30 @@ describe('the operations of the Monitor in the worker', () => {
     expect(execs).toEqual([{ container: REMOTE_MONITOR_CONTAINER, command: scriptCommand('monitorHeartbeat', [JSON.stringify(HEARTBEAT)]), options: { timeoutMs: 20_000, signal: controller.signal } }]);
     const missing = engineOf(() => Promise.reject(new EngineError('No such container', 404)));
     expect(await heartbeatOperation(() => missing.engine)({ heartbeat: HEARTBEAT }, contextOf().context)).toMatchObject({ ok: false, missing: true });
+  });
+
+  it('heartbeat: answers the last check of the helper image by the Monitor from its volume, when it found the image current', async () => {
+    const volume = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-monitor-volume-'));
+    try {
+      const { engine } = engineOf(ok);
+      const heartbeat = () => heartbeatOperation(() => engine, volume)({ heartbeat: HEARTBEAT }, contextOf().context);
+      // No record yet.
+      expect(await heartbeat()).toEqual({ ok: true });
+      const record = { tag: 'devspaces-worker:0123456789ab', baseImage: 'node:24-trixie-slim', baseDigest: `sha256:${'a'.repeat(64)}`, checkedAt: '2026-11-04T06:08:00.000Z' };
+      fs.writeFileSync(path.join(volume, HELPER_CHECK_FILE), engineHelperRecordText({ ...record, attemptedAt: '2026-11-03T06:08:00.000Z', builtAt: '2026-11-04T06:08:00.000Z' }));
+      expect(await heartbeat()).toEqual({ ok: true, helperCheck: record });
+      // A record of attempts only, and one that is not valid, give none.
+      fs.writeFileSync(path.join(volume, HELPER_CHECK_FILE), engineHelperRecordText({ tag: record.tag, baseImage: record.baseImage, attemptedAt: record.checkedAt }));
+      expect(await heartbeat()).toEqual({ ok: true });
+      fs.writeFileSync(path.join(volume, HELPER_CHECK_FILE), '{"tag":"x"}');
+      expect(await heartbeat()).toEqual({ ok: true });
+      // A heartbeat that the monitor did not take answers no check.
+      fs.writeFileSync(path.join(volume, HELPER_CHECK_FILE), engineHelperRecordText(record));
+      const missing = engineOf(() => Promise.reject(new EngineError('No such container', 404)));
+      expect(await heartbeatOperation(() => missing.engine, volume)({ heartbeat: HEARTBEAT }, contextOf().context)).toEqual({ ok: false, missing: true, detail: expect.any(String) });
+    } finally {
+      fs.rmSync(volume, { recursive: true, force: true });
+    }
   });
 
   it('heartbeat: refuses parameters that do not fit and a secret before anything runs; a cancel is cancelled', async () => {

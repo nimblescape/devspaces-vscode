@@ -702,6 +702,10 @@ async function activateExtension(
     flow: (op, params, options) => workerFlow(op, params, options),
     owner: () => ({ windowId: windowCoordinator?.windowId ?? '', pid: process.pid }),
     logger,
+    // The last check of the helper image by the Monitor of the engine of a heartbeat goes into the state of the helper
+    // image of that engine (its key: '' for the local Docker, else the host), so that this window does not check it
+    // while the Monitor did (docs/requirements.md R-DS-003).
+    onHelperCheck: (target, check) => void helper.recordEngineCheck(target.host, check),
   });
   // The source of the heartbeats and the owner of a permanent Monitor (computer.id); created by the first reader, and
   // read once (each open and each repair of the heartbeats asks for it; a failed read is tried again at the next call).
