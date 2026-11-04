@@ -203,6 +203,8 @@ function attachConfiguration(kind, index) {
       DEVSPACE_TEST_ATTACH_SEED: JSON.stringify(seed),
       ...(kind === 'account' ? { DEVSPACE_TEST_GITHUB_ACCOUNT: JSON.stringify({ id: '9999', label: 'devspaces-other' }) } : {}),
       ...(kind === 'stopped' ? { DEVSPACE_TEST_SECOND_VSCODE: JSON.stringify(secondVscode) } : {}),
+      // The part of the tests of `stopped`: the stop or the removal of the container; empty for both.
+      ...(kind === 'stopped' ? { DEVSPACE_TEST_STOPPED: process.env.DEVSPACE_TEST_STOPPED ?? '' } : {}),
     },
     // The longest wait of a test is one minute (postAttachCommand); the tests of `stopped` set their own.
     mocha: { ...base.mocha, timeout: 120_000 },

@@ -185,7 +185,7 @@ export interface ControllerDeps {
   /** "Use a Remote Docker Host…", "Use the Local Docker", and the choice of the first row of the view. */
   remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'useLocalDocker' | 'chooseDockerHost'>;
   /** "Set Up Docker for Devspaces…" and "Remove the WSL Distribution of Devspaces…" (Windows). */
-  wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove'>;
+  wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'ensureDockerHost'>;
   /**
    * One heartbeat with the current keep-running flag of a devspace to the Monitor container of its engine
    * (Close and Keep Running, Keep Running When Closed, Stop When Closed), on every engine, through this window's worker
@@ -2003,7 +2003,8 @@ export class Controller implements vscode.Disposable {
    * confirmOpenFromLink). VS Code gives the link to the window
    * that was active last, in which the user did not ask for anything: the devspace opens in that window only when it is
    * empty, else in a new window, and the window keeps what it has. The repository can be one that the list does not show: then GitHub is asked for
-   * it. A link that names no repository asks neither GitHub nor Docker. Never rejects: errors are shown.
+   * it. A link that names no repository asks neither GitHub nor Docker. On Windows without Docker, the link sets up the
+   * WSL distribution of Devspaces and opens the devspace there (dockerForLink). Never rejects: errors are shown.
    *
    * The course link `/course?repository=owner/name-<username>` opens the repository of one account in a course in the
    * same way: after the sign-in, `<username>` becomes the GitHub login of each account of Devspaces (courseRepository),
@@ -2035,6 +2036,9 @@ export class Controller implements vscode.Disposable {
     const accounts = await this.requireAccounts();
     const found = link.kind === 'course' ? await this.courseLinkRepository(link.template, accounts) : await this.openLinkRepository(link.repository, accounts);
     if (found === undefined) return;
+    // Before the operation, whose Docker host is the current one when it begins: on Windows without Docker, the WSL
+    // distribution of Devspaces becomes that host.
+    if (!(await this.dockerForLink())) return;
     const { repository, info, account, candidates } = found;
     const name = info?.nameWithOwner ?? repository;
     if (link.kind === 'course' && account !== undefined) this.logger.info(`The course link opens ${repository} for ${account.login}.`);
@@ -4103,6 +4107,23 @@ export class Controller implements vscode.Disposable {
    */
   private withTargetOf<T>(devspace: Devspace | undefined, fn: () => Promise<T>): Promise<T> {
     return devspace === undefined ? this.withDockerTarget(fn) : this.withHostOf(devspace, fn);
+  }
+
+  /**
+   * Docker for a link (R-GEN-002, R-ENG-005): when the current engine is the local Docker and no Docker CLI runs its
+   * calls (BootstrapDocker.canRunOn), Windows needs no Docker Desktop: the WSL distribution of Devspaces becomes the
+   * Docker host of Devspaces (WslSetupCommands.ensureDockerHost: the check of WSL, the setup after one question, and
+   * the Docker CLI of Devspaces), and the link goes on there. False when it did not (a closed question, or a problem
+   * with its message): the link opens nothing. True otherwise, also where this computer has no WSL setup (not Windows):
+   * there the link goes on as before and says that Docker is missing at its first Docker call.
+   */
+  private async dockerForLink(): Promise<boolean> {
+    const target = await this.operationTarget();
+    if (target.kind !== 'local' || this.deps.docker.canRunOn(target)) return true;
+    const result = (await this.deps.wslSetup?.ensureDockerHost()) ?? 'unavailable';
+    if (result === 'notUsed') this.logger.info('The link opened nothing: Devspaces does not use the WSL distribution of Devspaces, and this computer has no Docker.');
+    else if (result === 'used') this.logger.info('The link opens the repository with Docker in the WSL distribution of Devspaces.');
+    return result !== 'notUsed';
   }
 
   /** The Docker target of the operation (outside of one, the current one); the local Docker without dockerTargets. */

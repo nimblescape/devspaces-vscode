@@ -3,7 +3,9 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
-## 0.5.0
+## 0.4.1
+
+**Windows without Docker:** Devspaces uses Docker Desktop when it is installed, and otherwise always its own Docker in WSL. A link to Devspaces, also a course link, on a Windows computer without Docker no longer asks to install Docker Desktop: after the GitHub sign-in, it checks WSL, asks once with the downloads and the folder, sets up the WSL distribution of Devspaces with Docker Engine, downloads the Docker CLI of Devspaces, and uses that distribution as its Docker host. Then the link opens the repository there. When the distribution exists already, the link uses it without a question. The Docker setup of the view on Windows no longer offers to install Docker Desktop: **Set Up Docker for Devspaces** is the setup there. When WSL is missing, the setup and the link install WSL 2 first, after the question that shows the command; Windows asks for administrator permission, and you restart the computer afterwards. See [Installing Docker](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#installing-docker).
 
 **The update of VS Code first:** when VS Code has downloaded an update and waits for its restart (**Restart to Update**), a new window of a devspace installs it before it connects: VS Code closes its windows (a window with unsaved files asks first), installs the update, and opens the windows again. The window of the devspace then connects with the new version, and the devspace gets the VS Code Server of that version. The new setting devspaces.installVsCodeUpdateFirst (on by default) turns this off. See [The update of VS Code](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-of-vs-code).
 

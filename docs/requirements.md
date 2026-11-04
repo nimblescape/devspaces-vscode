@@ -94,7 +94,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-ENG-001
 
-**Local Docker and its setup.** Devspaces uses the Docker of the computer: Docker Desktop on Windows (also the installation for one user in `%LOCALAPPDATA%`), on macOS and on Linux, or Docker Engine on Linux. When Docker is missing, the view offers its installation, a remote host ([R-ENG-002](#r-eng-002)) and, on Windows, the WSL distribution of Devspaces ([R-ENG-005](#r-eng-005)). Devspaces first shows the exact commands, or the download address of the installer, and runs them only after the user confirms, in a terminal of VS Code that the user sees.
+**Local Docker and its setup.** Devspaces uses the Docker of the computer: Docker Desktop on Windows (also the installation for one user in `%LOCALAPPDATA%`), on macOS and on Linux, or Docker Engine on Linux. When Docker is missing, the view offers its installation on macOS and Linux, on Windows the WSL distribution of Devspaces instead ([R-ENG-005](#r-eng-005)), and a remote host ([R-ENG-002](#r-eng-002)). Devspaces first shows the exact commands, or the download address of the installer, and runs them only after the user confirms, in a terminal of VS Code that the user sees.
 
 ### R-ENG-002
 
@@ -110,7 +110,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-ENG-005
 
-**Windows without Docker Desktop.** On Windows, Devspaces sets up, after one confirmation and without administrator rights, its own WSL 2 distribution `devspaces` from the Debian file of the list of WSL distributions of Microsoft (checked against its SHA-256), with Docker Engine, and uses it as a host of its list through `wsl.exe`, without SSH. The distribution is never the default distribution of WSL, and a distribution with that name that the user made is never changed or removed. It runs while a window, a devspace or the Monitor needs it, and stops when nothing needs it; after **Keep Running** for its Monitor, a start entry of the Windows user starts it at logon. Devspaces upgrades its packages about once a week without stopping the running devspaces, and removes the distribution only after a question.
+**Windows without Docker Desktop.** On Windows, Devspaces uses Docker Desktop when it is installed. Otherwise, the Docker setup of the view and a link ([R-LINK-001](#r-link-001)) check WSL and install WSL 2 first when it is missing; then Devspaces sets up, after one confirmation and without administrator rights, its own WSL 2 distribution `devspaces` from the Debian file of the list of WSL distributions of Microsoft (checked against its SHA-256), with Docker Engine, and uses it as a host of its list through `wsl.exe`, without SSH, with the Docker CLI of Devspaces ([R-ENG-004](#r-eng-004)). A link uses a distribution that Devspaces set up before without a question. The distribution is never the default distribution of WSL, and a distribution with that name that the user made is never changed or removed. It runs while a window, a devspace or the Monitor needs it, and stops when nothing needs it; after **Keep Running** for its Monitor, a start entry of the Windows user starts it at logon. Devspaces upgrades its packages about once a week without stopping the running devspaces, and removes the distribution only after a question.
 
 ## Security
 

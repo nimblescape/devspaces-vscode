@@ -16,7 +16,8 @@
 // ("Container is no longer running") and offers to reload the window; the window stays open, and its extension, in the
 // local extension host, logs at its next heartbeat that the container does not run (src/vscode/controller.ts,
 // checkConnection) and shows Reconnect in the status bar. At the next open, the open pipeline starts the stopped
-// container, or makes a new one for a removed container, before the window connects.
+// container, or makes a new one for a removed container, before the window connects. The stop and the removal can run
+// apart (DEVSPACE_TEST_STOPPED), as on CI, where each is a job of its own.
 import * as assert from 'assert';
 import * as childProcess from 'child_process';
 import * as fs from 'fs';
@@ -49,6 +50,14 @@ const ATTACH_WAIT_MS = 300_000;
 const QUIT_WAIT_MS = 30_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The part of the tests that this run runs (DEVSPACE_TEST_STOPPED; on CI, each part is a job of its own): `stop`, the
+ * stop of the container and the next open, or `removal`, the removal of the container and the next open. Without it,
+ * both parts run, one after the other. Each part starts with the first attach of the second VS Code.
+ */
+const PART = process.env.DEVSPACE_TEST_STOPPED ?? '';
+if (!['', 'stop', 'removal'].includes(PART)) throw new Error(`DEVSPACE_TEST_STOPPED is "${PART}": it must be stop, removal or empty.`);
 
 describe('a devspace window whose container stops or is removed', () => {
   const { containerName, user } = seed();
@@ -268,48 +277,52 @@ describe('a devspace window whose container stops or is removed', () => {
     assert.match(secondLog(), new RegExp(`${repository} is ready in the container ${containerName}\\.`));
   });
 
-  it('the window notices that its container stopped and stays open, and nothing starts the container again', async function () {
-    this.timeout(WATCH_MS + NOTICE_WAIT_MS + 60_000);
-    assert.ok(running, 'The second VS Code does not run');
-    const from = secondLog().length;
-    const rendererFrom = rendererLog().length;
-    attachesAtStop = attaches();
-    docker(['stop', containerName]);
-    const { noticedAt, states } = await watchAfter('stop', from, rendererFrom);
-    assertNoticed(noticedAt, rendererFrom);
-    assert.deepStrictEqual(statesOnly(states), ['exited'], 'Something started the container again');
-  });
+  if (PART !== 'removal') {
+    it('the window notices that its container stopped and stays open, and nothing starts the container again', async function () {
+      this.timeout(WATCH_MS + NOTICE_WAIT_MS + 60_000);
+      assert.ok(running, 'The second VS Code does not run');
+      const from = secondLog().length;
+      const rendererFrom = rendererLog().length;
+      attachesAtStop = attaches();
+      docker(['stop', containerName]);
+      const { noticedAt, states } = await watchAfter('stop', from, rendererFrom);
+      assertNoticed(noticedAt, rendererFrom);
+      assert.deepStrictEqual(statesOnly(states), ['exited'], 'Something started the container again');
+    });
 
-  it('at the next open of the window, the open pipeline starts the stopped container, and the window attaches', async function () {
-    this.timeout(QUIT_WAIT_MS + ATTACH_WAIT_MS + 90_000);
-    await quitAndRelease();
-    assert.strictEqual(containerState(), 'exited');
-    const id = containerId();
-    // The container does not run, so its lines are the ones at the stop.
-    await startAndAttach(attachesAtStop);
-    printLong(`    the log of the window:\n${withoutGitHub(secondLog())}`);
-    assert.match(secondLog(), new RegExp(`State of ${repository}: container stopped,`));
-    assert.match(secondLog(), new RegExp(`Starting the container of ${repository}\\.`));
-    assert.strictEqual(containerState(), 'running');
-    assert.strictEqual(containerId(), id, 'The open made a new container');
-  });
+    it('at the next open of the window, the open pipeline starts the stopped container, and the window attaches', async function () {
+      this.timeout(QUIT_WAIT_MS + ATTACH_WAIT_MS + 90_000);
+      await quitAndRelease();
+      assert.strictEqual(containerState(), 'exited');
+      const id = containerId();
+      // The container does not run, so its lines are the ones at the stop.
+      await startAndAttach(attachesAtStop);
+      printLong(`    the log of the window:\n${withoutGitHub(secondLog())}`);
+      assert.match(secondLog(), new RegExp(`State of ${repository}: container stopped,`));
+      assert.match(secondLog(), new RegExp(`Starting the container of ${repository}\\.`));
+      assert.strictEqual(containerState(), 'running');
+      assert.strictEqual(containerId(), id, 'The open made a new container');
+    });
+  }
 
-  it('the window notices that its container was removed, and its next open makes a new container', async function () {
-    this.timeout(WATCH_MS + NOTICE_WAIT_MS + QUIT_WAIT_MS + ATTACH_WAIT_MS + 120_000);
-    assert.ok(running, 'The second VS Code does not run');
-    const id = containerId();
-    const from = secondLog().length;
-    const rendererFrom = rendererLog().length;
-    docker(['rm', '-f', containerName]);
-    const { noticedAt, states } = await watchAfter('removal', from, rendererFrom);
-    assertNoticed(noticedAt, rendererFrom);
-    assert.deepStrictEqual(statesOnly(states), ['missing'], 'Something made the container again before the next open');
-    await quitAndRelease();
-    // A new container starts without the lines of the old one.
-    await startAndAttach(0);
-    printLong(`    the log of the window:\n${withoutGitHub(secondLog())}`);
-    assert.match(secondLog(), new RegExp(`State of ${repository}: container missing,`));
-    assert.strictEqual(containerState(), 'running');
-    assert.notStrictEqual(containerId(), id, 'The container is the removed one');
-  });
+  if (PART !== 'stop') {
+    it('the window notices that its container was removed, and its next open makes a new container', async function () {
+      this.timeout(WATCH_MS + NOTICE_WAIT_MS + QUIT_WAIT_MS + ATTACH_WAIT_MS + 120_000);
+      assert.ok(running, 'The second VS Code does not run');
+      const id = containerId();
+      const from = secondLog().length;
+      const rendererFrom = rendererLog().length;
+      docker(['rm', '-f', containerName]);
+      const { noticedAt, states } = await watchAfter('removal', from, rendererFrom);
+      assertNoticed(noticedAt, rendererFrom);
+      assert.deepStrictEqual(statesOnly(states), ['missing'], 'Something made the container again before the next open');
+      await quitAndRelease();
+      // A new container starts without the lines of the old one.
+      await startAndAttach(0);
+      printLong(`    the log of the window:\n${withoutGitHub(secondLog())}`);
+      assert.match(secondLog(), new RegExp(`State of ${repository}: container missing,`));
+      assert.strictEqual(containerState(), 'running');
+      assert.notStrictEqual(containerId(), id, 'The container is the removed one');
+    });
+  }
 });
