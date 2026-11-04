@@ -80,11 +80,11 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-LINK-001
 
-**Open from a link.** A link `vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name` opens the devspace of that repository; when Devspaces is not installed, VS Code installs it first. Before a link creates a new devspace, Devspaces asks. For a repository of an account of Devspaces or of one of their organizations, **Always Open** in that question turns it off (setting `devspaces.confirmOpenFromLink`). For other owners, Devspaces always asks.
+**Open from a link.** A link `vscode://nimblescape.nimblescape-devspaces-2/open?repository=owner/name` opens the devspace of that repository; when Devspaces is not installed, VS Code installs it first. Before a link creates a new devspace, Devspaces asks. For a repository of an account of Devspaces or of one of their organizations, **Always Open** in that question turns it off (setting `devspaces.confirmOpenFromLink`). For other owners, Devspaces always asks. When the user has devspaces of several sources of the repository, the link opens the one used last on the current Docker engine. The devspace opens in the window that VS Code gives the link only when that window is empty; otherwise it opens in a new window.
 
 ### R-LINK-002
 
-**Course links.** A link `vscode://nimblescape.nimblescape-devspaces-2/course?repository=owner/name-<username>` opens the own repository of a student of a course. When the user is not signed in, Devspaces asks for the GitHub sign-in first. It puts the login of each account of Devspaces in place of `<username>` and opens the repository that exists with the account of that login, not with the account of the highest permission. When the repositories of two accounts exist, Devspaces asks which one to open.
+**Course links.** A link `vscode://nimblescape.nimblescape-devspaces-2/course?repository=owner/name-<username>` opens the own repository of a student of a course. When the user is not signed in, Devspaces asks for the GitHub sign-in first. It puts the login of each account of Devspaces in place of `<username>` and opens the repository that exists with the account of that login, not with the account of the highest permission. When the repositories of two accounts exist, Devspaces asks which one to open. `<username>` may stand anywhere in the name, also more than once; a course link without it gets `-<username>` at the end of the name. For a student who is not a member of the organization of the course, the repository belongs to another owner, so Devspaces always asks before it creates the devspace ([R-LINK-001](#r-link-001)).
 
 ## Docker engines
 
@@ -140,4 +140,4 @@ The dev container images of the courses are built in the repositories `majikmate
 
 ### R-IMG-003
 
-**nimblescape extensions.** The image of devcontainer-base installs nimblescape PlantUML (in place of the PlantUML extension of jebbs), nimblescape Mindbug and nimblescape Comment Links.
+**nimblescape extensions.** The image of devcontainer-base installs nimblescape PlantUML (in place of the PlantUML extension of jebbs), nimblescape Mindbug and nimblescape Comment Links. When the course extension of nimblescape Markdown is published, the image of devcontainer-classroom-web installs it too.
