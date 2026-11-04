@@ -287,6 +287,73 @@ describe('an entry without a build record takes the record over from its newest 
   });
 });
 
+describe('an entry whose image is gone takes the record over from a newer image of the devspace', () => {
+  const OLD_RECORD = { configHash: 'sha256:old', images: { [BASE_IMAGE]: DIGEST_OLD } };
+
+  it('takes the record of the newer image: no question about the configuration, and no build when up to date', async () => {
+    // Another computer on the same engine updated the devspace to build 3 and removed build 1 of this computer's record.
+    await seedDevspace(h, { record: OLD_RECORD, image: false, container: null });
+    addImage(IMAGE_3, labelsOf(recordOf(IMAGE_3, 3)));
+    await h.service.open(TARGET, options());
+    expect(h.ui.prompts).toEqual([]);
+    expect(h.helper.builds).toEqual([]);
+    expect(h.helper.ups.map((up) => up.image)).toEqual([IMAGE_3]);
+    const env = await h.registry.get(ENV_ID);
+    expect(env?.buildRecord).toEqual({ ...recordOf(IMAGE_3, 3), imageId: `sha256:image-of-${IMAGE_3}` });
+    expect(env?.lastBuildNumber).toBe(3);
+    expect(h.logger.infos.some((line) => line.includes(IMAGE_1) && line.includes(IMAGE_3) && line.includes('Its build record is used'))).toBe(true);
+  });
+
+  it('asks about the configuration only when it changed since the newer image', async () => {
+    await seedDevspace(h, { record: OLD_RECORD, image: false, container: null });
+    addImage(IMAGE_3, labelsOf({ ...recordOf(IMAGE_3, 3), configHash: 'sha256:other' }));
+    await h.service.open(TARGET, options());
+    expect(h.ui.prompts).toEqual([`configurationChanged ${REPO}`]);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(IMAGE_3);
+  });
+
+  it.each<[string, Record<string, string>]>([
+    ['with fitting labels', labelsOf(recordOf(IMAGE_2, 2))],
+    ['without labels of the extension (no warning about it)', {}],
+  ])('keeps its own record and builds when only an older image exists, %s', async (_name, labels) => {
+    await seedDevspace(h, { record: { ...recordOf(IMAGE_3, 3), imageId: `sha256:image-of-${IMAGE_3}` }, image: false, container: null });
+    addImage(IMAGE_2, labels);
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+    const env = await h.registry.get(ENV_ID);
+    expect(env?.buildRecord?.devspaceImage).toBe(devspaceImageName(REPO, ENV_ID, 4));
+    expect(h.logger.infos.some((line) => line.includes('Its build record is used'))).toBe(false);
+    expect(h.logger.warnings.some((line) => line.includes(IMAGE_2))).toBe(false);
+  });
+
+  it('takes nothing over while the image of its record exists with another ID, and builds', async () => {
+    await seedDevspace(h, { container: null });
+    h.docker.imageIds.set(IMAGE_1, `sha256:${'7'.repeat(64)}`);
+    addImage(IMAGE_3, labelsOf(recordOf(IMAGE_3, 3)));
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(devspaceImageName(REPO, ENV_ID, 4));
+  });
+
+  it('does not take the record of a newer image of another kind of devspace, and builds', async () => {
+    await seedDevspace(h, { record: OLD_RECORD, image: false, container: null });
+    addImage(IMAGE_3, labelsOf({ ...recordOf(IMAGE_3, 3), defaultImage: 'mcr.microsoft.com/devcontainers/base:ubuntu' }));
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(devspaceImageName(REPO, ENV_ID, 4));
+    expect(h.logger.warnings.some((line) => line.includes(IMAGE_3) && line.includes('another kind of devspace'))).toBe(true);
+  });
+
+  it('does not take the record of a newer image whose labels do not fit, and builds', async () => {
+    await seedDevspace(h, { record: OLD_RECORD, image: false, container: null });
+    addImage(IMAGE_3, labelsOf(recordOf(IMAGE_3, 3), { [LABEL_OWNER_ID]: OTHER_ACCOUNT.id }));
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(devspaceImageName(REPO, ENV_ID, 4));
+    expect(h.logger.warnings.some((line) => line.includes(IMAGE_3) && line.includes('its labels do not fit'))).toBe(true);
+  });
+});
+
 describe('reconcileFromVolumes and the names of the devspaces', () => {
   it('restores a volume with the name of its labels, with the container of the same name', async () => {
     h.docker.volumes.set(NAME, { [LABEL_DEVSPACE_ID]: ENV_ID, [LABEL_REPOSITORY]: REPO, [LABEL_OWNER_ID]: ACCOUNT.id });

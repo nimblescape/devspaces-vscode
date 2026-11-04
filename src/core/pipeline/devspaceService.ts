@@ -1392,9 +1392,10 @@ export class DevspaceService extends OperationBase {
     ctx.composeContainer = container !== undefined && isComposeContainer(container.labels, composeProjectName(ctx.env.repository, ctx.env.id));
     // An entry without a build record (restored from its volume after a lost registry, or a devspace that another
     // computer created) takes the record of its newest image (adoptImageRecord). The kind of the entry is fixed before
-    // the open (the label of its volume, or the record of its newest image at reconcileFromVolumes).
-    const record = ctx.env.buildRecord ?? (await this.adoptImageRecord(ctx));
-    const imagePresent = record !== undefined && (await this.pinnedImagePresent(record));
+    // the open (the label of its volume, or the record of its newest image at reconcileFromVolumes). An entry whose
+    // image is gone because a newer build replaced it (another computer on a shared engine) takes the record of that
+    // newer image (adoptNewerImageRecord).
+    const { record, imagePresent } = await this.openRecord(ctx);
     this.logger.info(
       `State of ${ctx.env.repository}: container ${container ? container.state : 'missing'}, devspace image ` +
         (record ? `${record.devspaceImage} ${imagePresent ? 'present' : 'missing'}` : 'not built yet') +
@@ -2500,11 +2501,66 @@ export class DevspaceService extends OperationBase {
    * is not used, and the open builds again (the build removes the other tags of the devspace image).
    */
   private async pinnedImagePresent(record: BuildRecord): Promise<boolean> {
+    return (await this.pinnedImageState(record)) === 'present';
+  }
+
+  /**
+   * pinnedImagePresent with the reason: `present`, `missing` (Docker has no image of that name), or `other` (an image of
+   * that name with another ID, or a record without a pinned ID; logged as a warning).
+   */
+  private async pinnedImageState(record: BuildRecord): Promise<'present' | 'missing' | 'other'> {
     const id = await this.deps.docker.imageId(record.devspaceImage);
-    if (id === undefined) return false;
-    if (record.imageId !== undefined && id.toLowerCase() === record.imageId.toLowerCase()) return true;
+    if (id === undefined) return 'missing';
+    if (record.imageId !== undefined && id.toLowerCase() === record.imageId.toLowerCase()) return 'present';
     this.logger.warn(`The devspace image ${record.devspaceImage} has the ID ${id}, not the ID of its build record (${record.imageId ?? 'none'}). It is not used.`);
-    return false;
+    return 'other';
+  }
+
+  /**
+   * The build record of the open, and whether its pinned image is present (pinnedImagePresent). Without a build
+   * record, the record of the newest devspace image (adoptImageRecord). With a build record whose image is missing, the
+   * record of a newer devspace image when there is one (adoptNewerImageRecord); else the record of the entry.
+   */
+  private async openRecord(ctx: PipelineContext): Promise<{ record: BuildRecord | undefined; imagePresent: boolean }> {
+    const own = ctx.env.buildRecord;
+    if (own === undefined) {
+      const adopted = await this.adoptImageRecord(ctx);
+      return { record: adopted, imagePresent: adopted !== undefined && (await this.pinnedImagePresent(adopted)) };
+    }
+    const state = await this.pinnedImageState(own);
+    if (state !== 'missing') return { record: own, imagePresent: state === 'present' };
+    const newer = await this.adoptNewerImageRecord(ctx, own);
+    if (newer === undefined) return { record: own, imagePresent: false };
+    return { record: newer, imagePresent: await this.pinnedImagePresent(newer) };
+  }
+
+  /**
+   * The build record of a devspace image of `ctx.env` that is newer than its build record `own`, whose image is gone:
+   * another computer that uses the same Docker engine updated the devspace (its build removed the older images), so
+   * the record of this computer is out of date. Takes the record of the newest devspace image (newestImageRecord: the
+   * labels of its devspace, with its ID pinned) when its build number is higher than that of `own` (imageBuildRecord:
+   * the record names that number) and it is of the same kind of devspace (a default image or a configuration), and writes it to the entry; else `undefined`, and the open
+   * goes on with `own` (its image is missing, so it builds). Without this, the open compares the configuration and the
+   * images with the old record: it asks whether to rebuild for a change that the newer image has already, and builds
+   * again although the newer image (and an image that the Monitor prepared for its next update) fits.
+   */
+  private async adoptNewerImageRecord(ctx: PipelineContext, own: BuildRecord): Promise<BuildRecord | undefined> {
+    const env = ctx.env;
+    const found = await this.newestImageRecord(env, own.buildNumber);
+    if ('reason' in found) {
+      if (found.warning !== undefined) this.logger.warn(found.warning);
+      return undefined;
+    }
+    const { record, tag } = found;
+    if ((record.defaultImage !== undefined) !== (env.defaultImage !== undefined)) {
+      this.logger.warn(`The devspace image ${tag} is of another kind of devspace than ${env.repository} (a default image or a configuration). Its build record is not used.`);
+      return undefined;
+    }
+    this.entryUpdated(ctx, await this.openRecords.build(env.id, { kind: 'record', record, dropRefused: false }));
+    this.logger.info(
+      `The devspace image ${own.devspaceImage} of the build record of ${env.repository} is gone, and the newer devspace image ${tag} (${record.imageId}) exists, for example from another computer that uses this Docker engine. Its build record is used.`,
+    );
+    return record;
   }
 
   /**
@@ -2547,9 +2603,10 @@ export class DevspaceService extends OperationBase {
    * The build record of the newest devspace image of `env` (the highest build number of devspaceImageRepository),
    * from its labels (imageBuildRecord), with the ID of that image pinned; else why there is none (`reason`), and the
    * warning of the open when that is worth one (`warning`). A Docker failure only means that there is no record. Apart
-   * from adoptImageRecord, for the prepare (the approved record).
+   * from adoptImageRecord, for the prepare (the approved record). `above`: only an image with a higher build number
+   * counts (adoptNewerImageRecord); a newest image that is not higher is no image, without a warning.
    */
-  private async newestImageRecord(env: Devspace): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
+  private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
     const repository = devspaceImageRepository(env.repository, env.id);
     let tags: string[];
     try {
@@ -2560,6 +2617,7 @@ export class DevspaceService extends OperationBase {
     }
     const newest = tags.map((tag) => ({ tag, number: Number(tag.slice(repository.length + 1)) })).filter((entry) => Number.isSafeInteger(entry.number) && entry.number > 0).sort((a, b) => b.number - a.number)[0];
     if (newest === undefined) return { reason: 'it has no devspace image' };
+    if (newest.number <= above) return { reason: `it has no devspace image newer than build ${above}` };
     // As for the tags, a Docker failure only means that no record is taken over.
     let id: string | undefined;
     let labels: Record<string, string> | undefined;

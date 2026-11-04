@@ -378,6 +378,8 @@ Several people, each with their own computer, can use the same remote Docker eng
 
 The engine has one Monitor for all computers, and each computer asks the question about it for itself (see [The background run](#the-background-run)). An older version of Devspaces on another computer that uses the engine does not ask: it still starts a Monitor that keeps running, until that computer is updated. **Remove Devspaces from This Docker Engine…** says when other computers use Devspaces on the engine. It deletes only the devspaces of your GitHub accounts in Devspaces; the devspaces of other accounts and of other computers stay. It removes the Monitor and the helper containers of all computers, so an operation of another computer that runs at that time can fail. The next work of that computer on the engine creates them again.
 
+One devspace can be used from several computers, for example with the same GitHub account at school and at home. When another computer updated the devspace to a newer image, the next start on your computer continues from that newer image: it does not ask about a changed configuration or build again for a change that the newer image has already.
+
 **A shared engine is for a group that trusts each other.** Everyone who can use Docker on that engine (root and the members of the group `docker` there) can reach every container and every volume on it, including the GitHub token in the memory of another person's running devspace. Devspaces separates accounts against mistakes, not against the other users of the engine. For people who must not see each other's work, give each person an engine of their own, for example a virtual machine.
 
 ## Installing Docker
