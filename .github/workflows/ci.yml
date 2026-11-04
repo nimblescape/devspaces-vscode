@@ -32,10 +32,9 @@
 # version and publishes the VSIX of that call. A push or a pull request that
 # changes only documentation, Markdown files and the files of docs/, starts no
 # run; the release calls this workflow for each version, where these path
-# filters do not apply. A change of this file changes the release process: its
-# pull request needs a dry run (rule 4). The workflow "VS Code versions" calls
-# it once per week with another VS Code version for the VS Code jobs; such a
-# call runs only the job "package", for the VSIX, and the VS Code jobs.
+# filters do not apply. The workflow "VS Code versions" calls it once per week
+# with another VS Code version for the VS Code jobs; such a call runs only the
+# job "package", for the VSIX, and the VS Code jobs.
 
 name: CI
 
