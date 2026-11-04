@@ -9,11 +9,18 @@ Devspaces opens a GitHub repository in a dev container, a *devspace*, on a Docke
 ```mermaid
 flowchart LR
   subgraph PC["Your computer"]
-    EXT["Extension<br/>(VS Code window)"]
     DC["Dev Containers extension"]
+    CLI["Docker CLI of Devspaces"]
+    WP["Docker pipe of the window<br/>request filter"]
+    EP["Docker pipe of the extension<br/>request filter"]
+    EXT["Extension<br/>(VS Code window)"]
+    AP["Pipe of the SSH questions"]
+    TR["Transport<br/>ssh or wsl.exe"]
   end
-  subgraph ENG["Docker engine (local or over SSH)"]
+  subgraph ENG["Docker engine (local, SSH host, or WSL distribution)"]
+    R["Relay<br/>first program of the worker container"]
     W["Worker<br/>…-worker…"]
+    SOCK["Docker engine<br/>/var/run/docker.sock"]
     B["Batch helper<br/>devspaces-batch-…"]
     SM["Monitor<br/>devspaces-monitor"]
     DEV["Dev container"]
@@ -23,9 +30,20 @@ flowchart LR
   end
   GH["GitHub API"]
   REG["Image registries"]
-  EXT -- "operations over stdin/stdout" --> W
   EXT --> GH
-  W -- "Engine API" --> DEV
+  DC -- "runs docker" --> CLI
+  CLI -- "calls of Dev Containers" --> WP
+  EXT -- "own Docker calls" --> EP
+  WP -- "one stream per connection" --> EXT
+  EP -- "one stream per connection" --> EXT
+  EXT -- "connection of the relay:<br/>streams in frames" --> TR
+  TR -. "questions of ssh" .-> AP
+  AP -.-> EXT
+  TR == "one login per window and engine" ==> R
+  R -- "stream worker:<br/>operations" --> W
+  R -- "streams docker" --> SOCK
+  W -- "Engine API" --> SOCK
+  SOCK -- "runs" --> DEV
   W -- "starts, one per operation" --> B
   B --> V
   DEV --> V
@@ -37,10 +55,19 @@ flowchart LR
   W --> REG
   SM --> REG
   SM -- "stops" --> DEV
-  DC -- "attaches" --> DEV
 ```
 
-The rule that holds everything together: **the extension sets up the worker, and the worker does all work on the engine.** The extension decides, asks the user, keeps the local records, and holds the secrets. It sends the worker one operation per flow. The worker runs the whole flow next to the engine, so that a remote engine costs one SSH connection per window instead of one per Docker call. Local and remote engines work the same way; only the Docker endpoint differs: the current Docker context for the local Docker, `ssh://<host>` for a remote host.
+The diagram shows a remote engine: an SSH host, or the WSL distribution of Devspaces on Windows. One process of the transport per window and engine (on an SSH host, one SSH login) carries the worker channel and the Docker connections of the window (see [The connection of the relay](#the-connection-of-the-relay)). The relay splits it into streams: one stream to the worker, and one stream for each Docker connection.
+
+- **Operations.** The extension sends the worker one operation per flow on the stream `worker` (see [The worker and the helper channel](#the-worker-and-the-helper-channel)).
+- **The Docker pipe of the window.** The Dev Containers extension runs the Docker CLI of Devspaces with `DOCKER_HOST` set to the Docker pipe of the window. The extension serves that pipe and makes each of its connections a stream `docker`, which the relay connects to the Docker socket of the engine.
+- **The Docker pipe of the extension.** The Docker calls of Devspaces itself use a second pipe. On an SSH host, they use it only while the connection of the relay is open; otherwise a call that only reads runs on the shell before the relay, and any other call uses `ssh://<host>`. On the WSL distribution, each connection of this pipe runs its own `wsl.exe … docker system dial-stdio`.
+- **The request filter.** Both pipes let only the requests of the Docker API on their own list through (see [The Docker pipe](#the-docker-pipe)). So the Dev Containers extension can attach the window to the container, but it cannot create, build or remove anything on the engine.
+- **The pipe of the SSH questions.** When an SSH login asks for a host key, a password or a passphrase, `ssh` asks through `SSH_ASKPASS`, and the extension shows the question in VS Code (see [Login without setup](#login-without-setup)).
+
+On the local Docker, there is no transport, relay or pipe: the extension starts the worker with `docker run -i` and talks to it over the standard input and output of that command, and the Dev Containers extension uses the local Docker directly. [remote-connection.md](remote-connection.md) shows the remote parts in more detail.
+
+The rule that holds everything together: **the extension sets up the worker, and the worker does all work on the engine.** The extension decides, asks the user, keeps the local records, and holds the secrets. It sends the worker one operation per flow. The worker runs the whole flow next to the engine, so that a remote engine costs one login per window instead of one per Docker call. Local and remote engines work the same way; only the way to the engine differs: the current Docker context for the local Docker, and the transport with the relay and the Docker pipes for a remote engine.
 
 ## Components
 

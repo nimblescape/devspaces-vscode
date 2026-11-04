@@ -32,7 +32,7 @@ Devspaces lists the GitHub repositories that you can access and that contain a D
 - **Open from a link.** A link on a website opens a repository in its devspace. When Devspaces is not installed, VS Code installs it first ([Open from a link](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#open-from-a-link)). A course link opens the own repository of each student of a course, with the GitHub login of the student in its name ([Course links](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#course-links)).
 - **Several GitHub accounts.** One list for all GitHub accounts of VS Code that you use in Devspaces. A new devspace uses the account with the highest permission on the repository, an existing devspace always its own account, and **Start with Account…** lets you choose ([Several GitHub accounts](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#several-github-accounts)).
 - **Back where you left off.** When the window that you closed last was connected to a devspace, the next start of VS Code opens that devspace again.
-- **Remote Docker.** Run your devspaces on a stronger machine or a shared classroom server over SSH.
+- **Remote Docker.** Run your devspaces on a stronger machine over SSH. A remote host serves one user, or a group whose members trust each other.
 - **Guard rails.** Host access checks refuse configurations that reach into your computer (bind mounts, privileged mode, the Docker socket, …). The GitHub token stays in the memory of the container only.
 - **Docker setup.** Without Docker, the view walks you through installing it.
 
@@ -72,7 +72,7 @@ Devspaces uses the GitHub sign-in of VS Code, stores no token, and collects no t
 
 ## Uninstall
 
-Before you uninstall Devspaces, run **Devspaces: Remove Devspaces from This Docker Engine…** (Command Palette, or the **…** menu of the view) on each Docker engine that you used. **Devspaces: Use a Remote Docker Host…** and **Devspaces: Use the Local Docker** switch the engine. The command removes the container `devspaces-monitor`, the helper containers and images of Devspaces, and the volumes `devspaces-monitor`, `devspaces-worker-cache` and `devspaces-vscode`. It asks first, and it asks again before it deletes your devspaces on that engine. Then uninstall the extension in VS Code. The [user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#uninstall) has the Docker commands that remove the same by hand, and the Docker contexts that Devspaces created.
+Before you uninstall Devspaces, run **Devspaces: Remove Devspaces from This Docker Engine…** (Command Palette, or the **…** menu of the view) on each Docker engine that you used. **Devspaces: Use a Remote Docker Host…** and **Devspaces: Use the Local Docker** switch the engine. The command removes the container `devspaces-monitor`, the helper containers and images of Devspaces, and the volumes `devspaces-monitor`, `devspaces-worker-cache` and `devspaces-vscode`. It asks first, and it asks again before it deletes your devspaces on that engine. Then uninstall the extension in VS Code. The [user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#uninstall) has the Docker commands that remove the same by hand, and how to remove the Docker contexts that versions 0.1.0 and 0.2.0 created.
 
 ---
 

@@ -23,6 +23,8 @@ VS Code installs the Dev Containers extension with it. To install a `.vsix` file
 
 ### Update from version 0.4.0 or older
 
+This section and the next one are about the first extension of Devspaces, with the ID `nimblescape.nimblescape-devspaces`: 0.4.0 and 0.2.1 are versions of that extension. Devspaces 2 started at version 0.1.0 with the new names. When you used the first extension on a Docker engine, remove its old objects there as described here.
+
 Version 0.4.0 and older named the image of the worker `devspaces-helper:<hash>` (with the second tag `devspaces-monitor:<hash>`), its cache volume `devspaces-helper-cache`, and its labels `nimblescape.devspaces.helper…`. Later versions name them `devspaces-worker:<hash>`, `devspaces-worker-cache`, and `nimblescape.devspaces.worker…`, build the new image at the first use, and do not use or remove the old objects. On each Docker engine, after the first start of a devspace with the new version (which replaces the Monitor), remove the old objects, because the host access checks of the new version do not protect the old volume:
 
 ```sh
@@ -496,11 +498,11 @@ These Docker commands remove the same without the extension, in a shell such as 
    docker volume rm devspaces-monitor devspaces-worker-cache devspaces-vscode
    ```
 
-The objects of version 0.4.0 and older have other names: see [Update from version 0.4.0 or older](#update-from-version-040-or-older).
+The objects of version 0.4.0 and older of the first extension have other names: see [Update from version 0.4.0 or older](#update-from-version-040-or-older).
 
 ### Docker contexts and your computer
 
-- **Docker contexts.** Devspaces creates no Docker context, so there is none to remove.
+- **Docker contexts.** Devspaces creates no Docker context. Versions 0.1.0 and 0.2.0 did: their **Use a Remote Docker Host…** created a Docker context for each host, named after the host (for example `build-box`), with the description `Devspaces: remote Docker host <host>`, and made it the current context. Later versions do not use or remove these contexts. `docker context ls` lists them. To remove one, first set Docker to the local engine (`docker context use default`, or with Docker Desktop `docker context use desktop-linux`), then run `docker context rm <name>`.
 - **Files.** Devspaces keeps its records, also the list of remote hosts (`remote-docker.json`), in a folder of VS Code: `~/.config/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on Linux, `~/Library/Application Support/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on macOS, and `%APPDATA%\Code\User\globalStorage\nimblescape.nimblescape-devspaces-2` on Windows. For VS Code Insiders, the folder `Code - Insiders` takes the place of `Code`. You can delete this folder after the uninstall.
 - **Settings.** The settings `devspaces.…` stay in your `settings.json` until you remove them.
 
