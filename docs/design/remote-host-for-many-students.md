@@ -1,6 +1,6 @@
 # Remote host for many students
 
-Design proposal of 2026-10-29. Nothing of it is built yet.
+**Status: future work.** Nothing of it is built, and it is not a requirement: a remote host serves one user, or a group whose members trust each other ([R-ENG-002](../requirements.md#r-eng-002)). This file keeps the design proposal of 2026-10-29.
 
 ## Purpose
 

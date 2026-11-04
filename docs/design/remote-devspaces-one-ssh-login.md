@@ -1,6 +1,6 @@
 # Remote devspaces with one SSH login
 
-Design proposal of 2026-10-29. Nothing of it is built yet.
+**Status: built in version 0.3.0.** How it works now is in [remote-connection.md](../remote-connection.md); the requirements are [R-ENG-002](../requirements.md#r-eng-002) to [R-ENG-004](../requirements.md#r-eng-004). This file keeps the design proposal of 2026-10-29 as it was written, so its statements about what is built and what is open are from that day.
 
 Hannes chose this design on 2026-10-29. A VS Code window that uses a remote host opens exactly one SSH login, and that one connection carries the worker and every Docker call of the window. The student needs only VS Code, Devspaces and the SSH client of the system. The host needs Docker and `sh`. Nothing needs admin rights on the student's computer, and nothing needs setup. This is a design: no code is written yet.
 
