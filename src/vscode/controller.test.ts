@@ -36,12 +36,13 @@ import { availableDevspaces } from '../core/ownership';
 import { dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
 import { DockerTargets, operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { silentLogger } from '../core/ports';
-import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, RepositoryInfo, WindowStatus } from '../core/types';
+import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, ReadyVscodeUpdate, RepositoryInfo, WindowStatus } from '../core/types';
 import { GITHUB_ENTERPRISE_CONTEXT_KEY, SIGNED_IN_CONTEXT_KEY } from './auth';
 import { Commands } from './commands';
 import { CONNECTED_CONTEXT_KEY, Controller, HELPER_BUILDS_STOP_WAIT_MS, type ControllerDeps } from './controller';
 import { placeholderRepositoryInfo } from './targets';
 import { ControllerTexts } from './controllerTexts';
+import type { RestartOutcome } from './vscodeUpdate';
 import { DisconnectRequests } from './disconnectRequests';
 import { DOUBLE_CLICK_INTERVAL_MS, type ListOpenMode } from './rowActivation';
 import { DEFAULT_SETTINGS, SETTINGS_SECTION } from './settings';
@@ -229,7 +230,7 @@ interface Harness {
   };
   coordinator: {
     windowId: string;
-    writePending: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>;
+    writePending: ReturnType<typeof vi.fn<(id: string, vscodeUpdate?: ReadyVscodeUpdate) => Promise<void>>>;
     otherActiveWindows: ReturnType<typeof vi.fn<() => Promise<WindowStatus[]>>>;
     setDevspace: ReturnType<typeof vi.fn>;
     setPlainDevspace: ReturnType<typeof vi.fn>;
@@ -304,6 +305,8 @@ function createHarness(
     startDocker?: ControllerDeps['startDocker'];
     /** The longest wait of a removal for the background builds of the helper image (default 60 s). */
     helperBuildsStopWaitMs?: number;
+    /** The update of VS Code before a new window of a devspace connects. Default: none. */
+    vscodeUpdate?: ControllerDeps['vscodeUpdate'];
   } = {},
 ): Harness {
   const monitorQuestion = { askIfNeeded: vi.fn(async (_host: string, _removalRuns?: () => Promise<(removal: EngineRemoval) => boolean>): Promise<string> => 'notNeeded') };
@@ -409,7 +412,7 @@ function createHarness(
   };
   const coordinator: Harness['coordinator'] = {
     windowId: WINDOW_ID,
-    writePending: vi.fn((id: string) => sessionFiles.writePending(id, WINDOW_ID)),
+    writePending: vi.fn((id: string, vscodeUpdate?: ReadyVscodeUpdate) => sessionFiles.writePending(id, WINDOW_ID, vscodeUpdate)),
     otherActiveWindows: vi.fn(async () => []),
     setDevspace: vi.fn(async () => {}),
     setPlainDevspace: vi.fn(async () => {}),
@@ -500,6 +503,7 @@ function createHarness(
     engineRemovalEnded: options.engineRemovalEnded,
     updateImagesNow: options.updateImagesNow,
     startDocker: options.startDocker,
+    vscodeUpdate: options.vscodeUpdate,
     listOpenMode: () => listOpenMode.value,
     // A promise of its own: vitest handles the promises that a mock returns, so a rejection would never be unhandled.
     revealRow: async (rowId: string) => revealRow(rowId),
@@ -6832,13 +6836,14 @@ describe('the Docker host of Devspaces', () => {
     let connects: { host: string; again: boolean; asks: boolean }[];
     let failWithoutQuestions: boolean;
     let failWithQuestions: boolean;
+    let hostConnection: NonNullable<ControllerDeps['hostConnection']>;
 
     beforeEach(() => {
       fs.rmSync(h.root, { recursive: true, force: true });
       connects = [];
       failWithoutQuestions = false;
       failWithQuestions = false;
-      const hostConnection: NonNullable<ControllerDeps['hostConnection']> = {
+      hostConnection = {
         // As extension.ts: only an SSH host, never the WSL distribution of Devspaces or the local Docker.
         sshHostOf: (shown) => (shown.dockerHost !== undefined && !shown.dockerHost.startsWith('wsl:') ? shown.dockerHost : undefined),
         connect: async (host, options) => {
@@ -6882,6 +6887,28 @@ describe('the Docker host of Devspaces', () => {
       expect(connects).toHaveLength(2);
       expect(fakeVscode.window.showErrorMessage).toHaveBeenCalled();
       expect(h.statusBar.showConnectionLost).toHaveBeenCalled();
+    });
+
+    it('opens no connection while VS Code restarts for its update, and opens it when VS Code keeps running', async () => {
+      // The login to the host may ask questions, which must not appear while VS Code closes its windows (R-DS-006).
+      let kept: (() => void) | undefined;
+      const vscodeUpdate = {
+        readyToInstall: vi.fn(async () => undefined),
+        restartToInstall: vi.fn(async (_update: ReadyVscodeUpdate, onKept?: () => void): Promise<RestartOutcome> => {
+          kept = onKept;
+          return 'restarting';
+        }),
+      };
+      h.controller.dispose();
+      h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, hostConnection, vscodeUpdate });
+      const env = remoteDevspace();
+      await h.registry.add(env);
+      await h.controller.openAttachedWindow(env, env.containerName, { ...fresh(), vscodeUpdate: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273' } });
+      expect(vscodeUpdate.restartToInstall).toHaveBeenCalledTimes(1);
+      expect(connects).toEqual([]);
+      kept?.();
+      await settle(() => connects.length === 1, 'the connection to the host');
+      expect(connects).toEqual([{ host: 'build-box', again: false, asks: false }]);
     });
 
     it('opens no connection for a devspace on the WSL distribution, nor when the pipeline did not just run', async () => {
@@ -8158,5 +8185,118 @@ describe('Several GitHub accounts', () => {
     expect((await h.sidebar.availableDevspaces()).map((entry: Devspace) => entry.id)).toEqual([ENV_ID, OTHER_ENV_ID]);
     await run('stop', row('acme/web', devspace({ id: OTHER_ENV_ID, repository: 'acme/web', owner: OTHER_ACCOUNT })));
     expect(h.service.stop).toHaveBeenCalledWith(OTHER_ENV_ID);
+  });
+});
+
+describe('the update of VS Code before a new window connects (R-DS-006)', () => {
+  const UPDATE: ReadyVscodeUpdate = { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' };
+  const fresh = (vscodeUpdate?: ReadyVscodeUpdate) => ({ devspaceId: ENV_ID, windowId: 'old', createdAt: iso(NOW - 30_000), ...(vscodeUpdate ? { vscodeUpdate } : {}) });
+  let vscodeUpdate: {
+    readyToInstall: Mock<(enabled: boolean) => Promise<ReadyVscodeUpdate | undefined>>;
+    restartToInstall: Mock<(update: ReadyVscodeUpdate, kept?: () => void) => Promise<RestartOutcome>>;
+  };
+
+  beforeEach(() => {
+    vscodeUpdate = {
+      readyToInstall: vi.fn(async (enabled: boolean) => (enabled ? UPDATE : undefined)),
+      restartToInstall: vi.fn(async (_update: ReadyVscodeUpdate, _kept?: () => void): Promise<RestartOutcome> => 'notStarted'),
+    };
+    recreateHarness({ vscodeUpdate });
+  });
+
+  it('a Start names the update in the pending connection file, and then opens the window as usual', async () => {
+    h.service.openInWorker.mockImplementation(async () => {
+      const env = devspace();
+      await h.registry.add(env);
+      return openResult(env);
+    });
+    await run('start', row('acme/api'));
+    expect(vscodeUpdate.readyToInstall).toHaveBeenCalledWith(true);
+    expect(h.coordinator.writePending).toHaveBeenCalledWith(ENV_ID, UPDATE);
+    expect((await h.sessionFiles.readPendings()).map((pending) => pending.vscodeUpdate)).toEqual([UPDATE]);
+    expect(h.connection.open).toHaveBeenCalledWith(CONTAINER, '/workspaces/api');
+    // The window that runs the Start installs nothing itself: the window of the devspace does.
+    expect(vscodeUpdate.restartToInstall).not.toHaveBeenCalled();
+  });
+
+  it('a Start names no update when the setting installVsCodeUpdateFirst is off', async () => {
+    h.settings.installVsCodeUpdateFirst = false;
+    h.service.openInWorker.mockImplementation(async () => {
+      const env = devspace();
+      await h.registry.add(env);
+      return openResult(env);
+    });
+    await run('start', row('acme/api'));
+    expect(vscodeUpdate.readyToInstall).toHaveBeenCalledWith(false);
+    expect(h.coordinator.writePending).toHaveBeenCalledWith(ENV_ID);
+    expect((await h.sessionFiles.readPendings())[0]).not.toHaveProperty('vscodeUpdate');
+    expect(h.connection.open).toHaveBeenCalled();
+  });
+
+  const branchRead = () => h.service.windowStateInWorker.mock.calls.some(([, , options]) => options?.branch === true);
+
+  it('the window of the devspace restarts VS Code for the update, and its activation ends without a connection', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    vscodeUpdate.restartToInstall.mockResolvedValueOnce('restarting');
+    // VS Code closes the window only after the end of its activation, so the activation must end now.
+    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
+    expect(vscodeUpdate.restartToInstall).toHaveBeenCalledWith(UPDATE, expect.any(Function));
+    expect(h.progressTitles[0]).toContain(ControllerTexts.installingVscodeUpdate('1.146.0', 'acme/api'));
+    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
+    await pause(20);
+    expect(branchRead()).toBe(false);
+  });
+
+  it('the window connects when VS Code keeps running after the restart began (Cancel on unsaved files)', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    let kept: (() => void) | undefined;
+    vscodeUpdate.restartToInstall.mockImplementationOnce(async (_update, onKept) => {
+      kept = onKept;
+      return 'restarting';
+    });
+    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
+    expect(branchRead()).toBe(false);
+    kept?.();
+    await settle(branchRead, 'the read of the branch');
+    await settle(() => h.statusBar.showConnected.mock.calls.some(([, branch]) => branch === 'main'), 'the branch in the status bar');
+    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
+  });
+
+  it('the window connects with the running version when VS Code does not restart', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
+    expect(vscodeUpdate.restartToInstall).toHaveBeenCalledTimes(1);
+    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
+    await settle(() => h.statusBar.showConnected.mock.calls.some(([, branch]) => branch === 'main'), 'the branch in the status bar');
+  });
+
+  it('installs nothing without an update in the pending connection file, and in a restored or reloaded window', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    await h.controller.openAttachedWindow(env, CONTAINER, fresh());
+    await h.controller.openAttachedWindow(env, CONTAINER, undefined);
+    expect(vscodeUpdate.restartToInstall).not.toHaveBeenCalled();
+  });
+
+  it('reads the setting as a user setting only, on by default (package.json)', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+      contributes: { configuration: { properties: Record<string, { default?: unknown; scope?: string; type?: string }> } };
+    };
+    const properties = manifest.contributes.configuration.properties;
+    expect(properties[`${SETTINGS_SECTION}.installVsCodeUpdateFirst`]).toMatchObject({ type: 'boolean', default: true, scope: 'application' });
+    expect(DEFAULT_SETTINGS.installVsCodeUpdateFirst).toBe(true);
+  });
+
+  it('installs nothing when the setting was turned off after the Start', async () => {
+    const env = devspace();
+    await h.registry.add(env);
+    h.settings.installVsCodeUpdateFirst = false;
+    await h.controller.openAttachedWindow(env, CONTAINER, fresh(UPDATE));
+    expect(vscodeUpdate.restartToInstall).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The update 1.146.0 of VS Code is not installed first: the setting installVsCodeUpdateFirst is off.');
+    expect(h.statusBar.showConnected).toHaveBeenCalled();
   });
 });

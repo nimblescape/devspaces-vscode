@@ -148,6 +148,17 @@ describe('pending connection files', () => {
     ]);
   });
 
+  it('writes and reads the update of VS Code that the new window installs first', async () => {
+    await files.writePending(ENV_A, WIN_1, { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' });
+    // A Snap package names no version number: the field is left out, not written as undefined.
+    await files.writePending(ENV_B, WIN_2, { version: 'something', productVersion: undefined });
+    await expect(files.readPendings()).resolves.toEqual([
+      { devspaceId: ENV_A, windowId: WIN_1, createdAt: '2026-09-24T17:40:15.000Z', vscodeUpdate: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' } },
+      { devspaceId: ENV_B, windowId: WIN_2, createdAt: '2026-09-24T17:40:15.000Z', vscodeUpdate: { version: 'something' } },
+    ]);
+    expect(JSON.parse(fs.readFileSync(path.join(paths.pendingDir, `${ENV_B}.json`), 'utf8')).vscodeUpdate).toEqual({ version: 'something' });
+  });
+
   it('skips invalid pending files', async () => {
     fs.mkdirSync(paths.pendingDir, { recursive: true });
     fs.writeFileSync(path.join(paths.pendingDir, `${ENV_A}.json`), JSON.stringify({ devspaceId: ENV_A, windowId: WIN_1, createdAt: 'yesterday' }));
@@ -371,6 +382,12 @@ describe('validators', () => {
     for (const plainDevspaceId of ['', '../x', 3, null]) expect(isWindowStatus({ ...status(WIN_1), plainDevspaceId })).toBe(false);
     expect(isPendingConnection({ devspaceId: ENV_A, windowId: WIN_1, createdAt: '2026-09-24T17:40:15Z' })).toBe(true);
     expect(isPendingConnection({ devspaceId: ENV_A, windowId: '', createdAt: '2026-09-24T17:40:15Z' })).toBe(false);
+    const pending = { devspaceId: ENV_A, windowId: WIN_1, createdAt: '2026-09-24T17:40:15Z' };
+    expect(isPendingConnection({ ...pending, vscodeUpdate: { version: 'a717861c07586a53d83b80d742cd3f59b20a6273', productVersion: '1.146.0' } })).toBe(true);
+    expect(isPendingConnection({ ...pending, vscodeUpdate: { version: 'something' } })).toBe(true);
+    for (const vscodeUpdate of [{ version: '' }, { productVersion: '1.146.0' }, { version: 'x', productVersion: 7 }, 'a717861c', null]) {
+      expect(isPendingConnection({ ...pending, vscodeUpdate }), JSON.stringify(vscodeUpdate)).toBe(false);
+    }
     expect(isPendingOperation(operation(ENV_A))).toBe(true);
     expect(isPendingOperation({ ...operation(ENV_A), reason: 'whim' })).toBe(false);
     expect(isPendingOperation({ ...operation(ENV_A), additionalVolumesToRemove: 'yes' })).toBe(false);

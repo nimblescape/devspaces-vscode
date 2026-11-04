@@ -361,6 +361,19 @@ export interface PendingConnection {
   devspaceId: string;
   windowId: string;
   createdAt: string;
+  /**
+   * The update of VS Code that the new window installs before it connects (docs/requirements.md R-DS-006): VS Code has
+   * downloaded it and waits for its restart. Only the window that ran the Start writes it (Controller.connect).
+   */
+  vscodeUpdate?: ReadyVscodeUpdate;
+}
+
+/** An update of VS Code that VS Code installs at its next restart (src/vscode/vscodeUpdate.ts). */
+export interface ReadyVscodeUpdate {
+  /** The commit of the new build (`update.version` of the update service; a Snap package names no commit). */
+  version: string;
+  /** Its version number, for example `1.146.0`, when the update service named it. */
+  productVersion?: string;
 }
 
 /**
@@ -463,6 +476,12 @@ export interface ExtensionSettings {
    * the user setting counts (scope `application`).
    */
   confirmOpenFromLink?: boolean;
+  /**
+   * `installVsCodeUpdateFirst`: when VS Code has downloaded an update and waits for its restart, a new window of a
+   * devspace restarts VS Code to install it before it connects (true, the default; docs/requirements.md R-DS-006). Only
+   * the user setting counts (scope `application`).
+   */
+  installVsCodeUpdateFirst?: boolean;
 }
 
 /** The values of the setting updateContainer. */

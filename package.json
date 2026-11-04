@@ -903,6 +903,13 @@
           "scope": "application",
           "default": true,
           "markdownDescription": "Ask before a link, for example on a website or a course page, creates a devspace of a repository of your account or of one of your organizations. **Always Open** in that question turns this off. A repository of another owner is always confirmed.\n\n[Open from a link in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#open-from-a-link)"
+        },
+        "devspaces.installVsCodeUpdateFirst": {
+          "order": 20,
+          "type": "boolean",
+          "scope": "application",
+          "default": true,
+          "markdownDescription": "Install an update of VS Code that waits for its restart (**Restart to Update**) before a new window connects to a devspace: VS Code restarts, and the window then connects with the new version. **Cancel** on unsaved files keeps VS Code running. Off: VS Code installs the update at its next restart.\n\n[The update of VS Code in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-of-vs-code)"
         }
       }
     }

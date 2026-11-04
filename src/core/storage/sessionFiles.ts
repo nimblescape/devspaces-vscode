@@ -12,6 +12,7 @@ import type {
   PendingConnection,
   PendingOperation,
   PendingOperationKind,
+  ReadyVscodeUpdate,
   ReopenRecord,
   WindowStatus,
 } from '../types';
@@ -65,9 +66,15 @@ export class SessionFiles {
 
   // --- Pending connection files (pending/<devspace-id>.json) ----------------------------------------------------
 
-  /** Writes the pending connection file with `createdAt` = now. */
-  async writePending(devspaceId: string, windowId: string): Promise<void> {
+  /**
+   * Writes the pending connection file with `createdAt` = now, and with the update of VS Code that the new window
+   * installs before it connects, if any (Controller.connect).
+   */
+  async writePending(devspaceId: string, windowId: string, vscodeUpdate?: ReadyVscodeUpdate): Promise<void> {
     const pending: PendingConnection = { devspaceId, windowId, createdAt: isoTime(this.clock) };
+    if (vscodeUpdate !== undefined) {
+      pending.vscodeUpdate = vscodeUpdate.productVersion === undefined ? { version: vscodeUpdate.version } : { version: vscodeUpdate.version, productVersion: vscodeUpdate.productVersion };
+    }
     const file = this.paths.pendingFile(devspaceId);
     await retryTransient(() => writeJsonAtomic(file, pending));
   }
@@ -278,8 +285,13 @@ export function isPendingConnection(value: unknown): value is PendingConnection 
     isRecord(value) &&
     isStorageId(value.devspaceId) &&
     isNonEmptyString(value.windowId) &&
-    isTime(value.createdAt)
+    isTime(value.createdAt) &&
+    (value.vscodeUpdate === undefined || isReadyVscodeUpdate(value.vscodeUpdate))
   );
+}
+
+function isReadyVscodeUpdate(value: unknown): value is ReadyVscodeUpdate {
+  return isRecord(value) && isNonEmptyString(value.version) && (value.productVersion === undefined || isNonEmptyString(value.productVersion));
 }
 
 // Records over the union types of types.ts, so that the compiler reports a kind or reason that is missing here.

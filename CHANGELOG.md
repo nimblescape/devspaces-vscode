@@ -3,6 +3,10 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
+## 0.5.0
+
+**The update of VS Code first:** when VS Code has downloaded an update and waits for its restart (**Restart to Update**), a new window of a devspace installs it before it connects: VS Code closes its windows (a window with unsaved files asks first), installs the update, and opens the windows again. The window of the devspace then connects with the new version, and the devspace gets the VS Code Server of that version. The new setting devspaces.installVsCodeUpdateFirst (on by default) turns this off. See [The update of VS Code](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-of-vs-code).
+
 ## 0.4.0
 
 **Helper image in the background:** the Monitor on each Docker engine also keeps the helper image of Devspaces (`devspaces-worker`) up to date in its background run. When the base image `node` of the helper image has a newer version, the Monitor builds the helper image again on that engine, so that a start does not need to build it. A window of Devspaces checks the base image itself only when the Monitor has not done it for a week, and a start no longer builds the helper image again after the Monitor did. When the Monitor cannot reach the registry or cannot build the image, the windows check and build it as before. See [The background run](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run).

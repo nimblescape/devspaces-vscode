@@ -71,6 +71,24 @@ describe('the extension in VS Code', () => {
     assert.ok(registered.has('notifications.hideToasts'), 'VS Code has no command notifications.hideToasts');
   });
 
+  // The update of VS Code before a new window of a devspace connects (src/vscode/vscodeUpdate.ts, docs/requirements.md
+  // R-DS-006) uses two commands of the workbench of VS Code, one of them internal. The weekly run against other versions
+  // of VS Code finds it early when VS Code removes or renames one of them. VS Code runs here with --disable-updates, so
+  // the state is `disabled`, and "Restart to Update" is not run.
+  it('finds the commands of VS Code for its update', async () => {
+    const all = new Set(await vscode.commands.getCommands(false));
+    assert.ok(all.has('update.restartToUpdate'), 'VS Code has no command update.restartToUpdate');
+    // The workbench registers _update.state in its phase "Restored", which may come after the start of the tests.
+    const deadline = Date.now() + 30_000;
+    while (!(await vscode.commands.getCommands(false)).includes('_update.state')) {
+      assert.ok(Date.now() < deadline, 'VS Code has no command _update.state');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    const state: unknown = await vscode.commands.executeCommand('_update.state');
+    assert.ok(typeof state === 'object' && state !== null && typeof (state as { type?: unknown }).type === 'string', `_update.state returned ${JSON.stringify(state)}`);
+    console.log(`    The update state of VS Code: ${(state as { type: string }).type}`);
+  });
+
   it('logs the Docker CLI it found, and no error', async () => {
     const extension = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(extension);

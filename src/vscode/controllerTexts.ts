@@ -17,6 +17,9 @@ export const ControllerTexts = {
   rebuilding: (repository: string) => `Rebuilding ${repository}…`,
   checkingChanges: (repository: string) => `Checking ${repository} for changes…`,
   waitingForOtherWindow: (repository: string) => `Waiting until another window has finished changing ${repository}…`,
+  /** The new window of a devspace restarts VS Code to install its update first (docs/requirements.md R-DS-006). */
+  installingVscodeUpdate: (version: string, repository: string) =>
+    `Restarting VS Code to install the update ${version}. Then the window connects to ${repository}…`,
   // Messages.
   alreadyConnected: (repository: string) => `This window is connected to ${repository}.`,
   // Keep Running When Closed and Stop When Closed.

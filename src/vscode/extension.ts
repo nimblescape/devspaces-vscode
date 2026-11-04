@@ -125,6 +125,7 @@ import { Sidebar } from './sidebar';
 import { DevspaceStatusBar } from './statusBar';
 import { Throttle } from './tasks';
 import { REPOSITORIES_VIEW_ID, RepositoriesTreeProvider, expandAll, revealRow, type TreeNode } from './treeView';
+import { VscodeUpdate } from './vscodeUpdate';
 
 /** A window that gets the focus refreshes the sidebar at most this often. */
 const FOCUS_REFRESH_INTERVAL_MS = 15_000;
@@ -1149,6 +1150,15 @@ async function activateExtension(
     },
     remoteDocker,
     wslSetup,
+    // The update of VS Code before a new window of a devspace connects (docs/requirements.md R-DS-006), with the
+    // commands of the workbench of VS Code (vscodeUpdate.ts) and the record of the last restart in the global state.
+    vscodeUpdate: new VscodeUpdate({
+      commands: () => vscode.commands.getCommands(false),
+      execute: (command) => vscode.commands.executeCommand(command),
+      state: context.globalState,
+      runningVersion: vscode.version,
+      logger,
+    }),
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.
     sessionMonitor: {

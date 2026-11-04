@@ -238,6 +238,7 @@ Up to version 0.2.1 the prefix was `devspace.`. Settings with the old prefix are
 | `hostAccessChecksOff` | `[]` | *User only.* Repositories (`owner/name`) whose host access checks are off. Only for repositories that you fully trust (see [Security](#security)). **Turn Off Host Access Checks…** in the context menu of a repository changes it. A change applies when the container is created next, for example with **Rebuild**. |
 | `repositoryGroups` | `[]` | *User only.* Regular expressions that filter and group the repositories of each owner by name (see [Repository groups](#repository-groups)). |
 | `confirmOpenFromLink` | `true` | *User only.* Ask before a link creates a devspace of a repository of your account or of one of your organizations (see [Open from a link](#open-from-a-link)). **Always Open** in that question turns this off. A repository of another owner is always confirmed, also when this setting is off. |
+| `installVsCodeUpdateFirst` | `true` | *User only.* When VS Code has downloaded an update and waits for its restart (**Restart to Update**), install it before a new window connects to a devspace: VS Code restarts, and the window then connects with the new version (see [The update of VS Code](#the-update-of-vs-code)). Off: the window connects with the running version, and VS Code installs the update at its next restart. |
 
 ### Repository groups
 
@@ -247,7 +248,7 @@ Each entry of `devspaces.repositoryGroups` is a regular expression (JavaScript s
 
 ## Updates
 
-Devspaces keeps your devspaces current in two places: in the background on each Docker engine, and at each start.
+Devspaces keeps your devspaces current in two places: in the background on each Docker engine, and at each start. Before a new window connects to a devspace, it also installs an update of VS Code that VS Code has downloaded.
 
 ### The background run
 
@@ -289,6 +290,17 @@ A first start, a missing image, and **Rebuild** never ask.
 After **Continue** or **Update Now**, Devspaces uses the image that the background run prepared when it fits. While the background run still prepares it, the progress shows "Preparing the newer image (3 min)…" and the start waits for it; cancel the progress to stop waiting. Otherwise Devspaces pulls and builds the new image. In every case the new image passes all checks again before the container is created.
 
 If the build of a newer image fails, or the new image needs access to your computer that the checks refuse, the devspace starts with its current container, and a message says so.
+
+### The update of VS Code
+
+VS Code downloads its updates by itself and installs them at its next restart; until then, the gear in the Activity Bar shows **Restart to Update**. A window that connects to a devspace while such an update waits would put the VS Code Server of the running version into the devspace, and after the restart, the window would need the server of the new version. So, with `devspaces.installVsCodeUpdateFirst` on (the default), the update comes first:
+
+1. **Start**, **Reconnect** in the status bar, **Switch Devspace…**, a link, or the reopen at startup opens the window of the devspace as usual.
+2. Before this window connects, it runs **Restart to Update** of VS Code. A notification says, for example: "Restarting VS Code to install the update 1.146.0. Then the window connects to owner/name…"
+3. VS Code closes all its windows. A window with unsaved files asks first, as at every restart of VS Code.
+4. VS Code installs the update, starts again, and opens all windows of the last session. The window of the devspace then connects with the new version: its open runs again, and the devspace gets the VS Code Server of the new version, from the store of the Monitor when the Monitor has it already.
+
+When you choose **Cancel** in a question about unsaved files, VS Code keeps running. VS Code closes each window without unsaved files at once, so the windows that it closed before your answer stay closed, often also the window of the devspace. If the window of the devspace is still open, it connects with the running version; else **Start** opens it again, and it connects with the running version. Devspaces restarts VS Code only once for each update: after **Cancel**, or when VS Code still runs the old version after the restart (for example because the installation needs the rights of an administrator), the next windows connect without the update, and VS Code installs it at its next restart, for example after **Restart to Update** in the menu of the gear. Devspaces installs only an update that VS Code has downloaded completely, not one that VS Code still downloads or installs in the background. A window that VS Code restores, or that you reload with **Developer: Reload Window**, always connects with the running version. Nothing happens when the VS Code setting `update.mode` is `none`, and on Linux when a package manager installed VS Code: VS Code then does not install its updates itself.
 
 ## Stop on close
 

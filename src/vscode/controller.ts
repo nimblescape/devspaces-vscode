@@ -39,6 +39,7 @@ import type {
   PendingConnection,
   PendingOperation,
   PendingOperationKind,
+  ReadyVscodeUpdate,
   RepositoryInfo,
   WindowStatus,
 } from '../core/types';
@@ -78,6 +79,7 @@ import { CoalescingTask, OperationGate } from './tasks';
 import { parseCommandArgument, repositoryTarget, sourceChoices, type CommandArgument } from './targets';
 import { TreeTexts, devspaceName, nonEmpty, recentDevspaces, repositoryRows, stateIcon } from './treeModel';
 import { opensNewWindow, type WindowRequest } from './windowChoice';
+import { updateLabel, type VscodeUpdate } from './vscodeUpdate';
 
 /**
  * After "Close Remote Connection", the window reloads and this extension host ends. If it still runs after this time,
@@ -232,6 +234,13 @@ export interface ControllerDeps {
    * mark (the start entry of the WSL distribution of Devspaces follows it). Never throws.
    */
   engineRemovalEnded?: (host: string) => void;
+  /**
+   * The update of VS Code before a new window of a devspace connects (vscodeUpdate.ts, docs/requirements.md R-DS-006):
+   * the window that runs a Start asks for the update that waits for the restart of VS Code before it opens the window of
+   * the devspace (connect), and names it in the pending connection file; that window installs it before it connects
+   * (openAttachedDevspace). Default: none (no update first).
+   */
+  vscodeUpdate?: Pick<VscodeUpdate, 'readyToInstall' | 'restartToInstall'>;
   /** The VS Code setting `workbench.list.openMode` (double-click on a row, rowActivation.ts). Default: `readListOpenMode`. */
   listOpenMode?: () => ListOpenMode;
   /** True in an Extension Development Host (a debug run of this extension): the reopen rule is relaxed. */
@@ -740,11 +749,10 @@ export class Controller implements vscode.Disposable {
     const repository = this.displayName({ repository: devspace.repository });
     if (pipelineJustRan(pending, devspace.id, this.clock.now())) {
       this.logger.info(`The open pipeline of ${repository} has just run for this window.`);
-      // The window shows its own connection error; the status bar offers Reconnect.
-      if (!(await this.connectAfterStart(devspace, repository)) && this.current?.devspace.id === devspace.id) {
-        this.current.lost = true;
-        this.updateStatusBar();
-      }
+      // The update of VS Code first, before the login to an SSH host. When VS Code restarts, the activation ends here
+      // without a connection: VS Code closes this window only after it.
+      if (pending?.vscodeUpdate !== undefined && (await this.installVscodeUpdateFirst(pending.vscodeUpdate, devspace, repository))) return;
+      await this.connectStartedWindow(devspace, repository);
     } else {
       this.logger.info(`This window was restored or reloaded. The open pipeline of ${repository} runs before it connects.`);
       // Assumption: activation through ATTACHED_CONTAINER_ACTIVATION_EVENT blocks the connection until activate()
@@ -796,6 +804,59 @@ export class Controller implements vscode.Disposable {
       }
     }
     this.background(this.readWindowBranch(), 'read the branch of the devspace');
+  }
+
+  /**
+   * Role A after a Start whose window found an update of VS Code that waits for the restart of VS Code (the pending
+   * connection file names it, connect): VS Code restarts to install it before this window connects
+   * (docs/requirements.md R-DS-006). True when VS Code closes its windows for the restart: this window must not
+   * connect, and its activation must end, because VS Code closes a window only after the activation of its extensions.
+   * VS Code opens the window again with the new version, and it connects then as a restored window: its open flow runs
+   * again and links the VS Code Server of the new version. False when VS Code does not restart (a newer update, the
+   * setting turned off meanwhile): this window connects with the running version. When a window asks about unsaved
+   * files during the restart and the user chooses Cancel, VS Code keeps running, and this window connects then, unless
+   * VS Code closed it before the answer (VscodeUpdate.restartToInstall, `kept`). Never throws.
+   */
+  private async installVscodeUpdateFirst(update: ReadyVscodeUpdate, devspace: Devspace, repository: string): Promise<boolean> {
+    const vscodeUpdate = this.deps.vscodeUpdate;
+    if (vscodeUpdate === undefined) return false;
+    if (this.deps.settings().installVsCodeUpdateFirst === false) {
+      this.logger.info(`The update ${updateLabel(update)} of VS Code is not installed first: the setting installVsCodeUpdateFirst is off.`);
+      return false;
+    }
+    const kept = (): void => {
+      if (this.disposed || this.current?.devspace.id !== devspace.id) return;
+      this.background(
+        (async () => {
+          await this.connectStartedWindow(devspace, repository);
+          await this.readWindowBranch();
+        })(),
+        'connect the window after VS Code kept running',
+      );
+    };
+    const shown = this.shownName(this.devspaceTarget(devspace));
+    try {
+      const outcome = await runWithProgress({
+        title: ControllerTexts.installingVscodeUpdate(updateLabel(update), shown),
+        repository: shown,
+        task: () => vscodeUpdate.restartToInstall(update, kept),
+      });
+      return outcome === 'restarting';
+    } catch (error) {
+      this.logger.warn(`The update of VS Code could not be installed first: ${errorMessage(error)}`);
+      return false;
+    }
+  }
+
+  /**
+   * Role A after a Start: the connection to an SSH host (connectAfterStart). When it fails, the window shows its own
+   * connection error, and the status bar offers Reconnect.
+   */
+  private async connectStartedWindow(devspace: Devspace, repository: string): Promise<void> {
+    if (!(await this.connectAfterStart(devspace, repository)) && this.current?.devspace.id === devspace.id) {
+      this.current.lost = true;
+      this.updateStatusBar();
+    }
   }
 
   /**
@@ -2611,6 +2672,10 @@ export class Controller implements vscode.Disposable {
     // Cancel also ends this wait.
     await Promise.race([diagnostics, this.delay(ATTACH_DIAGNOSTICS_WAIT_MS, AbortSignal.any([waited.signal, signal]))]);
     waited.abort();
+    // An update of VS Code that VS Code has downloaded and that waits for its restart: the window of the devspace
+    // installs it before it connects (openAttachedDevspace, docs/requirements.md R-DS-006). This window only names it in
+    // the pending connection file. Read before the checks below, so that Cancel during the read still counts.
+    const vscodeUpdate = await this.deps.vscodeUpdate?.readyToInstall(this.deps.settings().installVsCodeUpdateFirst !== false);
     if (!request.newWindow && [...this.activeConnectRequests].some((other) => other > request.number)) {
       this.logger.info(`${result.devspace.repository} is not connected: another devspace is opening in this window.`);
       return;
@@ -2653,7 +2718,8 @@ export class Controller implements vscode.Disposable {
         .catch((error: unknown) => this.logger.warn(`The pending connection file could not be removed: ${errorMessage(error)}`));
       throw notReady;
     }
-    await this.deps.coordinator.writePending(result.devspace.id);
+    if (vscodeUpdate === undefined) await this.deps.coordinator.writePending(result.devspace.id);
+    else await this.deps.coordinator.writePending(result.devspace.id, vscodeUpdate);
     if (request.newWindow) {
       await this.deps.connection.openInNewWindow(...this.windowArgs(result.devspace, result.containerName, result.remoteWorkspaceFolder));
       return;

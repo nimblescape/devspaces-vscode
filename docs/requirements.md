@@ -62,6 +62,10 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 **Back where you left off.** When VS Code restores the window of a devspace, Devspaces opens that devspace. When VS Code starts with an empty window, Devspaces opens a devspace again only when the window that was closed last was connected to it and the user did not stop it.
 
+### R-DS-006
+
+**The current VS Code first.** When VS Code has downloaded an update and waits for its restart ("Restart to Update"), a window that Devspaces connects to a devspace (after **Start**, **Reconnect**, **Switch Devspace…**, a link or the reopen at startup) installs that update before it connects: VS Code restarts, opens its windows again, and the window then connects with the new version, so that the devspace gets the VS Code Server of that version. The setting `devspaces.installVsCodeUpdateFirst` (on by default, user only) turns this off. When the user cancels the restart (for example in the question about unsaved files), VS Code keeps running, and the window of the devspace connects with the running version if VS Code did not close it; a new **Start** connects with the running version too. Devspaces restarts VS Code at most once for each update and running version, so that an update that a restart cannot install, or whose restart the user cancelled, does not restart VS Code again and again. A window that VS Code restores, or that the user reloads, connects without a restart.
+
 ## Accounts
 
 ### R-ACC-001
