@@ -8,7 +8,9 @@
 // which are modules of it, not text in it. Nothing in it runs with `eval`; it holds fixed scripts as text (the pipe loader, and
 // the scripts that run in containers with `node -e` or `sh -c`). It holds no code of the helper image of the extension:
 // the worker runs from its own image, so its WorkspaceHelper builds, checks, maintains and records no helper image;
-// HelperImages and what it runs (helperImage.ts) are the extension's.
+// HelperImages and what it runs (helperImage.ts) are the extension's. The Monitor builds only its own helper tag again
+// when its base image changed (src/remoteMonitor/helperRefresh.ts), with the tag and the build inputs of
+// helperImageBuild.ts, which the extension shares.
 import * as fs from 'fs';
 import * as path from 'path';
 import * as esbuild from 'esbuild';

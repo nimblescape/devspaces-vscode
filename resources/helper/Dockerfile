@@ -49,6 +49,10 @@ RUN set -eux; \
     install -d -m 0700 -o root -g root /run/devspace-docker; \
     setpriv --version
 
+# The image holds this Dockerfile: the Monitor runs from this image and builds it again from this copy when its base
+# image changed (src/remoteMonitor/helperRefresh.ts, HELPER_DOCKERFILE_COPY; docs/requirements.md R-DS-003).
+COPY Dockerfile /usr/local/share/devspaces/helper/Dockerfile
+
 LABEL nimblescape.devspaces.worker=true
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["sh"]

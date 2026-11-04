@@ -3,10 +3,11 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The calls of this window to the Monitor of an engine, as operations of the worker of that engine (every
-// remote action is a worker operation): the heartbeats (`heartbeat`), the check that the container of a devspace
-// exists there (`windowState`), the Git state of a release (`recordGitState`), the ensure of the monitor
-// (`monitorEnsure`), and "Update All Images Now" (`monitorRunNow`). The image settings and list come with the operation
-// `open`. No `vscode` here; never throws, except the Git state (its caller bounds and logs it).
+// remote action is a worker operation): the heartbeats (`heartbeat`, whose answer also carries the last check of the
+// helper image by the Monitor), the check that the container of a devspace exists there (`windowState`), the Git state
+// of a release (`recordGitState`), the ensure of the monitor (`monitorEnsure`), and "Update All Images Now"
+// (`monitorRunNow`). The image settings and list come with the operation `open`. No `vscode` here; never throws,
+// except the Git state (its caller bounds and logs it).
 import type { DockerTarget } from '../core/docker/dockerHost';
 import { errorMessage } from '../core/errors';
 import {
@@ -26,6 +27,7 @@ import {
 } from '../core/helperChannel/protocol';
 import { MONITOR_ENSURE_FLOW_TIMEOUT_MS, MONITOR_FLOW_TIMEOUT_MS, MONITOR_RUN_NOW_FLOW_TIMEOUT_MS } from '../core/pipeline/operationBase';
 import type { Logger } from '../core/ports';
+import type { HelperCheck } from '../core/remoteMonitor/helperCheck';
 import type { HeartbeatInput, MonitorSettings } from '../core/remoteMonitor/protocol';
 import type { HeartbeatSendResult } from '../core/session/windowHeartbeats';
 import type { Devspace } from '../core/types';
@@ -38,6 +40,12 @@ export interface WorkerMonitorDeps {
   /** The window that sends the operations (for `recordGitState`). */
   owner: () => { windowId: string; pid: number };
   logger: Logger;
+  /**
+   * The last check of the helper image by the Monitor of `target`, from the answer of a heartbeat there
+   * (HeartbeatValue.helperCheck): the window takes it into its state of the helper image (HelperImages.recordEngineCheck).
+   * Called without a wait; it must not throw.
+   */
+  onHelperCheck?: (target: DockerTarget, check: HelperCheck) => void;
 }
 
 export function workerMonitor(deps: WorkerMonitorDeps) {
@@ -48,7 +56,9 @@ export function workerMonitor(deps: WorkerMonitorDeps) {
       try {
         const value = parseHeartbeatValue(await flow(OP_HEARTBEAT, { heartbeat: input }, { target, timeoutMs: MONITOR_FLOW_TIMEOUT_MS, ...(signal ? { signal } : {}) }));
         if (value === undefined) return { ok: false, missing: false, detail: 'the worker answered the heartbeat with an invalid value' };
-        return value;
+        if (!value.ok) return value;
+        if (value.helperCheck !== undefined) deps.onHelperCheck?.(target, value.helperCheck);
+        return { ok: true };
       } catch (error) {
         return { ok: false, missing: false, detail: errorMessage(error) };
       }

@@ -8,7 +8,6 @@
 // background prebuild), and helper images that no window uses anymore are removed once a day. There is no previous
 // helper image. When the current tag is missing and cannot be built, the ensure fails (the open then fails with
 // helperFailed); the background prebuild after an extension update (HelperPrebuild) builds the new tag early.
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { BootstrapDocker } from '../docker/bootstrapDocker';
@@ -18,27 +17,14 @@ import { extractBaseImages } from '../imageCheck/dockerfile';
 import { IMAGE_CHECK_TIMEOUT_MS } from '../imageCheck/registryClient';
 import { parseImageReference } from '../imageCheck/reference';
 import type { RegistryClient } from '../imageCheck/registryClient';
-import { LABEL_HELPER } from '../names';
+import { LABEL_HELPER, LABEL_HELPER_BASE_DIGEST } from '../names';
 import { abortError, isAbortError, isoTime, silentLogger, systemClock, type Clock, type Logger } from '../ports';
+import type { HelperCheck } from '../remoteMonitor/helperCheck';
+import { DEVCONTAINER_CLI_VERSION, HELPER_GENERATION, HELPER_REBUILD_TIMEOUT_MS, helperImageTag } from './helperImageBuild';
 import { isHelperImageTag, isMonitorImageTag, monitorImageTag, readHelperState, updateHelperState, type HelperImageRecord, type HelperState } from './helperState';
 
-/**
- * Version of `@devcontainers/cli` in the helper image. It comes from the exact devDependency in package.json:
- * esbuild.mjs (and vitest.config.mts for the tests) puts it into the code at build time (scripts/cliVersion.mjs).
- * The version is part of the helper image tag, so after a version bump every user's helper is rebuilt at first use.
- */
-export const DEVCONTAINER_CLI_VERSION: string = __DEVCONTAINER_CLI_VERSION__;
-
-/** Repository part of the helper image tag. */
-export const HELPER_IMAGE_REPOSITORY = 'devspaces-worker';
-
-/**
- * The helper generation of this extension version, recorded per tag in helper.json (`generation`, for diagnosis) at
- * each build and rebuild. It is part of the helper tag (helperImageTag), so raising it gives a new current tag, which
- * is built: an image of an older generation never stays the current helper (for example after a release that fixes a
- * security problem in the helper image, when neither the Dockerfile nor the CLI version changed).
- */
-export const HELPER_GENERATION = 1;
+// The tag and the inputs of a build of the helper image, which the Monitor shares (helperImageBuild.ts).
+export { DEVCONTAINER_CLI_VERSION, HELPER_GENERATION, HELPER_IMAGE_REPOSITORY, HELPER_REBUILD_TIMEOUT_MS, helperImageTag } from './helperImageBuild';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -59,12 +45,6 @@ export const HELPER_RETRY_INTERVAL_MS = DAY_MS;
  */
 export const HELPER_TOMBSTONE_MS = 90 * DAY_MS;
 
-/**
- * The longest rebuild that a check asked for (`--pull --no-cache`), as long as the time limit of the background
- * prebuild. A rebuild that takes longer (a pull or a download that stalls without failing) is ended and counts as a
- * failed rebuild: the existing image stays, and the next check is in a week.
- */
-export const HELPER_REBUILD_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * The abort reason of a time limit of a caller (the background prebuild), a TimeoutError as AbortSignal.timeout gives
@@ -121,25 +101,6 @@ export function registryBaseDigest(
       signal?.removeEventListener('abort', onAbort);
     }
   };
-}
-
-/**
- * `devspaces-worker:<first 12 hex characters of sha256(Dockerfile content + CLI version + "\ngeneration " + helper
- * generation)>`. Line endings are normalized, so that a checkout with CRLF line endings gives the same tag. The helper
- * generation (HELPER_GENERATION) is part of the hash.
- */
-export function helperImageTag(
-  dockerfileContent: string,
-  cliVersion: string = DEVCONTAINER_CLI_VERSION,
-  generation: number = HELPER_GENERATION,
-): string {
-  const hash = crypto
-    .createHash('sha256')
-    .update(dockerfileContent.replace(/\r\n/g, '\n'))
-    .update(cliVersion)
-    .update(`\ngeneration ${generation}`)
-    .digest('hex');
-  return `${HELPER_IMAGE_REPOSITORY}:${hash.slice(0, 12)}`;
 }
 
 /**
@@ -216,8 +177,11 @@ export interface EnsureHelperImageOptions {
   logger?: Logger;
 }
 
-/** `signal`: instead of the caller's (the rebuild bounds it, HELPER_REBUILD_TIMEOUT_MS). */
-type BuildFlags = { pull?: boolean; noCache?: boolean; signal?: AbortSignal };
+/**
+ * `signal`: instead of the caller's (the rebuild bounds it, HELPER_REBUILD_TIMEOUT_MS). `baseDigest`: the registry
+ * digest of the base image that the build pulls (with `pull` only), as the label LABEL_HELPER_BASE_DIGEST of the image.
+ */
+type BuildFlags = { pull?: boolean; noCache?: boolean; signal?: AbortSignal; baseDigest?: string };
 
 /** How a build or a check changes the record of the tag: a function of the current record. */
 type RecordChange = (record: HelperImageRecord | undefined) => HelperImageRecord;
@@ -267,12 +231,13 @@ export async function ensureHelperImageUse(
   const content = await fs.promises.readFile(dockerfilePath, 'utf8');
   const tag = helperImageTag(content);
   const logger = options.logger ?? silentLogger;
-  const build = ({ signal, ...flags }: BuildFlags): Promise<string | undefined> =>
+  const build = ({ signal, baseDigest, ...flags }: BuildFlags): Promise<string | undefined> =>
     docker.buildImage({
       tag,
       dockerfile: dockerfilePath,
       context: path.dirname(dockerfilePath),
-      labels: { [LABEL_HELPER]: 'true' },
+      // The digest of the base image that the build pulls, for the check of the Monitor (src/remoteMonitor/helperRefresh.ts).
+      labels: { [LABEL_HELPER]: 'true', ...(flags.pull === true && baseDigest !== undefined ? { [LABEL_HELPER_BASE_DIGEST]: baseDigest } : {}) },
       buildArgs: { DEVCONTAINER_CLI_VERSION },
       ...flags,
       onOutput: options.onOutput,
@@ -331,6 +296,68 @@ export async function recordHelperImageUse(
   } catch (error) {
     (options.logger ?? silentLogger).warn(`The state of the workspace helper image could not be written: ${errorMessage(error)}`);
   }
+}
+
+/** A check of the Monitor whose time is later than this after the clock of this computer is not taken (another clock). */
+export const ENGINE_CHECK_CLOCK_SKEW_MS = 60_000;
+
+/**
+ * Takes the last check of the helper image by the Monitor of the engine (HelperCheck, from the answer of a heartbeat:
+ * src/core/remoteMonitor/helperCheck.ts) into the state file of that engine (docs/requirements.md R-DS-003), for a tag
+ * that this installation uses and whose state has the same base image or none:
+ * - A check of the Monitor that is newer than the last check of this window counts as the check of this window: the
+ *   weekly check of the base image waits for 7 days from it, and a rebuild that an older check of this window asked for
+ *   is not done. The Monitor records a check only when the image of the tag is current after it (it built the image
+ *   again when the base image had changed: src/remoteMonitor/helperRefresh.ts).
+ * - A rebuild that a newer check of this window asked for is not done either when the Monitor recorded that digest.
+ * - A build of this window without `--pull` after the check of the Monitor is not covered by it: the check is not taken.
+ * A check with a time later than ENGINE_CHECK_CLOCK_SKEW_MS after the clock of this computer is not taken; one a little
+ * later counts as now. Never throws; resolves whether it changed the state.
+ */
+export async function recordEngineHelperCheck(
+  statePath: string,
+  check: HelperCheck,
+  options: { clock?: Clock; logger?: Logger } = {},
+): Promise<boolean> {
+  const now = (options.clock ?? systemClock).now();
+  const checkedMs = Date.parse(check.checkedAt);
+  if (Number.isNaN(checkedMs) || checkedMs > now + ENGINE_CHECK_CLOCK_SKEW_MS) return false;
+  const checkedAt = new Date(Math.min(checkedMs, now)).toISOString();
+  try {
+    if (engineCheckChange((await readHelperState(statePath)).images[check.tag], check, checkedAt) === undefined) return false;
+    let changed = false;
+    await updateHelperState(statePath, (state) => {
+      const next = engineCheckChange(state.images[check.tag], check, checkedAt);
+      if (next === undefined) return;
+      state.images[check.tag] = next;
+      changed = true;
+    });
+    return changed;
+  } catch (error) {
+    (options.logger ?? silentLogger).warn(`The state of the workspace helper image could not be written: ${errorMessage(error)}`);
+    return false;
+  }
+}
+
+/** The record of a tag with the check of the Monitor (recordEngineHelperCheck), or undefined when it does not change. */
+function engineCheckChange(record: HelperImageRecord | undefined, check: HelperCheck, checkedAt: string): HelperImageRecord | undefined {
+  if (record === undefined || isForeign(record)) return undefined;
+  if (record.baseImage !== undefined && record.baseImage !== check.baseImage) return undefined;
+  const checkedMs = Date.parse(checkedAt);
+  // A build without `--pull` at or after the check: the image of the tag may be older than the base image of the check.
+  if (record.builtWithoutPull !== undefined && !(Date.parse(record.builtWithoutPull) < checkedMs)) return undefined;
+  const ownMs = record.checkedAt === undefined ? Number.NaN : Date.parse(record.checkedAt);
+  const newer = Number.isNaN(ownMs) || ownMs < checkedMs;
+  const asked = record.latestBaseDigest !== undefined && record.latestBaseDigest.toLowerCase() === check.baseDigest.toLowerCase();
+  if (!newer && !asked) return undefined;
+  const { latestBaseDigest: _latest, builtWithoutPull: _unpulled, attemptedAt, ...rest } = record;
+  return {
+    ...rest,
+    baseImage: check.baseImage,
+    baseDigest: check.baseDigest,
+    // A newer check of this window (one that asked for the rebuild that the Monitor did) keeps its time and its attempt.
+    ...(newer ? { checkedAt } : { checkedAt: record.checkedAt, ...(attemptedAt !== undefined ? { attemptedAt } : {}) }),
+  };
 }
 
 function baseImageOf(dockerfileContent: string): string | undefined {
@@ -482,7 +509,7 @@ function isCheckDue(m: Maintenance, record: HelperImageRecord | undefined): bool
 async function create(m: Maintenance, checkBaseImage: boolean): Promise<{ change: RecordChange; id: string | undefined }> {
   const lookedUp = checkBaseImage && m.options.baseDigest !== undefined && m.baseImage !== undefined;
   const digest = lookedUp ? await lookUpBaseDigest(m, m.options.signal) : undefined;
-  const { pulled, id } = await buildMissing(m, digest !== 'unreachable');
+  const { pulled, id } = await buildMissing(m, digest !== 'unreachable', digest === 'unreachable' ? undefined : digest);
   const now = isoTime(m.clock);
   // The helper generation of this build.
   const record: HelperImageRecord = { builtAt: now, generation: HELPER_GENERATION };
@@ -503,12 +530,13 @@ async function create(m: Maintenance, checkBaseImage: boolean): Promise<{ change
  * Builds a missing tag, with `--pull` unless `pull` is false. A build with `--pull` that fails (the pull of the daemon
  * can fail where the request of the extension host worked: the pull limit, stored credentials that the registry
  * refuses, a proxy) is tried again without it. Returns whether the build pulled the base image, and the ID of the built
- * image (by its build label). Throws when the tag cannot be built.
+ * image (by its build label). Throws when the tag cannot be built. `baseDigest`: the digest that the registry gave right
+ * before, the label of an image that the build with `--pull` makes (none without `--pull`).
  */
-async function buildMissing(m: Maintenance, pull: boolean): Promise<{ pulled: boolean; id: string | undefined }> {
+async function buildMissing(m: Maintenance, pull: boolean, baseDigest: string | undefined): Promise<{ pulled: boolean; id: string | undefined }> {
   m.options.onBuild?.('create');
   try {
-    return { pulled: pull, id: await m.build({ pull }) };
+    return { pulled: pull, id: await m.build({ pull, ...(baseDigest !== undefined ? { baseDigest } : {}) }) };
   } catch (error) {
     if (!pull || isAbortError(error) || m.options.signal?.aborted) throw error;
     m.logger.warn(
@@ -547,7 +575,7 @@ async function rebuild(
   let builtId: string | undefined;
   try {
     // A fresh base image, and no cache: the Debian packages and the Docker CLI are installed again, too.
-    builtId = await m.build({ pull: true, noCache: true, signal });
+    builtId = await m.build({ pull: true, noCache: true, signal, baseDigest: digest });
   } catch (error) {
     // A time limit (this one, or the caller's) ends a stalled rebuild like a failed one; a cancel of the caller stays
     // an abort.

@@ -123,7 +123,9 @@ describe('the Monitor container of a remote Docker host', () => {
     containerName,
     volumeName,
     labels: { [TEST_RUN_LABEL]: run.runId },
-    containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS) },
+    // Its first background run is a day away (DEVSPACE_IMAGE_FIRST_MS), so it never builds the helper image of the
+    // tests again (its part "the workspace helper image": that image has no label of its base digest).
+    containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_IMAGE_FIRST_MS: '86400000' },
   });
   const socket = helperDockerSocket(env, process.platform, run.dockerHost);
   const ids = { stale: crypto.randomUUID(), kept: crypto.randomUUID(), fresh: crypto.randomUUID(), unrecorded: crypto.randomUUID() };
@@ -622,7 +624,8 @@ describe('the Monitor container: the devspace lock of its stops and its exit whe
       containerName,
       volumeName,
       labels: { [TEST_RUN_LABEL]: run.runId },
-      containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_MONITOR_IDLE_MS: String(idleMs) },
+      // No background run during the test (see the first monitor of this file).
+      containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_MONITOR_IDLE_MS: String(idleMs), DEVSPACE_IMAGE_FIRST_MS: '86400000' },
     });
   }
 

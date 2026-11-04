@@ -50,8 +50,9 @@ beforeAll(async () => {
     format: 'cjs',
     target: 'node24',
     outfile: script,
-    // Not the entry module of main.ts: its own start (argv without the state folder) stays out.
-    define: { 'require.main': 'undefined' },
+    // Not the entry module of main.ts: its own start (argv without the state folder) stays out. The version of the Dev
+    // Container CLI of the helper image, which the part "the workspace helper image" of the background run reads.
+    define: { 'require.main': 'undefined', __DEVCONTAINER_CLI_VERSION__: JSON.stringify('0.0.0') },
     logLevel: 'silent',
   });
 });

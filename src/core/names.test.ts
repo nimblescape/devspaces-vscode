@@ -209,6 +209,8 @@ describe('EXTENSION_LABEL_KEYS', () => {
       'volume',
       // The label of the helper image.
       'worker',
+      // The digest of the base image that a build of the helper image pulled (LABEL_HELPER_BASE_DIGEST).
+      'worker-base-digest',
       // The label of the container of a helper channel.
       'worker-channel',
       // The label of every container of the helper image but the Monitor.
