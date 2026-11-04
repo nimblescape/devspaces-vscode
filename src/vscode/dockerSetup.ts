@@ -286,7 +286,7 @@ export class DockerSetup implements vscode.Disposable {
   }
 
   /**
-   * Command devspaces.dockerSetup.show (action Install Docker… of the error "Docker Desktop is not installed."):
+   * Command devspaces.dockerSetup.show (action Install Docker… of the error "Docker is not installed on this computer."):
    * updates the context keys from the adapter (a missing CLI may be found again; a lost CLI was reported already by
    * `reportCliLost`), then shows the sidebar view.
    */

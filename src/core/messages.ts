@@ -23,7 +23,12 @@ export const Steps = {
 export type ProgressStep = keyof typeof Steps;
 
 export const Messages = {
-  dockerNotInstalled: 'Docker Desktop is not installed.',
+  dockerNotInstalled: 'Docker is not installed on this computer.',
+  /**
+   * The error dockerNotInstalled as Windows shows it (src/vscode/errors.ts): its action "Set Up Docker for Devspaces"
+   * sets up the WSL distribution of Devspaces with Docker Engine (R-ENG-005). Docker Desktop is not needed.
+   */
+  dockerMissingOnWindows: 'Docker is not set up on this computer. Devspaces can set up its own Docker in WSL, without Docker Desktop.',
   dockerStartFailed: 'Docker could not be started.',
   dockerEngineNotRunning: 'Docker is not running. Start the Docker service with this command: sudo systemctl enable --now docker',
   /**
@@ -501,8 +506,10 @@ export function dockerHostReason(
 }
 
 export const Actions = {
-  /** Shows the sidebar view with the steps of the Docker setup (action of the error dockerNotInstalled). */
+  /** Shows the sidebar view with the steps of the Docker setup (action of the error dockerNotInstalled, except on Windows). */
   installDocker: 'Install Docker…',
+  /** Sets up the WSL distribution of Devspaces with Docker Engine (Windows; action of the error dockerNotInstalled there). */
+  setUpWsl: 'Set Up Docker for Devspaces',
   /** Starts Docker Engine on Linux with `sudo systemctl enable --now docker` in a terminal, after a confirmation (action
    *  of the error dockerEngineNotRunning). */
   startDocker: 'Start Docker',

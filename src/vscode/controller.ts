@@ -1942,7 +1942,9 @@ export class Controller implements vscode.Disposable {
    * confirmOpenFromLink). VS Code gives the link to the window
    * that was active last, in which the user did not ask for anything: the devspace opens in that window only when it is
    * empty, else in a new window, and the window keeps what it has. The repository can be one that the list does not show: then GitHub is asked for
-   * it. A link that names no repository asks neither GitHub nor Docker. Never rejects: errors are shown.
+   * it. A link that names no repository asks neither GitHub nor Docker. Without a Docker CLI for the current engine,
+   * the link stops before the sign-in with the message of a missing Docker (requireDockerCli), whose action is the
+   * Docker setup. Never rejects: errors are shown.
    *
    * The course link `/course?repository=owner/name-<username>` opens the repository of one account in a course in the
    * same way: after the sign-in, `<username>` becomes the GitHub login of each account of Devspaces (courseRepository),
@@ -1971,6 +1973,8 @@ export class Controller implements vscode.Disposable {
   }
 
   private async startFromLink(link: RepositoryLink, window: WindowRequest): Promise<void> {
+    // Without Docker, the link stops before the sign-in and its questions, with the message that offers the Docker setup.
+    await this.requireDockerCli();
     const accounts = await this.requireAccounts();
     const found = link.kind === 'course' ? await this.courseLinkRepository(link.template, accounts) : await this.openLinkRepository(link.repository, accounts);
     if (found === undefined) return;
@@ -4039,6 +4043,18 @@ export class Controller implements vscode.Disposable {
     return devspace === undefined ? this.withDockerTarget(fn) : this.withHostOf(devspace, fn);
   }
 
+  /**
+   * Throws the error of a missing Docker (dockerNotInstalled, with the action of the Docker setup) when no Docker CLI
+   * runs the calls on the current engine (BootstrapDocker.canRunOn). Nothing for a target that is not supported: the
+   * flow refuses it with its own message.
+   */
+  private async requireDockerCli(): Promise<void> {
+    const target = await this.operationTarget();
+    if (target.kind !== 'unsupported' && !this.deps.docker.canRunOn(target)) {
+      throw new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled);
+    }
+  }
+
   /** The Docker target of the operation (outside of one, the current one); the local Docker without dockerTargets. */
   private async operationTarget(): Promise<DockerTarget> {
     return this.deps.dockerTargets ? this.deps.dockerTargets.current() : LOCAL_DOCKER_TARGET;
@@ -4058,6 +4074,12 @@ export class Controller implements vscode.Disposable {
     if (this.refusedWhileRemoving(operation)) return false;
     const target = await this.operationTarget();
     if (target.kind === 'unsupported' || (devspace !== undefined && !isOnDockerHost(devspace, target.host))) return true;
+    // Without a Docker CLI for the engine, the flow stops at its first Docker call with the message of a missing Docker:
+    // no question about a Monitor that cannot run. The next flow with Docker asks it.
+    if (!this.deps.docker.canRunOn(target)) {
+      this.logger.info(`${operation}: no question about the Monitor on ${describeDockerHost(target.host)}, because no Docker CLI runs the calls there.`);
+      return true;
+    }
     if (!(await this.clearRemovalMark(operation, target.host))) return false;
     await this.deps.monitorQuestion?.askIfNeeded(target.host, () => this.markBlocker());
     // Again after the question, which can stay open for long: a removal that another window began meanwhile refuses the

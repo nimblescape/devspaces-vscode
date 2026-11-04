@@ -2797,6 +2797,24 @@ describe('the question about the Monitor of the engine', () => {
     expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
   });
 
+  it('asks nothing about the Monitor when no Docker CLI runs the calls on the engine: the Start fails with the message of a missing Docker', async () => {
+    const info = repositoryInfo('acme/api');
+    h.sidebar.infos.set('acme/api', info);
+    h.docker.isInstalled.mockReturnValue(false);
+    h.service.openInWorker.mockRejectedValue(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled));
+    await run('start', row('acme/api', undefined, info));
+    expect(asked()).toEqual([]);
+    expect(h.logger.info).toHaveBeenCalledWith('Start: no question about the Monitor on the local Docker, because no Docker CLI runs the calls there.');
+    expect(fakeVscode.window.showErrorMessage.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+      process.platform === 'win32' ? Messages.dockerMissingOnWindows : Messages.dockerNotInstalled,
+    ]);
+    // With Docker, the next Start asks.
+    h.docker.isInstalled.mockReturnValue(true);
+    h.service.openInWorker.mockReset();
+    await run('start', row('acme/api', undefined, info));
+    expect(asked()).toEqual(['']);
+  });
+
   it('a Start asks about the engine of its devspace', async () => {
     const target = remoteDockerTarget('build-box');
     recreateHarness({
@@ -7768,6 +7786,29 @@ describe('A course link to Devspaces', () => {
     expect(warningMessages()).toEqual([Messages.signInRequired]);
     expect(h.discovery.getRepository).not.toHaveBeenCalled();
     expect(h.service.openInWorker).not.toHaveBeenCalled();
+  });
+
+  // Windows without Docker Desktop (a test report): the link asked for the sign-in and about the Monitor, and only then
+  // said that Docker Desktop is not installed. Now it stops at once with the message of a missing Docker.
+  it('stops before the sign-in and its questions when Docker is not installed, with the message of the Docker setup', async () => {
+    h.docker.isInstalled.mockReturnValue(false);
+    h.discovery.getRepository.mockImplementation(async (repository: string) => repositoryInfo(repository.toLowerCase()));
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(h.docker.canRunOn).toHaveBeenCalledWith(expect.objectContaining({ kind: 'local' }));
+    const message = process.platform === 'win32' ? Messages.dockerMissingOnWindows : Messages.dockerNotInstalled;
+    const action = process.platform === 'win32' ? Actions.setUpWsl : Actions.installDocker;
+    expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledTimes(1);
+    expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledWith(message, action);
+    expect(h.auth.getAccount).not.toHaveBeenCalled();
+    expect(h.auth.getToken).not.toHaveBeenCalled();
+    expect(h.discovery.getRepository).not.toHaveBeenCalled();
+    expect(warningMessages()).toEqual([]);
+    expect(h.monitorQuestion.askIfNeeded).not.toHaveBeenCalled();
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
+    // With Docker, the same link opens.
+    h.docker.isInstalled.mockReturnValue(true);
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(h.service.openInWorker).toHaveBeenCalledTimes(1);
   });
 
   it('says that the account has no repository of the course when GitHub does not show it', async () => {

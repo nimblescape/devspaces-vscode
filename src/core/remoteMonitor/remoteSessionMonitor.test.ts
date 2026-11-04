@@ -594,7 +594,7 @@ describe('RemoteSessionMonitor.ensure: the stored script and the nonce of a crea
   // A check that fails is no evidence; the monitor is kept.
   const keeping = [
     ['no answer in time', TIMED_OUT],
-    ['a failed call', new Error('Docker Desktop is not installed.')],
+    ['a failed call', new Error('Docker is not installed on this computer.')],
     ['an SSH failure', new EngineError('error during connect: ssh: connect to host build-box port 22: Connection refused', 0)],
     ['another failure of the engine', new EngineError('the engine is busy', 500)],
     ['no regular file or a file too large to read', undefined],
@@ -1265,7 +1265,7 @@ describe('RemoteSessionMonitor.ensure: created containers, the nonce, and IDs', 
   for (const [what, info] of [
     ['a failed docker info', () => Promise.reject(new EngineError('Cannot connect to the Docker daemon', 500))],
     ['docker info without an answer in time', () => Promise.reject(new Error('no answer in time'))],
-    ['docker info that throws', () => Promise.reject(new Error('Docker Desktop is not installed.'))],
+    ['docker info that throws', () => Promise.reject(new Error('Docker is not installed on this computer.'))],
     ['a time of the daemon that is not a time', () => 'yesterday'],
     ['an empty answer of docker info', () => ''],
     ['a time of the daemon without a zone', () => '2026-09-30T10:05:00'],

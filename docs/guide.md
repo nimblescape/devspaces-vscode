@@ -394,6 +394,8 @@ When Docker is not installed, the view shows the steps to set it up instead of t
 
 Instead of an installation, the last step of the view, **Use a Remote Docker Host…**, uses Docker on another computer that you reach over SSH; your computer then needs no Docker (see [Remote Docker host](#remote-docker-host)).
 
+When a link or a command needs Docker and your computer has none, a message says "Docker is not installed on this computer.", and **Install Docker…** shows these steps in the view. On Windows, the message says instead that Devspaces can set up its own Docker in WSL, without Docker Desktop, and **Set Up Docker for Devspaces** starts that setup (step 2; when WSL 2 is missing, its message offers **Install WSL 2**). A link stops at this message before the GitHub sign-in and before its questions; open the link again when Docker is set up.
+
 Nothing runs without your confirmation: a dialog first lists the exact commands, or the download address and the file. Commands run visibly in a terminal of VS Code, where you enter your password if one is needed. Downloads come only from Docker over HTTPS, and the installers are signed by Docker. The setup of the WSL distribution of Devspaces is the exception: its dialog names the downloads and the folder, and its steps run without a terminal, with a progress notification and the log. If Docker is installed already, nothing is installed. The installation works only in a local window. Docker Desktop is free for personal use, education, non-commercial open source projects, and small businesses; larger companies need a paid subscription.
 
 ## Security

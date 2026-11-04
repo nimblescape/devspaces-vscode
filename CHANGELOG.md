@@ -3,6 +3,10 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
+## 0.4.1
+
+**Windows without Docker:** a link or a command that needs Docker no longer says "Docker Desktop is not installed." on Windows, where Devspaces does not need Docker Desktop. The message says that Devspaces can set up its own Docker in WSL, and its button **Set Up Docker for Devspaces** starts that setup. On macOS and Linux, the message says "Docker is not installed on this computer.", and **Install Docker…** shows the Docker setup in the view as before. Without Docker, a link now stops at once with this message, before the GitHub sign-in, the question of the link and the question about the background container; a Start asks about the background container only when Docker is there. See [Installing Docker](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#installing-docker).
+
 ## 0.4.0
 
 **Helper image in the background:** the Monitor on each Docker engine also keeps the helper image of Devspaces (`devspaces-worker`) up to date in its background run. When the base image `node` of the helper image has a newer version, the Monitor builds the helper image again on that engine, so that a start does not need to build it. A window of Devspaces checks the base image itself only when the Monitor has not done it for a week, and a start no longer builds the helper image again after the Monitor did. When the Monitor cannot reach the registry or cannot build the image, the windows check and build it as before. See [The background run](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run).

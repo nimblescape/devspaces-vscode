@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The Docker setup lives only in the sidebar (welcome view): no walkthrough, no command that opens it, and no message
-// "Docker Desktop is not installed." at activation.
+// "Docker is not installed on this computer." at activation.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -256,13 +256,13 @@ describe('no message at activation when Docker is missing', () => {
     }
   });
 
-  it('has no check of the view that shows "Docker Desktop is not installed." once', () => {
+  it('has no check of the view that shows "Docker is not installed on this computer." once', () => {
     expect('onViewVisible' in Controller.prototype).toBe(false);
     const extension = fs.readFileSync(path.join(ROOT, 'src', 'vscode', 'extension.ts'), 'utf8');
     expect(extension).not.toContain('onViewVisible');
   });
 
-  it('uses "Docker Desktop is not installed." only as the error of an operation that needs Docker', () => {
+  it('uses "Docker is not installed on this computer." only as the error of an operation that needs Docker', () => {
     const uses: string[] = [];
     for (const file of sourceFiles(path.join(ROOT, 'src'))) {
       const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -272,7 +272,7 @@ describe('no message at activation when Docker is missing', () => {
     }
     expect(uses.length).toBeGreaterThan(0);
     for (const use of uses) expect(use).toMatch(/UserFacingError\('dockerNotInstalled', Messages\.dockerNotInstalled/);
-    expect(Messages.dockerNotInstalled).toBe('Docker Desktop is not installed.');
+    expect(Messages.dockerNotInstalled).toBe('Docker is not installed on this computer.');
   });
 });
 
