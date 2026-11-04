@@ -4,7 +4,9 @@ This guide explains the files, the development, the tests and the release of
 the extension. The [README](README.md) describes the use in short, the
 [user guide](docs/guide.md) in full. How the extension works inside is in
 [architecture.md](docs/architecture.md), its security model in
-[security.md](docs/security.md).
+[security.md](docs/security.md). What the extension must do is in
+[requirements.md](docs/requirements.md), with an ID for each requirement
+that a pull request can name.
 
 ## Files
 
@@ -15,7 +17,7 @@ the extension. The [README](README.md) describes the use in short, the
 | `test/vscode/` | The tests in a real VS Code: mocha runs them in the extension host of a VS Code that `@vscode/test-cli` downloads. `test/vscode/host/` is a development extension without code, for the tests of the packaged VSIX. `test/vscode/attach/` holds the attach tests, `test/vscode/github/` the sign-in provider `github` that they use instead of the real GitHub sign-in, and `test/vscode/untrusted/` the tests in a folder that VS Code does not trust. |
 | `resources/` | The files of the package beside the bundles: the icons, the Dockerfile of the workspace helper, and the editor of the repository groups. |
 | `scripts/` | The build of the icon font, the local installation, the Marketplace setup of the repository (`marketplace-setup.sh`), the check of rule 4 of the [release rules](#release-rules) (`release-checks.mjs`, with its test `release-checks.test.mjs`), the reset of a Docker engine for tests (`purge-docker-context.sh`), the pin of the Docker CLI of Devspaces (`docker-cli-pin.mjs`, see the workflow "Docker CLI" below), and the programs of the tests in a real VS Code, for example `vscode-with-trust.mjs`, which starts the test VS Code without `--disable-workspace-trust` for the configuration `untrusted`. |
-| `docs/` | The user guide, the architecture, the security model, and how the remote connection works (`remote-connection.md`). `docs/design/` holds design proposals as they were written; the code can differ from them. |
+| `docs/` | The requirements (`requirements.md`), the user guide, the architecture, the security model, and how the remote connection works (`remote-connection.md`). `docs/design/` holds design proposals as they were written; the code can differ from them. |
 | `esbuild.mjs` | Bundles the three entry points into `dist/` as readable JavaScript (not minified, with the names of the source), with the options of `scripts/bundleOptions.mjs`. Only a development build writes source maps, and not for `dist/helperChannel.js`. |
 | `tsconfig.json` | The TypeScript settings of the type check with TypeScript 6.0: strict, and no output, because esbuild builds the bundles. They are the same in every nimblescape extension, except the files they include. |
 | `eslint.config.mjs` | The rules of `npm run lint`: the recommended rules of ESLint and of typescript-eslint, and the rules that find promises that nobody waits for, with the types of `tsconfig.json`. The file is the same in every nimblescape extension, except its lists of the ignored files and of the scripts of webviews. |
