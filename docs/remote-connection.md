@@ -502,7 +502,7 @@ On Windows, Devspaces can use Docker Engine in its own WSL distribution `devspac
 
 **Set Up Docker for Devspaces in WSL…** ([`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/wslSetupCommands.ts)) runs these steps. One setup or removal runs at a time, also across windows (the lock folder `%LOCALAPPDATA%\nimblescape\devspaces\wsl.lock`).
 
-1. **WSL**: `wsl.exe --version` must name WSL 2.4.4 or later. Without WSL, the message offers **Install WSL 2** (`wsl --install --no-distribution`, which needs administrator rights and a restart).
+1. **WSL**: `wsl.exe --version` must name WSL 2.4.4 or later. Without WSL, the setup runs **Install WSL 2** next (`wsl --install --no-distribution` after its question, which needs administrator rights and a restart).
 2. **Which distribution**: `wsl.exe --list --quiet`, and the registry of the Windows user (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`). Devspaces knows its own distribution by the folder of its virtual disk.
 3. **The file**: the list of WSL distributions of Microsoft (`DistributionInfo.json` in `microsoft/WSL`, the list that `wsl --install` uses) names the URL and the SHA-256 of the Debian file.
 4. **The question**: one modal question names the file, its size, the list, Docker Engine, and the folder.

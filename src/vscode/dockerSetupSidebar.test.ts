@@ -634,10 +634,8 @@ describe('the Docker setup in the sidebar welcome view', () => {
   it('names the license of Docker Desktop in the steps that install it', () => {
     const welcome = manifest().contributes.viewsWelcome;
     const desktopSteps = welcome.filter((view) => /install Docker Desktop/i.test(view.contents));
-    expect(desktopSteps.map((view) => view.when)).toEqual([
-      `${DockerContextKeys.setupRequired} && isMac`,
-      `${DockerContextKeys.setupRequired} && isWindows`,
-    ]);
+    // Only macOS: Windows uses the WSL distribution of Devspaces instead (R-ENG-005), and Linux Docker Engine.
+    expect(desktopSteps.map((view) => view.when)).toEqual([`${DockerContextKeys.setupRequired} && isMac`]);
     for (const view of desktopSteps) {
       // A short text; the license terms are named and linked.
       expect(view.contents).toContain('free for personal use, education, non-commercial open source, and small businesses');
