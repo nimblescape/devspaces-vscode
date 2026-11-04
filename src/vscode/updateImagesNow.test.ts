@@ -51,17 +51,14 @@ function controllerWith(
 ) {
   const infos: string[] = [];
   const logger = { info: vi.fn((text: string) => void infos.push(text)), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), show: vi.fn() };
-  // A Docker CLI runs the calls on every engine (BootstrapDocker.canRunOn), unless a test says otherwise.
-  const docker = { canRunOn: vi.fn((_target: unknown): boolean => true) };
   const deps = {
     logger,
     dockerTargets: { current: async () => target, resolve: async () => target, withOperation: <T>(fn: () => Promise<T>) => fn() },
-    docker,
     ...(update !== undefined ? { updateImagesNow: update } : {}),
     ...(startDocker !== undefined ? { startDocker } : {}),
     ...(monitorQuestion !== undefined ? { monitorQuestion } : {}),
   } as unknown as ControllerDeps;
-  return { controller: new Controller(deps), infos, docker };
+  return { controller: new Controller(deps), infos };
 }
 
 /** Registers the commands of `controller`, and returns the handler of the command `id`. */
@@ -110,20 +107,6 @@ describe('the command Update All Images Now', () => {
     await controllerWith(REMOTE, update, undefined, { askIfNeeded }).controller.updateImagesNow();
     expect(order).toEqual(['ask build-box', 'update']);
     expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('The Monitor on build-box updates the images now.');
-  });
-
-  it('asks nothing about the Monitor without a Docker CLI for the engine: the step "Docker start" says that Docker is missing', async () => {
-    const askIfNeeded = vi.fn(async () => 'closed' as const);
-    const update = vi.fn(async () => {});
-    const startDocker = vi.fn<DockerStarter>(async () => {
-      throw new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled);
-    });
-    const { controller, infos, docker } = controllerWith(LOCAL, update, startDocker, { askIfNeeded });
-    docker.canRunOn.mockReturnValue(false);
-    await expect(controller.updateImagesNow()).rejects.toMatchObject({ code: 'dockerNotInstalled' });
-    expect(askIfNeeded).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-    expect(infos).toContain('Update All Images Now: no question about the Monitor on the local Docker, because no Docker CLI runs the calls there.');
   });
 
   it('names the local Docker for a local engine', async () => {

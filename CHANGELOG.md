@@ -5,7 +5,7 @@ takes the section of a version as the notes of its GitHub release.
 
 ## 0.4.1
 
-**Windows without Docker:** a link or a command that needs Docker no longer says "Docker Desktop is not installed." on Windows, where Devspaces does not need Docker Desktop. The message says that Devspaces can set up its own Docker in WSL, and its button **Set Up Docker for Devspaces** starts that setup. On macOS and Linux, the message says "Docker is not installed on this computer.", and **Install Docker…** shows the Docker setup in the view as before. Without Docker, a link now stops at once with this message, before the GitHub sign-in, the question of the link and the question about the background container; a Start asks about the background container only when Docker is there. See [Installing Docker](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#installing-docker).
+**Links on Windows without Docker:** a link to Devspaces, also a course link, on a Windows computer without Docker no longer asks to install Docker Desktop. After the GitHub sign-in, Devspaces checks WSL, asks once with the downloads and the folder, sets up its own WSL distribution with Docker Engine, downloads its Docker CLI, and uses that distribution as its Docker host. Then the link opens the repository there. When the distribution exists already, the link uses it without a question. Without WSL, the message offers **Install WSL 2**. See [Open from a link](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#open-from-a-link).
 
 ## 0.4.0
 

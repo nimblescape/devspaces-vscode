@@ -148,6 +148,89 @@ describe('the check at the start of a window', () => {
   });
 });
 
+// A link on Windows without Docker (R-GEN-002, R-ENG-005): the WSL distribution of Devspaces becomes the Docker host,
+// after the check of WSL and one question, and useHost downloads the Docker CLI of Devspaces when the computer has none.
+describe('Docker for a flow on Windows without Docker', () => {
+  it('checks WSL, asks once, sets up the distribution, and then uses it', async () => {
+    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
+    expect(await commands().ensureDockerHost()).toBe('used');
+    expect(setup.checkWsl).toHaveBeenCalledTimes(1);
+    expect(questions()).toEqual([{ message: WslSetupTexts.confirmSetUpForFlow, detail: WslSetupTexts.confirmSetUpDetail(IMAGE, FOLDER), button: WslSetupTexts.setUp }]);
+    expect(WslSetupTexts.confirmSetUpForFlow).toBe('This computer has no Docker. Set up Docker for Devspaces?');
+    expect(setup.setUp).toHaveBeenCalledWith(IMAGE, expect.any(Function), expect.any(AbortSignal));
+    expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
+  });
+
+  // Mutation: a flow that sets up the distribution of Devspaces again fails it (a question, and a restart of the
+  // distribution that stops its devspaces).
+  it('uses a distribution that Devspaces set up before as it is, without a question, under the lock of all windows', async () => {
+    registered('own');
+    expect(await commands().ensureDockerHost()).toBe('used');
+    expect(questions()).toEqual([]);
+    expect(setup.setUp).not.toHaveBeenCalled();
+    expect(setup.locked).toHaveBeenCalledTimes(1);
+    expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
+    // useHost shows its own problem.
+    useHost.mockResolvedValue(false);
+    expect(await commands().ensureDockerHost()).toBe('notUsed');
+    // Removed in another window after the check: nothing is used, and the message says so.
+    useHost.mockClear();
+    setup.registration.mockResolvedValueOnce('own').mockResolvedValueOnce('none');
+    expect(await commands().ensureDockerHost()).toBe('notUsed');
+    expect(useHost).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.changedElsewhere);
+  });
+
+  it('offers Install WSL 2 when WSL is missing, and uses nothing', async () => {
+    setup.checkWsl.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
+    expect(await commands().ensureDockerHost()).toBe('notUsed');
+    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('wslMissing'), WslSetupTexts.installWsl, Actions.showDetails);
+    expect(questions()).toEqual([]);
+    expect(useHost).not.toHaveBeenCalled();
+  });
+
+  it('uses nothing when the question is closed', async () => {
+    expect(await commands().ensureDockerHost()).toBe('notUsed');
+    expect(questions()).toHaveLength(1);
+    expect(setup.setUp).not.toHaveBeenCalled();
+    expect(useHost).not.toHaveBeenCalled();
+  });
+
+  it('asks in a modal question before it uses a distribution devspaces of the user, and never changes it', async () => {
+    registered('foreign');
+    window.showInformationMessage.mockResolvedValueOnce(WslSetupTexts.useIt);
+    expect(await commands().ensureDockerHost()).toBe('used');
+    expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.foreign, { modal: true }, WslSetupTexts.useIt);
+    expect(setup.setUp).not.toHaveBeenCalled();
+    expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
+    useHost.mockClear();
+    expect(await commands().ensureDockerHost()).toBe('notUsed');
+    expect(useHost).not.toHaveBeenCalled();
+  });
+
+  it('is unavailable without the WSL setup of this computer (not Windows, or no LOCALAPPDATA), and shows nothing', async () => {
+    expect(await commands({ setup: undefined, isWindows: false }).ensureDockerHost()).toBe('unavailable');
+    expect(await commands({ folder: undefined }).ensureDockerHost()).toBe('unavailable');
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it('uses nothing while a setup or a removal runs in this window', async () => {
+    let release: () => void = () => {};
+    setup.setUp.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ version: '29.9.2', separation: { state: 'separate', dockerDesktop: true } }))),
+    );
+    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
+    const instance = commands();
+    const first = instance.setUp();
+    await vi.waitFor(() => expect(setup.setUp).toHaveBeenCalledTimes(1));
+    expect(await instance.ensureDockerHost()).toBe('notUsed');
+    expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.busy);
+    release();
+    await first;
+  });
+});
+
 describe('Set Up Docker for Devspaces in WSL…', () => {
   it('asks once with the downloads and the folder, sets up the distribution with its steps, and then uses it', async () => {
     window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);

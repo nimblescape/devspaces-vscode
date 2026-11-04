@@ -6,7 +6,7 @@
 // error goes to the log.
 import * as vscode from 'vscode';
 import { isUserFacingError, type UserErrorCode } from '../core/errors';
-import { Actions, Messages } from '../core/messages';
+import { Actions } from '../core/messages';
 import { Commands } from './commands';
 import { isAbortError, type Logger } from '../core/ports';
 import { RegistryVersionError } from '../core/storage/registry';
@@ -26,12 +26,6 @@ const INSTALL_DOCKER_COMMAND = 'devspaces.dockerSetup.show';
  * in a terminal, after a confirmation. The extension cannot start Docker Engine by itself (administrator rights).
  */
 const START_DOCKER_COMMAND = 'devspaces.dockerSetup.start';
-/**
- * Command of the action "Set Up Docker for Devspaces" (Windows): the setup of the WSL distribution of Devspaces with
- * Docker Engine (R-ENG-005), the button of the same name in the Docker setup of the sidebar. It asks once with the
- * downloads and the folder, and says when WSL itself is missing.
- */
-const SET_UP_WSL_COMMAND = Commands.setUpWslDistribution;
 
 export interface ShowErrorOptions {
   logger: Logger;
@@ -39,12 +33,9 @@ export interface ShowErrorOptions {
   /** Runs the operation again (action Try again). Without it, Try again is not offered. A returned promise that
    *  rejects is logged. */
   retry?: () => unknown;
-  /** The platform of this computer (default: process.platform). On Windows, a missing Docker offers the WSL
-   *  distribution of Devspaces instead of the installation of Docker. */
-  platform?: NodeJS.Platform;
 }
 
-type ErrorAction = 'installDocker' | 'setUpWsl' | 'startDocker' | 'showDetails' | 'tryAgain' | 'signIn';
+type ErrorAction = 'installDocker' | 'startDocker' | 'showDetails' | 'tryAgain' | 'signIn';
 
 interface Presentation {
   message: string;
@@ -66,7 +57,7 @@ export function showError(error: unknown, options: ShowErrorOptions): void {
     options.logger.info('The operation was cancelled.');
     return;
   }
-  const presentation = present(error, options.retry !== undefined, options.platform ?? process.platform);
+  const presentation = present(error, options.retry !== undefined);
   options.logger.error(presentation.message, error);
 
   const labels = presentation.actions.map((action) => Actions[action]);
@@ -83,17 +74,12 @@ export function showError(error: unknown, options: ShowErrorOptions): void {
   );
 }
 
-function present(error: unknown, canRetry: boolean, platform: NodeJS.Platform): Presentation {
+function present(error: unknown, canRetry: boolean): Presentation {
   if (error instanceof RegistryVersionError) {
     return { message: error.message, severity: 'error', actions: ['showDetails'] };
   }
   if (!isUserFacingError(error)) {
     return { message: OPERATION_FAILED, severity: 'error', actions: ['showDetails'] };
-  }
-  // On Windows, Devspaces sets up its own Docker in WSL, without Docker Desktop (R-ENG-005): the message names this
-  // way, and its action starts it. The other ways (Docker Desktop, a remote host) stay in the Docker setup of the sidebar.
-  if (error.code === 'dockerNotInstalled' && platform === 'win32') {
-    return { message: Messages.dockerMissingOnWindows, severity: 'error', actions: ['setUpWsl'] };
   }
   const rule = ACTIONS[error.code];
   let actions: ErrorAction[];
@@ -109,7 +95,6 @@ function present(error: unknown, canRetry: boolean, platform: NodeJS.Platform): 
 // At most one action besides Show details.
 // 'retry': Show details, plus Try again when the caller can retry. 'retryOnly': Try again (Show details without retry).
 const ACTIONS: Record<UserErrorCode, ErrorAction[] | 'retry' | 'retryOnly'> = {
-  // On Windows: Set Up Docker for Devspaces instead (present).
   dockerNotInstalled: ['installDocker'],
   dockerStartFailed: 'retry',
   buildFailed: 'retry',
@@ -151,11 +136,6 @@ function runAction(action: ErrorAction, options: ShowErrorOptions): void {
         vscode.commands
           .executeCommand(INSTALL_DOCKER_COMMAND)
           .then(undefined, (error: unknown) => options.logger.error('Could not open the Docker setup.', error));
-        return;
-      case 'setUpWsl':
-        vscode.commands
-          .executeCommand(SET_UP_WSL_COMMAND)
-          .then(undefined, (error: unknown) => options.logger.error('Docker for Devspaces could not be set up.', error));
         return;
       case 'startDocker':
         vscode.commands

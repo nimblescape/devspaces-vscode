@@ -41,13 +41,13 @@ describe('showError', () => {
     return { severity: error ? 'error' : 'warning', message, actions };
   }
 
-  it.each(['darwin', 'linux'] as const)('offers Install Docker… (the Docker setup in the sidebar) when Docker is not installed (%s)', async (platform) => {
+  it('offers Install Docker… (the Docker setup in the sidebar) when Docker is not installed', async () => {
     const { logger } = recordingLogger();
     window.showErrorMessage.mockResolvedValue(Actions.installDocker);
-    showError(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled), { logger, showLog: vi.fn(), platform });
+    showError(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled), { logger, showLog: vi.fn() });
     expect(shown()).toEqual({
       severity: 'error',
-      message: 'Docker is not installed on this computer.',
+      message: 'Docker Desktop is not installed.',
       actions: ['Install Docker…'],
     });
     await flush();
@@ -55,43 +55,6 @@ describe('showError', () => {
     // The command looks for the Docker CLI again before it shows the sidebar, so that the view shows the setup.
     expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.dockerSetup.show');
     expect(fakeVscode.env.openExternal).not.toHaveBeenCalled();
-  });
-
-  it('offers Set Up Docker for Devspaces on Windows when Docker is not installed, and never names Docker Desktop as missing', async () => {
-    const { logger, lines } = recordingLogger();
-    window.showErrorMessage.mockResolvedValue(Actions.setUpWsl);
-    showError(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled), { logger, showLog: vi.fn(), platform: 'win32' });
-    expect(shown()).toEqual({
-      severity: 'error',
-      message: 'Docker is not set up on this computer. Devspaces can set up its own Docker in WSL, without Docker Desktop.',
-      actions: ['Set Up Docker for Devspaces'],
-    });
-    expect(lines).toEqual([`error ${Messages.dockerMissingOnWindows} | ${String(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled))}`]);
-    await flush();
-    // The setup of the WSL distribution of Devspaces, as the button of the same name in the Docker setup of the sidebar.
-    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledTimes(1);
-    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.setUpWslDistribution');
-  });
-
-  it('offers Set Up Docker for Devspaces on Windows also in a remote window (the extension runs on Windows)', () => {
-    fakeVscode.env.remoteName = 'dev-container';
-    showError(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled), { logger: recordingLogger().logger, showLog: vi.fn(), platform: 'win32' });
-    expect(shown().actions).toEqual(['Set Up Docker for Devspaces']);
-  });
-
-  it('logs a failed setup command of Set Up Docker for Devspaces', async () => {
-    const { logger, lines } = recordingLogger();
-    window.showErrorMessage.mockResolvedValue(Actions.setUpWsl);
-    fakeVscode.commands.executeCommand.mockRejectedValueOnce(new Error('command not found'));
-    showError(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled), { logger, showLog: vi.fn(), platform: 'win32' });
-    await flush();
-    await flush();
-    expect(lines.at(-1)).toBe('error Docker for Devspaces could not be set up. | Error: command not found');
-  });
-
-  it('keeps the other messages on Windows as they are', () => {
-    showError(new UserFacingError('dockerStartFailed', Messages.dockerStartFailed), { logger: recordingLogger().logger, showLog: vi.fn(), platform: 'win32' });
-    expect(shown()).toEqual({ severity: 'error', message: Messages.dockerStartFailed, actions: ['Show details'] });
   });
 
   it('offers Start Docker when Docker Engine does not run (Linux), which runs Start Docker of the Docker setup', async () => {

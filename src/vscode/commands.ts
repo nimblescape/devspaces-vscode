@@ -48,7 +48,7 @@ export const Commands = {
   closeAndKeepRunning: 'devspaces.closeAndKeepRunning',
   // The buttons of the Docker setup in the sidebar (welcome view), Start Docker after an installation and of the error
   // "Docker is not running." (Docker Engine on Linux), and Show Docker Setup, the action Install Docker… of the error
-  // "Docker is not installed on this computer." (all hidden in the Command Palette).
+  // "Docker Desktop is not installed." (all hidden in the Command Palette).
   dockerSetupInstall: 'devspaces.dockerSetup.install',
   dockerSetupStart: 'devspaces.dockerSetup.start',
   dockerSetupInstallWsl: 'devspaces.dockerSetup.installWsl',

@@ -72,6 +72,8 @@ export const WslSetupTexts = {
     `(up to ${duration(UPGRADE_MS)}). Try again after that.`,
   changedElsewhere: 'The WSL distribution of Devspaces was set up or removed in another VS Code window after the check, so nothing was changed. Try again.',
   confirmSetUp: 'Set up Docker for Devspaces?',
+  /** The same question in a flow that needs Docker (a link to Devspaces), on a computer without Docker. */
+  confirmSetUpForFlow: 'This computer has no Docker. Set up Docker for Devspaces?',
   confirmSetUpDetail: (image: WslImage, folder: string) =>
     [
       `Devspaces creates its own WSL distribution "${WSL_DISTRIBUTION}" with Docker Engine, and then uses Docker there. Your other WSL distributions and Docker Desktop stay as they are. This needs no administrator permission.`,
@@ -210,12 +212,33 @@ export class WslSetupCommands {
    * a new distribution needs the version of WSL that registers a file. Never throws.
    */
   async setUp(): Promise<void> {
+    await this.run('command');
+  }
+
+  /**
+   * A flow that needs Docker on Windows while this computer has none (a link to Devspaces, R-ENG-005): the WSL
+   * distribution of Devspaces becomes the Docker host of Devspaces, which reaches it through its own connection
+   * (`wsl.exe`), and useHost downloads the Docker CLI of Devspaces when this computer has none. A distribution that
+   * Devspaces set up before (for example with another VS Code) is used as it is, without a question. Otherwise as "Set
+   * Up Docker for Devspaces in WSL…": the check of WSL (without WSL, its message offers Install WSL 2), one question
+   * with the downloads and the folder, the setup with its progress, and the use. A distribution `devspaces` that the
+   * user made is offered for use in a modal question. `used`: Devspaces uses the distribution now. `notUsed`: it does
+   * not (a closed question, or a problem with its message). `unavailable`: this computer has no WSL setup (not
+   * Windows, or no LOCALAPPDATA); nothing is shown. Never throws.
+   */
+  async ensureDockerHost(): Promise<'used' | 'notUsed' | 'unavailable'> {
+    if (this.deps.setup === undefined || this.deps.folder === undefined) return 'unavailable';
+    return (await this.run('flow')) ? 'used' : 'notUsed';
+  }
+
+  /** setUp (`command`) or ensureDockerHost (`flow`); true when Devspaces uses the distribution afterwards. */
+  private async run(mode: 'command' | 'flow'): Promise<boolean> {
     const { setup, folder } = this.deps;
     if (setup === undefined || folder === undefined) {
       this.inform(this.deps.isWindows ? WslSetupTexts.noLocalAppData : WslSetupTexts.notWindows);
-      return;
+      return false;
     }
-    if (!this.start()) return;
+    if (!this.start()) return false;
     try {
       const plan = await this.withProgress(WslSetupTexts.checking, async (signal) => {
         const registration = await setup.registration(signal);
@@ -226,17 +249,33 @@ export class WslSetupCommands {
       });
       if (plan.registration === 'foreign') {
         this.deps.logger.info(`A WSL distribution ${WSL_DISTRIBUTION} exists that Devspaces did not set up; Devspaces does not change it.`);
+        if (mode === 'flow') {
+          // The flow waits for the answer, so the question is modal: it cannot stay open unnoticed.
+          const choice = await showInformationMessage(WslSetupTexts.foreign, { modal: true }, WslSetupTexts.useIt);
+          return choice === WslSetupTexts.useIt && (await this.deps.useHost(WSL_HOST));
+        }
         // Not awaited: a message that nobody answers must not block the next setup or removal here.
         showInformationMessage(WslSetupTexts.foreign, WslSetupTexts.useIt)
           .then((choice) => (choice === WslSetupTexts.useIt ? this.deps.useHost(WSL_HOST) : undefined))
           .then(undefined, (error: unknown) => this.deps.logger.error(`${WSL_HOST} could not be used: ${errorMessage(error)}`));
-        return;
+        return false;
+      }
+      if (mode === 'flow' && plan.registration === 'own') {
+        // A flow needs Docker, not a repair: the distribution of Devspaces is used as it is (useHost tests it). Under the
+        // lock of all windows, so that a removal in another window does not come between.
+        this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} of Devspaces exists, so Devspaces uses it.`);
+        const done = await setup.locked(async () => ((await setup.registration()) === 'own' ? { used: await this.deps.useHost(WSL_HOST) } : false));
+        return this.finished(done)?.used === true;
       }
       const confirmed =
         plan.image === undefined
           ? await this.confirm(WslSetupTexts.confirmRepair, WslSetupTexts.confirmRepairDetail, WslSetupTexts.setUp)
-          : await this.confirm(WslSetupTexts.confirmSetUp, WslSetupTexts.confirmSetUpDetail(plan.image, folder), WslSetupTexts.setUp);
-      if (!confirmed) return;
+          : await this.confirm(
+              mode === 'flow' ? WslSetupTexts.confirmSetUpForFlow : WslSetupTexts.confirmSetUp,
+              WslSetupTexts.confirmSetUpDetail(plan.image, folder),
+              WslSetupTexts.setUp,
+            );
+      if (!confirmed) return false;
       this.deps.logger.info(plan.image === undefined ? `The WSL distribution ${WSL_DISTRIBUTION} is set up again.` : `The WSL distribution ${WSL_DISTRIBUTION} is set up in ${folder}.`);
       // The lock of all windows only from here: an open question holds nothing. Under the lock, the distribution must
       // still be as checked: another window may have set it up or removed it meanwhile. Devspaces chooses the host under
@@ -256,8 +295,10 @@ export class WslSetupCommands {
       if (result !== undefined) await this.warnDockerDesktop(result.separation);
       // This message says that the setup itself is done.
       if (result !== undefined && !result.used) this.inform(WslSetupTexts.readyNotUsed);
+      return result?.used === true;
     } catch (error) {
       this.showFailure(error, WslSetupTexts.failed, 'The setup of the WSL distribution of Devspaces was cancelled.');
+      return false;
     } finally {
       this.running = false;
     }

@@ -33,7 +33,7 @@ import { SessionFiles } from '../core/storage/sessionFiles';
 import { isHandedOffStop } from '../core/session/windowRelease';
 import { PENDING_MAX_AGE_MS } from '../core/busy';
 import { availableDevspaces } from '../core/ownership';
-import { dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
+import { WSL_HOST, dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
 import { DockerTargets, operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { silentLogger } from '../core/ports';
 import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, RepositoryInfo, WindowStatus } from '../core/types';
@@ -286,6 +286,8 @@ function createHarness(
     /** The current Docker host and the remote Docker commands. Default: none (the local Docker). */
     dockerTargets?: ControllerDeps['dockerTargets'];
     remoteDocker?: ControllerDeps['remoteDocker'];
+    /** The WSL distribution of Devspaces (Windows). Default: none. */
+    wslSetup?: ControllerDeps['wslSetup'];
     /** The Docker pipe of the window of a devspace. Default: none. */
     windowDockerHost?: ControllerDeps['windowDockerHost'];
     /** The connection of the window to the SSH host of its devspace after a Start. Default: none. */
@@ -491,6 +493,7 @@ function createHarness(
     viewVisible: () => false,
     dockerTargets: options.dockerTargets,
     remoteDocker: options.remoteDocker,
+    wslSetup: options.wslSetup,
     windowDockerHost: options.windowDockerHost,
     hostConnection: options.hostConnection,
     sessionMonitor: options.sessionMonitor,
@@ -2795,24 +2798,6 @@ describe('the question about the Monitor of the engine', () => {
     await run('startInNewWindow', row('acme/api', devspace()));
     expect(asked()).toEqual(['', '']);
     expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it('asks nothing about the Monitor when no Docker CLI runs the calls on the engine: the Start fails with the message of a missing Docker', async () => {
-    const info = repositoryInfo('acme/api');
-    h.sidebar.infos.set('acme/api', info);
-    h.docker.isInstalled.mockReturnValue(false);
-    h.service.openInWorker.mockRejectedValue(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled));
-    await run('start', row('acme/api', undefined, info));
-    expect(asked()).toEqual([]);
-    expect(h.logger.info).toHaveBeenCalledWith('Start: no question about the Monitor on the local Docker, because no Docker CLI runs the calls there.');
-    expect(fakeVscode.window.showErrorMessage.mock.calls.map((call: unknown[]) => call[0])).toEqual([
-      process.platform === 'win32' ? Messages.dockerMissingOnWindows : Messages.dockerNotInstalled,
-    ]);
-    // With Docker, the next Start asks.
-    h.docker.isInstalled.mockReturnValue(true);
-    h.service.openInWorker.mockReset();
-    await run('start', row('acme/api', undefined, info));
-    expect(asked()).toEqual(['']);
   });
 
   it('a Start asks about the engine of its devspace', async () => {
@@ -7788,27 +7773,88 @@ describe('A course link to Devspaces', () => {
     expect(h.service.openInWorker).not.toHaveBeenCalled();
   });
 
-  // Windows without Docker Desktop (a test report): the link asked for the sign-in and about the Monitor, and only then
-  // said that Docker Desktop is not installed. Now it stops at once with the message of a missing Docker.
-  it('stops before the sign-in and its questions when Docker is not installed, with the message of the Docker setup', async () => {
+  /**
+   * A harness without Docker on this computer, whose current Docker host is the local Docker until the WSL
+   * distribution of Devspaces becomes the Docker host (`ensureDockerHost`, here the fake of WslSetupCommands, which
+   * also records the host of each open in the worker in `hosts`).
+   */
+  function withoutDocker(result: 'used' | 'notUsed' | 'unavailable') {
+    let target: DockerTarget = dockerTargetOf('npipe:////./pipe/docker_engine', 'default');
+    const ensureDockerHost = vi.fn(async () => {
+      if (result === 'used') target = remoteDockerTarget(WSL_HOST);
+      return result;
+    });
+    recreateHarness({
+      dockerTargets: {
+        resolve: async () => target,
+        current: async () => operationDockerTarget() ?? target,
+        withOperation: <T,>(fn: () => Promise<T>) => (operationDockerTarget() ? fn() : runWithDockerTarget(target, fn)),
+        ofHost: async (host: string) => (host === '' ? dockerTargetOf('npipe:////./pipe/docker_engine', 'default') : remoteDockerTarget(host)),
+      } as unknown as ControllerDeps['dockerTargets'],
+      wslSetup: { setUp: vi.fn(async () => {}), remove: vi.fn(async () => {}), ensureDockerHost },
+    });
+    fakeVscode.window.showWarningMessage.mockImplementation(async (message: string) => (isLinkQuestion(message) ? Actions.open : undefined));
+    // No Docker CLI of this computer; once Devspaces uses the WSL distribution, its own Docker CLI runs the calls there.
     h.docker.isInstalled.mockReturnValue(false);
+    h.docker.canRunOn.mockImplementation((candidate: unknown) => (candidate as DockerTarget).kind === 'remote');
     h.discovery.getRepository.mockImplementation(async (repository: string) => repositoryInfo(repository.toLowerCase()));
+    const hosts: Array<string | undefined> = [];
+    h.service.openInWorker.mockImplementation(async () => {
+      const host = operationDockerTarget()?.host;
+      hosts.push(host);
+      const env = devspace({ repository: 'myschool/module-ts-2-octo', dockerHost: host });
+      await h.registry.add(env);
+      return openResult(env);
+    });
+    return { ensureDockerHost, hosts };
+  }
+
+  // A test on Windows without Docker Desktop: the link asked to install Docker Desktop. Windows needs no Docker Desktop
+  // (R-GEN-002, R-ENG-005): the link sets up the WSL distribution of Devspaces after one question, and opens there.
+  it('sets up the WSL distribution of Devspaces on Windows without Docker, after the sign-in, and opens the repository there', async () => {
+    const { ensureDockerHost, hosts } = withoutDocker('used');
     await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
-    expect(h.docker.canRunOn).toHaveBeenCalledWith(expect.objectContaining({ kind: 'local' }));
-    const message = process.platform === 'win32' ? Messages.dockerMissingOnWindows : Messages.dockerNotInstalled;
-    const action = process.platform === 'win32' ? Actions.setUpWsl : Actions.installDocker;
-    expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledTimes(1);
-    expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledWith(message, action);
-    expect(h.auth.getAccount).not.toHaveBeenCalled();
-    expect(h.auth.getToken).not.toHaveBeenCalled();
-    expect(h.discovery.getRepository).not.toHaveBeenCalled();
+    expect(ensureDockerHost).toHaveBeenCalledTimes(1);
+    // The sign-in and GitHub first: a link to a repository that GitHub does not show sets up nothing.
+    expect(h.discovery.getRepository.mock.invocationCallOrder[0]).toBeLessThan(ensureDockerHost.mock.invocationCallOrder[0]);
+    // Then the question of the link and the open, on the WSL distribution.
+    expect(warningMessages()).toEqual([ControllerTexts.linkStartConfirm('myschool/module-ts-2-octo')]);
+    expect(hosts).toEqual([WSL_HOST]);
+    expect(h.logger.info).toHaveBeenCalledWith('The link opens the repository with Docker in the WSL distribution of Devspaces.');
+    // Never the message of a missing Docker. (The connection of the window afterwards needs wsl.exe, which this test has not.)
+    expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalledWith(Messages.dockerNotInstalled, expect.anything());
+  });
+
+  it('opens nothing when the WSL distribution of Devspaces is not used (a closed question, or a problem with its message)', async () => {
+    const { ensureDockerHost, hosts } = withoutDocker('notUsed');
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(ensureDockerHost).toHaveBeenCalledTimes(1);
+    expect(hosts).toEqual([]);
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
     expect(warningMessages()).toEqual([]);
     expect(h.monitorQuestion.askIfNeeded).not.toHaveBeenCalled();
-    expect(h.service.openInWorker).not.toHaveBeenCalled();
-    // With Docker, the same link opens.
-    h.docker.isInstalled.mockReturnValue(true);
+    expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The link opened nothing: Devspaces does not use the WSL distribution of Devspaces, and this computer has no Docker.');
+  });
+
+  it('sets up nothing with Docker on this computer, nor for a repository that GitHub does not show', async () => {
+    const { ensureDockerHost } = withoutDocker('used');
+    h.discovery.getRepository.mockResolvedValue(undefined);
+    await h.controller.openLink(courseLink('acme/api-<username>'));
+    expect(warningMessages()).toEqual([ControllerTexts.courseRepositoryNotFound('acme/api-octo', 'octo')]);
+    h.docker.canRunOn.mockReturnValue(true);
+    h.discovery.getRepository.mockImplementation(async (repository: string) => repositoryInfo(repository.toLowerCase()));
     await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(ensureDockerHost).not.toHaveBeenCalled();
     expect(h.service.openInWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it('goes on as before where this computer has no WSL setup (not Windows)', async () => {
+    const { ensureDockerHost, hosts } = withoutDocker('unavailable');
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(ensureDockerHost).toHaveBeenCalledTimes(1);
+    // The pipeline says that Docker is missing at its first Docker call (here the fake of the worker opens).
+    expect(hosts).toEqual(['']);
   });
 
   it('says that the account has no repository of the course when GitHub does not show it', async () => {
