@@ -267,6 +267,42 @@ describe('the swap to a prepared image at the open', () => {
   });
 });
 
+describe('a prepared image after an update of another computer on the same engine', () => {
+  it('takes the record of the newer image and then the prepared image: no question about the configuration, no build', async () => {
+    // This computer recorded build 1 with an older configuration. Another computer updated the devspace to build 2
+    // (its build removed build 1), and the Monitor prepared the next update of build 2.
+    await seedDevspace(h, { record: { configHash: 'sha256:old', images: { [BASE_IMAGE]: DIGEST_OLD } }, image: false, container: null });
+    const newer = {
+      builtAt: '2026-11-04T10:00:00.000Z',
+      devspaceImage: IMAGE_2,
+      buildNumber: 2,
+      configPath: DEFAULT_CONFIG_PATH,
+      configHash: configHash(DEFAULT_CONFIG_TEXT),
+      images: { [BASE_IMAGE]: DIGEST_OLD },
+      features: { [FEATURE]: FEATURE_DIGEST },
+    };
+    h.docker.images.add(IMAGE_2);
+    const config = imageConfigWithUser('vscode');
+    h.docker.imageConfigs.set(IMAGE_2, {
+      ...config,
+      Labels: { ...config.Labels, [LABEL_DEVSPACE_ID]: ENV_ID, [LABEL_REPOSITORY]: REPO, [LABEL_OWNER_ID]: ACCOUNT.id, [LABEL_BUILD_RECORD]: JSON.stringify(newer) },
+    });
+    const name = (await entry())!.containerName;
+    h.docker.addContainer({ devspaceId: ENV_ID, name, state: 'stopped', image: IMAGE_2 });
+    addPrepared();
+    await open();
+    expect(h.ui.prompts).toEqual([`updateContainer ${REPO} stopped`]);
+    expect(h.helper.builds).toEqual([]);
+    expect(h.docker.log.filter((line) => line.startsWith('pull'))).toEqual([]);
+    const image3 = devspaceImageName(REPO, ENV_ID, 3);
+    expect(h.docker.log).toContain(`tag ${PREPARED_ID} ${image3}`);
+    expect(h.helper.calls).toContain(`up ${image3} --remove-existing-container`);
+    expect((await entry())?.buildRecord).toMatchObject({ devspaceImage: image3, buildNumber: 3, imageId: PREPARED_ID, images: { [BASE_IMAGE]: DIGEST_NEW } });
+    expect(h.docker.images.has(IMAGE_2)).toBe(false);
+    expect(h.docker.images.has(PREPARED)).toBe(false);
+  });
+});
+
 describe('a prepare that runs at the open', () => {
   it('is waited for in waits of a minute, with no limit of its own', () => {
     expect(PREPARE_WAIT_STEP_SECONDS).toBe(60);
