@@ -302,6 +302,9 @@ describe('SessionCoordinator', () => {
     let ticks = 0;
     let disposeOnWrite = false;
     let writes = 0;
+    // The ticks when the window closed. Not the ticks after start(): under CPU load, an update that began before
+    // disposeOnWrite was set may still tick after that.
+    let ticksAtDispose: number | undefined;
     const coordinator: SessionCoordinator = h.create({
       heartbeatMs: 20,
       windowHeartbeats: {
@@ -312,20 +315,23 @@ describe('SessionCoordinator', () => {
       windowDockerContext: () => {
         writes += 1;
         // The window closes while this update runs.
-        if (disposeOnWrite) coordinator.dispose();
+        if (disposeOnWrite && ticksAtDispose === undefined) {
+          ticksAtDispose = ticks;
+          coordinator.dispose();
+        }
         return undefined;
       },
     });
     h.coordinator.dispose();
     h.coordinator = coordinator;
     await coordinator.start(ID_A);
-    const before = ticks;
     const writesBefore = writes;
     disposeOnWrite = true;
-    for (let i = 0; i < 50 && writes === writesBefore; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    for (let i = 0; i < 50 && ticksAtDispose === undefined; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
     expect(writes).toBeGreaterThan(writesBefore);
+    expect(ticksAtDispose).toBeDefined();
     await new Promise((resolve) => setTimeout(resolve, 60));
-    expect(ticks).toBe(before);
+    expect(ticks).toBe(ticksAtDispose);
   });
 
   it('setDevspace writes the status file at once', async () => {
