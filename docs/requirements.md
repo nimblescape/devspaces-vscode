@@ -12,7 +12,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-GEN-002
 
-**No setup and no administrator rights.** A student installs only VS Code, and VS Code installs Devspaces and the Dev Containers extension. Devspaces brings everything else that it needs, or sets it up after one confirmation, without administrator rights: the Docker CLI ([R-ENG-004](#r-eng-004)), the WSL distribution on Windows ([R-ENG-005](#r-eng-005)) and the SSH login ([R-ENG-003](#r-eng-003)). Only the installation of WSL itself, and of Docker when the user chooses it ([R-ENG-001](#r-eng-001)), needs administrator rights.
+**No setup and no administrator rights.** A student installs only VS Code, and VS Code installs Devspaces and the Dev Containers extension. Devspaces brings everything else that it needs, or sets it up after one confirmation, without administrator rights: the Docker CLI ([R-ENG-004](#r-eng-004)), the WSL distribution on Windows ([R-ENG-005](#r-eng-005)) and the SSH login ([R-ENG-003](#r-eng-003)). Only the installation of WSL itself and the installation of Docker, when the user chooses it ([R-ENG-001](#r-eng-001)), need administrator rights.
 
 ### R-GEN-003
 
@@ -94,7 +94,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-ENG-002
 
-**A remote host over SSH with one login.** Devspaces runs devspaces on Docker Engine on another computer that it reaches over SSH. It keeps its own list of hosts and never creates or changes a Docker context or `DOCKER_HOST`, so the Docker tools in the terminals of the user keep their target. Each window logs in to a host once: the checks before the connection, the worker, the Docker connections of the Dev Containers extension and the Docker calls of Devspaces use that one login. A build of the helper image in the background waits for that connection and runs through it, without a login of its own. The host needs only an SSH server, Docker Engine that the account may use, and `sh`; Devspaces never installs or starts Docker there. A remote host serves one user, or a group whose members trust each other; the separation of students on one shared host is not a requirement now.
+**A remote host over SSH with one login.** Devspaces runs devspaces on Docker Engine on another computer that it reaches over SSH. It keeps its own list of hosts and never creates or changes a Docker context or `DOCKER_HOST`, so the Docker tools in the terminals of the user keep their target. Each window logs in to a host once (after a **Start**, VS Code starts the window again, and it logs in once more): the checks before the connection, the worker, the Docker connections of the Dev Containers extension and the Docker calls of Devspaces use that one login. A build of the helper image in the background waits for that connection and runs through it, without a login of its own. The host needs only an SSH server, Docker Engine that the account may use, and `sh`; Devspaces never installs or starts Docker there. A remote host serves one user, or a group whose members trust each other; the separation of students on one shared host is not a requirement now.
 
 ### R-ENG-003
 
