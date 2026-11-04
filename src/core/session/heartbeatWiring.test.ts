@@ -402,10 +402,11 @@ describe('heartbeatWiring: waits, target and failures', () => {
     expect(source).toContain('const repairSessionMonitor = heartbeats.repair(async (target, signal) => monitorCalls.monitorEnsure(target, await monitorSettings.forTarget(target), signal));');
     expect(source).not.toContain('ensureOrThrow(image.tag');
     // A build also ends the wait of the background build of a missing helper image (MissingHelperBuild.clearFailures),
-    // the next worker on a remote engine opens a new connection of the relay (RelayConnections.retireAll), and the log
-    // names a build on an engine with the removal mark (a Stop or a Delete of a devspace kept there).
+    // after the build of a missing tag the next worker on a remote engine opens a new connection of the relay
+    // (RelayConnections.retireAll; a rebuild of the same tag ran through the open connection, which stays usable), and
+    // the log names a build on an engine with the removal mark (a Stop or a Delete of a devspace kept there).
     expect(source).toMatch(
-      /onImageBuilt: \(\) => \{\s*helperChannels\?\.clearFailures\(\);\s*heartbeats\.imageBuilt\(\);\s*(\/\/[^\n]*\n\s*)*missingHelperBuild\?\.clearFailures\(\);\s*const built = operationDockerTarget\(\);\s*(\/\/[^\n]*\n\s*)*if \(built === undefined\) relayConnections\.retireAll\(\);\s*else if \(built\.kind === 'remote'\) relayConnections\.retireAll\(built\.host\);\s*(\/\/[^\n]*\n\s*)*if \(built !== undefined\) void engineRemoved\(built\)\.then\(\(removed\) => \(removed \? logger\.info\(removedEngineImageNote\(describeDockerHost\(built\.host\)\)\) : undefined\)\);\s*\}/,
+      /onImageBuilt: \(kind\) => \{\s*helperChannels\?\.clearFailures\(\);\s*heartbeats\.imageBuilt\(\);\s*(\/\/[^\n]*\n\s*)*missingHelperBuild\?\.clearFailures\(\);\s*const built = operationDockerTarget\(\);\s*(\/\/[^\n]*\n\s*)*if \(kind === 'create' && built === undefined\) relayConnections\.retireAll\(\);\s*else if \(kind === 'create' && built\?\.kind === 'remote'\) relayConnections\.retireAll\(built\.host\);\s*(\/\/[^\n]*\n\s*)*if \(built !== undefined\) void engineRemoved\(built\)\.then\(\(removed\) => \(removed \? logger\.info\(removedEngineImageNote\(describeDockerHost\(built\.host\)\)\) : undefined\)\);\s*\}/,
     );
   });
 });

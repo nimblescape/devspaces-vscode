@@ -12,7 +12,9 @@
 // of an operation on an SSH host goes through the Docker pipe of the extension for the host while a connection of the
 // relay to it is open (BootstrapDockerOptions.dockerPipe), without an SSH login of its own, else with
 // DOCKER_HOST=ssh://<host>; before that connection, a call that only reads runs on the shell before the relay (BootstrapDockerOptions.remoteShell, isShellCall), whose
-// login the connection then takes over. A call of an operation on the WSL distribution of Devspaces always goes through
+// login the connection then takes over. The work in the background on an SSH host never logs in itself
+// (runWithDockerTarget with `withoutLogin`, dockerTargets.ts): without that connection, its call is refused. A call of
+// an operation on the WSL distribution of Devspaces always goes through
 // the Docker pipe of the extension for it (BootstrapDockerOptions.servePipe), which needs no connection of the relay; it
 // never logs in with `ssh://`. The calls of an operation on a remote host run with the Docker CLI of Devspaces
 // when it is installed (BootstrapDockerOptions.ownCli, one tested version), also on a computer without a Docker CLI of
@@ -29,7 +31,7 @@ import { deleteEnv, dockerCommandWords, dockerProcessEnv, isReadOnlyDockerCall }
 import { hostAccessOf, hostEndpoint, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
-import { operationDockerTarget, outsideOperation } from './dockerTargets';
+import { operationDockerTarget, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
 
 /** Result of `docker info`. */
@@ -420,6 +422,15 @@ export class BootstrapDocker {
       if (options.env === undefined) await this.servePipeOf(operationDockerTarget());
       // The environment after the lookup: a CLI that was found again has its own (dockerProcessEnv).
       const call = options.env === undefined ? this.callEnv(viaPipe) : { env: options.env };
+      // The work in the background on an SSH host goes only through the connection of the relay of this window to it
+      // (runWithDockerTarget, `withoutLogin`): without that connection, neither `ssh://<host>` nor the shell before the
+      // relay, which could log in too. The work stops, and a caller that joined its build builds for itself.
+      const withoutLogin = options.env === undefined ? operationWithoutLogin() : undefined;
+      if (withoutLogin !== undefined && call.login !== undefined && reachesEngine(args)) {
+        this.logger.info(`${commandText(args)} does not run: the work in the background on ${call.login} uses only the connection of this window to the host, and that connection is not open.`);
+        withoutLogin.abort(abortError());
+        throw abortError();
+      }
       const onShell = call.shellTarget === undefined ? undefined : await this.runOnShell(call.shellTarget, args, options);
       if (onShell !== undefined) return onShell;
       if (call.noEndpoint !== undefined) {

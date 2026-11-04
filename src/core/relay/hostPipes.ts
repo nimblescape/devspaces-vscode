@@ -17,7 +17,7 @@ import { randomBytes } from 'crypto';
 import type { Duplex } from 'stream';
 import { hostAccessOf, transportProgramOf } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
-import type { Logger, StartedByteProcess } from '../ports';
+import { abortError, type Logger, type StartedByteProcess } from '../ports';
 import type { RelayConnection } from './connection';
 import { DockerPipe, processDockerDial, relayDockerDial } from './dockerPipe';
 import { extensionPipeRule } from './dockerPipeRules';
@@ -54,6 +54,8 @@ export class HostPipes {
   private readonly pipes = new Map<string, { pipe?: DockerPipe; listening?: Promise<void> }>();
   /** When the pipe of a WSL distribution could not listen the last time (WSL_PIPE_RETRY_MS). */
   private readonly wslFailedAt = new Map<string, number>();
+  /** The waits for the pipe of each host (whenDockerHost): each one checks dockerHost again after a `serve`. */
+  private readonly waits = new Map<string, Set<() => void>>();
   private disposed = false;
 
   constructor(private readonly deps: HostPipesDeps) {}
@@ -72,14 +74,61 @@ export class HostPipes {
   }
 
   /**
+   * Resolves when dockerHost gives the pipe of `host`: at once when it does, else at the end of the first `serve` of the
+   * host after which it does (for an SSH host, `serve` follows each connection of the relay to it that passed its checks,
+   * RelayConnections.use). No time limit: the work in the background on an SSH host waits for the connection of this
+   * window to it, and runs only through it (docs/requirements.md R-ENG-002). Rejects with an AbortError when `signal`
+   * aborts or the window closes.
+   */
+  whenDockerHost(host: string, signal: AbortSignal): Promise<void> {
+    if (this.disposed || signal.aborted) return Promise.reject(abortError());
+    if (this.dockerHost(host) !== undefined) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      const waits = this.waits.get(host) ?? new Set<() => void>();
+      this.waits.set(host, waits);
+      const end = (): void => {
+        waits.delete(check);
+        if (waits.size === 0 && this.waits.get(host) === waits) this.waits.delete(host);
+        signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = (): void => {
+        end();
+        reject(abortError());
+      };
+      const check = (): void => {
+        if (this.disposed) onAbort();
+        else if (this.dockerHost(host) !== undefined) {
+          end();
+          resolve();
+        }
+      };
+      waits.add(check);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
    * Serves the pipe of `host` (a host with a transport, hostAccessOf) when it does not listen yet: for an SSH host, a
    * connection of the relay to it passed its checks; for a WSL distribution, a Docker call of an operation there comes.
    * A pipe that does not serve its address anymore (DockerPipe.isServing) is closed, and a new one at a new address
    * takes its place. A pipe that cannot listen is logged; the next call of `serve` tries again, for a WSL distribution
    * only after WSL_PIPE_RETRY_MS. Resolves when the pipe listens or could not, also for a call while another one starts
-   * it; never rejects.
+   * it; never rejects. Then the waits of whenDockerHost for the host check the pipe again.
    */
   async serve(host: string): Promise<void> {
+    try {
+      await this.listenFor(host);
+    } finally {
+      this.wake(host);
+    }
+  }
+
+  /** The waits of whenDockerHost for `host` check the pipe again. */
+  private wake(host: string): void {
+    for (const check of [...(this.waits.get(host) ?? [])]) check();
+  }
+
+  private async listenFor(host: string): Promise<void> {
     const access = hostAccessOf(host);
     if (this.disposed || access === undefined) return;
     const { logger, platform } = this.deps;
@@ -149,5 +198,7 @@ export class HostPipes {
     this.disposed = true;
     for (const entry of this.pipes.values()) entry.pipe?.close();
     this.pipes.clear();
+    // The waits of whenDockerHost end with an AbortError.
+    for (const host of [...this.waits.keys()]) this.wake(host);
   }
 }

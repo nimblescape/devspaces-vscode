@@ -476,7 +476,7 @@ export function dockerHostReason(
     case 'unreachable':
       return 'The computer does not answer. Check its name and the network connection.';
     case 'closedBeforeLogin':
-      return 'Its SSH server closed the connection before the login. It may limit new connections, for example after failed logins or while many open at once. Wait a minute, then try again. Connection sharing in your SSH config (ControlMaster auto with ControlPersist) lets every Docker call use one connection.';
+      return 'Its SSH server closed the connection before the login. It may limit new connections, for example after failed logins or while many open at once. Wait a minute, then try again.';
     case 'login':
       return 'SSH could not log in. Add your SSH key to the SSH agent (ssh-add) or name it in your SSH config, then try again.';
     case 'hostKey':

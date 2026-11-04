@@ -72,7 +72,7 @@ describe('the messages of a remote Docker host', () => {
 
   it.each([
     ['closedBeforeLogin', 'closed the connection before the login'],
-    ['closedBeforeLogin', 'ControlMaster'],
+    ['closedBeforeLogin', 'Wait a minute, then try again.'],
     ['login', 'SSH could not log in'],
     ['dockerMissing', 'Docker is not installed on that computer.'],
     ['dockerNotRunning', 'Docker is not running on that computer.'],
