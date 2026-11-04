@@ -796,10 +796,9 @@ describe('Controller commands', () => {
     const installMac =
       'Install Docker Desktop with Homebrew or Docker\'s installer. You see the commands before anything runs. Docker Desktop is free for personal use, education, non-commercial open source, and small businesses; larger companies need a [paid subscription](https://www.docker.com/legal/docker-subscription-service-agreement/).\n[Install Docker](command:devspaces.dockerSetup.install)';
     // The WSL distribution of Devspaces, without Docker Desktop.
+    // On Windows, the only setup of Docker (R-ENG-005): no installation of Docker Desktop.
     const setUpWsl =
-      '2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution with Docker Engine, without Docker Desktop and without administrator permission. You see the downloads and the folder before anything runs.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)';
-    const installWindows =
-      'Or install Docker Desktop with winget or Docker\'s installer. You see the commands before anything runs. Docker Desktop is free for personal use, education, non-commercial open source, and small businesses; larger companies need a [paid subscription](https://www.docker.com/legal/docker-subscription-service-agreement/).\n[Install Docker](command:devspaces.dockerSetup.install)';
+      '2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first. You see the downloads and the folder before anything runs.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)';
     const installLinux =
       'Install Docker Engine from Docker\'s package repository. You see the commands before anything runs.\n[Install Docker](command:devspaces.dockerSetup.install)';
     // The last step on every platform: Docker on another computer, without Docker on this one.
@@ -811,16 +810,14 @@ describe('Controller commands', () => {
     });
 
     it('shows the steps of Windows with WSL 2 first, and a check mark instead of its button once WSL 2 is ready', () => {
-      expect(shownWelcome({ ...setup, isWindows: true })).toEqual([intro, installWsl, setUpWsl, installWindows, after, remote, signIn]);
-      expect(shownWelcome({ ...setup, isWindows: true, [DockerContextKeys.wslReady]: true })).toEqual([
-        intro,
-        wslInstalled,
-        setUpWsl,
-        installWindows,
-        after,
-        remote,
-        signIn,
-      ]);
+      expect(shownWelcome({ ...setup, isWindows: true })).toEqual([intro, installWsl, setUpWsl, after, remote, signIn]);
+      expect(shownWelcome({ ...setup, isWindows: true, [DockerContextKeys.wslReady]: true })).toEqual([intro, wslInstalled, setUpWsl, after, remote, signIn]);
+    });
+
+    it('offers no installation of Docker Desktop on Windows', () => {
+      const windows = shownWelcome({ ...setup, isWindows: true }).join('\n');
+      expect(windows).not.toContain('command:devspaces.dockerSetup.install)');
+      expect(windows).not.toContain('Install Docker Desktop');
     });
 
     it('shows the steps of Linux', () => {

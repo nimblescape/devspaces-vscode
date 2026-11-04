@@ -297,6 +297,13 @@ export class WslSetupCommands {
       if (result !== undefined && !result.used) this.inform(WslSetupTexts.readyNotUsed);
       return result?.used === true;
     } catch (error) {
+      if (isWslSetupError(error) && error.problem === 'wslMissing') {
+        // Docker for Devspaces needs WSL: its installation comes next, with its own question that shows the command
+        // (Windows asks for administrator permission, and the computer restarts afterwards).
+        this.deps.logger.info(`WSL is not installed, so Devspaces offers to install WSL 2 first: ${error.message}`);
+        this.installWsl();
+        return false;
+      }
       this.showFailure(error, WslSetupTexts.failed, 'The setup of the WSL distribution of Devspaces was cancelled.');
       return false;
     } finally {
@@ -453,14 +460,17 @@ export class WslSetupCommands {
     showErrorMessage(message, ...items).then(
       (choice) => {
         if (choice === Actions.showDetails) this.deps.showLog();
-        else if (choice !== undefined && choice === action) {
-          vscode.commands
-            .executeCommand(Commands.dockerSetupInstallWsl)
-            .then(undefined, (error: unknown) => this.deps.logger.error(`WSL 2 could not be installed: ${errorMessage(error)}`));
-        }
+        else if (choice !== undefined && choice === action) this.installWsl();
       },
       (error: unknown) => this.deps.logger.error('Could not show the message.', error),
     );
+  }
+
+  /** "Install WSL 2" of the Docker setup (`wsl --install --no-distribution` in a terminal, after its question). Not awaited. */
+  private installWsl(): void {
+    vscode.commands
+      .executeCommand(Commands.dockerSetupInstallWsl)
+      .then(undefined, (error: unknown) => this.deps.logger.error(`WSL 2 could not be installed: ${errorMessage(error)}`));
   }
 
   /**

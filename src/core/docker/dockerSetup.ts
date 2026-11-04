@@ -97,7 +97,8 @@ export const DockerSetupTexts = {
   downloadWindows:
     'Then it starts. The installer is signed by Docker; the file is marked as downloaded, so that Windows checks it. Windows may ask for an administrator password or for your permission.',
   confirmWsl: 'Install WSL 2?',
-  wslRestart: 'Windows asks for administrator permission; without it, ask an administrator of this computer to run this command. Restart the computer afterwards.',
+  wslRestart:
+    'Docker for Devspaces needs WSL 2. Windows asks for administrator permission; without it, ask an administrator of this computer to run this command. Restart the computer afterwards; then Devspaces sets up its Docker in WSL.',
   confirmStartEngine: 'Start the Docker service?',
   install: 'Install',
   download: 'Download',

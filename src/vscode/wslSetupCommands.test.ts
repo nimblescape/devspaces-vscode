@@ -181,10 +181,11 @@ describe('Docker for a flow on Windows without Docker', () => {
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.changedElsewhere);
   });
 
-  it('offers Install WSL 2 when WSL is missing, and uses nothing', async () => {
+  it('installs WSL 2 first when WSL is missing, and uses nothing', async () => {
     setup.checkWsl.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
     expect(await commands().ensureDockerHost()).toBe('notUsed');
-    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('wslMissing'), WslSetupTexts.installWsl, Actions.showDetails);
+    expect(fakeVscode.commands.executeCommand.mock.calls).toEqual([[Commands.dockerSetupInstallWsl]]);
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
     expect(questions()).toEqual([]);
     expect(useHost).not.toHaveBeenCalled();
   });
@@ -355,14 +356,23 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(questions()).toHaveLength(1);
   });
 
-  it('offers Install WSL 2 when WSL is missing', async () => {
+  // The process of Windows without Docker: WSL first. Its installation has its own question with the command, the
+  // administrator permission and the restart (DockerSetup.installWsl), so no message comes before it.
+  it('installs WSL 2 first when WSL is missing', async () => {
     setup.checkWsl.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
-    window.showErrorMessage.mockResolvedValue(WslSetupTexts.installWsl);
     await commands().setUp();
-    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('wslMissing'), WslSetupTexts.installWsl, Actions.showDetails);
-    await vi.waitFor(() => expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith(Commands.dockerSetupInstallWsl));
+    expect(fakeVscode.commands.executeCommand.mock.calls).toEqual([[Commands.dockerSetupInstallWsl]]);
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
     expect(setup.image).not.toHaveBeenCalled();
-    expect(logger.error).toHaveBeenCalledWith(`${WslSetupTexts.problem('wslMissing')} wsl.exe was not found.`);
+    expect(questions()).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith('WSL is not installed, so Devspaces offers to install WSL 2 first: wsl.exe was not found.');
+    // A failed command is logged.
+    fakeVscode.commands.executeCommand.mockRejectedValueOnce(new Error('command not found'));
+    await commands().setUp();
+    await vi.waitFor(() => expect(logger.error).toHaveBeenCalledWith('WSL 2 could not be installed: command not found'));
+  });
+
+  it('keeps Install WSL 2 in the message of a problem that names it', () => {
     // A user without administrator permission learns the command for an administrator.
     expect(WslSetupTexts.problem('wslMissing')).toContain('"wsl --install --no-distribution"');
   });
