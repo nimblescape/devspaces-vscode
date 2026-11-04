@@ -24,7 +24,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-GEN-005
 
-**Release.** The publisher is `nimblescape`, the extension ID is `nimblescape.nimblescape-devspaces-2`, and the display name is "nimblescape Devspaces 2": the display name carries the same number as the ID. A release follows the [release rules](../CONTRIBUTING.md#release-rules) and [Naming](../CONTRIBUTING.md#naming). Nobody publishes a version, creates a version tag or creates a GitHub release until Hannes asks for that release in his own words, and a release dry run needs his yes too. The ID stays. The display name changes only after the Marketplace team approved the new name in writing, and nobody tries a name by publishing it.
+**Release.** The publisher is `nimblescape`, the extension ID is `nimblescape.nimblescape-devspaces-2`, and the display name is "nimblescape Devspaces 2": the display name carries the same number as the ID. A release follows the [release rules](../CONTRIBUTING.md#release-rules) and [Naming](../CONTRIBUTING.md#naming). Nobody publishes a version, creates a version tag or creates a GitHub release until Hannes asks for that release in his own words, and a release dry run needs his yes too. The ID stays. The display name changes only after the Marketplace team approved the new name in writing, and nobody tries a name by publishing it. The display name of the publisher does not change, and `contributes.configuration.title` stays set in `package.json`, so that the title of the settings does not change with the display name.
 
 ### R-GEN-006
 
