@@ -6,30 +6,36 @@
 # request, on the pinned Node.js 24 release (.node-version); VS Code 1.125
 # (engines.vscode) and later run extensions on Node.js 24 too. The job "test"
 # installs the locked development tools, checks the types and the code (ESLint),
-# runs the unit tests, and packages the VSIX with vsce. The helper container
-# runs its scripts as root on the files of other users, and the tests of that
-# behavior need root (chown to other users, mknod, mount --bind), so the job
-# "test as root" runs the unit tests again as root; the job "test" runs them as
-# a user without root, as some tests need. The job "every test ran" fails when a
-# test is skipped in both runs, so no test stops running unseen. The job
-# "docker" runs the integration tests against the Docker Engine of the runner,
-# in three groups of test files side by side, each on a runner of its own. The
-# job "vscode" runs the tests in a real VS Code (stable) with the Dev Containers
-# extension on Linux, Windows and macOS, against the packaged VSIX and on Linux
-# also against the development build. The job "vscode attach" starts VS Code in
-# the windows of containers on the Docker Engine of the runner, through the real
-# Dev Containers extension, the job "vscode attach remote" in the window of a
-# devspace on a Docker Engine over SSH, and the job "vscode update" in the
-# window of a devspace before and after the update from the last released
-# version. The VSIX of the job "test" stays a workflow artifact for inspection.
-# This workflow publishes nothing: the release workflow calls it for the commit
-# of a version and publishes the VSIX of that call. A push or a pull request
-# that changes only documentation, Markdown files and the files of docs/, starts
-# no run; the release calls this workflow for each version, where these path
+# and runs the unit tests. The job "package" packages the VSIX with vsce, side
+# by side with the tests, so that the VS Code jobs, which test this VSIX, do not
+# wait for the unit tests. The helper container runs its scripts as root on the
+# files of other users, and the tests of that behavior need root (chown to other
+# users, mknod, mount --bind), so the job "test as root" runs the unit tests
+# again as root; the job "test" runs them as a user without root, as some tests
+# need. The job "every test ran" fails when a test is skipped in both runs, so
+# no test stops running unseen. The job "docker" runs the integration tests
+# against the Docker Engine of the runner, in three groups of test files side by
+# side, each on a runner of its own. The job "vscode" runs the tests in a real
+# VS Code (stable) with the Dev Containers extension on Linux, Windows and
+# macOS, against the packaged VSIX and on Linux also against the development
+# build. The job "vscode attach" starts VS Code in the windows of containers on
+# the Docker Engine of the runner, through the real Dev Containers extension, in
+# two parts side by side, each on a runner of its own. The job "vscode attach
+# remote" starts VS Code in the window of a devspace on a Docker Engine over
+# SSH, and the job "vscode update" in the window of a devspace before and after
+# the update from the last released version. The VSIX of the job "package" stays
+# a workflow artifact for inspection. Each job keeps the npm packages that it
+# downloads in the cache of GitHub Actions (actions/setup-node, key from
+# package-lock.json), so the next run downloads none; npm ci checks each package
+# from the cache against its hash in package-lock.json, as a download. This
+# workflow publishes nothing: the release workflow calls it for the commit of a
+# version and publishes the VSIX of that call. A push or a pull request that
+# changes only documentation, Markdown files and the files of docs/, starts no
+# run; the release calls this workflow for each version, where these path
 # filters do not apply. A change of this file changes the release process: its
 # pull request needs a dry run (rule 4). The workflow "VS Code versions" calls
 # it once per week with another VS Code version for the VS Code jobs; such a
-# call runs only the job "test", for the VSIX, and the VS Code jobs.
+# call runs only the job "package", for the VSIX, and the VS Code jobs.
 
 name: CI
 
@@ -51,7 +57,7 @@ on:
         required: false
         default: ''
       vscode-version:
-        description: The VS Code version of the VS Code jobs, "insiders" or a version such as 1.125.0; empty for stable. When set, only the job "test" (for the VSIX) and the VS Code jobs run.
+        description: The VS Code version of the VS Code jobs, "insiders" or a version such as 1.125.0; empty for stable. When set, only the job "package" (for the VSIX) and the VS Code jobs run.
         type: string
         required: false
         default: ''
@@ -67,6 +73,7 @@ env:
 
 jobs:
   test:
+    if: ${{ !inputs.vscode-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -80,6 +87,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools without install scripts
         run: npm ci --ignore-scripts
@@ -98,9 +106,31 @@ jobs:
       - name: Keep the test results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-results-user${{ env.ARTIFACT_SUFFIX }}
+          name: test-results-user
           path: test-results/user.json
           if-no-files-found: error
+
+  package:
+    # The VSIX that the release publishes and that the job "vscode" tests. A job of its own, side by side with the
+    # tests, so that the job "vscode" starts as soon as the VSIX is there; a failed test still fails this workflow, and
+    # then the release publishes nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install the locked development tools without install scripts
+        run: npm ci --ignore-scripts
 
       - name: Build the VSIX package
         run: npm run package
@@ -129,6 +159,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools without install scripts
         run: npm ci --ignore-scripts
@@ -206,6 +237,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools
         run: npm ci
@@ -218,11 +250,11 @@ jobs:
 
   vscode:
     # The tests in a real VS Code (.vscode-test.mjs) on the three systems of the users: against the VSIX of the job
-    # "test", as users install it, and on Linux also against the development build (npm run test:vscode). The job
-    # waits for the job "test" and its VSIX, so it does not run when a unit test fails. The Linux runner has no
-    # display, so xvfb-run gives VS Code a virtual one; xvfb is preinstalled on ubuntu-latest.
+    # "package", as users install it, and on Linux also against the development build (npm run test:vscode). The job
+    # waits only for the job "package" and its VSIX, not for the unit tests, so it also runs when a unit test fails. The
+    # Linux runner has no display, so xvfb-run gives VS Code a virtual one; xvfb is preinstalled on ubuntu-latest.
     name: vscode (${{ matrix.os }})
-    needs: test
+    needs: package
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -244,6 +276,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools without install scripts
         run: npm ci --ignore-scripts
@@ -252,9 +285,9 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:vscode
 
-      # The VSIX of the job "test", which the release publishes: the tests run against the file that users get, also in a
-      # folder that VS Code does not trust (Restricted Mode, the configuration "untrusted" of .vscode-test.mjs).
-      - name: Download the VSIX of the job "test"
+      # The VSIX of the job "package", which the release publishes: the tests run against the file that users get, also in
+      # a folder that VS Code does not trust (Restricted Mode, the configuration "untrusted" of .vscode-test.mjs).
+      - name: Download the VSIX of the job "package"
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: vsix${{ env.ARTIFACT_SUFFIX }}
@@ -272,17 +305,24 @@ jobs:
   vscode-attach:
     # The attach tests (.vscode-test.mjs, label attach): VS Code starts in the window of a container on the Docker
     # Engine of the runner, through the real Dev Containers extension. test/vscode/attach/prepare.ts prepares the engine
-    # and the test VS Code. The first start opens a container that is no devspace, the second a devspace that the window
-    # restores from its volume labels, the third the same devspace again with the user data folder of the second (a
-    # restart of VS Code), the fourth the same window under another GitHub account, and the fifth the same window when
-    # the start of its stopped container takes several minutes. The sixth starts with a local folder and starts a
-    # second VS Code, with the extension installed from its VSIX, in the window of the devspace, whose container the
-    # tests stop and then remove. The runner gets a Git configuration and an SSH agent, so that the tests see which of
-    # them reach the containers. The extension creates its objects with the names of a real installation, which is why
-    # these tests run only on CI.
-    name: vscode attach
+    # and the test VS Code. Some runs take several minutes, so they run in two parts side by side, each on its own runner
+    # and engine; both parts run the run `devspace`, in which the devspace gets its container. The part
+    # `restarts`: the first start opens a container that is no devspace, the second a devspace that the window restores
+    # from its volume labels, the third the same devspace again with the user data folder of the second (a restart of VS
+    # Code), the fourth the same window under another GitHub account, and the fifth the same window when the start of
+    # its stopped container takes several minutes. The part `stopped`: after the run `devspace`, VS Code starts with a
+    # local folder and starts a second VS Code, with the extension installed from its VSIX, in the window of the
+    # devspace, whose container the tests stop and then remove. The runner gets a Git configuration and an SSH agent, so
+    # that the tests see which of them reach the containers. The extension creates its objects with the names of a real
+    # installation, which is why these tests run only on CI.
+    name: vscode attach (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      # Every part reports its failures, also when the other part failed.
+      fail-fast: false
+      matrix:
+        part: [restarts, stopped]
     steps:
       # .vscode-test.mjs, test/vscode/attach/prepare.ts and scripts/install-attach-extensions.mjs download the VS Code
       # version of VSCODE_TEST_VERSION; empty (also for every event but a call) gives stable. @vscode/test-electron
@@ -319,6 +359,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools without install scripts
         run: npm ci --ignore-scripts
@@ -335,6 +376,7 @@ jobs:
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
 
       - name: Run the tests in the window of a container that is no devspace
+        if: matrix.part == 'restarts'
         env:
           DEVSPACE_TEST_ATTACH: plain
         run: xvfb-run -a npm run test:vscode:attach
@@ -353,16 +395,19 @@ jobs:
           test "$(docker inspect -f '{{.State.Running}}' "$name")" = true
 
       - name: Run the tests in the window of the devspace after a restart of VS Code
+        if: matrix.part == 'restarts'
         env:
           DEVSPACE_TEST_ATTACH: reattach
         run: xvfb-run -a npm run test:vscode:attach
 
       - name: Run the tests in the window of the devspace under another GitHub account
+        if: matrix.part == 'restarts'
         env:
           DEVSPACE_TEST_ATTACH: account
         run: xvfb-run -a npm run test:vscode:attach
 
       - name: Check that the devspace of the owner still runs
+        if: matrix.part == 'restarts'
         run: |
           name=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.containerName")
           test "$(docker inspect -f '{{.State.Running}}' "$name")" = true
@@ -370,6 +415,7 @@ jobs:
       # The open pipeline of the next run starts the container, and its postStartCommand waits several minutes once
       # (test/vscode/attach/prepare.ts). The file of postAttachCommand starts empty, so that the run counts its attaches.
       - name: Stop the devspace, with a long postStartCommand at its next start
+        if: matrix.part == 'restarts'
         run: |
           name=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.containerName")
           user=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.user")
@@ -378,15 +424,18 @@ jobs:
           docker stop "$name"
 
       - name: Run the tests in the window of the devspace with an open pipeline of several minutes
+        if: matrix.part == 'restarts'
         env:
           DEVSPACE_TEST_ATTACH: longopen
         run: xvfb-run -a npm run test:vscode:attach
 
       # The second VS Code of the next run loads the extension as users install it (scripts/install-attach-extensions.mjs).
       - name: Install the extension and the test sign-in provider into the test VS Code from VSIX files
+        if: matrix.part == 'stopped'
         run: node scripts/install-attach-extensions.mjs
 
       - name: Run the tests in the window of the devspace whose container stops
+        if: matrix.part == 'stopped'
         env:
           DEVSPACE_TEST_ATTACH: stopped
         run: xvfb-run -a npm run test:vscode:attach
@@ -437,6 +486,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools without install scripts
         run: npm ci --ignore-scripts
@@ -507,6 +557,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
 
       - name: Install the locked development tools without install scripts
         run: npm ci --ignore-scripts
