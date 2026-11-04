@@ -57,9 +57,17 @@ export interface HelperImagesDeps {
    * helpers take the worker's own).
    */
   engine?: () => Promise<HelperEngine>;
-  /** Called after a build of the helper image succeeded (the worker can be opened again at once). */
-  onImageBuilt?: () => void;
-
+  /**
+   * Called after a maintaining or a plain ensure that built the helper image (the worker can be opened again at once):
+   * `create` when it built a missing tag, else `refresh` (a rebuild of the existing tag, which also calls it when the
+   * rebuild failed and the existing image stays).
+   */
+  onImageBuilt?: (kind: HelperBuildKind) => void;
+  /**
+   * Whether the maintenance of the maintaining ensure may change the engine of the operation now (the rebuild that a
+   * check asked for, the cleanup; EnsureHelperImageOptions.mayChangeEngine). Default: always.
+   */
+  mayChangeEngine?: () => boolean;
 }
 
 /** The options of HelperImages.ensureImagePresent. */
@@ -349,7 +357,8 @@ export class HelperImages {
       // rejects at once for an aborted signal) and which could start a build.
       if (options.signal?.aborted) throw abortError();
       const listeners = new Set<(kind: HelperBuildKind) => void>();
-      let built = false;
+      let built: HelperBuildKind | undefined;
+      let putOff = false;
       const promise: Promise<HelperImageUse> = ensureHelperImageUse(this.deps.docker, this.deps.dockerfilePath, {
         onOutput: options.onOutput ?? this.logOutput,
         signal: options.signal,
@@ -357,9 +366,11 @@ export class HelperImages {
         baseDigest: this.deps.baseDigest,
         maintain: recheck,
         checkBaseImage: options.checkBaseImage,
+        mayChangeEngine: this.deps.mayChangeEngine,
+        onPutOff: () => (putOff = true),
         // The progress reaches every caller that awaits this promise (join), not only the caller that started it.
         onBuild: (kind) => {
-          built = true;
+          if (built !== 'create') built = kind;
           if (this.imagePromise === promise) this.imageBuilding = kind;
           for (const listener of [...listeners]) listener(kind);
         },
@@ -374,10 +385,13 @@ export class HelperImages {
             this.imageUsedAt = this.imageReadyAt;
             this.imageTag = use.tag;
             this.imageCachedId = use.id;
+            // A maintenance that was put off (mayChangeEngine) is not done: the next maintaining ensure runs it, also
+            // within HELPER_IMAGE_RECHECK_MS (the background prebuild once the connection to the SSH host is open).
+            if (putOff) this.imageMaintained = false;
           }
-          if (built) {
+          if (built !== undefined) {
             try {
-              this.deps.onImageBuilt?.();
+              this.deps.onImageBuilt?.(built);
             } catch (error) {
               this.deps.logger.warn(`The built helper image could not be reported: ${errorMessage(error)}`);
             }

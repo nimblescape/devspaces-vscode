@@ -59,7 +59,7 @@ import { Messages } from '../core/messages';
 import { nodeHttpsTransport, takeUserAgentVersion } from '../core/http';
 import { DockerCredentialStore } from '../core/imageCheck/credentials';
 import { RegistryClient } from '../core/imageCheck/registryClient';
-import { isoTime, systemClock, type RunResult, type StartedByteProcess } from '../core/ports';
+import { abortError, isoTime, systemClock, type RunResult, type StartedByteProcess } from '../core/ports';
 import { usableTimeZone } from '../core/remoteMonitor/cron';
 import { monitorSettingsOf } from './monitorSettings';
 import { REMOTE_MONITOR_VOLUME } from '../core/remoteMonitor/protocol';
@@ -508,19 +508,29 @@ async function activateExtension(
     // The engine of the operation (its key: '' for the local Docker, else the host), without its socket, which only the
     // steps of the workspace helper read (the worker's own; the socket mount of the worker is engineSocket below).
     engine: async () => ({ key: (await targets.current()).host }),
+    // On an SSH host, the rebuild that a check asked for and the cleanup change the engine only through the connection
+    // of the relay of this window to the host (docs/requirements.md R-ENG-002): an open before that connection uses the
+    // existing image, and the background prebuild runs them through the connection when it is open.
+    mayChangeEngine: () => {
+      const target = operationDockerTarget();
+      return target?.kind !== 'remote' || hostAccessOf(target.host)?.kind !== 'ssh' || hostPipes?.dockerHost(target.host) !== undefined;
+    },
     // A worker that could not be opened for want of the helper image is tried again at once. A build that succeeded
     // also ends the wait of the heartbeats' builds on its engine (the target of the operation that built it; every wait
     // when it is not known), in heartbeatWiring.
-    onImageBuilt: () => {
+    onImageBuilt: (kind) => {
       helperChannels?.clearFailures();
       heartbeats.imageBuilt();
       // A build (a Start, for example) also ends the wait after a failed background build.
       missingHelperBuild?.clearFailures();
       const built = operationDockerTarget();
-      // The next worker on the engine starts in a new container of the relay, from the new image (the open connection
-      // keeps its streams); every remote engine when the engine of the build is not known.
-      if (built === undefined) relayConnections.retireAll();
-      else if (built.kind === 'remote') relayConnections.retireAll(built.host);
+      // After the build of a missing tag, the next worker on the engine starts in a new container of the relay, from the
+      // new image (the open connection keeps its streams); every remote engine when the engine of the build is not
+      // known. A rebuild of the same tag does not end the connection for new workers: it ran through that connection,
+      // which needs no new login, and its container runs the same tag (a new worker starts there only within an hour of
+      // its open, RELAY_WORKER_MAX_AGE_MS).
+      if (kind === 'create' && built === undefined) relayConnections.retireAll();
+      else if (kind === 'create' && built?.kind === 'remote') relayConnections.retireAll(built.host);
       // A Stop or a Delete of a devspace that the user kept on an engine with the removal mark builds it there again.
       if (built !== undefined) void engineRemoved(built).then((removed) => (removed ? logger.info(removedEngineImageNote(describeDockerHost(built.host))) : undefined));
     },
@@ -576,14 +586,22 @@ async function activateExtension(
   // within 10 minutes (a Start, Stop or Delete builds it at once, as before). The build is the one of Start, Stop and
   // Delete (the preparation of their worker, `prepare` below, without the maintenance of an open: the same Dockerfile,
   // tag and privileges, and the window's shared build, which a Start at the same time joins); only when the engine
-  // answers (as the background prebuild: Docker is never started, a remote host gets the SSH check without questions
-  // first). Shown in the status bar; then the sidebar refreshes.
+  // answers (as the background prebuild: Docker is never started). On an SSH host, only while the connection of the
+  // relay of this window to the host is open, and only through it, without a login of its own (docs/requirements.md
+  // R-ENG-002): otherwise the next Start, Stop or Delete there builds it. Shown in the status bar; then the sidebar
+  // refreshes.
+  const isSshHost = (target: DockerTarget): boolean => target.kind === 'remote' && hostAccessOf(target.host)?.kind === 'ssh';
   const helperBuilds = new MissingHelperBuild({
     engineAnswers: (target, signal) =>
       runWithDockerTarget(target, () =>
-        dockerEngineAnswers(target, engineAnswersDeps(), signal),
+        dockerEngineAnswers(target, { ...engineAnswersDeps(), connected: (host) => hostPipes?.dockerHost(host) !== undefined }, signal),
       ),
-    build: (target, signal) => heartbeats.prepareWorker(target, signal),
+    build: (target, signal) => {
+      if (!isSshHost(target)) return heartbeats.prepareWorker(target, signal);
+      // A call that would log in stops the build (as a cancel, so a Start that joined it builds for itself).
+      const withoutLogin = new AbortController();
+      return runWithDockerTarget(target, () => heartbeats.prepareWorker(target, AbortSignal.any([signal, withoutLogin.signal])), { withoutLogin });
+    },
     progress: (target, work) =>
       Promise.resolve(
         vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: `Devspaces: preparing ${describeDockerHost(target.host)}…` }, work),
@@ -1381,13 +1399,17 @@ async function activateExtension(
   // With updateImagesOnConnect on, it also runs when helper.json says that the refresh of the helper image is due (the
   // rebuild that a check asked for, the weekly check), never for the daily cleanup alone; its maintaining ensure then
   // also runs the cleanup when that is due. On the Docker engine of the current Docker context, local or remote alike,
-  // as an operation on it (the state file and engine key of an open there); a remote host gets our own SSH check
-  // without questions before its `docker info` (dockerEngineAnswers). A host switch starts no new prebuild: the next
+  // as an operation on it (the state file and engine key of an open there); the WSL distribution gets the start of its
+  // shell before its `docker info` (dockerEngineAnswers), and an SSH host is prepared only through the connection of
+  // this window to it, when that connection is open (`connection`). A host switch starts no new prebuild: the next
   // activation, or the first open on that host, builds its tag.
   const helperPrebuild = new HelperPrebuild({
     helper,
     dockerRunning: (target, signal) =>
       dockerEngineAnswers(target, engineAnswersDeps(), signal),
+    // On an SSH host, it waits for the connection of the relay of this window to the host, and runs only through it
+    // (docs/requirements.md R-ENG-002).
+    connection: (host, signal) => (hostPipes === undefined ? Promise.reject(abortError()) : hostPipes.whenDockerHost(host, signal)),
     dockerfilePath: context.asAbsolutePath(path.join('resources', 'helper', 'Dockerfile')),
     statePath: paths.helperState,
     // The setting decides the check of the base image and the rebuild, not the cleanup.

@@ -42,6 +42,8 @@ export function podmanDockerTarget(detail: string): DockerTarget {
 interface OperationScope {
   target: DockerTarget;
   active: boolean;
+  /** See runWithDockerTarget, `withoutLogin`. */
+  withoutLogin?: AbortController;
 }
 
 const operationTargets = new AsyncLocalStorage<OperationScope>();
@@ -57,9 +59,26 @@ export function outsideOperation<T>(fn: () => Promise<T>): Promise<T> {
   return operationTargets.exit(fn);
 }
 
-/** Runs `fn` as an operation on `target` (see the module comment). */
-export async function runWithDockerTarget<T>(target: DockerTarget, fn: () => Promise<T>): Promise<T> {
-  const scope: OperationScope = { target, active: true };
+/**
+ * The stop of the work in the background on an SSH host that runs now, if any (runWithDockerTarget, `withoutLogin`):
+ * BootstrapDocker refuses each of its Docker calls that would log in to the host.
+ */
+export function operationWithoutLogin(): AbortController | undefined {
+  const scope = operationTargets.getStore();
+  return scope?.active ? scope.withoutLogin : undefined;
+}
+
+/**
+ * Runs `fn` as an operation on `target` (see the module comment). `withoutLogin`: the work in the background on an SSH
+ * host (docs/requirements.md R-ENG-002), whose Docker calls go only through the connection of the relay of this window
+ * to the host (the Docker pipe of the extension) and never log in themselves. BootstrapDocker refuses a call that would
+ * log in (`ssh://<host>`, or the shell before the relay): it aborts this controller, whose signal the work passes on to
+ * its calls, and throws an AbortError. An operation on the same host within such work stays without a login.
+ */
+export async function runWithDockerTarget<T>(target: DockerTarget, fn: () => Promise<T>, options: { withoutLogin?: AbortController } = {}): Promise<T> {
+  const outer = operationTargets.getStore();
+  const withoutLogin = options.withoutLogin ?? (outer?.active === true && outer.target.host === target.host ? outer.withoutLogin : undefined);
+  const scope: OperationScope = { target, active: true, ...(withoutLogin !== undefined ? { withoutLogin } : {}) };
   try {
     return await operationTargets.run(scope, fn);
   } finally {

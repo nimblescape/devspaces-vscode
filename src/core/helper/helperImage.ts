@@ -199,6 +199,15 @@ export interface EnsureHelperImageOptions {
   /** Called right before a build of the helper image. */
   onBuild?: (kind: HelperBuildKind) => void;
   /**
+   * Whether the maintenance may change the engine now (default true): the rebuild that a check asked for, and the
+   * cleanup. Asked right before each of them. On an SSH host they run only through the connection of the relay of this
+   * window to the host (docs/requirements.md R-ENG-002): before that connection is open, they are put off (the record
+   * keeps the rebuild that was asked, and the cleanup stays due), and the background prebuild runs them through it.
+   */
+  mayChangeEngine?: () => boolean;
+  /** Called when mayChangeEngine put off the rebuild that a check asked for, or the cleanup that was due. */
+  onPutOff?: () => void;
+  /**
    * Called with the check of the base image when it starts. It runs in the background, after this function returned; the
    * promise never rejects (for tests, and for callers that want to wait for it).
    */
@@ -237,14 +246,16 @@ interface Maintenance {
  *   registry cannot be reached, or when the build with `--pull` fails (for example the pull limit of Docker Hub): the
  *   local base image and the build cache may still build it, and the next check that reaches the registry asks for a
  *   rebuild from the current base image.
- * - `maintain` (not for the helper runs): a rebuild that an earlier check asked for runs now, with `--pull --no-cache`;
- *   the previous image is then removed if it has no tag anymore. A failed rebuild keeps the existing image (so does one
+ * - `maintain` (not for the helper runs): a rebuild that an earlier check asked for runs now, with `--pull --no-cache`
+ *   (unless `mayChangeEngine` puts it off); the previous image is then removed if it has no tag anymore. A failed
+ *   rebuild keeps the existing image (so does one
  *   that takes longer than HELPER_REBUILD_TIMEOUT_MS, or that a time limit of the caller ends; a cancel of the caller
  *   is an abort). When the check of the base image is due (7 days after the last answer of the registry, a day after an
  *   attempt without an answer), it starts in the background, under its own time limit: this function does not wait for
  *   it. It compares the registry digest of the base image with the recorded one; a change asks the next ensure for a
  *   rebuild.
- * - `lastUsedAt` of the tag is written (at most once per hour); with `maintain`, the cleanup runs (at most once per day).
+ * - `lastUsedAt` of the tag is written (at most once per hour); with `maintain`, the cleanup runs (at most once per day;
+ *   not while `mayChangeEngine` puts it off).
  * - When the missing tag cannot be built, the error of the build is thrown; no other helper image is used in its place.
  * Problems of the check, the state file, and the cleanup are logged and never make this function fail.
  */
@@ -412,9 +423,14 @@ async function ensureWithState(m: Maintenance): Promise<HelperImageUse> {
     currentId = builtId ?? (await imageIdQuietly(m));
     change = builtId === undefined ? created.change : (record) => ({ ...created.change(record), imageId: builtId });
   } else if (maintain && checkBaseImage && m.baseImage !== undefined && isRebuildAsked(recorded)) {
-    const rebuilt = await rebuild(m, m.baseImage, recorded, recorded.latestBaseDigest, currentId);
-    change = rebuilt.change;
-    currentId = rebuilt.currentId;
+    if (mayChangeEngine(m)) {
+      const rebuilt = await rebuild(m, m.baseImage, recorded, recorded.latestBaseDigest, currentId);
+      change = rebuilt.change;
+      currentId = rebuilt.currentId;
+    } else {
+      m.logger.info(`The workspace helper image ${tag} is built again later, through the connection of this window to the Docker host. The existing image is used.`);
+      options.onPutOff?.();
+    }
   }
   // `imageId` comes only from a build or rebuild of this installation: a record without it gets none here (another
   // installation may have built the image that the tag has now).
@@ -431,7 +447,10 @@ async function ensureWithState(m: Maintenance): Promise<HelperImageUse> {
     });
   }
   // Without the ID of the current image, nothing is removed.
-  if (maintain && currentId !== undefined) await cleanUpIfDue(m, currentId);
+  if (maintain && currentId !== undefined) {
+    if (mayChangeEngine(m)) await cleanUpIfDue(m, currentId);
+    else if (isCleanupDue(await readHelperState(m.statePath), m.clock.now())) options.onPutOff?.();
+  }
   if (check && m.baseImage !== undefined) {
     const baseImage = m.baseImage;
     const done = check
@@ -442,6 +461,11 @@ async function ensureWithState(m: Maintenance): Promise<HelperImageUse> {
     options.onBaseImageCheck?.(done);
   }
   return withId(tag, currentId);
+}
+
+/** EnsureHelperImageOptions.mayChangeEngine: true without it. */
+function mayChangeEngine(m: Maintenance): boolean {
+  return m.options.mayChangeEngine?.() !== false;
 }
 
 /** The weekly check of the base image is due: 7 days after the last answer of the registry, a day after an attempt. */

@@ -299,4 +299,36 @@ describe('HostPipes', () => {
     }
     expect(new Set(ids).size).toBe(2);
   });
+
+  // The work in the background on an SSH host waits for the connection of this window to the host (R-ENG-002).
+  it('whenDockerHost resolves at once while the pipe serves an open connection, else at the serve after the connection', async () => {
+    const folder = base();
+    let connection: RelayConnection | undefined;
+    const hostPipes = pipes({ base: () => folder, relayConnection: (host) => (host === 'build-box' ? connection : undefined) });
+    let ready = false;
+    const waiting = hostPipes.whenDockerHost('build-box', new AbortController().signal).then(() => (ready = true));
+    // A serve without a connection (the pipe listens, but the calls would log in) does not end the wait.
+    await hostPipes.serve('build-box');
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    // The connection became the current one (RelayConnections.use, which serves the pipe again).
+    connection = echoRelay();
+    await hostPipes.serve('build-box');
+    await waiting;
+    expect(ready).toBe(true);
+    await expect(hostPipes.whenDockerHost('build-box', new AbortController().signal)).resolves.toBeUndefined();
+  });
+
+  it('whenDockerHost rejects with an AbortError at the abort of its signal and when the window closes', async () => {
+    const folder = base();
+    const hostPipes = pipes({ base: () => folder });
+    const stop = new AbortController();
+    const first = hostPipes.whenDockerHost('build-box', stop.signal);
+    const second = hostPipes.whenDockerHost('build-box', new AbortController().signal);
+    stop.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    hostPipes.dispose();
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(hostPipes.whenDockerHost('build-box', new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });

@@ -10,7 +10,8 @@
 // helperFailed. It runs on the Docker engine of the current Docker context, local or remote alike. With the setting
 // updateImagesOnConnect on, it also runs when the refresh of the helper image is due (the rebuild that a check asked
 // for, the weekly check of the base image), and its maintaining ensure then also runs the daily cleanup when that is due;
-// the cleanup alone never makes it run.
+// the cleanup alone never makes it run. On an SSH host it waits for the connection of the relay of this window to the host,
+// and runs only through it, without a login of its own (docs/requirements.md R-ENG-002).
 import * as fs from 'fs';
 import { LOCAL_DOCKER_TARGET, describeDockerHost, hostAccessOf, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
 import { runWithDockerTarget } from '../docker/dockerTargets';
@@ -26,9 +27,11 @@ import { helperStatePathFor, type HelperImages } from './helperImages';
  * `unsupported`: the Docker endpoint is neither local nor SSH (a remote SSH host is prebuilt too); `dockerNotRunning`:
  * the Docker engine does not answer; `built`: the tag was missing and was built; `present`: the tag exists (also after
  * the maintenance that was due, a rebuild that failed keeping the existing image); `failed`: the build failed (the
- * next open tries again); `cancelled`: dispose ended it.
+ * next open tries again); `cancelled`: dispose ended it; `connectionEnded`: on an SSH host, the connection of this
+ * window to the host ended before the prebuild was done, and the prebuild does not log in itself (the next open, or
+ * the next prebuild, prepares the image).
  */
-export type HelperPrebuildOutcome = 'notDue' | 'unsupported' | 'dockerNotRunning' | 'built' | 'present' | 'failed' | 'cancelled';
+export type HelperPrebuildOutcome = 'notDue' | 'unsupported' | 'dockerNotRunning' | 'built' | 'present' | 'failed' | 'cancelled' | 'connectionEnded';
 
 /**
  * The time limit of a prebuild, on every engine. Nobody can cancel the background prebuild, and an open that joins its
@@ -56,6 +59,15 @@ export interface HelperPrebuildDeps {
    * Never throws, except an AbortError.
    */
   dockerRunning: (target: DockerTarget, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * For an SSH host (hostAccessOf: `ssh`): resolves when a connection of the relay of this window to `host` is open and
+   * the Docker pipe of the extension serves it (HostPipes.whenDockerHost); rejects with an AbortError when `signal`
+   * aborts. With it, the prebuild on an SSH host waits for that connection without a time limit (the work of the
+   * prebuild has its time limit after it), asks nothing before it (no SSH check, no `docker info`: the connection
+   * passed its checks), and its Docker calls go only through that connection (runWithDockerTarget, `withoutLogin`).
+   * Without it, the prebuild on an SSH host checks the host with dockerRunning and may log in itself.
+   */
+  connection?: (host: string, signal: AbortSignal) => Promise<void>;
   /** resources/helper/Dockerfile of the installed extension: its content gives the current helper tag. */
   dockerfilePath: string;
   /**
@@ -75,6 +87,14 @@ export interface DockerEngineAnswersDeps {
   /** For the SSH check before a remote host (checkSshLogin). */
   ssh: SshCheckDeps;
   /**
+   * For the work in the background on an SSH host (the build of a missing helper image that the refresh of the sidebar
+   * asks for): whether a connection of the relay of this window to `host` is open, with the Docker pipe of the extension
+   * (HostPipes.dockerHost). With it, an SSH host answers exactly when that connection is open (its engine passed the
+   * checks of that connection), and nothing logs in to the host (docs/requirements.md R-ENG-002). Without it, the SSH
+   * check and `docker info` decide, and both may log in.
+   */
+  connected?: (host: string) => boolean;
+  /**
    * Whether a call on the engine of the Docker host `host` must not run now, because it would start a WSL distribution
    * that does not run (WslLifetime.leavesStopped). False when not given.
    */
@@ -83,7 +103,8 @@ export interface DockerEngineAnswersDeps {
 }
 
 /**
- * Whether the Docker engine of `target` answers, for the prebuild; Docker is never started for it.
+ * Whether the Docker engine of `target` answers, for the work in the background; Docker is never started for it. An SSH
+ * host with `connected`: whether the connection of this window to it is open, and nothing else.
  * The local Docker: `docker info`. A remote host: first our own `ssh -o BatchMode=yes` (checkSshLogin, a success of the
  * last minute counts), so no password, passphrase or host key is ever asked, also on Windows where the ssh of the Docker
  * CLI could ask on a hidden console; then `docker info` in the context of the operation with the time limit
@@ -99,6 +120,11 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
     case 'unsupported':
       return false;
     case 'remote': {
+      if (deps.connected !== undefined && hostAccessOf(target.host)?.kind === 'ssh') {
+        if (deps.connected(target.host)) return true;
+        deps.logger.info(`The work in the background does not reach ${target.host} now: it uses only the connection of this window to the host, and that connection is not open.`);
+        return false;
+      }
       if (await deps.leavesStopped?.(target.host)) return false;
       const login = await checkSshLogin(target.host, deps.ssh, { signal });
       if (!login.ok) {
@@ -131,7 +157,11 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
  * for housekeeping. It runs on the Docker engine of the target that `start` gets, local or remote alike (it runs as an
  * operation on it, so the engine key, the state file and every Docker call are those of an open on that engine), and
  * only when that engine answers (Docker is never started for this; a WSL distribution only while its Monitor runs
- * permanently). The ensure is the maintaining one of HelperImages.prebuildImage (it builds a missing tag, runs the
+ * permanently). On an SSH host (with HelperPrebuildDeps.connection), it waits, when it is due, for the connection of the
+ * relay of this window to the host, and its Docker calls go only through it: it never logs in itself
+ * (docs/requirements.md R-ENG-002). A missing tag is then built by the next open, before its connection (the container
+ * of the connection runs the helper image), and the prebuild finds the record afterwards. The ensure is the
+ * maintaining one of HelperImages.prebuildImage (it builds a missing tag, runs the
  * rebuild itself so that the next open does not wait for it, starts the check, and runs the cleanup when that is due
  * too), shared with the preparation of a worker in the same window, so one that needs the missing tag meanwhile never
  * builds a second time, and one before an open joins the rebuild. There is no lock across windows (a lock left behind by a window that closed during the prebuild would block
@@ -142,6 +172,11 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
 export class HelperPrebuild {
   private readonly controller = new AbortController();
   private readonly limit = new AbortController();
+  /**
+   * On an SSH host (HelperPrebuildDeps.connection): aborted when a Docker call of the prebuild would log in to the host,
+   * because the connection of this window to it ended (BootstrapDocker, runWithDockerTarget with `withoutLogin`).
+   */
+  private readonly withoutLogin = new AbortController();
   private run: Promise<HelperPrebuildOutcome> | undefined;
   /** The target of the prebuild that `start` began, while it runs. */
   private running: DockerTarget | undefined;
@@ -155,13 +190,22 @@ export class HelperPrebuild {
   start(target: DockerTarget = LOCAL_DOCKER_TARGET): Promise<HelperPrebuildOutcome> {
     if (this.run !== undefined) return this.run;
     this.running = target;
-    this.run = runWithDockerTarget(target, () => this.prebuild(target))
+    // An SSH host: only through the connection of this window to it (HelperPrebuildDeps.connection).
+    const throughConnection = this.deps.connection !== undefined && target.kind === 'remote' && hostAccessOf(target.host)?.kind === 'ssh';
+    this.run = runWithDockerTarget(target, () => this.prebuild(target, throughConnection), throughConnection ? { withoutLogin: this.withoutLogin } : {})
       .catch((error: unknown) => {
         if (this.limit.signal.aborted && !this.controller.signal.aborted) {
           this.deps.logger.warn('The workspace helper image was not ready within the time limit of the background preparation; the next open prepares it.');
           return 'failed' as const;
         }
-        if (this.controller.signal.aborted || isAbortError(error)) return 'cancelled' as const;
+        if (this.controller.signal.aborted) return 'cancelled' as const;
+        if (this.withoutLogin.signal.aborted) {
+          this.deps.logger.info(
+            `The background preparation of the workspace helper image on ${target.host} stopped: the connection of this window to the host ended, and the work in the background does not log in itself. The next open prepares the image.`,
+          );
+          return 'connectionEnded' as const;
+        }
+        if (isAbortError(error)) return 'cancelled' as const;
         this.deps.logger.warn(`The workspace helper image could not be prepared in the background: ${errorMessage(error)}`);
         return 'failed' as const;
       })
@@ -188,30 +232,42 @@ export class HelperPrebuild {
     await this.run;
   }
 
-  private async prebuild(target: DockerTarget): Promise<HelperPrebuildOutcome> {
+  /**
+   * `throughConnection` (an SSH host with HelperPrebuildDeps.connection): when the prebuild is due, it first waits for
+   * the connection of this window to the host, without a time limit; the time limit starts after it.
+   */
+  private async prebuild(target: DockerTarget, throughConnection: boolean): Promise<HelperPrebuildOutcome> {
     const { deps } = this;
+    if (throughConnection && deps.connection !== undefined) {
+      const waiting = this.controller.signal;
+      if (!(await this.isDue(waiting))) return waiting.aborted ? 'cancelled' : 'notDue';
+      deps.logger.info(`The workspace helper image on ${target.host} is prepared in the background through the connection of this window to the host, when that connection is open.`);
+      await deps.connection(target.host, waiting);
+    }
     // A time limit, not a cancel, so a rebuild that it ends counts as a failed one.
     const timer = setTimeout(
       () => this.limit.abort(helperTimeLimit('The time limit of the background preparation of the workspace helper image ended.')),
       deps.timeoutMs ?? HELPER_PREBUILD_TIMEOUT_MS,
     );
     try {
-      return await this.prebuildWithin(target, AbortSignal.any([this.controller.signal, this.limit.signal]));
+      return await this.prebuildWithin(target, AbortSignal.any([this.controller.signal, this.limit.signal, this.withoutLogin.signal]), throughConnection);
     } finally {
       clearTimeout(timer);
     }
   }
 
-  private async prebuildWithin(target: DockerTarget, signal: AbortSignal): Promise<HelperPrebuildOutcome> {
+  private async prebuildWithin(target: DockerTarget, signal: AbortSignal, throughConnection: boolean): Promise<HelperPrebuildOutcome> {
     const { deps } = this;
     if (target.kind === 'unsupported') {
       deps.logger.info(`The workspace helper image is not prepared in the background. ${unsupportedTargetReason(target)}`);
       return 'unsupported';
     }
+    // Again after the wait for the connection: another window may have done it meanwhile.
     if (!(await this.isDue(signal))) return signal.aborted ? 'cancelled' : 'notDue';
     if (signal.aborted) return 'cancelled';
-    // A remote host is prebuilt like the local Docker.
-    if (!(await deps.dockerRunning(target, signal))) {
+    // A remote host is prebuilt like the local Docker. Through the connection, the engine passed the checks of that
+    // connection, and nothing is asked that could log in.
+    if (!throughConnection && !(await deps.dockerRunning(target, signal))) {
       deps.logger.info('The workspace helper image is not prepared in the background: Docker is not running. It is prepared at the next open.');
       return 'dockerNotRunning';
     }
