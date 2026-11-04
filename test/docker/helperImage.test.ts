@@ -24,7 +24,7 @@ import {
 import { readHelperState, updateHelperState } from '../../src/core/helper/helperState';
 import { HelperImages, type HelperImageDocker } from '../../src/core/helper/helperImages';
 import { ImageChecker } from '../../src/core/imageCheck/imageCheck';
-import { LABEL_HELPER } from '../../src/core/names';
+import { LABEL_HELPER, LABEL_HELPER_BASE_DIGEST } from '../../src/core/names';
 import { NodeProcessRunner } from '../../src/core/process';
 import { TEST_BASE_IMAGE, TEST_RUN_LABEL, removeRunObjects } from './dockerRun';
 import { Timings, dockerTestContext, registryClient, registryDigest, registryTransport } from './harness';
@@ -155,7 +155,12 @@ describe('workspace helper image: weekly refresh and daily cleanup', () => {
 
     expect(docker.builds).toEqual([{ tag, pull: true, noCache: false }]);
     expect(lookups).toEqual([TEST_BASE_IMAGE]);
-    expect(cli.image(tag)?.Config.Labels).toMatchObject({ [LABEL_HELPER]: 'true', [TEST_RUN_LABEL]: run.runId });
+    // The digest of the base image that the build pulled, which the Monitor compares (src/remoteMonitor/helperRefresh.ts).
+    expect(cli.image(tag)?.Config.Labels).toMatchObject({
+      [LABEL_HELPER]: 'true',
+      [LABEL_HELPER_BASE_DIGEST]: await registryDigest(digestChecker, TEST_BASE_IMAGE),
+      [TEST_RUN_LABEL]: run.runId,
+    });
     const state = await readHelperState(statePath);
     expect(state.images[tag]).toMatchObject({
       baseImage: TEST_BASE_IMAGE,
@@ -205,6 +210,7 @@ describe('workspace helper image: weekly refresh and daily cleanup', () => {
     const currentId = cli.image(tag)?.Id;
     expect(currentId).toBeDefined();
     expect(currentId).not.toBe(previousId);
+    expect(cli.image(tag)?.Config.Labels?.[LABEL_HELPER_BASE_DIGEST]).toBe(await registryDigest(digestChecker, TEST_BASE_IMAGE));
     // With the classic image store, the previous image is dangling now and the helper removes it; the containerd image
     // store removes it itself when the tag moves.
     expect(cli.image(previousId!)).toBeUndefined();
