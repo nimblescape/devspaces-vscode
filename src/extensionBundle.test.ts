@@ -66,6 +66,8 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'wslAfterInstall.ts',
     // The weekly upgrade of the packages of the WSL distribution of Devspaces.
     'wslUpgrade.ts',
+    // The Docker CLI in the WSL distribution of Devspaces, for the build of the helper image there with its buildx.
+    'wslDockerCli.ts',
   ],
   // missingHelperBuild.ts: the background build of a helper image that the refresh found missing.
   'src/core/helper': ['analysisLimits.ts', 'batchStepKinds.ts', 'helperImage.ts', 'helperImageBuild.ts', 'helperImages.ts', 'helperPrebuild.ts', 'helperState.ts', 'missingHelperBuild.ts'],

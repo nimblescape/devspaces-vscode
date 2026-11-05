@@ -205,10 +205,10 @@ export interface BootstrapDockerOptions {
   sshEnv?: (host: string, env: NodeJS.ProcessEnv) => void;
   /**
    * The Docker CLI on the computer of the remote engine `target`, where Devspaces runs it without a login: a function
-   * that runs `docker <args>` there and resolves as ProcessRunner.run (the WSL distribution of Devspaces: `wsl.exe -d
-   * <distribution> -u root --cd / --exec docker <args>`). Undefined for another host (an SSH host). buildImage builds
-   * there when that Docker CLI has buildx, so that the build uses BuildKit also when the Docker CLI here has no buildx
-   * (the Docker CLI of Devspaces).
+   * that runs `docker <args>` there and resolves as ProcessRunner.run (the WSL distribution of Devspaces: wslDockerCli,
+   * `wsl.exe -d <distribution> -u root --cd / --exec env DEVSPACES_RUN=<mark> docker <args>`). Undefined for another
+   * host (an SSH host). buildImage builds there when that Docker CLI has buildx, so that the build uses BuildKit also
+   * when the Docker CLI here has no buildx (the Docker CLI of Devspaces).
    */
   hostCli?: (target: DockerTarget) => HostDockerCli | undefined;
   /** Only for tests. Default: SSH_DROP_RETRY_DELAY_MS. */
@@ -858,8 +858,9 @@ export class BootstrapDocker {
     const flagText = flags.length > 0 ? ` (${flags.join(' ')})` : '';
     const onOutput = options.onOutput ?? ((text: string) => this.logger.output(text));
     const buildLabel = `${LABEL_BUILD_ID}=${crypto.randomBytes(16).toString('hex')}`;
-    const build = (dockerfile: string, context: string): string[] => [
+    const build = (dockerfile: string, context: string, builder: string[] = []): string[] => [
       'build',
+      ...builder,
       '-t',
       options.tag,
       '-f',
@@ -872,14 +873,25 @@ export class BootstrapDocker {
       context,
     ];
     const onHost = await this.hostBuilder(options.dockerfile, options.context, options.signal);
-    if (onHost === undefined) {
+    let built = false;
+    if (onHost !== undefined) {
+      this.logger.info(`Building image ${options.tag}${flagText} on ${onHost.host} with its Docker CLI and ${onHost.buildx} (BuildKit).`);
+      // The builder of the engine there (the docker driver, `--builder default`), which keeps the image in the engine,
+      // also when `docker buildx use` chose another builder there.
+      const args = build(path.basename(options.dockerfile), '-', ['--builder', 'default']);
+      try {
+        const result = await this.logged(args, () => onHost.run(args, { input: onHost.context, signal: options.signal, onStdout: onOutput, onStderr: onOutput }));
+        if (result.exitCode !== 0) throw this.commandError(args, result);
+        built = true;
+      } catch (error) {
+        // A build that ran there and failed is the result. Only a Docker CLI there that did not start builds here.
+        if (isAbortError(error) || error instanceof CommandError) throw error;
+        this.logger.warn(`The Docker CLI on ${onHost.host} could not be started, so the image is built from this computer, as before: ${errorMessage(error)}`);
+      }
+    }
+    if (!built) {
       this.logger.info(`Building image ${options.tag}${flagText}.`);
       await this.runChecked(build(options.dockerfile, options.context), { signal: options.signal, onStdout: onOutput, onStderr: onOutput });
-    } else {
-      this.logger.info(`Building image ${options.tag}${flagText} on ${onHost.host} with its Docker CLI and ${onHost.buildx} (BuildKit).`);
-      const args = build(path.basename(options.dockerfile), '-');
-      const result = await this.logged(args, () => onHost.run(args, { input: onHost.context, signal: options.signal, onStdout: onOutput, onStderr: onOutput }));
-      if (result.exitCode !== 0) throw this.commandError(args, result);
     }
     let images: ImageInfo[];
     try {

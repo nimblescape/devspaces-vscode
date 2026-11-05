@@ -10,7 +10,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-/** The size of a header block, and of the blocks that the data is padded to (TAR_BLOCK_BYTES of tarFile.ts, the reader of the worker). */
+/**
+ * The size of a header block, and of the blocks that the data is padded to: TAR_BLOCK_BYTES of tarFile.ts, not imported,
+ * so that the bundle of the extension does not hold that reader of the worker.
+ */
 const BLOCK = 512;
 /** The longest name of a file in the header of the archive (ustar, without the prefix field). */
 const MAX_NAME_BYTES = 100;
@@ -43,22 +46,28 @@ function header(name: string, size: number): Buffer {
 }
 
 /**
- * The regular files at the top of `folder` as a tar archive (ustar), sorted by name; folders and links in it are left
- * out. Throws for a name that is not ASCII or longer than 100 bytes, and for a context larger than 1 MiB.
+ * The files at the top of `folder` as a tar archive (ustar), sorted by name; a link to a file is packed as that file.
+ * Throws for anything else in the folder (a folder, or a link to one), which the archive does not hold, for a name that
+ * is not ASCII or longer than 100 bytes, and for a context larger than 1 MiB (checked before the files are read).
  */
 export async function contextTar(folder: string): Promise<Buffer> {
-  const entries = await fs.promises.readdir(folder, { withFileTypes: true });
-  const names = entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => entry.name)
-    .sort();
-  const parts: Buffer[] = [];
+  const names = (await fs.promises.readdir(folder)).sort();
+  const tooLarge = (): Error => new Error(`The build context ${folder} is larger than ${MAX_CONTEXT_BYTES} bytes.`);
   let total = 0;
   for (const name of names) {
     if (!/^[\x20-\x7e]+$/.test(name) || name.length > MAX_NAME_BYTES) throw new Error(`The build context has a file whose name a tar header cannot hold: ${name}`);
+    const stat = await fs.promises.stat(path.join(folder, name));
+    if (!stat.isFile()) throw new Error(`The build context ${folder} has ${name}, which is not a file: only the files at the top of the folder are packed.`);
+    total += stat.size;
+    if (total > MAX_CONTEXT_BYTES) throw tooLarge();
+  }
+  const parts: Buffer[] = [];
+  total = 0;
+  for (const name of names) {
     const content = await fs.promises.readFile(path.join(folder, name));
+    // Again for the content, which can have grown since its size was read.
     total += content.length;
-    if (total > MAX_CONTEXT_BYTES) throw new Error(`The build context ${folder} is larger than ${MAX_CONTEXT_BYTES} bytes.`);
+    if (total > MAX_CONTEXT_BYTES) throw tooLarge();
     parts.push(header(name, content.length), content, Buffer.alloc((BLOCK - (content.length % BLOCK)) % BLOCK, 0));
   }
   // The end of the archive: two empty blocks.

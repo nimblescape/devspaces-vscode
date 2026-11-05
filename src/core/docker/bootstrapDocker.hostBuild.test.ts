@@ -116,6 +116,8 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     const build = host.calls[1];
     expect(withoutBuildLabel(build.args)).toEqual([
       'build',
+      '--builder',
+      'default',
       '-t',
       'devspaces-worker:abc',
       '-f',
@@ -205,6 +207,16 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     expect(hostCli).toHaveBeenCalledTimes(1);
     expect(host.calls).toEqual([]);
     expect(calls.filter((call) => call.args[0] === 'build')).toHaveLength(4);
+  });
+
+  it('builds here as before when the Docker CLI there could not be started for the build', async () => {
+    const { runner, calls } = localRunner();
+    const host = hostCliOf((call) => (call.args[0] === 'buildx' ? ok(BUILDX_VERSION) : Promise.reject(new Error('spawn wsl.exe ENOENT'))));
+    const { logger, warnings } = recordingLogger();
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'win32', { dockerPipe, hostCli: () => host.cli });
+    expect(await runWithDockerTarget(WSL, () => docker.buildImage(buildOptions()))).toBe(`sha256:${'a'.repeat(64)}`);
+    expect(warnings).toEqual([`The Docker CLI on ${WSL_HOST} could not be started, so the image is built from this computer, as before: spawn wsl.exe ENOENT`]);
+    expect(calls.filter((call) => call.args[0] === 'build').map((call) => call.args.at(-1))).toEqual([folder]);
   });
 
   it('throws CommandError when the build there fails, and builds nothing here', async () => {

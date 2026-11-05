@@ -43,13 +43,11 @@ describe('contextTar', () => {
     await fs.promises.rm(folder, { recursive: true, force: true });
   });
 
-  it('packs the regular files at the top of the folder, sorted by name, without folders', async () => {
+  it('packs the files at the top of the folder, sorted by name', async () => {
     await fs.promises.writeFile(path.join(folder, 'Dockerfile'), 'FROM debian:trixie-slim\nCOPY Dockerfile /Dockerfile\n');
     await fs.promises.writeFile(path.join(folder, '.dockerignore'), '*\n!Dockerfile\n');
     await fs.promises.writeFile(path.join(folder, 'empty'), '');
     await fs.promises.writeFile(path.join(folder, 'block'), Buffer.alloc(512, 0x61));
-    await fs.promises.mkdir(path.join(folder, 'sub'));
-    await fs.promises.writeFile(path.join(folder, 'sub', 'inner'), 'not packed');
     const archive = await contextTar(folder);
     const packed = entries(archive);
     expect(packed.map((entry) => entry.name)).toEqual(['.dockerignore', 'Dockerfile', 'block', 'empty']);
@@ -60,6 +58,29 @@ describe('contextTar', () => {
     expect(archive.subarray(archive.length - 1024).every((byte) => byte === 0)).toBe(true);
     // The reader of the extension takes the first entry: its checksum and its fields are valid.
     expect(firstTarFile(archive, { name: '.dockerignore', maxBytes: 1024 })?.toString('utf8')).toBe('*\n!Dockerfile\n');
+  });
+
+  it('refuses a folder in the folder, which the archive does not hold', async () => {
+    await fs.promises.writeFile(path.join(folder, 'Dockerfile'), 'FROM scratch\n');
+    await fs.promises.mkdir(path.join(folder, 'sub'));
+    await expect(contextTar(folder)).rejects.toThrow(/has sub, which is not a file/);
+  });
+
+  // Windows creates a link only with the right to create links (or the developer mode).
+  it.skipIf(process.platform === 'win32')('packs a link to a file as that file, and refuses a link to a folder', async () => {
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'devspaces-context-target-'));
+    try {
+      await fs.promises.writeFile(path.join(outside, 'Dockerfile'), 'FROM scratch\n');
+      await fs.promises.symlink(path.join(outside, 'Dockerfile'), path.join(folder, 'Dockerfile'));
+      const [entry] = entries(await contextTar(folder));
+      expect(entry.name).toBe('Dockerfile');
+      expect(entry.data.toString('utf8')).toBe('FROM scratch\n');
+      expect(text(entry.header, 156, 1)).toBe('0');
+      await fs.promises.symlink(outside, path.join(folder, 'linked'));
+      await expect(contextTar(folder)).rejects.toThrow(/has linked, which is not a file/);
+    } finally {
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it('gives each file the mode 0644, the owner 0, the time 0, the kind of a regular file and the ustar mark', async () => {
