@@ -380,9 +380,11 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
 
   it('builds with `docker build` when the Dockerfile is not at the top of its context folder', async () => {
     const { runner, calls } = runnerOf();
-    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', {});
+    const { logger, warnings } = recordingLogger();
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', {});
     await docker.buildImage(buildOptions({ context: os.tmpdir() }));
     expect(calls.map((call) => call.args[0])).toEqual(['build', 'image', 'image']);
+    expect(warnings).toEqual([expect.stringMatching(/is not at the top of its build context .*, so the image is built with `docker build`\.$/)]);
   });
 
   it('removes the name of its own pull of the build image when the tag fails, and builds with `docker build`', async () => {

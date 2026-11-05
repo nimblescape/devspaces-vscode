@@ -11,6 +11,7 @@
 // and "Remove Devspaces from This Docker Engine…" know it by its name. No `vscode`.
 import { isRecord } from '../valueChecks';
 import { LABEL_BUILD_RUN } from '../names';
+import { compareVersions } from '../vscodeExtensions';
 import pin from './buildxPin.json';
 
 /** The pin of the build image: the version of buildx, the repository of docker/buildx-bin, and the digest of its index. */
@@ -57,24 +58,16 @@ export function buildxImageTags(items: readonly unknown[]): Array<{ id: string; 
   );
 }
 
-/** The version x.y.z of a tag of BUILDX_REPOSITORY, as three numbers; undefined for another tag. */
-function versionOf(tag: string): [number, number, number] | undefined {
-  const match = new RegExp(`^${BUILDX_REPOSITORY}:(\\d+)\\.(\\d+)\\.(\\d+)$`).exec(tag);
-  return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
-}
+/** A tag x.y.z of BUILDX_REPOSITORY, with the version as group 1. */
+const BUILDX_VERSION_TAG = new RegExp(`^${BUILDX_REPOSITORY}:(\\d+\\.\\d+\\.\\d+)$`);
 
 /**
  * True for a tag of the build image of an older version than `buildx`: the removal of older versions after the pull
  * of a new one removes it. A newer version stays, because a window of a newer Devspaces on the same engine uses it.
  */
 export function isOlderBuildxTag(tag: string, buildx: BuildxPin = BUILDX_PIN): boolean {
-  const version = versionOf(tag);
-  const current = versionOf(buildxImageTag(buildx));
-  if (version === undefined || current === undefined) return false;
-  for (let index = 0; index < 3; index++) {
-    if (version[index] !== current[index]) return version[index] < current[index];
-  }
-  return false;
+  const version = BUILDX_VERSION_TAG.exec(tag)?.[1];
+  return version !== undefined && compareVersions(version, buildx.version) < 0;
 }
 
 /**

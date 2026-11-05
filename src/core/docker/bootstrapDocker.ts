@@ -909,8 +909,11 @@ export class BootstrapDocker {
     image: string,
     output: RunOptions,
   ): Promise<boolean> {
-    if (path.resolve(path.dirname(options.dockerfile)) !== path.resolve(options.context)) return false;
     const fallback = 'so the image is built with `docker build`';
+    if (path.resolve(path.dirname(options.dockerfile)) !== path.resolve(options.context)) {
+      this.logger.warn(`The Dockerfile ${options.dockerfile} is not at the top of its build context ${options.context}, ${fallback}.`);
+      return false;
+    }
     let context: Buffer;
     let baseImages: string[];
     try {

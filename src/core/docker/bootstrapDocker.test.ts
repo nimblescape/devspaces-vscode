@@ -459,7 +459,8 @@ describe('images', () => {
     expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBeUndefined();
     listing = 'two';
     expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBeUndefined();
-    expect(warnings).toHaveLength(3);
+    // Besides the warning of each build that its Dockerfile is not at the top of its context (no build in a container).
+    expect(warnings.filter((warning) => !warning.includes('is not at the top of its build context'))).toHaveLength(3);
   });
 
   it('buildImage throws CommandError', async () => {
