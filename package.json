@@ -394,6 +394,11 @@
         "category": "Devspaces"
       },
       {
+        "command": "devspaces.resetWslDistribution",
+        "title": "Remove and Set Up the WSL Distribution of Devspaces Again",
+        "category": "Devspaces"
+      },
+      {
         "command": "devspaces.rowActivated",
         "title": "Start on Double-Click",
         "category": "Devspaces"
@@ -502,6 +507,10 @@
         {
           "command": "devspaces.removeWslDistribution",
           "when": "isWindows"
+        },
+        {
+          "command": "devspaces.resetWslDistribution",
+          "when": "false"
         }
       ],
       "view/title": [

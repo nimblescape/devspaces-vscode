@@ -497,17 +497,31 @@ export type DockerHostProblem =
   | 'sshMissing'
   | 'wslMissing'
   | 'wslDistributionMissing'
+  | 'wslDiskCorrupt'
   | 'pipeNotListening'
   | 'unknown';
 
 /** The message of `wsl.exe` for a distribution that is not registered (WSL_E_DISTRO_NOT_FOUND). */
 const WSL_DISTRIBUTION_MISSING = /WSL_E_DISTRO_NOT_FOUND|There is no distribution with the supplied name/i;
 
+/**
+ * The error code of `wsl.exe` for a distribution whose virtual disk (ext4.vhdx) Windows cannot read:
+ * `Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT` ("The file or directory is corrupted and unreadable";
+ * older versions of WSL name the step MountVhd). WSL cannot start the distribution then.
+ */
+const WSL_DISK_CORRUPT = /CreateInstance\/Mount(?:Disk|Vhd)\/(?:\S+\/)?ERROR_(?:FILE|DISK)_CORRUPT\b/;
+
+/** True when the output `text` of `wsl.exe` says that the virtual disk of the distribution is damaged (WSL_DISK_CORRUPT). */
+export function wslDiskCorrupt(text: string): boolean {
+  return WSL_DISK_CORRUPT.test(wslText(text));
+}
+
 /** Maps the error text of `docker -H ssh://… info` (or of `ssh`, or of `wsl.exe`) to a DockerHostProblem. */
 export function dockerHostProblem(detail: string): DockerHostProblem {
   // The UTF-16 of an older wsl.exe (wslText).
   const text = wslText(detail);
   if (WSL_DISTRIBUTION_MISSING.test(text)) return 'wslDistributionMissing';
+  if (WSL_DISK_CORRUPT.test(text)) return 'wslDiskCorrupt';
   if (/exec: (?:"(?:[^"]*[\\/])?ssh(?:\.exe)?"|(?:[^"\s]*[\\/])?ssh(?:\.exe)?): executable file not found|ssh: (?:command )?not found|No such file or directory.*\bssh\b|\bssh\b.*ENOENT/i.test(text)) {
     return 'sshMissing';
   }

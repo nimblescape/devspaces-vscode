@@ -467,6 +467,7 @@ export function dockerHostReason(
         return `Docker in the WSL distribution ${distribution} refused the call. The details show why.`;
       case 'wslMissing':
       case 'wslDistributionMissing':
+      case 'wslDiskCorrupt':
       case 'pipeNotListening':
       case 'unknown':
         break;
@@ -493,6 +494,12 @@ export function dockerHostReason(
       return 'WSL (wsl.exe) was not found on this computer.';
     case 'wslDistributionMissing':
       return `The WSL distribution ${distribution ?? host} is not installed on this computer.`;
+    case 'wslDiskCorrupt':
+      // The message offers the button Actions.resetWsl (the error wslDiskCorrupt, RemoteDockerCommands.switchToRemote).
+      return (
+        `The disk of the WSL distribution ${distribution ?? host} is damaged, so WSL cannot start it. ` +
+        `"${Actions.resetWsl}" deletes the distribution with all devspaces in it, also changes that you did not push, and sets it up again.`
+      );
     case 'pipeNotListening':
       return 'The Docker pipe of Devspaces for it cannot listen on this computer. Devspaces tries again in a few seconds; the details show why.';
     case 'unknown':
@@ -530,6 +537,11 @@ export const Actions = {
   turnOffChecks: 'Turn Off Checks',
   /** The button of a warning about the value of a setting: opens the Settings editor at that setting. */
   openSettings: 'Open Settings',
+  /**
+   * The button of the error about a damaged disk of the WSL distribution of Devspaces (problem wslDiskCorrupt): removes
+   * the distribution and sets it up again, without another question (the message says what it deletes).
+   */
+  resetWsl: 'Remove and Set Up Again',
   /**
    * The button of a warning about the setting repositoryGroups: the title of the command devspaces.editRepositoryGroups,
    * which opens the editor of the setting with its preview.

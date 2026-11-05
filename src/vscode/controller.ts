@@ -193,8 +193,8 @@ export interface ControllerDeps {
   };
   /** "Use a Remote Docker Host…", "Use the Local Docker", and the choice of the first row of the view. */
   remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'useLocalDocker' | 'chooseDockerHost'>;
-  /** "Set Up Docker for Devspaces…" and "Remove the WSL Distribution of Devspaces…" (Windows). */
-  wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'ensureDockerHost' | 'wslInstalled'>;
+  /** "Set Up Docker for Devspaces…", "Remove the WSL Distribution of Devspaces…", and "Remove and Set Up Again" (Windows). */
+  wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'removeAndSetUpAgain' | 'ensureDockerHost' | 'wslInstalled'>;
   /**
    * The record of the installation of WSL (Windows): the first window after the restart of Windows goes on with the
    * setup of Docker for Devspaces (goOnAfterWslInstall).
@@ -563,6 +563,8 @@ export class Controller implements vscode.Disposable {
       chooseDockerHost: async () => this.deps.remoteDocker?.chooseDockerHost(),
       setUpWslDistribution: async () => this.deps.wslSetup?.setUp(),
       removeWslDistribution: async () => this.deps.wslSetup?.remove(),
+      // The button of the error wslDiskCorrupt passes the Try again of its operation, which runs after the setup.
+      resetWslDistribution: async (argument) => this.deps.wslSetup?.removeAndSetUpAgain(typeof argument === 'function' ? (argument as () => unknown) : undefined),
       rowActivated: (argument) => this.rowActivated(argument),
       rowEnter: () => this.rowEnter(),
     };
@@ -577,6 +579,7 @@ export class Controller implements vscode.Disposable {
       'chooseDockerHost',
       'setUpWslDistribution',
       'removeWslDistribution',
+      'resetWslDistribution',
       'rowActivated',
       'rowEnter',
       'showLog',

@@ -652,6 +652,20 @@ describe('useHost and forgetHost (the WSL distribution of Devspaces after its se
     expect(await state.dockerHost()).toBeUndefined();
   });
 
+  it('useHost offers Remove and Set Up Again when the disk of the distribution is damaged', async () => {
+    const detail = 'The file or directory is corrupted and unreadable.\r\nError code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT';
+    commands = create({ shells: { login: vi.fn(async () => ({ ok: false as const, detail, timedOut: false })), run: vi.fn(async () => undefined) } });
+    window.showErrorMessage.mockResolvedValue(Actions.resetWsl);
+    await expect(commands.useHost(WSL_HOST)).resolves.toBe(false);
+    expect(window.showErrorMessage).toHaveBeenCalledWith(
+      Messages.dockerHostUnreachable(WSL_HOST, dockerHostReason('wslDiskCorrupt', WSL_HOST)),
+      Actions.resetWsl,
+      Actions.showDetails,
+    );
+    await vi.waitFor(() => expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.resetWslDistribution'));
+    expect(await state.dockerHost()).toBeUndefined();
+  });
+
   it('useHost downloads the Docker CLI of Devspaces first on a computer without a Docker CLI, and gives false when that fails', async () => {
     cli.isInstalled = () => false;
     const installOwnCli = vi.fn(async () => undefined);

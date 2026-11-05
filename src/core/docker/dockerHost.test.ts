@@ -33,8 +33,14 @@ import {
   wslText,
   wslCommandArgs,
   wslDistributionOf,
+  wslDiskCorrupt,
   wslEnv,
 } from './dockerHost';
+
+/** The error of wsl.exe for a distribution whose virtual disk is damaged (WSL 2.6 on Windows 11). */
+const WSL_DISK_CORRUPT_TEXT =
+  "Failed to attach disk 'C:\\Users\\student\\AppData\\Local\\nimblescape\\devspaces\\wsl\\disk\\ext4.vhdx' to WSL2: The file or directory is corrupted and unreadable.\r\n" +
+  'Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT';
 
 describe('classifyDockerEndpoint (SSH only for another computer)', () => {
   it.each([
@@ -345,9 +351,23 @@ describe('dockerHostProblem (plain reasons of a failed connection)', () => {
     ['There is no distribution with the supplied name.', 'wslDistributionMissing'],
     // The UTF-16 text of an older wsl.exe, read as UTF-8.
     [Buffer.from('There is no distribution with the supplied name.', 'utf16le').toString('utf8'), 'wslDistributionMissing'],
+    // The virtual disk of the distribution is damaged (WSL 2.x; older versions name the step MountVhd).
+    [WSL_DISK_CORRUPT_TEXT, 'wslDiskCorrupt'],
+    ['Error code: Wsl/Service/CreateInstance/MountVhd/HCS/ERROR_FILE_CORRUPT', 'wslDiskCorrupt'],
+    [Buffer.from('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT', 'utf16le').toString('utf8'), 'wslDiskCorrupt'],
     ['something else', 'unknown'],
   ])('%s → %s', (detail, problem) => {
     expect(dockerHostProblem(detail)).toBe(problem);
+  });
+});
+
+describe('wslDiskCorrupt', () => {
+  it('is true only for the error of a damaged virtual disk', () => {
+    expect(wslDiskCorrupt(WSL_DISK_CORRUPT_TEXT)).toBe(true);
+    expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_DISK_CORRUPT')).toBe(true);
+    expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/ERROR_TIMEOUT')).toBe(false);
+    expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_SHARING_VIOLATION')).toBe(false);
+    expect(wslDiskCorrupt('The file or directory is corrupted and unreadable.')).toBe(false);
   });
 });
 

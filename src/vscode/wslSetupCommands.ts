@@ -7,9 +7,10 @@
 // the log names the downloads and the folder), shows its steps in a progress notification, and then makes the
 // distribution the Docker host of Devspaces, as "Use a Remote Docker Host…" does. The setup of an existing distribution
 // asks first, because it restarts the distribution. The removal asks first, because it deletes every devspace in the
-// distribution. A distribution with the name
-// devspaces that Devspaces did not set up is never changed or removed. The work is in src/core/docker/wslSetup.ts.
-import { WSL_DISTRIBUTION, WSL_HOST } from '../core/docker/dockerHost';
+// distribution; the button "Remove and Set Up Again" of the error about a damaged disk of the distribution removes it
+// and sets it up again without another question, because that message says what it deletes. A distribution with the
+// name devspaces that Devspaces did not set up is never changed or removed. The work is in src/core/docker/wslSetup.ts.
+import { WSL_DISTRIBUTION, WSL_HOST, wslDiskCorrupt } from '../core/docker/dockerHost';
 import { DockerSetupTexts, WSL_INSTALL_COMMAND } from '../core/docker/dockerSetup';
 import {
   WSL_DISTRIBUTION_LIST_URL,
@@ -27,7 +28,7 @@ import {
 } from '../core/docker/wslSetup';
 import { UPGRADE_MS } from '../core/docker/wslUpgrade';
 import { errorMessage } from '../core/errors';
-import { Actions } from '../core/messages';
+import { Actions, dockerHostReason } from '../core/messages';
 import { isAbortError, type Logger } from '../core/ports';
 import type { LinkUri } from '../core/types';
 import { DockerSetupUiTexts } from './dockerSetup';
@@ -113,6 +114,10 @@ export const WslSetupTexts = {
   installWsl: 'Install WSL 2',
   failed: 'The WSL distribution of Devspaces could not be set up.',
   removeFailedUnknown: 'The WSL distribution of Devspaces could not be removed.',
+  /** The error of a setup whose distribution has a damaged disk, with the button Actions.resetWsl. */
+  diskCorrupt: dockerHostReason('wslDiskCorrupt', WSL_HOST),
+  /** The log before the setup of "Remove and Set Up Again". */
+  removedToSetUpAgain: `The WSL distribution ${WSL_DISTRIBUTION} of Devspaces was removed, and is set up again.`,
   step: (step: WslSetupStep): string => {
     switch (step.kind) {
       case 'download': {
@@ -436,6 +441,58 @@ export class WslSetupCommands {
     }
   }
 
+  /**
+   * The button "Remove and Set Up Again" of the error about a damaged disk of the distribution (the problem
+   * wslDiskCorrupt): the removal without its question, because that message says what it deletes, and then the setup of
+   * a new distribution as for a link (ensureDockerHost), which Devspaces uses afterwards. Then `retry`, the Try again of
+   * the operation that failed, when Devspaces uses the new distribution. The host stays in the list of Devspaces
+   * meanwhile, so that no other Docker takes its place. A distribution that Devspaces did not set up is not removed.
+   * Never throws.
+   */
+  async removeAndSetUpAgain(retry?: () => unknown): Promise<void> {
+    const { setup, folder } = this.deps;
+    if (setup === undefined || folder === undefined) {
+      this.inform(this.deps.isWindows ? WslSetupTexts.noLocalAppData : WslSetupTexts.notWindows);
+      return;
+    }
+    if (!this.start()) return;
+    let removed = false;
+    try {
+      // `wsl --unregister` is not cancelled, as in remove. Under the lock of all windows, with the registration of then.
+      const done = await setup.locked(async () =>
+        withNotificationProgress({ title: WslSetupTexts.removing }, async () => {
+          const registration = await this.removalCheck(setup);
+          if (registration === 'foreign') return registration;
+          if (registration === 'own') {
+            const folderGone = await setup.remove();
+            if (!folderGone) this.deps.logger.warn(`The folder of the WSL distribution ${WSL_DISTRIBUTION} stays: ${folder}`);
+          } else {
+            await setup.removeLeftovers();
+          }
+          await this.deps.forgetDistribution?.();
+          return 'removed' as const;
+        }),
+      );
+      const result = this.finished(done);
+      if (result === 'foreign') {
+        this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
+        this.inform(WslSetupTexts.foreignRemove);
+      }
+      removed = result === 'removed';
+    } catch (error) {
+      this.showFailure(error, WslSetupTexts.removeFailedUnknown, 'The removal of the WSL distribution of Devspaces was cancelled.');
+    } finally {
+      this.running = false;
+    }
+    if (!removed) return;
+    this.deps.logger.info(WslSetupTexts.removedToSetUpAgain);
+    if (!(await this.run('flow')) || retry === undefined) return;
+    // A failed async retry must reach the log, not end as an unhandled rejection in the extension host.
+    Promise.resolve()
+      .then(retry)
+      .catch((error: unknown) => this.deps.logger.error('Try again failed.', error));
+  }
+
   /** The registration for the removal (WslSetup.registration, `sure`): `none` without WSL. */
   private async removalCheck(setup: NonNullable<WslSetupCommandsDeps['setup']>, signal?: AbortSignal): Promise<WslRegistration> {
     try {
@@ -514,16 +571,29 @@ export class WslSetupCommands {
       return;
     }
     this.deps.logger.error(`${WslSetupTexts.problem(error.problem)} ${error.message}`);
+    // WSL could not start the distribution, because its disk is damaged: its own message, with "Remove and Set Up Again".
+    if (wslDiskCorrupt(error.message)) {
+      this.showError(WslSetupTexts.diskCorrupt, Actions.resetWsl);
+      return;
+    }
     this.showError(WslSetupTexts.problem(error.problem), error.problem === 'wslMissing' ? WslSetupTexts.installWsl : undefined);
   }
 
-  /** An error with Show details, and `action` before it (Install WSL 2 runs the button of the Docker setup). */
+  /**
+   * An error with Show details, and `action` before it: Install WSL 2 runs the button of the Docker setup, Remove and Set
+   * Up Again runs removeAndSetUpAgain.
+   */
   private showError(message: string, action?: string): void {
     const items = action === undefined ? [Actions.showDetails] : [action, Actions.showDetails];
     showErrorMessage(message, ...items).then(
       (choice) => {
-        if (choice === Actions.showDetails) this.deps.showLog();
-        else if (choice !== undefined && choice === action) this.installWsl();
+        if (choice === Actions.showDetails) {
+          this.deps.showLog();
+          return;
+        }
+        if (choice === undefined || choice !== action) return;
+        if (action === Actions.resetWsl) void this.removeAndSetUpAgain();
+        else this.installWsl();
       },
       (error: unknown) => this.deps.logger.error('Could not show the message.', error),
     );

@@ -711,11 +711,11 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 40 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
+    // 41 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
-    // runs Start), and the choice of the Docker host (the command of the first row of the view). The last two that were
-    // added: the setup and the removal of the WSL distribution of Devspaces.
-    expect(declared).toHaveLength(40);
+    // runs Start), the choice of the Docker host (the command of the first row of the view), and the button "Remove and
+    // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, the last one that was added.
+    expect(declared).toHaveLength(41);
     expect(declared).toEqual(
       expect.arrayContaining([
         Commands.removeFromDockerEngine,
@@ -724,6 +724,7 @@ describe('Controller commands', () => {
         Commands.addAccount,
         Commands.setUpWslDistribution,
         Commands.removeWslDistribution,
+        Commands.resetWslDistribution,
       ]),
     );
   });
@@ -7796,7 +7797,7 @@ describe('A course link to Devspaces', () => {
         withOperation: <T,>(fn: () => Promise<T>) => (operationDockerTarget() ? fn() : runWithDockerTarget(target, fn)),
         ofHost: async (host: string) => (host === '' ? dockerTargetOf('npipe:////./pipe/docker_engine', 'default') : remoteDockerTarget(host)),
       } as unknown as ControllerDeps['dockerTargets'],
-      wslSetup: { setUp: vi.fn(async () => {}), remove: vi.fn(async () => {}), ensureDockerHost, wslInstalled },
+      wslSetup: { setUp: vi.fn(async () => {}), remove: vi.fn(async () => {}), removeAndSetUpAgain: vi.fn(async () => {}), ensureDockerHost, wslInstalled },
       wslAfterInstall,
     });
     fakeVscode.window.showWarningMessage.mockImplementation(async (message: string) => (isLinkQuestion(message) ? Actions.open : undefined));

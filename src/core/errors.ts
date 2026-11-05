@@ -19,6 +19,8 @@ export const USER_ERROR_CODES = [
   'hostAccess',
   'otherAccount',
   'dockerHostUnreachable',
+  /** The disk of the WSL distribution of Devspaces is damaged (dockerHostUnreachable with the problem wslDiskCorrupt). */
+  'wslDiskCorrupt',
   'dockerEndpointUnsupported',
   'otherDockerHost',
   'sessionMonitorFailed',

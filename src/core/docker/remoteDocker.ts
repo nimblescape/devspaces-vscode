@@ -443,9 +443,13 @@ export async function checkSshLogin(
   return { ok: true };
 }
 
-/** UserFacingError('dockerHostUnreachable') for `host`. */
+/**
+ * UserFacingError('dockerHostUnreachable') for `host`; UserFacingError('wslDiskCorrupt') for a damaged disk of the WSL
+ * distribution, whose message offers to remove it and set it up again.
+ */
 export function dockerHostUnreachable(host: string, problem: DockerHostProblem, detail: string): UserFacingError {
-  return new UserFacingError('dockerHostUnreachable', Messages.dockerHostUnreachable(host, dockerHostReason(problem, host)), detail);
+  const code = problem === 'wslDiskCorrupt' ? 'wslDiskCorrupt' : 'dockerHostUnreachable';
+  return new UserFacingError(code, Messages.dockerHostUnreachable(host, dockerHostReason(problem, host)), detail);
 }
 
 /**
