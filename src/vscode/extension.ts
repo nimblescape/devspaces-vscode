@@ -325,8 +325,8 @@ async function activateExtension(
     // The calls of an operation on a remote host: the Docker CLI of Devspaces when it is installed.
     ownCli: presentOwnCli,
     // The build of the helper image on the WSL distribution of Devspaces: with the Docker CLI there and its buildx
-    // (BuildKit), `wsl.exe -d devspaces -u root --cd / --exec docker …`, because the Docker CLI of Devspaces has no
-    // buildx. None for an SSH host.
+    // (BuildKit), `wsl.exe -d devspaces -u root --cd / --exec env DEVSPACES_RUN=<mark> docker …` (wslDockerCli; the mark
+    // ends it after a Cancel), because the Docker CLI of Devspaces has no buildx. None for an SSH host.
     hostCli: (target) => {
       const access = hostAccessOf(target.host);
       if (access?.kind !== 'wsl') return undefined;
