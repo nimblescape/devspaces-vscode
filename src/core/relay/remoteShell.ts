@@ -19,6 +19,12 @@ import { shellWord } from './startScript';
 
 /** The longest time from the start of the login to the answer of the shell (as SSH_TIMEOUT_MS of the SSH check). */
 export const SHELL_LOGIN_TIMEOUT_MS = 30_000;
+/**
+ * SHELL_LOGIN_TIMEOUT_MS of the WSL distribution of Devspaces: its login starts the distribution when it does not run,
+ * with the virtual machine of WSL and systemd, which takes more than 30 seconds in a slow virtual machine (Windows in a
+ * virtual machine). WSL itself gives up after its own time limit (WSL_START_ATTEMPTS), which comes first.
+ */
+export const WSL_SHELL_LOGIN_TIMEOUT_MS = 2 * 60_000;
 /** A shell that no call used for this long is closed (the next call logs in again). */
 export const SHELL_IDLE_CLOSE_MS = 2 * 60_000;
 /** The most output of one command on each stream; more ends the shell, and the call fails. */

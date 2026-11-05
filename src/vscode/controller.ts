@@ -36,6 +36,7 @@ import type {
   DevspaceSource,
   ExtensionSettings,
   GitHubAccount,
+  LinkUri,
   PendingConnection,
   PendingOperation,
   PendingOperationKind,
@@ -67,6 +68,7 @@ import { selectOwners } from './ownerSelector';
 import { setShowOnlyDevspaces } from './devspacesOnly';
 import { FROM_PROGRESS_NOTIFICATION, HIDE_NOTIFICATIONS_COMMAND, runWithProgress, type BusyChange } from './progress';
 import type { RemoteDockerCommands } from './remoteDockerCommands';
+import type { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import type { WslSetupCommands } from './wslSetupCommands';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import type { SessionCoordinator } from './sessionCoordinator';
@@ -192,7 +194,12 @@ export interface ControllerDeps {
   /** "Use a Remote Docker Host…", "Use the Local Docker", and the choice of the first row of the view. */
   remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'useLocalDocker' | 'chooseDockerHost'>;
   /** "Set Up Docker for Devspaces…" and "Remove the WSL Distribution of Devspaces…" (Windows). */
-  wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'ensureDockerHost'>;
+  wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'ensureDockerHost' | 'wslInstalled'>;
+  /**
+   * The record of the installation of WSL (Windows): the first window after the restart of Windows goes on with the
+   * setup of Docker for Devspaces (goOnAfterWslInstall).
+   */
+  wslAfterInstall?: Pick<WslAfterInstall, 'take'>;
   /**
    * One heartbeat with the current keep-running flag of a devspace to the Monitor container of its engine
    * (Close and Keep Running, Keep Running When Closed, Stop When Closed), on every engine, through this window's worker
@@ -2120,7 +2127,7 @@ export class Controller implements vscode.Disposable {
     this.linksOpening += 1;
     try {
       await this.activation;
-      await this.startFromLink(link, this.deps.connection.isEmptyWindow() ? 'currentWindow' : 'newWindow');
+      await this.startFromLink(link, this.deps.connection.isEmptyWindow() ? 'currentWindow' : 'newWindow', { path: uri.path, query: uri.query });
     } catch (error) {
       this.showError(error);
     } finally {
@@ -2128,13 +2135,14 @@ export class Controller implements vscode.Disposable {
     }
   }
 
-  private async startFromLink(link: RepositoryLink, window: WindowRequest): Promise<void> {
+  /** `uri`: the link itself, which the setup of Docker after the restart of Windows opens again (dockerForLink). */
+  private async startFromLink(link: RepositoryLink, window: WindowRequest, uri: LinkUri): Promise<void> {
     const accounts = await this.requireAccounts();
     const found = link.kind === 'course' ? await this.courseLinkRepository(link.template, accounts) : await this.openLinkRepository(link.repository, accounts);
     if (found === undefined) return;
     // Before the operation, whose Docker host is the current one when it begins: on Windows without Docker, the WSL
     // distribution of Devspaces becomes that host.
-    if (!(await this.dockerForLink())) return;
+    if (!(await this.dockerForLink(uri))) return;
     const { repository, info, account, candidates } = found;
     const name = info?.nameWithOwner ?? repository;
     if (link.kind === 'course' && account !== undefined) this.logger.info(`The course link opens ${repository} for ${account.login}.`);
@@ -4204,20 +4212,52 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * Docker for a link (R-GEN-002, R-ENG-005): when the current engine is the local Docker and no Docker CLI runs its
-   * calls (BootstrapDocker.canRunOn), Windows needs no Docker Desktop: the WSL distribution of Devspaces becomes the
-   * Docker host of Devspaces (WslSetupCommands.ensureDockerHost: the check of WSL, the setup after one question, and
-   * the Docker CLI of Devspaces), and the link goes on there. False when it did not (a closed question, or a problem
-   * with its message): the link opens nothing. True otherwise, also where this computer has no WSL setup (not Windows):
-   * there the link goes on as before and says that Docker is missing at its first Docker call.
+   * Docker for a link (R-GEN-002, R-ENG-005), `uri`: when the current engine is the local Docker and no Docker CLI runs
+   * its calls (BootstrapDocker.canRunOn), Windows needs no Docker Desktop: the WSL distribution of Devspaces becomes the
+   * Docker host of Devspaces (WslSetupCommands.ensureDockerHost: the check of WSL, the setup without a question, and the
+   * Docker CLI of Devspaces), and the link goes on there. Without WSL, Devspaces installs it, and the link opens again
+   * after the restart of Windows (goOnAfterWslInstall). False when Devspaces does not use the distribution (a closed
+   * question, the installation of WSL, or a problem with its message): the link opens nothing now. True otherwise, also
+   * where this computer has no WSL setup (not Windows): there the link goes on as before and says that Docker is
+   * missing at its first Docker call. Without `uri`, the setup after the restart of Windows that has no link.
    */
-  private async dockerForLink(): Promise<boolean> {
+  private async dockerForLink(uri?: LinkUri): Promise<boolean> {
     const target = await this.operationTarget();
     if (target.kind !== 'local' || this.deps.docker.canRunOn(target)) return true;
-    const result = (await this.deps.wslSetup?.ensureDockerHost()) ?? 'unavailable';
-    if (result === 'notUsed') this.logger.info('The link opened nothing: Devspaces does not use the WSL distribution of Devspaces, and this computer has no Docker.');
-    else if (result === 'used') this.logger.info('The link opens the repository with Docker in the WSL distribution of Devspaces.');
+    const result = (await this.deps.wslSetup?.ensureDockerHost(uri)) ?? 'unavailable';
+    const what = uri === undefined ? 'The setup after the restart of Windows' : 'The link';
+    if (result === 'notUsed') this.logger.info(`${what} opened nothing now: Devspaces does not use the WSL distribution of Devspaces, and this computer has no Docker.`);
+    else if (result === 'used') this.logger.info(`${what} goes on with Docker in the WSL distribution of Devspaces.`);
     return result !== 'notUsed';
+  }
+
+  /**
+   * After the restart of Windows that the installation of WSL asked for (R-ENG-005): the first window of VS Code goes on
+   * with the setup of Docker for Devspaces in WSL (WslAfterInstall.take, which only one window gets), without a
+   * question, and then opens the link that needed it, as when the user opens it again. Nothing when WSL is still
+   * missing (the installation did not end; the user starts it again), and nothing when this computer has Docker now or
+   * Devspaces uses another Docker host. Never rejects.
+   */
+  async goOnAfterWslInstall(): Promise<void> {
+    const { wslAfterInstall, wslSetup } = this.deps;
+    if (wslAfterInstall === undefined || wslSetup === undefined || this.disposed) return;
+    try {
+      const record = await wslAfterInstall.take(this.deps.coordinator.windowId);
+      if (record === undefined) return;
+      if (!(await wslSetup.wslInstalled())) {
+        this.logger.info('Windows restarted, but WSL is still not installed, so the setup of Docker for Devspaces does not go on. Set up Docker for Devspaces again in the view.');
+        return;
+      }
+      this.logger.info(`Windows restarted after the installation of WSL: Devspaces goes on with the setup of its Docker${record.link === undefined ? '' : ', and then opens the link'}.`);
+      if (record.link !== undefined) {
+        await this.openLink(record.link);
+        return;
+      }
+      await this.activation;
+      await this.dockerForLink();
+    } catch (error) {
+      this.logger.warn(`The setup of Docker for Devspaces after the restart of Windows could not go on: ${errorMessage(error)}`);
+    }
   }
 
   /** The Docker target of the operation (outside of one, the current one); the local Docker without dockerTargets. */

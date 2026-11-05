@@ -57,6 +57,7 @@ interface SetupOptions {
   remoteDockerHost?: boolean | (() => boolean);
   /** Whether the sidebar view is visible; visible when not given. */
   viewVisible?: () => boolean;
+  wslAfterInstall?: DockerSetupDeps['wslAfterInstall'];
 }
 
 function setup(installed: boolean, options: SetupOptions = {}) {
@@ -83,6 +84,7 @@ function setup(installed: boolean, options: SetupOptions = {}) {
     onDidChangeInstalled: changed,
     remoteDockerHostConfigured: () => (typeof options.remoteDockerHost === 'function' ? options.remoteDockerHost() : (options.remoteDockerHost ?? false)),
     viewVisible: options.viewVisible ?? (() => true),
+    wslAfterInstall: options.wslAfterInstall,
     planInput: async () => ({ platform, arch: 'arm64', has: (tool: SetupTool) => tools.includes(tool), userName: 'octo', ...options.input }),
     downloadFolder: path.join(os.tmpdir(), 'devspaces-downloads-test'),
     download,
@@ -947,22 +949,39 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     dockerSetup.dispose();
   });
 
-  it('runs wsl --install in the terminal after the confirmation, then checks again', async () => {
+  // Mutation: a question before the installation fails it (Windows asks for administrator permission itself); so does an
+  // installation without the record (nothing would go on after the restart of Windows).
+  it('runs wsl --install in the terminal without a question, notes it for after the restart, and says to restart when WSL is ready', async () => {
     let exitCode = 1;
-    const { dockerSetup, runner } = setup(false, { platform: 'win32', wsl: () => status(exitCode) });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.installWsl();
-    expect(modalCalls()[0][0]).toBe(DockerSetupTexts.confirmWsl);
+    const started = vi.fn(async () => undefined);
+    const { dockerSetup, runner } = setup(false, { platform: 'win32', wsl: () => status(exitCode), wslAfterInstall: { started } });
+    const link = { path: '/open', query: 'repository=octo/app' };
+    await dockerSetup.installWsl(link);
+    expect(modalCalls()).toEqual([]);
+    expect(started.mock.calls).toEqual([[link]]);
     // Without the Ubuntu that `wsl --install` adds by default.
-    expect(modalCalls()[0][1].detail).toBe(`${DockerSetupTexts.confirmCommands}\n\nwsl --install --no-distribution\n\n${DockerSetupTexts.wslRestart}`);
     expect(fakeVscode.terminals[0].lines).toEqual(['wsl --install --no-distribution']);
-    // The first check, before the confirmation (no check ran before the click).
+    expect(fakeVscode.window.showInformationMessage.mock.calls).toEqual([[DockerSetupTexts.wslInstalling('Install Docker', 'wsl --install --no-distribution')]]);
+    expect(DockerSetupTexts.wslInstalling('Install Docker', 'wsl --install --no-distribution')).toContain('Windows asks for administrator permission');
+    // The first check, before the installation (no check ran before the click).
     expect(runner.run).toHaveBeenCalledTimes(1);
     exitCode = 0;
     vi.advanceTimersByTime(5_000);
     await flush();
     expect(runner.run).toHaveBeenCalledTimes(2);
     expect(contextCalls()).toContainEqual([DockerContextKeys.wslReady, true]);
+    // WSL is installed: Windows restarts, then the first window goes on (Controller.goOnAfterWslInstall).
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenLastCalledWith(DockerSetupTexts.wslRestartToGoOn);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledTimes(2);
+    dockerSetup.dispose();
+  });
+
+  it('says nothing about a restart when WSL was ready without an installation of this window', async () => {
+    const { dockerSetup } = setup(false, { platform: 'win32', wsl: () => status(0) });
+    dockerSetup.initialize();
+    await flush();
+    expect(contextCalls()).toContainEqual([DockerContextKeys.wslReady, true]);
+    expect(fakeVscode.window.showInformationMessage).not.toHaveBeenCalled();
     dockerSetup.dispose();
   });
 

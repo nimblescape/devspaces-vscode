@@ -60,6 +60,8 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'wslKeeper.ts',
     // The setup and the removal of the WSL distribution of Devspaces on Windows.
     'wslSetup.ts',
+    // The record of the installation of WSL, so that the setup goes on after the restart of Windows.
+    'wslAfterInstall.ts',
     // The weekly upgrade of the packages of the WSL distribution of Devspaces.
     'wslUpgrade.ts',
   ],

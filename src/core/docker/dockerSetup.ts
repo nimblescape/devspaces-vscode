@@ -96,9 +96,12 @@ export const DockerSetupTexts = {
     'Then it opens. Drag Docker to the Applications folder. The installer is signed and notarized by Docker; the file is marked as downloaded, so that macOS checks this when Docker starts the first time.',
   downloadWindows:
     'Then it starts. The installer is signed by Docker; the file is marked as downloaded, so that Windows checks it. Windows may ask for an administrator password or for your permission.',
-  confirmWsl: 'Install WSL 2?',
-  wslRestart:
-    'Docker for Devspaces needs WSL 2. Windows asks for administrator permission; without it, ask an administrator of this computer to run this command. Restart the computer afterwards; then Devspaces sets up its Docker in WSL.',
+  /** While the terminal installs WSL 2 (no question before it: Windows asks for administrator permission itself). */
+  wslInstalling: (terminal: string, command: string) =>
+    `Devspaces installs WSL 2, which its Docker needs, in the terminal "${terminal}". Windows asks for administrator permission; without it, ask an administrator of this computer to run "${command}". ` +
+    'Then restart Windows and open VS Code again: Devspaces goes on with the setup of its Docker by itself.',
+  /** WSL 2 is installed, and Windows has not restarted since Devspaces started its installation. */
+  wslRestartToGoOn: 'Restart Windows to finish the installation of WSL 2. Then open VS Code again: Devspaces goes on with the setup of its Docker by itself.',
   confirmStartEngine: 'Start the Docker service?',
   install: 'Install',
   download: 'Download',

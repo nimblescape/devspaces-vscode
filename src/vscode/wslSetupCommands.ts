@@ -3,16 +3,18 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // "Set Up Docker for Devspaces in WSL…" and "Remove the WSL Distribution of Devspaces…" on Windows (docs/architecture.md "The
-// WSL distribution of Devspaces"): the setup asks once with the downloads and the folder, shows its steps in a
-// progress notification, and then makes the distribution the Docker host of Devspaces, as "Use a Remote Docker Host…"
-// does. The removal asks first, because it deletes every devspace in the distribution. A distribution with the name
+// WSL distribution of Devspaces"): the setup of a new distribution asks nothing (the click or the link is the decision;
+// the log names the downloads and the folder), shows its steps in a progress notification, and then makes the
+// distribution the Docker host of Devspaces, as "Use a Remote Docker Host…" does. The setup of an existing distribution
+// asks first, because it restarts the distribution. The removal asks first, because it deletes every devspace in the
+// distribution. A distribution with the name
 // devspaces that Devspaces did not set up is never changed or removed. The work is in src/core/docker/wslSetup.ts.
-import * as vscode from 'vscode';
 import { WSL_DISTRIBUTION, WSL_HOST } from '../core/docker/dockerHost';
-import { WSL_INSTALL_COMMAND } from '../core/docker/dockerSetup';
+import { DockerSetupTexts, WSL_INSTALL_COMMAND } from '../core/docker/dockerSetup';
 import {
   WSL_DISTRIBUTION_LIST_URL,
   WSL_FROM_FILE_VERSION,
+  WslSetupError,
   duration,
   isWslSetupError,
   type ProvisionPhase,
@@ -27,21 +29,25 @@ import { UPGRADE_MS } from '../core/docker/wslUpgrade';
 import { errorMessage } from '../core/errors';
 import { Actions } from '../core/messages';
 import { isAbortError, type Logger } from '../core/ports';
-import { Commands } from './commands';
+import type { LinkUri } from '../core/types';
 import { DockerSetupUiTexts } from './dockerSetup';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 
 const PHASE_TEXTS: Record<ProvisionPhase, string> = {
-  packages: 'Installing the base packages.',
-  repository: 'Adding the package repository of Docker.',
-  docker: 'Installing Docker Engine.',
+  packages: 'Installing the base packages',
+  repository: 'Adding the package repository of Docker',
+  docker: 'Installing Docker Engine',
 };
 
 /** The part of the bar of the setup that the download fills with its bytes, in percent. */
 const DOWNLOAD_PART = 40;
+/** Where the first start of the distribution is on the bar, in percent. */
+const LAUNCH_POSITION = 45;
 /** Where the other steps start on the bar, in percent, so that the bar is full only at the end. */
 const PHASE_STARTS: Record<ProvisionPhase, number> = { packages: 50, repository: 60, docker: 65 };
+/** Where the steps end on the bar: the progress of apt-get fills the part between start and end. */
+const PHASE_ENDS: Record<ProvisionPhase, number> = { packages: 60, repository: 65, docker: 90 };
 
 /** The place of `step` on the bar of the setup, in percent. */
 function barPosition(step: WslSetupStep): number {
@@ -50,8 +56,13 @@ function barPosition(step: WslSetupStep): number {
       return step.total ? Math.min(DOWNLOAD_PART, Math.floor((step.received * DOWNLOAD_PART) / step.total)) : 0;
     case 'register':
       return DOWNLOAD_PART;
-    case 'docker':
-      return PHASE_STARTS[step.phase];
+    case 'launch':
+      return LAUNCH_POSITION;
+    case 'docker': {
+      // The downloads of apt-get fill the first half of the part of the step, the installation of the packages the second.
+      const part = step.progress === undefined ? 0 : step.progress.action === 'download' ? step.progress.percent / 200 : 0.5 + step.progress.percent / 200;
+      return Math.floor(PHASE_STARTS[step.phase] + (PHASE_ENDS[step.phase] - PHASE_STARTS[step.phase]) * part);
+    }
     case 'restart':
       return 90;
     case 'start':
@@ -71,16 +82,11 @@ export const WslSetupTexts = {
     'The WSL distribution of Devspaces is being set up or removed in another VS Code window, or a VS Code window runs the weekly upgrade of its packages ' +
     `(up to ${duration(UPGRADE_MS)}). Try again after that.`,
   changedElsewhere: 'The WSL distribution of Devspaces was set up or removed in another VS Code window after the check, so nothing was changed. Try again.',
-  confirmSetUp: 'Set up Docker for Devspaces?',
-  /** The same question in a flow that needs Docker (a link to Devspaces), on a computer without Docker. */
-  confirmSetUpForFlow: 'This computer has no Docker. Set up Docker for Devspaces?',
-  confirmSetUpDetail: (image: WslImage, folder: string) =>
-    [
-      `Devspaces creates its own WSL distribution "${WSL_DISTRIBUTION}" with Docker Engine, and then uses Docker there. Your other WSL distributions and Docker Desktop stay as they are. This needs no administrator permission.`,
-      `Downloads:\n- ${image.name} for WSL${image.size === undefined ? '' : ` (${Math.ceil(image.size / 1_048_576)} MB)`} from ${image.url}, checked against its SHA-256 in the list of WSL distributions of Microsoft (${WSL_DISTRIBUTION_LIST_URL})\n- Docker Engine from download.docker.com, and the packages that it needs from Debian: about 120 MB`,
-      `Folder of the distribution:\n${folder}`,
-      'The distribution grows with your devspaces, their images and their volumes. Devspaces runs its commands there as root with wsl.exe.',
-    ].join('\n\n'),
+  /** The log of a new setup, which asks nothing: what Devspaces downloads, and the folder. */
+  setUpLog: (image: WslImage, folder: string) =>
+    `The WSL distribution ${WSL_DISTRIBUTION} of Devspaces is set up in ${folder}, with Docker Engine. Downloads: ${image.name} for WSL` +
+    `${image.size === undefined ? '' : ` (${Math.ceil(image.size / 1_048_576)} MB)`} from ${image.url}, checked against its SHA-256 in the list of WSL distributions of Microsoft (${WSL_DISTRIBUTION_LIST_URL}); ` +
+    'Docker Engine from download.docker.com, and the packages that it needs from Debian (about 120 MB). Devspaces runs its commands there as root with wsl.exe.',
   confirmRepair: 'Set up Docker in the WSL distribution of Devspaces again?',
   confirmRepairDetail: `The WSL distribution "${WSL_DISTRIBUTION}" of Devspaces exists. Devspaces installs Docker Engine there again from download.docker.com, or updates it, and then restarts the distribution: devspaces that run there stop, and their windows lose the connection. Your devspaces stay. Then Devspaces uses Docker there.`,
   setUp: 'Set Up',
@@ -117,8 +123,14 @@ export const WslSetupTexts = {
       }
       case 'register':
         return 'Creating the WSL distribution.';
-      case 'docker':
-        return PHASE_TEXTS[step.phase];
+      case 'launch':
+        return 'Starting the WSL distribution. The first start can take some minutes.';
+      case 'docker': {
+        const { progress } = step;
+        return progress === undefined
+          ? `${PHASE_TEXTS[step.phase]}.`
+          : `${PHASE_TEXTS[step.phase]}: ${progress.action === 'download' ? 'downloading' : 'installing'} ${Math.floor(progress.percent)} %.`;
+      }
       case 'restart':
         return 'Restarting the WSL distribution.';
       case 'start':
@@ -131,6 +143,14 @@ export const WslSetupTexts = {
         return `WSL is not installed on this computer. Install WSL 2 first: Windows asks for administrator permission (without it, ask an administrator of this computer to run "${WSL_INSTALL_COMMAND}"), and you restart the computer afterwards.`;
       case 'wslTooOld':
         return `The WSL of this computer is too old: Devspaces needs WSL ${WSL_FROM_FILE_VERSION.join('.')} or later. Run "wsl --update" in a terminal, then try again.`;
+      case 'restartNeeded':
+        return DockerSetupTexts.wslRestartToGoOn;
+      case 'vmUnavailable':
+        return (
+          'WSL 2 cannot start its virtual machine on this computer. When WSL was installed just now, restart Windows. Otherwise turn on virtualization: ' +
+          'in the firmware settings (UEFI or BIOS) of the computer, or, when Windows runs in a virtual machine, nested virtualization in the settings of that virtual machine. ' +
+          'Then try again. The details show the error of WSL.'
+        );
       case 'wslNotAnswering':
         return 'WSL does not answer. Try again. When it does not help, run "wsl --shutdown" in a terminal.';
       case 'listFailed':
@@ -144,7 +164,7 @@ export const WslSetupTexts = {
       case 'dockerFailed':
         return `Docker Engine could not be installed in the WSL distribution "${WSL_DISTRIBUTION}". The details show why. Set up Docker for Devspaces again to go on from there.`;
       case 'dockerNotRunning':
-        return `Docker does not start in the WSL distribution "${WSL_DISTRIBUTION}". The details show why.`;
+        return `Docker does not start in the WSL distribution "${WSL_DISTRIBUTION}". The details show why. Try again.`;
       case 'removeFailed':
         return `WSL could not remove the distribution "${WSL_DISTRIBUTION}". The details show why.`;
       case 'registryFailed':
@@ -155,13 +175,20 @@ export const WslSetupTexts = {
 
 export interface WslSetupCommandsDeps {
   /** The setup of this computer; undefined where there is none (not Windows, or no LOCALAPPDATA). */
-  setup: Pick<WslSetup, 'checkWsl' | 'registration' | 'image' | 'setUp' | 'remove' | 'removeLeftovers' | 'locked' | 'separate'> | undefined;
+  setup: Pick<WslSetup, 'checkWsl' | 'checkVirtualMachine' | 'registration' | 'image' | 'setUp' | 'remove' | 'removeLeftovers' | 'locked' | 'separate'> | undefined;
   /** The folder of the distribution (wslSetupFolder), for the questions. */
   folder: string | undefined;
   /** For the message without `setup`. */
   isWindows: boolean;
   logger: Logger;
   showLog: () => void;
+  /**
+   * Installs WSL when the setup finds it missing (DockerSetup.installWsl: the terminal, and the record for the setup after
+   * the restart of Windows, with the link `link` of a flow).
+   */
+  installWsl: (link?: LinkUri) => Promise<void>;
+  /** True while Windows has not restarted since Devspaces started the installation of WSL (WslAfterInstall.restartPending). */
+  restartPending?: () => Promise<boolean>;
   /** Devspaces uses the host after its test (RemoteDockerCommands.useHost); true when it does. */
   useHost: (host: string) => Promise<boolean>;
   /**
@@ -206,33 +233,50 @@ export class WslSetupCommands {
   }
 
   /**
-   * "Set Up Docker for Devspaces in WSL…": checks WSL, asks once with the downloads and the folder, sets up the distribution
-   * with a progress notification, and makes it the Docker host of Devspaces. A distribution that Devspaces set up
-   * before is set up again (Docker Engine installed or updated); one that the user made is only offered for use. Only
-   * a new distribution needs the version of WSL that registers a file. Never throws.
+   * "Set Up Docker for Devspaces in WSL…": checks WSL (without WSL, it installs WSL first, and the setup goes on after the
+   * restart of Windows), sets up the distribution without a question with a progress notification, and makes it the
+   * Docker host of Devspaces. A distribution that Devspaces set up before is set up again after a question (Docker
+   * Engine installed or updated, and the distribution restarts); one that the user made is only offered for use. Only a
+   * new distribution needs the version of WSL that registers a file. Never throws.
    */
   async setUp(): Promise<void> {
     await this.run('command');
   }
 
   /**
-   * A flow that needs Docker on Windows while this computer has none (a link to Devspaces, R-ENG-005): the WSL
-   * distribution of Devspaces becomes the Docker host of Devspaces, which reaches it through its own connection
-   * (`wsl.exe`), and useHost downloads the Docker CLI of Devspaces when this computer has none. A distribution that
-   * Devspaces set up before (for example with another VS Code) is used as it is, without a question. Otherwise as "Set
-   * Up Docker for Devspaces in WSL…": the check of WSL (without WSL, its message offers Install WSL 2), one question
-   * with the downloads and the folder, the setup with its progress, and the use. A distribution `devspaces` that the
-   * user made is offered for use in a modal question. `used`: Devspaces uses the distribution now. `notUsed`: it does
-   * not (a closed question, or a problem with its message). `unavailable`: this computer has no WSL setup (not
-   * Windows, or no LOCALAPPDATA); nothing is shown. Never throws.
+   * A flow that needs Docker on Windows while this computer has none (the link `link` to Devspaces, R-ENG-005, or the
+   * setup after the restart of Windows): the WSL distribution of Devspaces becomes the Docker host of Devspaces, which
+   * reaches it through its own connection (`wsl.exe`), and useHost downloads the Docker CLI of Devspaces when this
+   * computer has none. A distribution that Devspaces set up before (for example with another VS Code) is used as it is.
+   * Otherwise as "Set Up Docker for Devspaces in WSL…": the check of WSL (without WSL, it installs WSL, and the setup
+   * and the link go on after the restart of Windows), the setup with its progress, and the use, all without a question.
+   * A distribution `devspaces` that the user made is offered for use in a modal question. `used`: Devspaces uses the
+   * distribution now. `notUsed`: it does not (a closed question, the installation of WSL, or a problem with its
+   * message). `unavailable`: this computer has no WSL setup (not Windows, or no LOCALAPPDATA); nothing is shown. Never
+   * throws.
    */
-  async ensureDockerHost(): Promise<'used' | 'notUsed' | 'unavailable'> {
+  async ensureDockerHost(link?: LinkUri): Promise<'used' | 'notUsed' | 'unavailable'> {
     if (this.deps.setup === undefined || this.deps.folder === undefined) return 'unavailable';
-    return (await this.run('flow')) ? 'used' : 'notUsed';
+    return (await this.run('flow', link)) ? 'used' : 'notUsed';
   }
 
-  /** setUp (`command`) or ensureDockerHost (`flow`); true when Devspaces uses the distribution afterwards. */
-  private async run(mode: 'command' | 'flow'): Promise<boolean> {
+  /**
+   * Whether WSL is installed (WslSetup.checkWsl), for the setup after the restart of Windows: false without a setup of
+   * this computer or without WSL; true also when WSL is too old or does not answer (the setup then says so). Never throws.
+   */
+  async wslInstalled(): Promise<boolean> {
+    const { setup } = this.deps;
+    if (setup === undefined) return false;
+    try {
+      await setup.checkWsl();
+      return true;
+    } catch (error) {
+      return !(isWslSetupError(error) && error.problem === 'wslMissing');
+    }
+  }
+
+  /** setUp (`command`) or ensureDockerHost (`flow`, with its link); true when Devspaces uses the distribution afterwards. */
+  private async run(mode: 'command' | 'flow', link?: LinkUri): Promise<boolean> {
     const { setup, folder } = this.deps;
     if (setup === undefined || folder === undefined) {
       this.inform(this.deps.isWindows ? WslSetupTexts.noLocalAppData : WslSetupTexts.notWindows);
@@ -245,6 +289,9 @@ export class WslSetupCommands {
         if (registration !== 'none') return { registration };
         const version = await setup.checkWsl(signal);
         this.deps.logger.info(`WSL ${version} is installed.`);
+        // Before the download: WSL 2 runs only after the restart of Windows that its installation asks for.
+        if (await this.deps.restartPending?.()) throw new WslSetupError('restartNeeded', 'Windows has not restarted since Devspaces started the installation of WSL.');
+        await setup.checkVirtualMachine(signal);
         return { registration, image: await setup.image(signal) };
       });
       if (plan.registration === 'foreign') {
@@ -267,16 +314,14 @@ export class WslSetupCommands {
         const done = await setup.locked(async () => ((await setup.registration()) === 'own' ? { used: await this.deps.useHost(WSL_HOST) } : false));
         return this.finished(done)?.used === true;
       }
-      const confirmed =
-        plan.image === undefined
-          ? await this.confirm(WslSetupTexts.confirmRepair, WslSetupTexts.confirmRepairDetail, WslSetupTexts.setUp)
-          : await this.confirm(
-              mode === 'flow' ? WslSetupTexts.confirmSetUpForFlow : WslSetupTexts.confirmSetUp,
-              WslSetupTexts.confirmSetUpDetail(plan.image, folder),
-              WslSetupTexts.setUp,
-            );
-      if (!confirmed) return false;
-      this.deps.logger.info(plan.image === undefined ? `The WSL distribution ${WSL_DISTRIBUTION} is set up again.` : `The WSL distribution ${WSL_DISTRIBUTION} is set up in ${folder}.`);
+      // A new distribution needs no question: the click or the link is the decision, and the log names the downloads and
+      // the folder. The setup of an existing one asks, because it restarts the distribution and its devspaces.
+      if (plan.image === undefined) {
+        if (!(await this.confirm(WslSetupTexts.confirmRepair, WslSetupTexts.confirmRepairDetail, WslSetupTexts.setUp))) return false;
+        this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} is set up again.`);
+      } else {
+        this.deps.logger.info(WslSetupTexts.setUpLog(plan.image, folder));
+      }
       // The lock of all windows only from here: an open question holds nothing. Under the lock, the distribution must
       // still be as checked: another window may have set it up or removed it meanwhile. Devspaces chooses the host under
       // the lock too, so that a removal in another window does not come between.
@@ -298,10 +343,15 @@ export class WslSetupCommands {
       return result?.used === true;
     } catch (error) {
       if (isWslSetupError(error) && error.problem === 'wslMissing') {
-        // Docker for Devspaces needs WSL: its installation comes next, with its own question that shows the command
-        // (Windows asks for administrator permission, and the computer restarts afterwards).
-        this.deps.logger.info(`WSL is not installed, so Devspaces offers to install WSL 2 first: ${error.message}`);
-        this.installWsl();
+        // Docker for Devspaces needs WSL: its installation comes next, in a terminal (Windows asks for administrator
+        // permission). After the restart of Windows, the setup goes on, with the link.
+        this.deps.logger.info(`WSL is not installed, so Devspaces installs WSL 2 first: ${error.message}`);
+        this.installWsl(link);
+        return false;
+      }
+      if (isWslSetupError(error) && error.problem === 'restartNeeded') {
+        this.deps.logger.info(`${error.message} The setup of Docker for Devspaces goes on after the restart.`);
+        this.inform(WslSetupTexts.problem(error.problem));
         return false;
       }
       this.showFailure(error, WslSetupTexts.failed, 'The setup of the WSL distribution of Devspaces was cancelled.');
@@ -466,11 +516,9 @@ export class WslSetupCommands {
     );
   }
 
-  /** "Install WSL 2" of the Docker setup (`wsl --install --no-distribution` in a terminal, after its question). Not awaited. */
-  private installWsl(): void {
-    vscode.commands
-      .executeCommand(Commands.dockerSetupInstallWsl)
-      .then(undefined, (error: unknown) => this.deps.logger.error(`WSL 2 could not be installed: ${errorMessage(error)}`));
+  /** "Install WSL 2" of the Docker setup (`wsl --install --no-distribution` in a terminal), with the link of a flow. Not awaited. */
+  private installWsl(link?: LinkUri): void {
+    this.deps.installWsl(link).then(undefined, (error: unknown) => this.deps.logger.error(`WSL 2 could not be installed: ${errorMessage(error)}`));
   }
 
   /**

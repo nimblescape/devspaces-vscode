@@ -413,6 +413,18 @@ export function wslText(text: string): string {
   return text.replace(/[\u0000\uFEFF\uFFFD]/g, '');
 }
 
+/**
+ * How often Devspaces starts a WSL distribution when WSL runs out of time to start it (wslStartTimedOut): WSL waits 30
+ * seconds for the start of a distribution (its kernel boot timeout), and up to 10 seconds of them for systemd, which a
+ * slow virtual machine can need longer, for example Windows in a virtual machine at the first start after a restart.
+ */
+export const WSL_START_ATTEMPTS = 3;
+
+/** True when the output `text` of `wsl.exe` says that WSL ran out of time to start the distribution (`Wsl/Service/CreateInstance/ERROR_TIMEOUT`). */
+export function wslStartTimedOut(text: string): boolean {
+  return /CreateInstance\/ERROR_TIMEOUT/.test(wslText(text));
+}
+
 /** The names in the output of `wsl.exe --list --quiet` (WSL_LIST_ARGS): one per line (wslText). */
 export function parseWslList(stdout: string): string[] {
   return wslText(stdout)

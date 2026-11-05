@@ -392,6 +392,25 @@ export interface StartAfterUpdate {
 }
 
 /**
+ * The setup of Docker for Devspaces on Windows that waits for the restart of Windows after the installation of WSL 2
+ * (wsl-setup-after-install.json, docs/requirements.md R-ENG-005): Devspaces writes it when it starts the installation of
+ * WSL, and the first window after the restart goes on with the setup, and opens the link that needed it
+ * (Controller.goOnAfterWslInstall).
+ */
+export interface WslSetupAfterInstall {
+  /** The link to Devspaces that needed Docker: the path and the query of its URI (Controller.openLink). */
+  link?: LinkUri;
+  /** When Devspaces started the installation of WSL. */
+  createdAt: string;
+}
+
+/** The path and the query of the URI of a link to Devspaces (`vscode://<extension ID><path>?<query>`). */
+export interface LinkUri {
+  path: string;
+  query: string;
+}
+
+/**
  * `stop` exists because Stop of the devspace that the window is connected to closes the remote connection first,
  * which reloads the window; the reloaded window finishes the stop.
  */

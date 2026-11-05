@@ -79,6 +79,59 @@ describeUnix('RemoteShells', () => {
     expect(logins).toEqual(['box', 'box']);
   });
 
+  // In a slow virtual machine, WSL can run out of time to start the distribution (its own limit of 30 seconds).
+  it('starts a WSL distribution again when WSL ran out of time to start it, at most 3 times, and no other host', async () => {
+    const timeout = 'This operation returned because the timeout period expired. \nError code: Wsl/Service/CreateInstance/ERROR_TIMEOUT';
+    const failing = `printf '%s\\n' '${timeout}' >&2; exit 1`;
+    let failures = 2;
+    const lines: string[] = [];
+    const logins: string[] = [];
+    const registry = new RemoteShells({
+      logger: { ...silentLogger, info: (line) => lines.push(line) },
+      loginTimeoutMs: 5_000,
+      start: (host) => {
+        logins.push(host);
+        return { process: runner.startBytes('sh', ['-c', failures-- > 0 ? failing : 'exec sh -s']) };
+      },
+    });
+    await expect(registry.run('wsl:devspaces', 'printf one')).resolves.toMatchObject({ stdout: 'one' });
+    expect(logins).toEqual(['wsl:devspaces', 'wsl:devspaces', 'wsl:devspaces']);
+    expect(lines.filter((line) => line.startsWith('WSL ran out of time'))).toEqual([
+      `WSL ran out of time to start the distribution devspaces (attempt 1 of 3), so Devspaces starts it again: ${timeout.replace(' \n', '\n')}`,
+      `WSL ran out of time to start the distribution devspaces (attempt 2 of 3), so Devspaces starts it again: ${timeout.replace(' \n', '\n')}`,
+    ]);
+    registry.dispose();
+
+    // Three times out of time: the third failure counts.
+    failures = 5;
+    logins.length = 0;
+    const again = new RemoteShells({ logger: silentLogger, loginTimeoutMs: 5_000, start: (host) => (logins.push(host), { process: runner.startBytes('sh', ['-c', failing]) }) });
+    await expect(again.login('wsl:devspaces')).resolves.toMatchObject({ ok: false, timedOut: false, detail: expect.stringContaining('ERROR_TIMEOUT') });
+    expect(logins).toHaveLength(3);
+    // An SSH host, and another error of WSL, log in once.
+    logins.length = 0;
+    await expect(again.login('box')).resolves.toMatchObject({ ok: false });
+    expect(logins).toEqual(['box']);
+    const other = new RemoteShells({
+      logger: silentLogger,
+      loginTimeoutMs: 5_000,
+      start: (host) => (logins.push(host), { process: runner.startBytes('sh', ['-c', "echo 'Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND' >&2; exit 1"]) }),
+    });
+    logins.length = 0;
+    await expect(other.login('wsl:devspaces')).resolves.toMatchObject({ ok: false });
+    expect(logins).toEqual(['wsl:devspaces']);
+  });
+
+  it('forgets a shell to a WSL distribution that ended, so that the next call logs in again', async () => {
+    const { registry, logins, processes } = shells();
+    await expect(registry.run('wsl:devspaces', 'printf one')).resolves.toMatchObject({ stdout: 'one' });
+    processes[0].kill();
+    await processes[0].exited;
+    await expect(registry.run('wsl:devspaces', 'printf two')).resolves.toMatchObject({ stdout: 'two' });
+    expect(logins).toEqual(['wsl:devspaces', 'wsl:devspaces']);
+    registry.dispose();
+  });
+
   // A login of the background runs with BatchMode and fails for a host that needs a password or an unknown host key.
   it('logs in anew for a flow of the user after a login of the background in progress failed', async () => {
     const logins: string[] = [];

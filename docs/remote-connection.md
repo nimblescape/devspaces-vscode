@@ -502,14 +502,14 @@ On Windows, Devspaces can use Docker Engine in its own WSL distribution `devspac
 
 **Set Up Docker for Devspaces in WSL…** ([`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/wslSetupCommands.ts)) runs these steps. One setup or removal runs at a time, also across windows (the lock folder `%LOCALAPPDATA%\nimblescape\devspaces\wsl.lock`).
 
-1. **WSL**: `wsl.exe --version` must name WSL 2.4.4 or later. Without WSL, the setup runs **Install WSL 2** next (`wsl --install --no-distribution` after its question, which needs administrator rights and a restart).
+1. **WSL**: `wsl.exe --version` must name WSL 2.4.4 or later. Without WSL, the setup runs **Install WSL 2** next (`wsl --install --no-distribution` in a terminal, which needs administrator rights and a restart of Windows); after the restart, the first window goes on with the setup, and with the link that needed it. Before the download, the setup checks that the restart happened and that `wsl.exe --status` names no missing feature of the virtual machine.
 2. **Which distribution**: `wsl.exe --list --quiet`, and the registry of the Windows user (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`). Devspaces knows its own distribution by the folder of its virtual disk.
 3. **The file**: the list of WSL distributions of Microsoft (`DistributionInfo.json` in `microsoft/WSL`, the list that `wsl --install` uses) names the URL and the SHA-256 of the Debian file.
-4. **The question**: one modal question names the file, its size, the list, Docker Engine, and the folder.
+4. **The log**: a new setup asks no question; the log names the file, its size, the list, Docker Engine, and the folder.
 5. **Download** to `%LOCALAPPDATA%\nimblescape\devspaces\wsl\download\debian.wsl`, checked against the SHA-256 of the list.
 6. **Register**: `wsl.exe --install --from-file <file> --name devspaces --location <folder>\disk --version 2 --no-launch`, for the Windows user, without administrator rights.
 7. **Docker inside**: a script as root installs systemd and Docker Engine from `download.docker.com`, and writes `/etc/wsl.conf` (systemd on, root as the default user, no drives of Windows mounted, no start of Windows programs).
-8. **Restart**: `wsl.exe --terminate devspaces`, then a wait of up to 120 seconds for `docker info`.
+8. **Restart**: `wsl.exe --terminate devspaces`, then a wait of up to 120 seconds for `docker info`. A start that WSL ends with `Wsl/Service/CreateInstance/ERROR_TIMEOUT` runs again, up to 3 times.
 9. **Use**: Devspaces makes `wsl:devspaces` the Docker host of Devspaces, as **Use a Remote Docker Host…** does.
 
 After the setup and at the start of each window, Devspaces checks whether its distribution is the default distribution of WSL, and then makes another distribution the default. It warns when the WSL integration of Docker Desktop is on for its distribution.

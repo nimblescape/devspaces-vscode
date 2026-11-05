@@ -59,6 +59,8 @@ export class StoragePaths {
   readonly reopen: string;
   /** A Start that waits for the restart of VS Code for its update (StartAfterUpdate). */
   readonly startAfterUpdate: string;
+  /** The setup of Docker in WSL that waits for the restart of Windows after the installation of WSL (WslSetupAfterInstall). */
+  readonly wslSetupAfterInstall: string;
   /** State of the workspace helper images: base image digests, last check, last use, last cleanup. */
   readonly helperState: string;
   /** Remote Docker hosts: the list of SSH hosts, the Docker host of Devspaces, and the rootless sockets (RemoteDockerState). */
@@ -94,6 +96,7 @@ export class StoragePaths {
     this.disconnectDir = path.join(root, DISCONNECT_DIR_NAME);
     this.reopen = path.join(root, 'reopen.json');
     this.startAfterUpdate = path.join(root, 'start-after-update.json');
+    this.wslSetupAfterInstall = path.join(root, 'wsl-setup-after-install.json');
     this.helperState = path.join(root, 'helper.json');
     this.remoteDocker = path.join(root, 'remote-docker.json');
     this.dockerEngines = path.join(root, 'docker-engines.json');
@@ -136,6 +139,11 @@ export class StoragePaths {
   /** `start-after-update.json.claimed.<window-id>`: the record of a Start after the update, claimed by a window. Throws for an invalid ID. */
   claimedStartAfterUpdateFile(windowId: string): string {
     return `${this.startAfterUpdate}${CLAIM_MARKER}${checkedId('window ID', windowId)}`;
+  }
+
+  /** `wsl-setup-after-install.json.claimed.<window-id>`: the record of the setup after the restart of Windows, claimed by a window. Throws for an invalid ID. */
+  claimedWslSetupAfterInstallFile(windowId: string): string {
+    return `${this.wslSetupAfterInstall}${CLAIM_MARKER}${checkedId('window ID', windowId)}`;
   }
 
   /** `operations/<devspace-id>.claimed.<time in ms>.<window-id>`. Throws for an invalid ID. */

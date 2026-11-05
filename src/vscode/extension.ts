@@ -14,7 +14,8 @@ import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
 import { LOCAL_CLI_VERSION_FORMAT, LOCAL_CLI_VERSION_TIMEOUT_MS, localDockerCliApi, type DockerCliApi } from '../core/docker/dockerApiVersion';
 import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
-import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
+import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
+import { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { WslKeeper } from '../core/docker/wslKeeper';
 import { WslLifetime } from '../core/docker/wslLifetime';
 import { WslUpgrade } from '../core/docker/wslUpgrade';
@@ -755,7 +756,13 @@ async function activateExtension(
   // LOCALAPPDATA. About once a week, a window that uses it upgrades its packages (WslUpgrade), only when Devspaces set
   // it up.
   const wslFolder = platform === 'win32' ? wslSetupFolder(env) : undefined;
-  const wslSetupCore = wslFolder === undefined ? undefined : new WslSetup({ runner, wslPath, env, arch: process.arch, folder: wslFolder, logger, http: nodeHttpsTransport });
+  const wslSetupCore =
+    wslFolder === undefined
+      ? undefined
+      : new WslSetup({ runner, wslPath, env, arch: () => readWindowsArch(runner, env, process.arch, logger), folder: wslFolder, logger, http: nodeHttpsTransport });
+  // The record of the installation of WSL (Windows): after the restart of Windows, the first window goes on with the setup
+  // of Docker for Devspaces, and with the link that needed it (Controller.goOnAfterWslInstall).
+  const wslAfterInstall = platform === 'win32' ? new WslAfterInstall({ files: sessionFiles, logger }) : undefined;
   const upgrade = new WslUpgrade({
     runner,
     wslPath,
@@ -993,6 +1000,7 @@ async function activateExtension(
     remoteDockerHostConfigured: () => targets.last?.kind === 'remote',
     // Windows: `wsl --status` only while the view shows the setup (also onViewShown below).
     viewVisible: () => view.visible,
+    wslAfterInstall,
     // Start Docker never starts Docker Desktop for a remote host; it only checks that host.
     startDocker: async (signal, onStarting) =>
       startDockerFor(
@@ -1086,6 +1094,8 @@ async function activateExtension(
     isWindows: platform === 'win32',
     logger,
     showLog: () => logger.show(),
+    installWsl: (link) => setup.installWsl(link),
+    restartPending: async () => (await wslAfterInstall?.restartPending()) === true,
     useHost: (host) => remoteDocker.useHost(host),
     forgetHost: (host) => remoteDocker.forgetHost(host),
     // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes.
@@ -1150,6 +1160,7 @@ async function activateExtension(
     },
     remoteDocker,
     wslSetup,
+    wslAfterInstall,
     // The update of VS Code before a devspace starts (docs/requirements.md R-DS-006), with the commands of the
     // workbench of VS Code (vscodeUpdate.ts) and the record of the last restart in the global state.
     vscodeUpdate: new VscodeUpdate({
@@ -1491,4 +1502,6 @@ async function activateExtension(
   // folder or another remote): only a Start of this window that waited for the update of VS Code.
   if (connection.isEmptyWindow()) background(controller.runEmptyWindowTasks(activatedAt), 'run the tasks of the empty window');
   else background(started.then(() => controller.startAfterUpdate()), 'go on with the Start after the update of VS Code');
+  // Windows: the setup of Docker for Devspaces, and its link, after the restart that the installation of WSL asked for.
+  if (wslAfterInstall !== undefined) background(started.then(() => controller.goOnAfterWslInstall()), 'go on with the setup of Docker after the restart of Windows');
 }
