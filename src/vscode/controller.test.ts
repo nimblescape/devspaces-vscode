@@ -2989,6 +2989,8 @@ function removalFake(options: { answers?: boolean; engine?: Partial<RemovalEngin
       if (filter.startsWith('label=')) return result(lines(engine.devspaceVolumes.map((v) => ({ Name: v.name, Labels: `nimblescape.devspaces.id=${v.id}` }))));
       return result(lines(engine.volumes.map((name) => ({ Name: name, Labels: '' }))));
     }
+    // The tags of the build image (devspaces-buildx): none on this engine.
+    if (args[0] === 'image' && args[1] === 'ls') return result('');
     order.push(`docker ${args.join(' ')}`);
     if (args[0] === 'rm') {
       engine.containers = engine.containers.filter((c) => c.id !== args[2]);

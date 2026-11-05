@@ -37,7 +37,10 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'archive.ts',
     'attachDiagnostics.ts',
     'bootstrapDocker.ts',
-    // The build context of the helper image as a tar archive, for its build with the Docker CLI of the WSL distribution.
+    // The build image of Devspaces (buildx in a container on the engine) and its pin, for the build of the helper image.
+    'buildxImage.ts',
+    'buildxPin.json',
+    // The build context of the helper image as a tar archive, for its build in a container of the build image.
     'contextTar.ts',
     // The check of the Docker API versions of an engine against the Docker CLI of Devspaces, at the open of a worker.
     'dockerApiVersion.ts',
@@ -66,8 +69,6 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'wslAfterInstall.ts',
     // The weekly upgrade of the packages of the WSL distribution of Devspaces.
     'wslUpgrade.ts',
-    // The Docker CLI in the WSL distribution of Devspaces, for the build of the helper image there with its buildx.
-    'wslDockerCli.ts',
   ],
   // missingHelperBuild.ts: the background build of a helper image that the refresh found missing.
   'src/core/helper': ['analysisLimits.ts', 'batchStepKinds.ts', 'helperImage.ts', 'helperImageBuild.ts', 'helperImages.ts', 'helperPrebuild.ts', 'helperState.ts', 'missingHelperBuild.ts'],

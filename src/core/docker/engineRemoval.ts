@@ -7,16 +7,18 @@
 // Docker host of the engine), never through the worker, which the removal ends: besides the bootstrap
 // (bootstrapDocker.ts), the one place where the extension runs Docker commands without the worker. The caller checks
 // first that the engine answers (Docker is never started for this). Removes, in this order: the Monitor containers, the
-// helper containers (the workers of every window and their batch helpers), the helper images (never with force, and
-// only their tags of devspaces-monitor and devspaces-worker), and the shared volumes. Never anything of a devspace: the
+// helper containers (the workers of every window and their batch helpers), the build containers of the helper image,
+// the helper images (never with force, and only their tags of devspaces-monitor and devspaces-worker), the tags of the
+// build image (devspaces-buildx, buildxImage.ts), and the shared volumes. Never anything of a devspace: the
 // caller deletes the user's own devspaces before, each as Delete does. Every item is logged with its outcome, and each
 // one that is left with the command that removes it. No `vscode`.
 import { CommandError, errorMessage } from '../errors';
-import { HELPER_CACHE_VOLUME, LABEL_DEVSPACE_ID, LABEL_HELPER, LABEL_HELPER_RUN, VSCODE_STORE_VOLUME } from '../names';
+import { HELPER_CACHE_VOLUME, LABEL_BUILD_RUN, LABEL_DEVSPACE_ID, LABEL_HELPER, LABEL_HELPER_RUN, VSCODE_STORE_VOLUME } from '../names';
 import { isAbortError, type Logger, type RunOptions, type RunResult } from '../ports';
 import { LABEL_MONITOR, LABEL_MONITOR_OWNER, REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, type BootstrapDocker } from './bootstrapDocker';
+import { BUILDX_IMAGE_LS_ARGS, BUILDX_REFERENCE_FILTER, buildxImageTags } from './buildxImage';
 import { describeDockerHost, sshEndpoint, wslDistributionOf } from './dockerHost';
 import { DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 
@@ -69,9 +71,12 @@ interface ListedObject {
 export interface EngineInventory {
   /** The Monitor containers (label nimblescape.devspaces.monitor, any version), by name. */
   monitors: string[];
-  /** The helper containers (label nimblescape.devspaces.worker-run): the workers and their batch helpers, by name. */
+  /**
+   * The helper containers (label nimblescape.devspaces.worker-run): the workers and their batch helpers, and the build
+   * containers of the helper image (label nimblescape.devspaces.build-run), by name.
+   */
   helpers: string[];
-  /** The helper images (label nimblescape.devspaces.worker=true), with their tags. */
+  /** The helper images (label nimblescape.devspaces.worker=true), and the tags of the build image, with their tags. */
   images: Array<{ id: string; tags: string[] }>;
   /** Of SHARED_VOLUMES, those that exist. */
   volumes: string[];
@@ -134,6 +139,12 @@ async function helperImages(docker: Pick<BootstrapDocker, 'listImagesByLabel'>):
   return (await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => ({ id: image.id, tags: [...image.tags] }));
 }
 
+/** The tags of the build image (devspaces-buildx:<version>), each with the ID of its image. */
+async function buildxImages(docker: Pick<BootstrapDocker, 'run'>, signal: AbortSignal | undefined): Promise<Array<{ id: string; tags: string[] }>> {
+  const stdout = await read(docker, [...BUILDX_IMAGE_LS_ARGS], signal);
+  return buildxImageTags(parseJsonLines(stdout)).map(({ id, tag }) => ({ id, tags: [tag] }));
+}
+
 /**
  * Lists what the removal would remove on the engine of the operation, and what shows that others use Devspaces there:
  * devspaces that `knownDevspaces` (the IDs of the devspaces of this computer) does not name, and a Monitor that another
@@ -145,11 +156,11 @@ export async function engineInventory(
 ): Promise<EngineInventory> {
   const { signal } = options;
   const monitors = await containersWithLabel(docker, LABEL_MONITOR, signal);
-  const helpers = await containersWithLabel(docker, LABEL_HELPER_RUN, signal);
+  const helpers = [...(await containersWithLabel(docker, LABEL_HELPER_RUN, signal)), ...(await containersWithLabel(docker, LABEL_BUILD_RUN, signal))];
   const devspaceObjects = [...(await containersWithLabel(docker, LABEL_DEVSPACE_ID, signal)), ...(await volumesWith(docker, `label=${LABEL_DEVSPACE_ID}`, signal))];
   // `name` filters by a part of the name.
   const volumes = new Set((await volumesWith(docker, 'name=devspaces-', signal)).map((volume) => volume.name));
-  const images = await helperImages(docker);
+  const images = [...(await helperImages(docker)), ...(await buildxImages(docker, signal))];
   const unknown = new Set<string>();
   for (const object of devspaceObjects) {
     const id = object.labels.get(LABEL_DEVSPACE_ID);
@@ -190,10 +201,16 @@ export function manualCommand(item: Pick<RemovalItem, 'kind' | 'name'>, remoteHo
     case 'container':
       return byLabel ? `${docker} rm -f $(${docker} ps -aq --filter ${item.name})` : `${docker} rm -f ${item.name}`;
     case 'image':
+      if (item.name === BUILDX_REFERENCE_FILTER) return buildxRemovalCommand(docker);
       return byLabel ? `${docker} image prune -a -f --filter ${item.name}` : `${docker} image rm ${item.name}`;
     case 'volume':
       return `${docker} volume rm ${item.name}`;
   }
+}
+
+/** The command that removes every tag of the build image. */
+function buildxRemovalCommand(docker: string): string {
+  return `${docker} image rm $(${docker} image ls --format '{{.Repository}}:{{.Tag}}' --filter ${BUILDX_REFERENCE_FILTER})`;
 }
 
 /**
@@ -205,7 +222,9 @@ export function uninstallCommands(remoteHost?: string): string[] {
   return [
     `${docker} rm -f $(${docker} ps -aq --filter label=${LABEL_MONITOR})`,
     `${docker} rm -f $(${docker} ps -aq --filter label=${LABEL_HELPER_RUN})`,
+    `${docker} rm -f $(${docker} ps -aq --filter label=${LABEL_BUILD_RUN})`,
     `${docker} image prune -a -f --filter label=${LABEL_HELPER}`,
+    buildxRemovalCommand(docker),
     `${docker} volume rm ${SHARED_VOLUMES.join(' ')}`,
   ];
 }
@@ -230,7 +249,7 @@ function detailOf(result: RunResult): string {
 
 /** What an item is, for the progress and the log: `the container devspaces-monitor`. */
 export function itemText(item: Pick<RemovalItem, 'kind' | 'name'>): string {
-  if (item.name.startsWith('label=')) return `the ${item.kind}s with the ${item.name.replace('=', ' ')}`;
+  if (item.name.startsWith('label=') || item.name.startsWith('reference=')) return `the ${item.kind}s with the ${item.name.replace('=', ' ')}`;
   return `the ${item.kind} ${item.name}`;
 }
 
@@ -266,13 +285,17 @@ class RemovalRun {
     return this.ended === undefined;
   }
 
-  /** A list that failed: logged as an item that is left; false when the run ends (cancelled, or no answer). */
-  private async listFailed(kind: RemovalItem['kind'], label: string, error: unknown): Promise<boolean> {
+  /**
+   * A list that failed: logged as an item that is left; false when the run ends (cancelled, or no answer). `filter` is
+   * a label (`key` or `key=value`), or the filter of the tags of the build image (`reference=devspaces-buildx`).
+   */
+  private async listFailed(kind: RemovalItem['kind'], filter: string, error: unknown): Promise<boolean> {
     if (isAbortError(error) || this.options.signal?.aborted) {
       this.ended ??= 'cancelled';
       return false;
     }
-    return this.record({ kind, name: `label=${label}`, outcome: 'failed', detail: errorMessage(error).slice(-500) });
+    const name = filter === BUILDX_REFERENCE_FILTER ? filter : `label=${filter}`;
+    return this.record({ kind, name, outcome: 'failed', detail: errorMessage(error).slice(-500) });
   }
 
   /** Logs `item`; after a failure, false when the engine does not answer anymore (the run ends). */
@@ -368,6 +391,21 @@ class RemovalRun {
     }
     return true;
   }
+
+  /** `docker image rm` (never with force) of each tag of the build image, listed now. False when the run ends. */
+  async buildxImages(): Promise<boolean> {
+    if (!this.goOn()) return false;
+    let images: Array<{ id: string; tags: string[] }>;
+    try {
+      images = await buildxImages(this.docker, this.options.signal);
+    } catch (error) {
+      return this.listFailed('image', BUILDX_REFERENCE_FILTER, error);
+    }
+    for (const reference of images.flatMap((image) => image.tags)) {
+      if (!(await this.remove('image', reference, ['image', 'rm', reference]))) return false;
+    }
+    return true;
+  }
 }
 
 function capitalized(text: string): string {
@@ -385,7 +423,10 @@ export async function removeEngineInfrastructure(docker: Pick<BootstrapDocker, '
   if (!(await run.containers(LABEL_MONITOR))) return finish(run, options);
   // The workers of every window (also of other computers on a shared engine) and their batch helpers.
   if (!(await run.containers(LABEL_HELPER_RUN))) return finish(run, options);
+  // A build of the helper image that runs now (it would build the image again).
+  if (!(await run.containers(LABEL_BUILD_RUN))) return finish(run, options);
   if (!(await run.images())) return finish(run, options);
+  if (!(await run.buildxImages())) return finish(run, options);
   for (const volume of SHARED_VOLUMES) {
     if (!(await run.remove('volume', volume, ['volume', 'rm', volume], VOLUME_REMOVE_TIMEOUT_MS))) return finish(run, options);
   }

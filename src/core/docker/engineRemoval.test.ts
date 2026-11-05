@@ -79,9 +79,13 @@ class FakeEngine implements ProcessRunner {
       return ok(lines(engine.volumes.filter(matches).map((v) => ({ Name: v.name, Labels: labelText(v.labels) }))));
     }
     if (args[0] === 'image' && args[1] === 'ls') {
-      // Every image of the test has the helper label; the dangling list only the images without a tag.
+      // Every image of the test has the helper label, except the tags of the build image (devspaces-buildx), which only
+      // the filter of their reference lists; the dangling list only the images without a tag.
       const dangling = args.includes('dangling=true');
+      const buildx = (image: Engine['images'][number]): boolean => image.tags.some((tag) => tag.startsWith('devspaces-buildx:'));
+      const byReference = filter('--filter') === 'reference=devspaces-buildx';
       const rows = engine.images
+        .filter((image) => buildx(image) === byReference)
         .filter((image) => !dangling || image.tags.length === 0)
         .flatMap((image) =>
           image.tags.length === 0
@@ -142,6 +146,7 @@ function fullEngine(): Partial<Engine> {
       { id: 'm1', name: 'devspaces-monitor', labels: { 'nimblescape.devspaces.monitor': 'abc', 'nimblescape.devspaces.monitor-owner': COMPUTER } },
       { id: 'w1', name: 'devspaces-api-worker1', labels: { 'nimblescape.devspaces.worker-run': 'true' } },
       { id: 'b1', name: 'devspaces-batch-1', labels: { 'nimblescape.devspaces.worker-run': 'true' } },
+      { id: 'x1', name: 'devspaces-build-0123456789abcdef', labels: { 'nimblescape.devspaces.build-run': 'true' } },
       { id: 'd1', name: 'devspaces-acme-api-1111', labels: { 'nimblescape.devspaces.id': KNOWN } },
     ],
     volumes: [
@@ -155,6 +160,9 @@ function fullEngine(): Partial<Engine> {
       { id: 'sha256:old', tags: [] },
       // A tag of another repository on a helper image: it stays, and with it the image.
       { id: 'sha256:mine', tags: ['devspaces-worker:aaaaaaaaaaaa', 'my-copy:1'] },
+      // The build image, with the tags of two versions.
+      { id: 'sha256:buildx', tags: ['devspaces-buildx:0.38.1'] },
+      { id: 'sha256:buildx-old', tags: ['devspaces-buildx:0.37.0'] },
     ],
   };
 }
@@ -169,11 +177,13 @@ describe('engineInventory', () => {
     const inventory = await engineInventory(dockerOf(runner), { computerId: COMPUTER, knownDevspaces: new Set([KNOWN]) });
     expect(inventory).toEqual({
       monitors: ['devspaces-monitor'],
-      helpers: ['devspaces-api-worker1', 'devspaces-batch-1'],
+      helpers: ['devspaces-api-worker1', 'devspaces-batch-1', 'devspaces-build-0123456789abcdef'],
       images: [
         { id: 'sha256:new', tags: ['devspaces-monitor:0123456789ab', 'devspaces-worker:0123456789ab'] },
         { id: 'sha256:old', tags: [] },
         { id: 'sha256:mine', tags: ['devspaces-worker:aaaaaaaaaaaa', 'my-copy:1'] },
+        { id: 'sha256:buildx', tags: ['devspaces-buildx:0.38.1'] },
+        { id: 'sha256:buildx-old', tags: ['devspaces-buildx:0.37.0'] },
       ],
       volumes: SHARED_VOLUMES,
       unknownDevspaces: [],
@@ -206,7 +216,7 @@ describe('engineInventory', () => {
 });
 
 describe('removeEngineInfrastructure', () => {
-  it('removes the Monitor, the helper containers, the helper images (never with force) and the volumes, in this order', async () => {
+  it('removes the Monitor, the helper and build containers, the helper and build images (never with force) and the volumes, in this order', async () => {
     const runner = new FakeEngine(fullEngine());
     const logger = recordingLogger();
     const steps: string[] = [];
@@ -217,10 +227,13 @@ describe('removeEngineInfrastructure', () => {
       ['rm', '-f', 'm1'],
       ['rm', '-f', 'w1'],
       ['rm', '-f', 'b1'],
+      ['rm', '-f', 'x1'],
       ['image', 'rm', 'devspaces-monitor:0123456789ab'],
       ['image', 'rm', 'devspaces-worker:0123456789ab'],
       ['image', 'rm', 'devspaces-worker:aaaaaaaaaaaa'],
       ['image', 'rm', 'sha256:old'],
+      ['image', 'rm', 'devspaces-buildx:0.38.1'],
+      ['image', 'rm', 'devspaces-buildx:0.37.0'],
       ['volume', 'rm', 'devspaces-monitor'],
       ['volume', 'rm', 'devspaces-worker-cache'],
       ['volume', 'rm', 'devspaces-vscode'],
@@ -316,6 +329,21 @@ describe('removeEngineInfrastructure', () => {
     expect(runner.calls).toContainEqual(['volume', 'rm', 'devspaces-vscode']);
   });
 
+  it('a list of the build images that fails is an item that is left, with the command that removes them', async () => {
+    const runner = new FakeEngine(fullEngine());
+    runner.engine.answers.set('image ls --filter reference=devspaces-buildx', fail('permission denied'));
+    const logger = recordingLogger();
+    const result = await removeEngineInfrastructure(dockerOf(runner), options(logger));
+    expect(result.items).toContainEqual({ kind: 'image', name: 'reference=devspaces-buildx', outcome: 'failed', detail: expect.stringContaining('permission denied') });
+    expect(
+      logger.lines.some((line) =>
+        line.startsWith('warn The images with the reference devspaces-buildx could not be removed (') &&
+        line.endsWith("permission denied). Remove it with: docker image rm $(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter reference=devspaces-buildx)"),
+      ),
+    ).toBe(true);
+    expect(runner.calls).toContainEqual(['volume', 'rm', 'devspaces-vscode']);
+  });
+
   it('Cancel ends the removal before its next call, and the log names the commands for the rest', async () => {
     const cancel = new AbortController();
     const runner = new FakeEngine(fullEngine());
@@ -337,11 +365,15 @@ describe('the commands in the log', () => {
     expect(manualCommand({ kind: 'image', name: 'devspaces-worker:0123456789ab' }, 'me@build-box:2222')).toBe('docker -H ssh://me@build-box:2222 image rm devspaces-worker:0123456789ab');
     expect(manualCommand({ kind: 'volume', name: 'devspaces-vscode' })).toBe('docker volume rm devspaces-vscode');
     expect(manualCommand({ kind: 'image', name: 'label=nimblescape.devspaces.worker=true' })).toBe('docker image prune -a -f --filter label=nimblescape.devspaces.worker=true');
+    expect(manualCommand({ kind: 'image', name: 'reference=devspaces-buildx' })).toBe("docker image rm $(docker image ls --format '{{.Repository}}:{{.Tag}}' --filter reference=devspaces-buildx)");
     expect(itemText({ kind: 'container', name: 'label=nimblescape.devspaces.monitor' })).toBe('the containers with the label nimblescape.devspaces.monitor');
+    expect(itemText({ kind: 'image', name: 'reference=devspaces-buildx' })).toBe('the images with the reference devspaces-buildx');
     expect(uninstallCommands('box')).toEqual([
       'docker -H ssh://box rm -f $(docker -H ssh://box ps -aq --filter label=nimblescape.devspaces.monitor)',
       'docker -H ssh://box rm -f $(docker -H ssh://box ps -aq --filter label=nimblescape.devspaces.worker-run)',
+      'docker -H ssh://box rm -f $(docker -H ssh://box ps -aq --filter label=nimblescape.devspaces.build-run)',
       'docker -H ssh://box image prune -a -f --filter label=nimblescape.devspaces.worker',
+      "docker -H ssh://box image rm $(docker -H ssh://box image ls --format '{{.Repository}}:{{.Tag}}' --filter reference=devspaces-buildx)",
       'docker -H ssh://box volume rm devspaces-monitor devspaces-worker-cache devspaces-vscode',
     ]);
     // The WSL distribution of Devspaces: its own Docker CLI, through wsl.
