@@ -215,6 +215,9 @@ describe('Use a Remote Docker Host…', () => {
     expect(cli.calls.filter((call) => call.args[0] === '-H')).toEqual([]);
     expect(runner.run).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(`Devspaces uses ${WSL_HOST} (wsl://devspaces). No Docker context was changed.`);
+    // Its progress says that the first start can take some minutes (a slow virtual machine).
+    expect(RemoteDockerTexts.testing(WSL_HOST)).toContain('can take some minutes');
+    expect(RemoteDockerTexts.testing('box')).toBe('Testing the connection to box…');
     // Without wsl.exe (no shell), the plain reason, and nothing changes.
     await state.setDockerHost(undefined);
     commands = create({ wslDistributions: async () => ['devspaces'], shells: { login: vi.fn(async () => undefined), run: vi.fn(async () => undefined) } });

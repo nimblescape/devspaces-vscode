@@ -79,7 +79,10 @@ export const RemoteDockerTexts = {
   },
   /** The description of a host of a Docker context of the user in the choice. */
   dockerContext: (name: string) => `Docker context ${name}`,
-  testing: (host: string) => `Testing the connection to ${host}…`,
+  testing: (host: string) =>
+    host === WSL_HOST
+      ? 'Starting and testing the WSL distribution of Devspaces. Its first start after a restart of Windows can take some minutes…'
+      : `Testing the connection to ${host}…`,
   useHost: (host: string) => `Use ${host}`,
   useLocal: 'Use the Local Docker',
   nowRemote: (host: string, rootless: boolean) =>
@@ -321,6 +324,7 @@ export class RemoteDockerCommands {
 
   /** Test, rootless socket, use. True when Devspaces uses `host` afterwards. */
   private async switchToRemote(host: string): Promise<boolean> {
+    this.deps.logger.info(`Devspaces tests the Docker host ${host}.`);
     const check = await withNotificationProgress(
       { title: RemoteDockerTexts.testing(host), cancellable: true },
       async (_progress, token) => {

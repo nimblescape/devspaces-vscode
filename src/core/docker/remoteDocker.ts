@@ -63,6 +63,17 @@ import { runWithDockerTarget } from './dockerTargets';
 
 /** Time limit of `docker info` on a remote host: an SSH connection plus the question (the CLI gives ssh 30 s to connect). */
 export const REMOTE_INFO_TIMEOUT_MS = 45_000;
+/**
+ * Time limit of `docker info` on the WSL distribution of Devspaces: when the distribution did not run, its start starts
+ * Docker (systemd), which can take more than 45 seconds in a slow virtual machine (Windows in a virtual machine: about 45
+ * seconds from the start of the service to the answer of Docker). The call waits for Docker (socket activation).
+ */
+export const WSL_INFO_TIMEOUT_MS = 3 * 60_000;
+
+/** The time limit of `docker info` on `host`: WSL_INFO_TIMEOUT_MS for a WSL distribution, else REMOTE_INFO_TIMEOUT_MS. */
+export function engineInfoTimeoutOf(host: string): number {
+  return hostAccessOf(host)?.kind === 'wsl' ? WSL_INFO_TIMEOUT_MS : REMOTE_INFO_TIMEOUT_MS;
+}
 /** Time limit of our own `ssh` call. */
 export const SSH_TIMEOUT_MS = 30_000;
 /** Time limit of `docker context ls`, which only reads files of the Docker CLI. */
@@ -144,7 +155,7 @@ export async function testRemoteDockerHost(
   ssh: SshCheckDeps,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<EngineCheck> {
-  const timeoutMs = options.timeoutMs ?? REMOTE_INFO_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? engineInfoTimeoutOf(host);
   if (hostAccessOf(host)?.kind === 'wsl') return testWslHost(host, ssh, options.signal, timeoutMs);
   if (ssh.shells !== undefined && ssh.sshPath !== undefined && sshTargetOf(host) !== undefined) {
     // Always a new login, as checkSshLogin without its cache: the test sees the SSH configuration and the host of now.
@@ -479,8 +490,8 @@ export interface RemoteReachabilityDeps {
 }
 
 /**
- * The step "Docker start" for a remote host: the SSH check (checkSshLogin), then one `docker info` of the host (no Docker
- * Desktop start, no setup, no "Starting Docker" step). Throws UserFacingError('dockerHostUnreachable') with the plain reason. A rootless
+ * The step "Docker start" for a remote host: the SSH check (checkSshLogin), then one `docker info` of the host (with the
+ * time limit engineInfoTimeoutOf; no Docker Desktop start, no setup, no "Starting Docker" step). Throws UserFacingError('dockerHostUnreachable') with the plain reason. A rootless
  * engine gets its socket recorded (read once with ssh), a rootful one has it forgotten, so the helper mounts the right
  * socket of that computer.
  */
@@ -495,7 +506,7 @@ export async function ensureDockerHostReachable(
     deps.logger.warn(`The Docker host ${target.host} cannot be reached ${hostAccessOf(target.host)?.kind === 'wsl' ? 'through wsl.exe' : 'over SSH'}: ${login.detail}`);
     throw dockerHostUnreachable(target.host, login.problem, login.detail);
   }
-  const check = await checkCurrentEngine(deps.docker, options);
+  const check = await checkCurrentEngine(deps.docker, { ...options, timeoutMs: options.timeoutMs ?? engineInfoTimeoutOf(target.host) });
   if (!check.ok) {
     deps.logger.warn(`The Docker host ${target.host} cannot be reached: ${check.detail}`);
     // `docker info` with the Docker CLI of Devspaces (on the WSL distribution, or through the Docker pipe of the

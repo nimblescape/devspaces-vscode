@@ -10,6 +10,7 @@
 // takes the login over (takeOver: RelayConnection.open writes its start script into the idle shell), so the open of a
 // window logs in to the host once. A shell that no call used for SHELL_IDLE_CLOSE_MS is closed. No `vscode`.
 import { randomBytes } from 'crypto';
+import { wslText } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';
 import { abortError, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
@@ -19,6 +20,12 @@ import { shellWord } from './startScript';
 
 /** The longest time from the start of the login to the answer of the shell (as SSH_TIMEOUT_MS of the SSH check). */
 export const SHELL_LOGIN_TIMEOUT_MS = 30_000;
+/**
+ * SHELL_LOGIN_TIMEOUT_MS of the WSL distribution of Devspaces: its login starts the distribution when it does not run,
+ * with the virtual machine of WSL and systemd, which takes more than 30 seconds in a slow virtual machine (Windows in a
+ * virtual machine). WSL itself gives up after its own time limit (WSL_START_ATTEMPTS), which comes first.
+ */
+export const WSL_SHELL_LOGIN_TIMEOUT_MS = 2 * 60_000;
 /** A shell that no call used for this long is closed (the next call logs in again). */
 export const SHELL_IDLE_CLOSE_MS = 2 * 60_000;
 /** The most output of one command on each stream; more ends the shell, and the call fails. */
@@ -234,7 +241,12 @@ export class RemoteShell {
           stderrReady = true;
           check();
         },
-        ended: () => fail(this.stderrReason() || 'The login ended before the shell answered.'),
+        // wsl.exe writes its errors to the standard output (for example "Error code: Wsl/Service/CreateInstance/ERROR_TIMEOUT"):
+        // for it, what came there before the marker is a part of the reason. The text of an SSH login stays unlogged.
+        ended: () => {
+          const output = options.program === 'wsl.exe' ? readableStderr(wslText(before.toString('utf8')), MAX_OUTPUT_BEFORE_MARKER) : '';
+          fail([this.stderrReason(), output].filter((text) => text !== '').join('\n') || 'The login ended before the shell answered.');
+        },
       };
       process.write(Buffer.from(`printf '%s\\n' ${marker}; printf '%s\\n' ${marker} >&2\n`, 'utf8'));
     });

@@ -3,6 +3,16 @@
 Each section lists the changes of one released version. The release workflow
 takes the section of a version as the notes of its GitHub release.
 
+## 0.4.2
+
+**Setup of Docker on Windows without questions:** the setup of the WSL distribution of Devspaces, from **Set Up Docker for Devspaces** or from a link on a computer without Docker, no longer asks "Set up Docker for Devspaces?": the click or the link is the decision, and the log names the downloads and the folder. **Install WSL 2** no longer asks either: it runs `wsl --install --no-distribution` in a terminal, Windows asks for administrator permission, and a message says to restart Windows afterwards. After the restart, the first VS Code window goes on with the setup of Docker by itself, and opens the link that needed it. Until Windows restarts, the setup says that the restart is missing, before any download. See [The WSL distribution of Devspaces](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-wsl-distribution-of-devspaces-windows).
+
+**WSL in a virtual machine:** before the download, the setup checks that WSL 2 can start its virtual machine. When it cannot, the message says to restart Windows after the installation of WSL, or to turn on virtualization, also nested virtualization when Windows runs in a virtual machine. A download that WSL could not register for this reason stays, and the next setup uses it without a new download. When WSL runs out of time to start the distribution (`Wsl/Service/CreateInstance/ERROR_TIMEOUT`), Devspaces starts it again, up to 3 times, and it waits up to 2 minutes for the first start of the distribution after a restart of Windows, which takes more than 30 seconds in a slow virtual machine, and then up to 3 minutes for Docker there, which needs about 45 seconds to start in such a virtual machine.
+
+**Progress of the setup:** the progress notification shows the first start of the distribution, and the percent of the downloads and of the installation of the packages of Docker Engine, so that a long step does not look stalled.
+
+**Debian for Windows on Arm:** the setup downloads the Debian file for the architecture of Windows, also when VS Code runs as an x64 program on Windows on Arm.
+
 ## 0.4.1
 
 **Windows without Docker:** Devspaces uses Docker Desktop when it is installed, and otherwise always its own Docker in WSL. A link to Devspaces, also a course link, on a Windows computer without Docker no longer asks to install Docker Desktop: after the GitHub sign-in, it checks WSL, asks once with the downloads and the folder, sets up the WSL distribution of Devspaces with Docker Engine, downloads the Docker CLI of Devspaces, and uses that distribution as its Docker host. Then the link opens the repository there. When the distribution exists already, the link uses it without a question. The Docker setup of the view on Windows no longer offers to install Docker Desktop: **Set Up Docker for Devspaces** is the setup there. When WSL is missing, the setup and the link install WSL 2 first, after the question that shows the command; Windows asks for administrator permission, and you restart the computer afterwards. See [Installing Docker](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#installing-docker).

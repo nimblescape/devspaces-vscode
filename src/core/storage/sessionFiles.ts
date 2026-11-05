@@ -15,6 +15,7 @@ import type {
   ReopenRecord,
   StartAfterUpdate,
   WindowStatus,
+  WslSetupAfterInstall,
 } from '../types';
 import { parseDevspaceSource } from '../helperChannel/protocol';
 import { listJsonFiles, removeFile, removeFileSync, writeJsonAtomic, writeJsonAtomicSync } from './atomicJson';
@@ -227,24 +228,56 @@ export class SessionFiles {
    * `undefined` when another window took it first, or when it is not valid.
    */
   async claimStartAfterUpdate(windowId: string): Promise<StartAfterUpdate | undefined> {
-    const claimed = this.paths.claimedStartAfterUpdateFile(windowId);
-    try {
-      await retryTransient(() => fs.promises.rename(this.paths.startAfterUpdate, claimed));
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') return undefined;
-      throw error;
-    }
-    try {
-      const text = await readTextFile(claimed);
-      const value = text === undefined ? undefined : parseJson(text);
-      return isStartAfterUpdate(value) ? value : undefined;
-    } finally {
-      await retryTransient(() => removeFile(claimed)).catch(() => {});
-    }
+    return claimFile(this.paths.startAfterUpdate, this.paths.claimedStartAfterUpdateFile(windowId), isStartAfterUpdate);
   }
 
   async removeStartAfterUpdate(): Promise<void> {
     await retryTransient(() => removeFile(this.paths.startAfterUpdate));
+  }
+
+  // --- Setup of Docker in WSL after the restart of Windows (wsl-setup-after-install.json) ------------------------------
+
+  /** Writes the record when Devspaces starts the installation of WSL; it replaces an older one. */
+  async writeWslSetupAfterInstall(record: WslSetupAfterInstall): Promise<void> {
+    await retryTransient(() => writeJsonAtomic(this.paths.wslSetupAfterInstall, record));
+  }
+
+  /** The record, or `undefined` when it is missing or not valid. */
+  async readWslSetupAfterInstall(): Promise<WslSetupAfterInstall | undefined> {
+    const value = await readJsonTolerant(this.paths.wslSetupAfterInstall);
+    return isWslSetupAfterInstall(value) ? value : undefined;
+  }
+
+  /**
+   * Takes the record for this window: only one window gets it (an atomic rename), and the file is gone afterwards.
+   * `undefined` when another window took it first, or when it is not valid.
+   */
+  async claimWslSetupAfterInstall(windowId: string): Promise<WslSetupAfterInstall | undefined> {
+    return claimFile(this.paths.wslSetupAfterInstall, this.paths.claimedWslSetupAfterInstallFile(windowId), isWslSetupAfterInstall);
+  }
+
+  async removeWslSetupAfterInstall(): Promise<void> {
+    await retryTransient(() => removeFile(this.paths.wslSetupAfterInstall));
+  }
+}
+
+/**
+ * Takes the record `file` for one window: it becomes `claimed` with an atomic rename, so that only one window gets it,
+ * and is removed after the read. `undefined` when it is missing (another window took it first) or not valid.
+ */
+async function claimFile<T>(file: string, claimed: string, isValid: (value: unknown) => value is T): Promise<T | undefined> {
+  try {
+    await retryTransient(() => fs.promises.rename(file, claimed));
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return undefined;
+    throw error;
+  }
+  try {
+    const text = await readTextFile(claimed);
+    const value = text === undefined ? undefined : parseJson(text);
+    return isValid(value) ? value : undefined;
+  } finally {
+    await retryTransient(() => removeFile(claimed)).catch(() => {});
   }
 }
 
@@ -359,6 +392,14 @@ export function isStartAfterUpdate(value: unknown): value is StartAfterUpdate {
     (value.confirmed === undefined || typeof value.confirmed === 'boolean') &&
     isNonEmptyString(value.window) &&
     isNonEmptyString(value.from) &&
+    isTime(value.createdAt)
+  );
+}
+
+export function isWslSetupAfterInstall(value: unknown): value is WslSetupAfterInstall {
+  return (
+    isRecord(value) &&
+    (value.link === undefined || (isRecord(value.link) && typeof value.link.path === 'string' && typeof value.link.query === 'string')) &&
     isTime(value.createdAt)
   );
 }

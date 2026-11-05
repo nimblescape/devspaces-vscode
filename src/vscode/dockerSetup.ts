@@ -49,6 +49,8 @@ import {
 import { MAC_OPEN, ensureDockerRunning, launchDetachedProcess } from '../core/docker/dockerStart';
 import { errorMessage, isUserFacingError } from '../core/errors';
 import { isAbortError, systemClock, type Clock, type Logger, type ProcessRunner } from '../core/ports';
+import type { LinkUri } from '../core/types';
+import type { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 
@@ -109,6 +111,11 @@ export interface DockerSetupDeps {
    * (see `onViewShown`), and after an installation started.
    */
   viewVisible: () => boolean;
+  /**
+   * Windows: the record of the installation of WSL, so that Devspaces goes on with the setup of its Docker after the
+   * restart of Windows (WslAfterInstall).
+   */
+  wslAfterInstall?: Pick<WslAfterInstall, 'started'>;
   /** For tests. Default: `readInstallPlanInput` (this computer). */
   planInput?: () => Promise<InstallPlanInput>;
   /** For tests. Default: the folder Downloads of the home folder. */
@@ -232,6 +239,8 @@ export class DockerSetup implements vscode.Disposable {
   private wslCheck: Promise<void> | undefined;
   /** True once a `wsl --status` ended. */
   private wslChecked = false;
+  /** This window started the installation of WSL, and WSL was not ready then. */
+  private wslInstallStarted = false;
   private disposed = false;
 
   constructor(private readonly deps: DockerSetupDeps) {
@@ -379,8 +388,14 @@ export class DockerSetup implements vscode.Disposable {
     void showInformationMessage(DockerSetupUiTexts.dockerRunning).then(undefined, () => undefined);
   }
 
-  /** Command devspaces.dockerSetup.installWsl (sidebar button "Install WSL 2", Windows): WSL_INSTALL_COMMAND in the terminal. */
-  async installWsl(): Promise<void> {
+  /**
+   * Command devspaces.dockerSetup.installWsl (sidebar button "Install WSL 2", Windows), and the setup of Docker for
+   * Devspaces or a link (`link`) when WSL is missing (WslSetupCommands): WSL_INSTALL_COMMAND in the terminal, without a
+   * question of Devspaces, because Windows asks for administrator permission itself; a message says what happens. The
+   * record of the installation (WslAfterInstall) lets the first window after the restart of Windows go on with the setup
+   * of Docker for Devspaces, and with the link.
+   */
+  async installWsl(link?: LinkUri): Promise<void> {
     if (this.refuseInRemoteWindow()) return;
     // The button shows until a check finds WSL ready, so a click before the first check ended waits for one.
     if (!this.wslChecked) await this.checkWsl();
@@ -388,12 +403,10 @@ export class DockerSetup implements vscode.Disposable {
       this.inform(DockerSetupUiTexts.wslAlreadyInstalled);
       return;
     }
-    const confirmation = terminalConfirmation(DockerSetupTexts.confirmWsl, [WSL_INSTALL_COMMAND], {
-      needsAdmin: false,
-      note: DockerSetupTexts.wslRestart,
-    });
-    if (!(await this.confirm(confirmation))) return;
+    await this.deps.wslAfterInstall?.started(link);
     this.runInTerminal([WSL_INSTALL_COMMAND]);
+    this.wslInstallStarted = true;
+    this.inform(DockerSetupTexts.wslInstalling(INSTALL_TERMINAL_NAME, WSL_INSTALL_COMMAND));
     this.startInstallWatch();
   }
 
@@ -619,6 +632,12 @@ export class DockerSetup implements vscode.Disposable {
       });
     }
     this.shown = values;
+    // WSL is installed now: Windows must restart, and the first window after the restart goes on with the setup.
+    if (event.kind === 'wsl' && !before.wslReady && this.state.wslReady && this.wslInstallStarted) {
+      this.wslInstallStarted = false;
+      this.deps.logger.info('WSL is installed. Devspaces goes on with the setup of its Docker after the restart of Windows.');
+      this.inform(DockerSetupTexts.wslRestartToGoOn);
+    }
     // The first check only sets the keys: the sidebar reads `setupRequired` when it renders.
     if (!first && before.cliFound !== this.state.cliFound) {
       this.deps.logger.info(this.state.cliFound ? 'The Docker CLI was found.' : 'The Docker CLI was not found.');

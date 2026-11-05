@@ -9,8 +9,8 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 import { WSL_HOST } from '../core/docker/dockerHost';
 import { WslSetupError, type WslImage, type WslRegistration, type WslSeparation, type WslSetupStep } from '../core/docker/wslSetup';
 import { Actions } from '../core/messages';
+import { DockerSetupTexts } from '../core/docker/dockerSetup';
 import { abortError } from '../core/ports';
-import { Commands } from './commands';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
 import { WslSetupCommands, WslSetupTexts, type WslSetupCommandsDeps } from './wslSetupCommands';
 
@@ -23,6 +23,7 @@ const IMAGE: WslImage & { size: number } = {
   size: 117 * 1_048_576 + 1,
 };
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
+const LINK = { path: '/course', query: 'repository=school/course-<username>' };
 
 /** The messages of the progress notifications, as reported. */
 let reports: Array<{ message?: string; increment?: number }>;
@@ -33,6 +34,7 @@ let setup: { [K in Exclude<keyof Setup, 'locked'>]: Mock<Setup[K]> } & { locked:
 let useHost: Mock<WslSetupCommandsDeps['useHost']>;
 let forgetHost: Mock<WslSetupCommandsDeps['forgetHost']>;
 let showLog: Mock<() => void>;
+let installWsl: Mock<WslSetupCommandsDeps['installWsl']>;
 
 function commands(extra: Partial<WslSetupCommandsDeps> = {}): WslSetupCommands {
   return new WslSetupCommands({
@@ -41,6 +43,7 @@ function commands(extra: Partial<WslSetupCommandsDeps> = {}): WslSetupCommands {
     isWindows: true,
     logger,
     showLog,
+    installWsl,
     useHost,
     forgetHost,
     ...extra,
@@ -64,6 +67,7 @@ beforeEach(() => {
   reports = [];
   setup = {
     checkWsl: vi.fn(async (_signal?: AbortSignal) => '2.6.1'),
+    checkVirtualMachine: vi.fn(async (_signal?: AbortSignal) => undefined),
     registration: vi.fn(async (): Promise<WslRegistration> => 'none'),
     image: vi.fn(async (_signal?: AbortSignal): Promise<WslImage> => IMAGE),
     setUp: vi.fn(async (_image: unknown, onStep: (step: WslSetupStep) => void, _signal?: AbortSignal) => {
@@ -84,6 +88,7 @@ beforeEach(() => {
   useHost = vi.fn(async (_host: string) => true);
   forgetHost = vi.fn(async (_host: string): Promise<'notDockerHost' | 'local' | 'unsupported'> => 'notDockerHost');
   showLog = vi.fn();
+  installWsl = vi.fn(async () => undefined);
   window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
     task(
       { report: (value: { message?: string; increment?: number }) => reports.push(value) },
@@ -149,14 +154,16 @@ describe('the check at the start of a window', () => {
 });
 
 // A link on Windows without Docker (R-GEN-002, R-ENG-005): the WSL distribution of Devspaces becomes the Docker host,
-// after the check of WSL and one question, and useHost downloads the Docker CLI of Devspaces when the computer has none.
+// after the check of WSL and without a question, and useHost downloads the Docker CLI of Devspaces when the computer has
+// none.
 describe('Docker for a flow on Windows without Docker', () => {
-  it('checks WSL, asks once, sets up the distribution, and then uses it', async () => {
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
-    expect(await commands().ensureDockerHost()).toBe('used');
+  // Mutation: a question before the setup fails it (Hannes: as few interactions as possible for students).
+  it('checks WSL and its virtual machine, sets up the distribution without a question, and then uses it', async () => {
+    expect(await commands().ensureDockerHost(LINK)).toBe('used');
     expect(setup.checkWsl).toHaveBeenCalledTimes(1);
-    expect(questions()).toEqual([{ message: WslSetupTexts.confirmSetUpForFlow, detail: WslSetupTexts.confirmSetUpDetail(IMAGE, FOLDER), button: WslSetupTexts.setUp }]);
-    expect(WslSetupTexts.confirmSetUpForFlow).toBe('This computer has no Docker. Set up Docker for Devspaces?');
+    expect(setup.checkVirtualMachine).toHaveBeenCalledTimes(1);
+    expect(window.showWarningMessage.mock.calls.filter((call: unknown[]) => call[0] !== WslSetupTexts.dockerDesktopIntegrates)).toEqual([]);
+    expect(logger.info).toHaveBeenCalledWith(WslSetupTexts.setUpLog(IMAGE, FOLDER));
     expect(setup.setUp).toHaveBeenCalledWith(IMAGE, expect.any(Function), expect.any(AbortSignal));
     expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
   });
@@ -181,20 +188,54 @@ describe('Docker for a flow on Windows without Docker', () => {
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.changedElsewhere);
   });
 
-  it('installs WSL 2 first when WSL is missing, and uses nothing', async () => {
+  it('installs WSL 2 first when WSL is missing, with the link for after the restart of Windows, and uses nothing', async () => {
     setup.checkWsl.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
-    expect(await commands().ensureDockerHost()).toBe('notUsed');
-    expect(fakeVscode.commands.executeCommand.mock.calls).toEqual([[Commands.dockerSetupInstallWsl]]);
+    expect(await commands().ensureDockerHost(LINK)).toBe('notUsed');
+    expect(installWsl.mock.calls).toEqual([[LINK]]);
     expect(window.showErrorMessage).not.toHaveBeenCalled();
     expect(questions()).toEqual([]);
     expect(useHost).not.toHaveBeenCalled();
   });
 
-  it('uses nothing when the question is closed', async () => {
-    expect(await commands().ensureDockerHost()).toBe('notUsed');
-    expect(questions()).toHaveLength(1);
+  // Mutation: a check of the restart after the download fails it (some 100 MB that WSL cannot register before the restart).
+  it('says that Windows must restart first, before any download, while the restart after the installation of WSL is missing', async () => {
+    const restartPending = vi.fn(async () => true);
+    const wslInstallDone = vi.fn(async () => undefined);
+    setup.checkVirtualMachine.mockRejectedValue(new WslSetupError('vmUnavailable', 'wsl.exe --status says that WSL 2 cannot start'));
+    expect(await commands({ restartPending, wslInstallDone }).ensureDockerHost(LINK)).toBe('notUsed');
+    expect(setup.image).not.toHaveBeenCalled();
     expect(setup.setUp).not.toHaveBeenCalled();
-    expect(useHost).not.toHaveBeenCalled();
+    expect(installWsl).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerSetupTexts.wslRestartToGoOn);
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+    // The record stays for the window after the restart.
+    expect(wslInstallDone).not.toHaveBeenCalled();
+    // A distribution that exists needs no new check of WSL; its use makes the record needless.
+    registered('own');
+    expect(await commands({ restartPending, wslInstallDone }).ensureDockerHost()).toBe('used');
+    expect(wslInstallDone).toHaveBeenCalledTimes(1);
+  });
+
+  // An installation of WSL that needed no restart (its virtual machine was on before) must not block the setup for days.
+  it('goes on without the restart when WSL 2 can start its virtual machine, and forgets the record after the use', async () => {
+    const wslInstallDone = vi.fn(async () => undefined);
+    expect(await commands({ restartPending: async () => true, wslInstallDone }).ensureDockerHost(LINK)).toBe('used');
+    expect(setup.setUp).toHaveBeenCalledTimes(1);
+    expect(wslInstallDone).toHaveBeenCalledTimes(1);
+    // Not used: the record stays.
+    wslInstallDone.mockClear();
+    useHost.mockResolvedValue(false);
+    expect(await commands({ restartPending: async () => true, wslInstallDone }).ensureDockerHost(LINK)).toBe('notUsed');
+    expect(wslInstallDone).not.toHaveBeenCalled();
+  });
+
+  it('says why WSL 2 cannot start its virtual machine, with Show details, before any download', async () => {
+    setup.checkVirtualMachine.mockRejectedValue(new WslSetupError('vmUnavailable', 'wsl.exe --status says that WSL 2 cannot start'));
+    expect(await commands().ensureDockerHost()).toBe('notUsed');
+    expect(setup.image).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('vmUnavailable'), Actions.showDetails);
+    expect(WslSetupTexts.problem('vmUnavailable')).toContain('When WSL was installed just now, restart Windows.');
+    expect(WslSetupTexts.problem('vmUnavailable')).toContain('nested virtualization in the settings of that virtual machine');
   });
 
   it('asks in a modal question before it uses a distribution devspaces of the user, and never changes it', async () => {
@@ -221,7 +262,6 @@ describe('Docker for a flow on Windows without Docker', () => {
     setup.setUp.mockImplementationOnce(
       () => new Promise((resolve) => (release = () => resolve({ version: '29.9.2', separation: { state: 'separate', dockerDesktop: true } }))),
     );
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     const instance = commands();
     const first = instance.setUp();
     await vi.waitFor(() => expect(setup.setUp).toHaveBeenCalledTimes(1));
@@ -233,14 +273,13 @@ describe('Docker for a flow on Windows without Docker', () => {
 });
 
 describe('Set Up Docker for Devspaces in WSL…', () => {
-  it('asks once with the downloads and the folder, sets up the distribution with its steps, and then uses it', async () => {
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
+  it('sets up a new distribution without a question, logs the downloads and the folder, shows its steps, and then uses it', async () => {
     await commands().setUp();
-    expect(questions()).toEqual([{ message: WslSetupTexts.confirmSetUp, detail: WslSetupTexts.confirmSetUpDetail(IMAGE, FOLDER), button: WslSetupTexts.setUp }]);
-    const [detail] = questions().map((question) => question.detail);
-    expect(detail).toContain(`Debian for WSL (118 MB) from ${IMAGE.url}, checked against its SHA-256`);
-    expect(detail).toContain(`Folder of the distribution:\n${FOLDER}`);
-    expect(detail).toContain('This needs no administrator permission.');
+    expect(questions()).toEqual([]);
+    const log = WslSetupTexts.setUpLog(IMAGE, FOLDER);
+    expect(logger.info).toHaveBeenCalledWith(log);
+    expect(log).toContain(`Debian for WSL (118 MB) from ${IMAGE.url}, checked against its SHA-256`);
+    expect(log).toContain(`set up in ${FOLDER}`);
     expect(setup.setUp).toHaveBeenCalledWith(IMAGE, expect.any(Function), expect.any(AbortSignal));
     expect(useHost).toHaveBeenCalledWith(WSL_HOST);
     // The download fills the bar; the other steps only change the text.
@@ -256,7 +295,7 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     ]);
     // The download fills 40 percent; the other steps start at their places, so the bar is full only at the end.
     expect(reports.map((report) => report.increment).filter((increment) => increment !== undefined)).toEqual([20, 20, 25]);
-    // Only the work after the question holds the lock of all windows.
+    // Only the work after the check holds the lock of all windows.
     expect(setup.locked).toHaveBeenCalledTimes(1);
   });
 
@@ -302,7 +341,8 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(window.showErrorMessage).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the question is closed', async () => {
+  it('does nothing when the question before the setup of an existing distribution is closed', async () => {
+    registered('own');
     await commands().setUp();
     expect(questions()).toHaveLength(1);
     expect(setup.setUp).not.toHaveBeenCalled();
@@ -356,21 +396,22 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(questions()).toHaveLength(1);
   });
 
-  // The process of Windows without Docker: WSL first. Its installation has its own question with the command, the
-  // administrator permission and the restart (DockerSetup.installWsl), so no message comes before it.
+  // The process of Windows without Docker: WSL first. Its installation says what happens itself (DockerSetup.installWsl),
+  // so no message comes before it.
   it('installs WSL 2 first when WSL is missing', async () => {
     setup.checkWsl.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
     await commands().setUp();
-    expect(fakeVscode.commands.executeCommand.mock.calls).toEqual([[Commands.dockerSetupInstallWsl]]);
+    expect(installWsl.mock.calls).toEqual([[undefined]]);
     expect(window.showErrorMessage).not.toHaveBeenCalled();
     expect(setup.image).not.toHaveBeenCalled();
     expect(questions()).toEqual([]);
-    expect(logger.info).toHaveBeenCalledWith('WSL is not installed, so Devspaces offers to install WSL 2 first: wsl.exe was not found.');
-    // A failed command is logged.
-    fakeVscode.commands.executeCommand.mockRejectedValueOnce(new Error('command not found'));
+    expect(logger.info).toHaveBeenCalledWith('WSL is not installed, so Devspaces installs WSL 2 first: wsl.exe was not found.');
+    // A failed installation is logged.
+    installWsl.mockRejectedValueOnce(new Error('terminal not available'));
     await commands().setUp();
-    await vi.waitFor(() => expect(logger.error).toHaveBeenCalledWith('WSL 2 could not be installed: command not found'));
+    await vi.waitFor(() => expect(logger.error).toHaveBeenCalledWith('WSL 2 could not be installed: terminal not available'));
   });
+
 
   it('keeps Install WSL 2 in the message of a problem that names it', () => {
     // A user without administrator permission learns the command for an administrator.
@@ -556,8 +597,14 @@ describe('the texts of the steps', () => {
     expect(WslSetupTexts.step({ kind: 'start' })).toBe('Starting Docker.');
   });
 
-  it('give the question a size only when it is known', () => {
+  it('show the first start of the distribution and the progress of apt-get', () => {
+    expect(WslSetupTexts.step({ kind: 'launch' })).toBe('Starting the WSL distribution. The first start can take some minutes.');
+    expect(WslSetupTexts.step({ kind: 'docker', phase: 'docker', progress: { action: 'download', percent: 42.7 } })).toBe('Installing Docker Engine: downloading 42 %.');
+    expect(WslSetupTexts.step({ kind: 'docker', phase: 'packages', progress: { action: 'install', percent: 80 } })).toBe('Installing the base packages: installing 80 %.');
+  });
+
+  it('give the log a size only when it is known', () => {
     const { size: _size, ...withoutSize } = IMAGE;
-    expect(WslSetupTexts.confirmSetUpDetail(withoutSize, FOLDER)).toContain(`- Debian for WSL from ${IMAGE.url}`);
+    expect(WslSetupTexts.setUpLog(withoutSize, FOLDER)).toContain(`Debian for WSL from ${IMAGE.url}`);
   });
 });

@@ -14,7 +14,8 @@ import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
 import { LOCAL_CLI_VERSION_FORMAT, LOCAL_CLI_VERSION_TIMEOUT_MS, localDockerCliApi, type DockerCliApi } from '../core/docker/dockerApiVersion';
 import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
-import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, wslSetupFolder } from '../core/docker/wslSetup';
+import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
+import { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { WslKeeper } from '../core/docker/wslKeeper';
 import { WslLifetime } from '../core/docker/wslLifetime';
 import { WslUpgrade } from '../core/docker/wslUpgrade';
@@ -208,7 +209,7 @@ async function activateExtension(
   // The window of an attached container, also in the names of its workers (ConnectionAdapter.windowName).
   const connection = new ConnectionAdapter(logger);
   const installedCli = findDockerCli(env, platform);
-  logger.info(installedCli ? `Docker CLI: ${installedCli}` : 'The Docker CLI was not found.');
+  logger.info(installedCli ? `Docker CLI: ${installedCli}` : 'This computer has no Docker CLI of its own (Docker Desktop or Docker Engine).');
   // The Docker CLI of Devspaces, one tested version (docs/architecture.md "The Docker CLI of Devspaces"), where Docker
   // publishes one that runs here. In every window, the Docker calls of Devspaces on a remote host take it when it is
   // installed, also on a computer without a Docker CLI (BootstrapDocker option ownCli); the other calls keep the Docker
@@ -223,6 +224,12 @@ async function activateExtension(
     logger.info(`Docker publishes no Docker CLI for ${platform} on ${process.arch} that runs here, so this window uses the Docker CLI of this computer.`);
   }
   const presentOwnCli = (): string | undefined => (ownCliBuild ? presentOwnDockerCli(paths.dockerCliDir, platform, process.arch) : undefined);
+  // Without a Docker CLI of this computer, the log names the Docker CLI of Devspaces, which runs the calls on a remote
+  // host (the window of a devspace names it below, when it puts it first in PATH).
+  if (installedCli === undefined && !pipeWindow) {
+    const present = presentOwnCli();
+    if (present !== undefined) logger.info(`The Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces is installed: ${present}`);
+  }
   // Whether this window put the Docker CLI of Devspaces first in PATH (useOwnDockerCli).
   let ownCliInPath = false;
   const useOwnDockerCli = (cli: string): void => {
@@ -755,7 +762,13 @@ async function activateExtension(
   // LOCALAPPDATA. About once a week, a window that uses it upgrades its packages (WslUpgrade), only when Devspaces set
   // it up.
   const wslFolder = platform === 'win32' ? wslSetupFolder(env) : undefined;
-  const wslSetupCore = wslFolder === undefined ? undefined : new WslSetup({ runner, wslPath, env, arch: process.arch, folder: wslFolder, logger, http: nodeHttpsTransport });
+  const wslSetupCore =
+    wslFolder === undefined
+      ? undefined
+      : new WslSetup({ runner, wslPath, env, arch: () => readWindowsArch(runner, env, process.arch, logger), folder: wslFolder, logger, http: nodeHttpsTransport });
+  // The record of the installation of WSL (Windows): after the restart of Windows, the first window goes on with the setup
+  // of Docker for Devspaces, and with the link that needed it (Controller.goOnAfterWslInstall).
+  const wslAfterInstall = platform === 'win32' ? new WslAfterInstall({ files: sessionFiles, logger }) : undefined;
   const upgrade = new WslUpgrade({
     runner,
     wslPath,
@@ -993,6 +1006,7 @@ async function activateExtension(
     remoteDockerHostConfigured: () => targets.last?.kind === 'remote',
     // Windows: `wsl --status` only while the view shows the setup (also onViewShown below).
     viewVisible: () => view.visible,
+    wslAfterInstall,
     // Start Docker never starts Docker Desktop for a remote host; it only checks that host.
     startDocker: async (signal, onStarting) =>
       startDockerFor(
@@ -1086,6 +1100,9 @@ async function activateExtension(
     isWindows: platform === 'win32',
     logger,
     showLog: () => logger.show(),
+    installWsl: (link) => setup.installWsl(link),
+    restartPending: async () => (await wslAfterInstall?.restartPending()) === true,
+    wslInstallDone: async () => wslAfterInstall?.forget(),
     useHost: (host) => remoteDocker.useHost(host),
     forgetHost: (host) => remoteDocker.forgetHost(host),
     // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes.
@@ -1150,6 +1167,7 @@ async function activateExtension(
     },
     remoteDocker,
     wslSetup,
+    wslAfterInstall,
     // The update of VS Code before a devspace starts (docs/requirements.md R-DS-006), with the commands of the
     // workbench of VS Code (vscodeUpdate.ts) and the record of the last restart in the global state.
     vscodeUpdate: new VscodeUpdate({
@@ -1491,4 +1509,6 @@ async function activateExtension(
   // folder or another remote): only a Start of this window that waited for the update of VS Code.
   if (connection.isEmptyWindow()) background(controller.runEmptyWindowTasks(activatedAt), 'run the tasks of the empty window');
   else background(started.then(() => controller.startAfterUpdate()), 'go on with the Start after the update of VS Code');
+  // Windows: the setup of Docker for Devspaces, and its link, after the restart that the installation of WSL asked for.
+  if (wslAfterInstall !== undefined) background(started.then(() => controller.goOnAfterWslInstall()), 'go on with the setup of Docker after the restart of Windows');
 }

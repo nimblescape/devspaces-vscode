@@ -6,11 +6,11 @@
 // host (an SSH host, or the WSL distribution of Devspaces), opened by the first check or Docker call before a connection
 // of the relay to the host, used by the calls after it, and taken over by the next connection of the relay to the host
 // (takeOver). No `vscode`.
-import { transportProgramOf } from '../docker/dockerHost';
+import { WSL_START_ATTEMPTS, hostAccessOf, transportProgramOf, wslStartTimedOut } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
 import { currentSshPromptFlow, type SshLoginPrompts } from '../sshAskpass';
-import { RemoteShell, RemoteShellError, ShellGoneError, dockerShellCommand } from './remoteShell';
+import { RemoteShell, RemoteShellError, ShellGoneError, WSL_SHELL_LOGIN_TIMEOUT_MS, dockerShellCommand } from './remoteShell';
 
 /** A login that started: its process, and the questions it may ask in VS Code (a login of a flow of the user). */
 export interface RemoteShellStart {
@@ -31,7 +31,7 @@ export interface RemoteShellsOptions {
    * (wslHostTransport); undefined when the host has no transport.
    */
   start(host: string): RemoteShellStart | undefined;
-  /** Only for the tests. */
+  /** Only for the tests (all hosts). Default: SHELL_LOGIN_TIMEOUT_MS, and WSL_SHELL_LOGIN_TIMEOUT_MS for a WSL distribution. */
   loginTimeoutMs?: number;
   idleCloseMs?: number;
 }
@@ -74,7 +74,9 @@ export class RemoteShells {
    * key, and the Cancel of the other flow ends the questions of its login. After the time limit of that login it does
    * not: a login without questions fails at once instead of waiting, so the host did not answer in time. `fresh` (the
    * test of a host): the open shell to the host ends at once (a command on it ends with it), and a new login starts; a
-   * login in progress counts as new.
+   * login in progress counts as new. A login to a WSL distribution has a longer time limit (WSL_SHELL_LOGIN_TIMEOUT_MS),
+   * and starts again when WSL ran out of time to start the distribution (wslStartTimedOut), at most WSL_START_ATTEMPTS
+   * times in all.
    */
   open(host: string, signal?: AbortSignal, options: { fresh?: boolean } = {}): Promise<RemoteShell | undefined> {
     if (this.disposed) return Promise.resolve(undefined);
@@ -99,13 +101,35 @@ export class RemoteShells {
     }
     const started = this.options.start(host);
     if (started === undefined) return Promise.resolve(undefined);
-    const { process, prompts, afterLogin } = started;
-    const entry: Entry = { process, flow: currentSshPromptFlow() };
+    // The start of the last login (a new one after WSL ran out of time to start the distribution).
+    let latest = started;
+    const entry: Entry = { process: started.process, flow: currentSshPromptFlow() };
     const forget = () => {
       if (this.entries.get(host) === entry) this.entries.delete(host);
     };
-    const { logger, loginTimeoutMs, idleCloseMs } = this.options;
-    entry.opening = RemoteShell.open(process, { logger, name: host, program: transportProgramOf(host), loginTimeoutMs, idleCloseMs, onEnd: forget, prompts }).then(
+    const { logger, idleCloseMs } = this.options;
+    const access = hostAccessOf(host);
+    const distribution = access?.kind === 'wsl' ? access.distribution : undefined;
+    const loginTimeoutMs = this.options.loginTimeoutMs ?? (distribution !== undefined ? WSL_SHELL_LOGIN_TIMEOUT_MS : undefined);
+    const login = async (): Promise<RemoteShell> => {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          // The end of a login that failed does not forget the entry: a new login may follow, and the failure forgets it.
+          const onEnd = (): void => {
+            if (entry.shell !== undefined) forget();
+          };
+          return await RemoteShell.open(latest.process, { logger, name: host, program: transportProgramOf(host), loginTimeoutMs, idleCloseMs, onEnd, prompts: latest.prompts });
+        } catch (error) {
+          if (distribution === undefined || attempt >= WSL_START_ATTEMPTS || this.disposed || !(error instanceof RemoteShellError) || error.timedOut || !wslStartTimedOut(error.detail)) throw error;
+          const next = this.options.start(host);
+          if (next === undefined) throw error;
+          logger.info(`WSL ran out of time to start the distribution ${distribution} (attempt ${attempt} of ${WSL_START_ATTEMPTS}), so Devspaces starts it again: ${error.detail}`);
+          latest = next;
+          entry.process = next.process;
+        }
+      }
+    };
+    entry.opening = login().then(
       (shell) => {
         entry.shell = shell;
         entry.opening = undefined;
@@ -114,6 +138,7 @@ export class RemoteShells {
           return shell;
         }
         logger.info(`The shell on ${host} is open: one login for the checks before the relay.`);
+        const { afterLogin } = latest;
         if (afterLogin !== undefined) {
           const step: Promise<void> = shell
             .keepOpenDuring(() => afterLogin(shell))
