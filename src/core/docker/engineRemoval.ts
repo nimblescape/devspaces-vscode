@@ -18,7 +18,7 @@ import { isAbortError, type Logger, type RunOptions, type RunResult } from '../p
 import { LABEL_MONITOR, LABEL_MONITOR_OWNER, REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, type BootstrapDocker } from './bootstrapDocker';
-import { BUILDX_REPOSITORY } from './buildxImage';
+import { BUILDX_IMAGE_LS_ARGS, BUILDX_REPOSITORY, buildxImageTags } from './buildxImage';
 import { describeDockerHost, sshEndpoint, wslDistributionOf } from './dockerHost';
 import { DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 
@@ -144,12 +144,8 @@ const BUILDX_REFERENCE = `reference=${BUILDX_REPOSITORY}`;
 
 /** The tags of the build image (devspaces-buildx:<version>), each with the ID of its image. */
 async function buildxImages(docker: Pick<BootstrapDocker, 'run'>, signal: AbortSignal | undefined): Promise<Array<{ id: string; tags: string[] }>> {
-  const stdout = await read(docker, ['image', 'ls', '--filter', BUILDX_REFERENCE, '--format', '{{json .}}'], signal);
-  return parseJsonLines(stdout).flatMap((item) =>
-    isRecord(item) && typeof item.ID === 'string' && item.Repository === BUILDX_REPOSITORY && typeof item.Tag === 'string' && item.Tag !== '' && item.Tag !== '<none>'
-      ? [{ id: item.ID, tags: [`${BUILDX_REPOSITORY}:${item.Tag}`] }]
-      : [],
-  );
+  const stdout = await read(docker, [...BUILDX_IMAGE_LS_ARGS], signal);
+  return buildxImageTags(parseJsonLines(stdout)).map(({ id, tag }) => ({ id, tags: [tag] }));
 }
 
 /**

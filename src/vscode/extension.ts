@@ -323,8 +323,9 @@ async function activateExtension(
     sshEnv: (host, callEnv) => keyOffer?.dockerSshEnv(host, callEnv),
     // The calls of an operation on a remote host: the Docker CLI of Devspaces when it is installed.
     ownCli: presentOwnCli,
-    // The build container of the helper image mounts the Docker socket of its engine, as the worker there does.
-    engineSocket: (target) => (target === undefined ? Promise.resolve(helperDockerSocket(env, platform)) : engineSocket(target)),
+    // The build container of the helper image mounts the Docker socket of its engine, as the worker there does. Outside
+    // an operation, the engine is the local Docker of the current Docker context.
+    engineSocket: async (target): Promise<string> => engineSocket(target ?? (await targets.ofHost(''))),
     onCliFound: shareDockerFolder,
     onDaemonStatus: (running) => {
       if (running && !daemonRunning) helperChannels?.clearFailures();

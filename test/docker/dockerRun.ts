@@ -212,7 +212,7 @@ export function familiarName(reference: string): string {
  * images whose tags are all in `allowedTags` (the workspace helper image, pulled base images); objects of the baseline
  * that are gone (the tests must never remove an object of the user); and tags of the baseline images that are gone (also
  * allowed ones), or that moved to another image (except allowed ones: a pull or a build of the tests may move them).
- * Tags for which `mayGo` is true may go, and so may a baseline image whose tags all may go (the build images of older
+ * Tags for which `mayGo` is true (with their familiar name) may go, and so may a baseline image whose tags all may go (the build images of older
  * versions, which the build of the helper image removes).
  */
 export function unexpectedChanges(
@@ -246,14 +246,14 @@ export function unexpectedChanges(
   for (const image of current.images) for (const tag of image.tags) currentTags.set(familiarName(tag), image.id);
   for (const image of baseline.images) {
     if (!currentImages.has(image.id)) {
-      if (image.tags.length > 0 && image.tags.every(mayGo)) continue;
+      if (image.tags.length > 0 && image.tags.every((tag) => mayGo(familiarName(tag)))) continue;
       changes.push(`image ${image.id.slice(7, 19)} ${image.tags.join(', ')} of the baseline is gone`);
       continue;
     }
     for (const tag of image.tags) {
       const id = currentTags.get(familiarName(tag));
       if (id === undefined) {
-        if (!mayGo(tag)) changes.push(`tag ${tag} of the baseline image ${image.id.slice(7, 19)} is gone`);
+        if (!mayGo(familiarName(tag))) changes.push(`tag ${tag} of the baseline image ${image.id.slice(7, 19)} is gone`);
       } else if (id !== image.id && !allowed.has(familiarName(tag))) changes.push(`tag ${tag} of the baseline moved to ${id.slice(7, 19)}`);
     }
   }

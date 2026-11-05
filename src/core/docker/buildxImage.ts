@@ -9,6 +9,7 @@
 // index for all platforms in buildxPin.json (written by scripts/buildx-pin.mjs, which the workflow "Buildx image"
 // runs every week). On the engine it carries the tag devspaces-buildx:<version>, so that the removal of older versions
 // and "Remove Devspaces from This Docker Engine…" know it by its name. No `vscode`.
+import { isRecord } from '../valueChecks';
 import { LABEL_BUILD_RUN } from '../names';
 import pin from './buildxPin.json';
 
@@ -39,6 +40,18 @@ export function buildxImageTag(buildx: BuildxPin = BUILDX_PIN): string {
 /** The reference by which the build image is pulled: `docker/buildx-bin@sha256:<digest of its index>`. */
 export function buildxPulledReference(buildx: BuildxPin = BUILDX_PIN): string {
   return `${buildx.image}@${buildx.digest}`;
+}
+
+/** The arguments of `docker image ls` of the tags of the build image, one JSON line each (buildxImageTags). */
+export const BUILDX_IMAGE_LS_ARGS: readonly string[] = ['image', 'ls', '--filter', `reference=${BUILDX_REPOSITORY}`, '--format', '{{json .}}'];
+
+/** The tags `devspaces-buildx:<tag>` of the JSON lines of BUILDX_IMAGE_LS_ARGS, each with the ID of its image. */
+export function buildxImageTags(items: readonly unknown[]): Array<{ id: string; tag: string }> {
+  return items.flatMap((item) =>
+    isRecord(item) && typeof item.ID === 'string' && item.Repository === BUILDX_REPOSITORY && typeof item.Tag === 'string' && item.Tag !== '' && item.Tag !== '<none>'
+      ? [{ id: item.ID, tag: `${BUILDX_REPOSITORY}:${item.Tag}` }]
+      : [],
+  );
 }
 
 /** The version x.y.z of a tag of BUILDX_REPOSITORY, as three numbers; undefined for another tag. */
@@ -79,7 +92,7 @@ export const PROXY_BUILD_ARG_NAMES: readonly string[] = ['HTTP_PROXY', 'HTTPS_PR
  * builds with the builder of the engine (the docker driver, `--builder default`), which keeps the image in the engine
  * (`--load`). The build gets the proxy settings of the Docker CLI that runs the container, as `docker build` would:
  * `--build-arg <name>` without a value for each of PROXY_BUILD_ARG_NAMES, so that no value appears in the arguments (a
- * proxy URL can hold a password). `buildArgs` are the flags and the labels of the build (`--pull`, `--label k=v`,
+ * proxy URL can hold a password). `buildArgs` are the flags and the labels of the build (`--no-cache`, `--label k=v`,
  * `--build-arg k=v`, …); they come after these, so that a build argument of the caller wins.
  */
 export function buildxRunArgs(options: {

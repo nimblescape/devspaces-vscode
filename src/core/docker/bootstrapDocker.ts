@@ -29,12 +29,13 @@ import { CommandError, errorMessage, UserFacingError } from '../errors';
 import { Messages, dockerHostReason } from '../messages';
 import { HELPER_DOCKER_SOCKET, LABEL_BUILD_ID } from '../names';
 import { abortError, isAbortError, sleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
-import { BUILD_CONTAINER_PREFIX, BUILDX_PIN, BUILDX_REPOSITORY, DOCKER_RUN_FAILED_EXIT_CODE, buildxImageTag, buildxPulledReference, buildxRunArgs, isOlderBuildxTag } from './buildxImage';
+import { BUILD_CONTAINER_PREFIX, BUILDX_IMAGE_LS_ARGS, BUILDX_PIN, DOCKER_RUN_FAILED_EXIT_CODE, buildxImageTag, buildxImageTags, buildxPulledReference, buildxRunArgs, isOlderBuildxTag } from './buildxImage';
 import { contextTar } from './contextTar';
 import { deleteEnv, dockerCommandWords, dockerProcessEnv, isReadOnlyDockerCall } from './dockerCli';
 import { hostAccessOf, hostEndpoint, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
+import { extractBaseImages } from '../imageCheck/dockerfile';
 import { operationDockerTarget, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
 
@@ -218,6 +219,15 @@ export interface BootstrapDockerOptions {
 
 /** Time limit of `docker rm -f` of a build container after a cancel or a failure of its `docker run`. */
 export const BUILD_CONTAINER_REMOVE_TIMEOUT_MS = 60_000;
+
+/**
+ * The wait before the second `docker rm -f` of a build container that the first one did not find: a cancel can come
+ * while the Docker CLI creates the container, which then stays created and never starts (`--rm` acts only after a start).
+ */
+export const BUILD_CONTAINER_REMOVE_AGAIN_MS = 10_000;
+
+/** Time limit of the pull of the build image (about 30 MB); after it, the build runs with `docker build`. */
+export const BUILDX_PULL_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * The identity of the file at `path`: its inode, size and modification time (fs.stat, which follows a link). Another
@@ -857,9 +867,11 @@ export class BootstrapDocker {
     const flagText = flags.length > 0 ? ` (${flags.join(' ')})` : '';
     const onOutput = options.onOutput ?? ((text: string) => this.logger.output(text));
     const buildLabel = `${LABEL_BUILD_ID}=${crypto.randomBytes(16).toString('hex')}`;
-    const rest = [...flags, ...labelArgs(options.labels, '--label'), '--label', buildLabel, ...labelArgs(options.buildArgs, '--build-arg')];
+    const labels = [...labelArgs(options.labels, '--label'), '--label', buildLabel, ...labelArgs(options.buildArgs, '--build-arg')];
+    const rest = [...flags, ...labels];
     const output: RunOptions = { signal: options.signal, onStdout: onOutput, onStderr: onOutput };
-    if (!(await this.buildInContainer(options, rest, `${options.tag}${flagText}`, output))) {
+    // The build container pulls nothing itself: `--pull` is the pull of the base images before it.
+    if (!(await this.buildInContainer(options, [...(options.noCache ? ['--no-cache'] : []), ...labels], `${options.tag}${flagText}`, output))) {
       this.logger.info(`Building image ${options.tag}${flagText} with \`docker build\`.`);
       await this.runChecked(['build', '-t', options.tag, '-f', options.dockerfile, ...rest, options.context], output);
     }
@@ -880,15 +892,18 @@ export class BootstrapDocker {
   /**
    * The build of buildImage in a container of the build image on the engine (buildxImage.ts): `docker run --rm -i …
    * devspaces-buildx:<version> build … -t <tag> -f <name of the Dockerfile> … -`, with the context as a tar archive on
-   * its standard input (contextTar), and the Docker socket of the engine (engineSocket). True when it built the image.
-   * False (logged) when it cannot run there: a Dockerfile that is not at the top of its context folder, a context that
-   * cannot be packed, a build image that cannot be prepared (buildxImage), or Docker that cannot create or start the
-   * container (exit code 125); buildImage then runs `docker build`. Throws CommandError when the build ran and failed,
-   * and an AbortError when `output.signal` aborts. After a cancel or a failure of its `docker run`, the container is
+   * its standard input (contextTar), and the Docker socket of the engine (engineSocket). The container has no network,
+   * and buildx would fetch the token of a registry itself, so the engine first pulls the base images of the Dockerfile
+   * (pullBaseImages: with `pull`, or when one is missing), with the logins of the Docker CLI and the proxy of the
+   * engine, as `docker build` does; the build then finds them on the engine. True when it built the image. False
+   * (logged) when it cannot run there: a Dockerfile that is not at the top of its context folder, a context that cannot
+   * be packed, a Dockerfile without a base image that can be read, a build image that cannot be prepared (buildxImage),
+   * or Docker that cannot create or start the container (exit code 125); buildImage then runs `docker build`. Throws
+   * CommandError when the pull of a base image or the build failed, and an AbortError when `output.signal` aborts. After a cancel or a failure of its `docker run`, the container is
    * removed (removeBuildContainer): the Docker CLI on Windows ends without stopping it.
    */
   private async buildInContainer(
-    options: { tag: string; dockerfile: string; context: string },
+    options: { tag: string; dockerfile: string; context: string; buildArgs?: Record<string, string>; pull?: boolean },
     rest: readonly string[],
     image: string,
     output: RunOptions,
@@ -896,14 +911,21 @@ export class BootstrapDocker {
     if (path.resolve(path.dirname(options.dockerfile)) !== path.resolve(options.context)) return false;
     const fallback = 'so the image is built with `docker build`';
     let context: Buffer;
+    let baseImages: string[];
     try {
       context = await contextTar(options.context);
+      baseImages = extractBaseImages(await fs.promises.readFile(options.dockerfile, 'utf8'), options.buildArgs);
     } catch (error) {
       this.logger.warn(`The build context ${options.context} cannot be packed, ${fallback}: ${errorMessage(error)}`);
       return false;
     }
+    if (baseImages.length === 0) {
+      this.logger.warn(`The base image of ${options.dockerfile} cannot be read, ${fallback}.`);
+      return false;
+    }
     const buildx = await this.buildxImage(output.signal);
     if (buildx === undefined) return false;
+    await this.pullBaseImages(baseImages, options.pull === true, output);
     const target = operationDockerTarget();
     let socket: string;
     try {
@@ -919,7 +941,8 @@ export class BootstrapDocker {
     try {
       result = await this.run(args, { ...output, input: context });
     } catch (error) {
-      this.removeBuildContainer(name);
+      // A cancel can come before the Docker CLI created the container.
+      this.removeBuildContainer(name, isAbortError(error));
       throw error;
     }
     if (result.exitCode === 0) return true;
@@ -929,6 +952,18 @@ export class BootstrapDocker {
       return false;
     }
     throw this.commandError(args, result);
+  }
+
+  /**
+   * `docker pull` of each base image of a build in the build container, with `pull` always, else only when the engine
+   * does not have it: the Docker CLI sends its logins, and the engine pulls through its proxy, as for `docker build
+   * --pull`. Its output goes to the output of the build. Throws CommandError when a pull fails.
+   */
+  private async pullBaseImages(images: readonly string[], pull: boolean, output: RunOptions): Promise<void> {
+    for (const base of images) {
+      if (!pull && (await this.imageExists(base))) continue;
+      await this.runChecked(['pull', base], output);
+    }
   }
 
   /**
@@ -948,7 +983,7 @@ export class BootstrapDocker {
       if (!present) {
         this.logger.info(`Pulling the build image ${pinned} (buildx ${BUILDX_PIN.version}).`);
         const log = (text: string): void => this.logger.output(text);
-        await this.runChecked(['pull', pinned], { signal, onStdout: log, onStderr: log });
+        await this.runChecked(['pull', pinned], { signal, timeoutMs: BUILDX_PULL_TIMEOUT_MS, onStdout: log, onStderr: log });
       }
       await this.runChecked(['tag', pinned, tag], { signal, timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
       if (!present) {
@@ -968,33 +1003,44 @@ export class BootstrapDocker {
 
   /**
    * `docker image rm` (never with force) of each tag of the build image of an older version than the pin
-   * (isOlderBuildxTag); a tag that a container uses stays. Failures are logged.
+   * (isOlderBuildxTag); a tag that a container uses stays. Failures are logged, and the other tags are still removed.
    */
   private async removeOlderBuildxImages(): Promise<void> {
+    let stdout: string;
     try {
-      const stdout = await this.runChecked(['image', 'ls', '--filter', `reference=${BUILDX_REPOSITORY}`, '--format', '{{json .}}'], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
-      for (const item of parseJsonLines(stdout)) {
-        if (!isRecord(item) || item.Repository !== BUILDX_REPOSITORY || typeof item.Tag !== 'string') continue;
-        const reference = `${BUILDX_REPOSITORY}:${item.Tag}`;
-        if (isOlderBuildxTag(reference)) await this.removeImage(reference);
-      }
+      stdout = await this.runChecked([...BUILDX_IMAGE_LS_ARGS], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
     } catch (error) {
-      this.logger.warn(`The older build images could not be removed: ${errorMessage(error)}`);
+      this.logger.warn(`The older build images could not be listed: ${errorMessage(error)}`);
+      return;
+    }
+    for (const { tag } of buildxImageTags(parseJsonLines(stdout))) {
+      if (!isOlderBuildxTag(tag)) continue;
+      try {
+        await this.removeImage(tag);
+      } catch (error) {
+        this.logger.warn(`The older build image ${tag} could not be removed: ${errorMessage(error)}`);
+      }
     }
   }
 
   /**
    * `docker rm -f <name>` of a build container in the background, after a cancel or a failure of its `docker run`: the
-   * build in it stops. A container that is not there anymore (its `--rm`) is no failure; another failure is logged.
+   * build in it stops. A container that is not there (its `--rm`, or a cancel before its creation) is no failure; then
+   * a second `docker rm -f` follows after BUILD_CONTAINER_REMOVE_AGAIN_MS when `again` is set (a cancel), for a
+   * container that the Docker CLI created after the first one. Another failure is logged.
    */
-  private removeBuildContainer(name: string): void {
+  private removeBuildContainer(name: string, again = false): void {
+    const failed = (detail: string): void => this.logger.warn(`The build container ${name} could not be removed, so its build may go on: ${detail}`);
     this.run(['rm', '-f', name], { timeoutMs: BUILD_CONTAINER_REMOVE_TIMEOUT_MS }).then(
       (result) => {
-        if (result.exitCode !== 0 && !/no such container/i.test(result.stderr)) {
-          this.logger.warn(`The build container ${name} could not be removed, so its build may go on: ${result.timedOut ? 'no answer within the time limit' : result.stderr.trim()}`);
+        if (result.exitCode === 0) return;
+        if (!result.timedOut && /no such container/i.test(result.stderr)) {
+          if (again) setTimeout(() => this.removeBuildContainer(name), BUILD_CONTAINER_REMOVE_AGAIN_MS).unref();
+          return;
         }
+        failed(result.timedOut ? 'no answer within the time limit' : result.stderr.trim());
       },
-      (error: unknown) => this.logger.warn(`The build container ${name} could not be removed, so its build may go on: ${errorMessage(error)}`),
+      (error: unknown) => failed(errorMessage(error)),
     );
   }
 

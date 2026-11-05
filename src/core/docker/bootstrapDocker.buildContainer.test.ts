@@ -12,7 +12,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandError } from '../errors';
 import { abortError, isAbortError, silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
-import { BootstrapDocker, BUILD_CONTAINER_REMOVE_TIMEOUT_MS } from './bootstrapDocker';
+import { BootstrapDocker, BUILD_CONTAINER_REMOVE_AGAIN_MS, BUILD_CONTAINER_REMOVE_TIMEOUT_MS, BUILDX_PULL_TIMEOUT_MS } from './bootstrapDocker';
 import { BUILDX_PIN, buildxImageTag, buildxPulledReference, buildxRunArgs } from './buildxImage';
 import { WSL_HOST, remoteDockerTarget, type DockerTarget } from './dockerHost';
 import { runWithDockerTarget } from './dockerTargets';
@@ -121,7 +121,7 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
       socket,
       tag: 'devspaces-worker:abc',
       dockerfile: 'Dockerfile',
-      buildArgs: ['--pull', '--label', 'nimblescape.devspaces.worker=true', '--build-arg', 'DEVCONTAINER_CLI_VERSION=0.90.0'],
+      buildArgs: ['--label', 'nimblescape.devspaces.worker=true', '--build-arg', 'DEVCONTAINER_CLI_VERSION=0.90.0'],
     });
 
   it.each([
@@ -131,6 +131,7 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
   ])('builds the same way on %s; only the way to the engine differs', async (_name, target, socket, env) => {
     const output: string[] = [];
     const { runner, calls } = runnerOf((call) => {
+      if (call.args[0] === 'pull') call.options.onStdout?.('trixie-slim: Pulling from library/debian\n');
       if (!isRun(call)) return undefined;
       call.options.onStderr?.('#1 [internal] load remote build context\n');
       return ok();
@@ -143,17 +144,20 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     expect(engineSocket).toHaveBeenCalledWith(target);
     expect(calls.map((call) => call.args.slice(0, 2))).toEqual([
       ['image', 'inspect'],
+      // `--pull`: the engine pulls the base image with the Docker CLI, because the container has no network.
+      ['pull', 'debian:trixie-slim'],
       ['run', '--rm'],
       ['image', 'ls'],
       ['image', 'ls'],
     ]);
     expect(calls[0].args).toEqual(['image', 'inspect', '--format', '{{json .Id}}', TAG]);
-    const run = calls[1];
+    expect(calls[1].options.env).toMatchObject(env);
+    const run = calls[2];
     expect(withoutBuildLabel(run.args)).toEqual(expectedRun(containerName(run), socket));
     // The context: the Dockerfile in a tar archive on the standard input.
     expect(firstTarFile(run.options.input as Buffer, { name: 'Dockerfile', maxBytes: 1024 })?.toString('utf8')).toBe(DOCKERFILE_TEXT);
     expect(run.options.env).toMatchObject(env);
-    expect(output).toEqual(['#1 [internal] load remote build context\n']);
+    expect(output).toEqual(['trixie-slim: Pulling from library/debian\n', '#1 [internal] load remote build context\n']);
     expect(infos).toContain(`Building image devspaces-worker:abc (--pull) in the container ${containerName(run)} with buildx ${BUILDX_PIN.version} (BuildKit).`);
     expect(infos.some((line) => /^docker run: exit code 0 after \d+\.\d s\.$/.test(line))).toBe(true);
   });
@@ -194,8 +198,10 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
       ['image', 'rm', 'devspaces-buildx:0.30.0'],
       ['image', 'rm', 'devspaces-buildx:0.38.0'],
     ]);
-    expect(calls[8].args[0]).toBe('run');
-    expect(calls[8].args).toContain(TAG);
+    expect(calls[8].args).toEqual(['pull', 'debian:trixie-slim']);
+    expect(calls[9].args[0]).toBe('run');
+    expect(calls[9].args).toContain(TAG);
+    expect(calls[2].options.timeoutMs).toBe(BUILDX_PULL_TIMEOUT_MS);
     expect(infos).toContain(`Pulling the build image ${PINNED} (buildx ${BUILDX_PIN.version}).`);
     expect(outputs).toContain(`Status: Downloaded newer image for ${PINNED}\n`);
   });
@@ -209,11 +215,12 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
       ['image', 'inspect'],
       ['tag', PINNED],
       ['image', 'ls'],
+      ['pull', 'debian:trixie-slim'],
       ['run', '--rm'],
       ['image', 'ls'],
       ['image', 'ls'],
     ]);
-    expect(calls.some((call) => call.args[0] === 'pull')).toBe(false);
+    expect(calls.some((call) => call.args[0] === 'pull' && call.args[1] === PINNED)).toBe(false);
   });
 
   it('builds with `docker build` when the build image cannot be pulled, and when Docker cannot run the container', async () => {
@@ -288,6 +295,89 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     expect(calls.some(isClassicBuild)).toBe(false);
   });
 
+  it('removes the container again after a cancel that came before Docker created it', async () => {
+    vi.useFakeTimers();
+    try {
+      const { runner, calls } = runnerOf((call) => {
+        if (isRun(call)) throw abortError();
+        if (isRemoval(call)) return failed(1, `Error response from daemon: No such container: ${call.args[2]}\n`);
+        return undefined;
+      });
+      const { logger, warnings } = recordingLogger();
+      const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', {});
+      const error = await docker.buildImage(buildOptions()).catch((caught: unknown) => caught);
+      expect(isAbortError(error)).toBe(true);
+      const name = containerName(calls.find(isRun) as Call);
+      await vi.advanceTimersByTimeAsync(BUILD_CONTAINER_REMOVE_AGAIN_MS - 1);
+      expect(calls.filter(isRemoval)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      // Once more, and not again after that.
+      await vi.advanceTimersByTimeAsync(BUILD_CONTAINER_REMOVE_AGAIN_MS * 3);
+      expect(calls.filter(isRemoval).map((call) => call.args)).toEqual([
+        ['rm', '-f', name],
+        ['rm', '-f', name],
+      ]);
+      expect(warnings).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('removes the other older build images when the removal of one fails', async () => {
+    const { runner, calls } = runnerOf((call) => {
+      if (call.args[0] === 'image' && call.args[1] === 'inspect') return missing(call.args[4]);
+      if (call.args[0] === 'image' && call.args.includes('reference=devspaces-buildx')) {
+        return ok(['0.30.0', '0.31.0'].map((tag) => JSON.stringify({ ID: `sha256:${tag}`, Repository: 'devspaces-buildx', Tag: tag })).join('\n'));
+      }
+      if (call.args[0] === 'image' && call.args[1] === 'rm' && call.args[2] === 'devspaces-buildx:0.30.0') return { exitCode: 1, stdout: '', stderr: '', timedOut: true };
+      return undefined;
+    });
+    const { logger, warnings } = recordingLogger();
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', {});
+    await docker.buildImage(buildOptions());
+    expect(calls.filter((call) => call.args[0] === 'image' && call.args[1] === 'rm').map((call) => call.args[2])).toEqual([PINNED, 'devspaces-buildx:0.30.0', 'devspaces-buildx:0.31.0']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/^The older build image devspaces-buildx:0\.30\.0 could not be removed: /);
+    expect(calls.find(isRun)?.args).toContain(TAG);
+  });
+
+  it('fails with the error of the pull of a base image, without a build', async () => {
+    const { runner, calls } = runnerOf((call) => (call.args[0] === 'pull' ? failed(1, 'Error response from daemon: toomanyrequests\n') : undefined));
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', {});
+    await expect(docker.buildImage(buildOptions())).rejects.toBeInstanceOf(CommandError);
+    expect(calls.some(isRun) || calls.some(isClassicBuild)).toBe(false);
+  });
+
+  it('pulls a base image without `--pull` only when the engine does not have it', async () => {
+    const { runner, calls } = runnerOf((call) => (call.args[0] === 'image' && call.args[1] === 'inspect' && call.args[4] === 'debian:trixie-slim' ? missing('debian:trixie-slim') : undefined));
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', {});
+    await docker.buildImage(buildOptions({ pull: false }));
+    expect(calls.map((call) => call.args.slice(0, 2))).toEqual([
+      ['image', 'inspect'],
+      ['image', 'inspect'],
+      ['pull', 'debian:trixie-slim'],
+      ['run', '--rm'],
+      ['image', 'ls'],
+      ['image', 'ls'],
+    ]);
+    const runArgs = calls.find(isRun)?.args ?? [];
+    // `--pull never` of `docker run` only; the build itself pulls nothing.
+    expect(runArgs.slice(runArgs.indexOf('build'))).not.toContain('--pull');
+    const present = runnerOf();
+    await new BootstrapDocker(present.runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', {}).buildImage(buildOptions({ pull: false }));
+    expect(present.calls.some((call) => call.args[0] === 'pull')).toBe(false);
+  });
+
+  it('builds with `docker build` when the Dockerfile names no base image that can be read', async () => {
+    await fs.promises.writeFile(dockerfile, 'FROM $UNKNOWN_BASE\n');
+    const { runner, calls } = runnerOf();
+    const { logger, warnings } = recordingLogger();
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', {});
+    await docker.buildImage(buildOptions());
+    expect(calls.map((call) => call.args[0])).toEqual(['build', 'image', 'image']);
+    expect(warnings).toEqual([`The base image of ${dockerfile} cannot be read, so the image is built with \`docker build\`.`]);
+  });
+
   it('builds with `docker build` when the Dockerfile is not at the top of its context folder', async () => {
     const { runner, calls } = runnerOf();
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', {});
@@ -299,7 +389,7 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     let tagged = false;
     const { runner, calls } = runnerOf((call) => {
       if (call.args[0] === 'image' && call.args[1] === 'inspect') return tagged && call.args[4] === TAG ? ok('"sha256:1"') : missing(call.args[4]);
-      if (call.args[0] === 'pull') {
+      if (call.args[0] === 'pull' && call.args[1] === PINNED) {
         tagged = true;
         return failed(1, 'Error response from daemon: unexpected EOF\n');
       }
