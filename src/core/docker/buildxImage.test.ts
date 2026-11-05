@@ -44,11 +44,11 @@ describe('buildxRunArgs', () => {
     socket: '/run/user/1000/docker.sock',
     tag: 'devspaces-worker:abc',
     dockerfile: 'Dockerfile',
-    buildArgs: ['--pull', '--build-arg', 'HTTP_PROXY=http://given:3128'],
+    buildArgs: ['--no-cache', '--build-arg', 'HTTP_PROXY=http://given:3128'],
   });
 
   it('runs buildx without network and capabilities, with the socket of the engine and the context on stdin', () => {
-    expect(args.slice(0, 22)).toEqual([
+    expect(args.slice(0, 24)).toEqual([
       'run',
       '--rm',
       '-i',
@@ -59,6 +59,8 @@ describe('buildxRunArgs', () => {
       '--label',
       'nimblescape.devspaces.build-run=true',
       '--network',
+      'none',
+      '--log-driver',
       'none',
       '--cap-drop',
       'ALL',
@@ -81,6 +83,6 @@ describe('buildxRunArgs', () => {
     const start = args.indexOf('--build-arg');
     expect(args.slice(start, start + proxyArgs.length)).toEqual(proxyArgs);
     // buildx takes the last value of a name, so the build argument of the caller wins.
-    expect(args.slice(start + proxyArgs.length)).toEqual(['--pull', '--build-arg', 'HTTP_PROXY=http://given:3128', '-']);
+    expect(args.slice(start + proxyArgs.length)).toEqual(['--no-cache', '--build-arg', 'HTTP_PROXY=http://given:3128', '-']);
   });
 });

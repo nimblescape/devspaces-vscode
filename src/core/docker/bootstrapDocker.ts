@@ -897,7 +897,8 @@ export class BootstrapDocker {
    * (pullBaseImages: with `pull`, or when one is missing), with the logins of the Docker CLI and the proxy of the
    * engine, as `docker build` does; the build then finds them on the engine. True when it built the image. False
    * (logged) when it cannot run there: a Dockerfile that is not at the top of its context folder, a context that cannot
-   * be packed, a Dockerfile without a base image that can be read, a build image that cannot be prepared (buildxImage),
+   * be packed, a Dockerfile without a base image that can be read (each FROM must name its image in a form that
+   * extractBaseImages reads, as the helper Dockerfile does, because the build cannot pull one itself), a build image that cannot be prepared (buildxImage),
    * or Docker that cannot create or start the container (exit code 125); buildImage then runs `docker build`. Throws
    * CommandError when the pull of a base image or the build failed, and an AbortError when `output.signal` aborts. After a cancel or a failure of its `docker run`, the container is
    * removed (removeBuildContainer): the Docker CLI on Windows ends without stopping it.
@@ -916,7 +917,7 @@ export class BootstrapDocker {
       context = await contextTar(options.context);
       baseImages = extractBaseImages(await fs.promises.readFile(options.dockerfile, 'utf8'), options.buildArgs);
     } catch (error) {
-      this.logger.warn(`The build context ${options.context} cannot be packed, ${fallback}: ${errorMessage(error)}`);
+      this.logger.warn(`The build context ${options.context} or its Dockerfile cannot be read, ${fallback}: ${errorMessage(error)}`);
       return false;
     }
     if (baseImages.length === 0) {
@@ -978,28 +979,41 @@ export class BootstrapDocker {
   private async buildxImage(signal: AbortSignal | undefined): Promise<string | undefined> {
     const tag = buildxImageTag();
     const pinned = buildxPulledReference();
+    // Whether the engine answered the first check, and whether this call pulled the pinned image itself.
+    let checked = false;
+    let pulled = false;
     try {
       if (await this.imageExists(tag)) return tag;
+      checked = true;
       const present = await this.imageExists(pinned);
       if (!present) {
         this.logger.info(`Pulling the build image ${pinned} (buildx ${BUILDX_PIN.version}).`);
         const log = (text: string): void => this.logger.output(text);
         await this.runChecked(['pull', pinned], { signal, timeoutMs: BUILDX_PULL_TIMEOUT_MS, onStdout: log, onStderr: log });
+        pulled = true;
       }
       await this.runChecked(['tag', pinned, tag], { signal, timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
-      if (!present) {
-        const removed = await this.run(['image', 'rm', pinned], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
-        if (removed.exitCode !== 0 && !this.isMissing(removed)) this.logger.warn(`The name ${pinned} of the pull of the build image stays: ${removed.stderr.trim()}`);
-      }
+      if (pulled) await this.removePulledName(pinned);
       await this.removeOlderBuildxImages();
       return tag;
     } catch (error) {
+      // The name of a pull of its own goes also after a failure, so that no image without a tag of Devspaces stays.
+      if (pulled) await this.removePulledName(pinned);
       if (isAbortError(error)) throw error;
-      // Another window may have tagged it meanwhile.
-      if (await this.imageExists(tag).catch(() => false)) return tag;
+      // Another window may have tagged it meanwhile (not asked again when the engine did not answer the first check).
+      if (checked && (await this.imageExists(tag).catch(() => false))) return tag;
       this.logger.warn(`The build image ${pinned} could not be prepared, so the image is built with \`docker build\`: ${errorMessage(error)}`);
       return undefined;
     }
+  }
+
+  /**
+   * `docker image rm <pinned>` of the name of a pull of the build image by its digest: the image stays when it has the
+   * tag of the build image. A failure is logged.
+   */
+  private async removePulledName(pinned: string): Promise<void> {
+    const removed = await this.run(['image', 'rm', pinned], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS }).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: errorMessage(error), timedOut: false }));
+    if (removed.exitCode !== 0 && !this.isMissing(removed)) this.logger.warn(`The name ${pinned} of the pull of the build image stays: ${removed.stderr.trim()}`);
   }
 
   /**

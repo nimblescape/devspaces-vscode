@@ -90,8 +90,9 @@ export const PROXY_BUILD_ARG_NAMES: readonly string[] = ['HTTP_PROXY', 'HTTPS_PR
 /**
  * The arguments of `docker run` of a build in a container of the build image `image` on the engine: the build context
  * as a tar archive on its standard input (`-`, contextTar), the Docker socket of the engine (`socket`, a path on the
- * computer of the engine) at /var/run/docker.sock, where buildx finds it. The container has no network (buildx talks
- * only to the socket; the engine pulls the base image), no capabilities, `no-new-privileges`, and `--rm`. buildx
+ * computer of the engine) at /var/run/docker.sock, where buildx finds it. The container has no log of the engine
+ * (`--log-driver none`), no network (buildx talks only to the socket; the engine pulled the base images before),
+ * no capabilities, `no-new-privileges`, and `--rm`. buildx
  * builds with the builder of the engine (the docker driver, `--builder default`), which keeps the image in the engine
  * (`--load`). The build gets the proxy settings of the Docker CLI that runs the container, as `docker build` would:
  * `--build-arg <name>` without a value for each of PROXY_BUILD_ARG_NAMES, so that no value appears in the arguments (a
@@ -117,6 +118,9 @@ export function buildxRunArgs(options: {
     '--label',
     `${LABEL_BUILD_RUN}=true`,
     '--network',
+    'none',
+    // The engine keeps no log of the build (its output goes to the log of Devspaces), as for the worker.
+    '--log-driver',
     'none',
     '--cap-drop',
     'ALL',

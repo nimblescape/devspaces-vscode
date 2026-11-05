@@ -916,6 +916,7 @@ describe('BootstrapDocker: every call runs directly', () => {
       // The parts of buildImage, whose calls go through `run` (bootstrapDocker.buildContainer.test.ts).
       'buildInContainer',
       'pullBaseImages',
+      'removePulledName',
       'buildxImage',
       'removeOlderBuildxImages',
       'removeBuildContainer',

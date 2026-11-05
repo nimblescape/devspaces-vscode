@@ -385,6 +385,27 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     expect(calls.map((call) => call.args[0])).toEqual(['build', 'image', 'image']);
   });
 
+  it('removes the name of its own pull of the build image when the tag fails, and builds with `docker build`', async () => {
+    const { runner, calls } = runnerOf((call) => {
+      if (call.args[0] === 'image' && call.args[1] === 'inspect') return missing(call.args[4]);
+      if (call.args[0] === 'tag') return failed(1, 'Error response from daemon: unexpected EOF\n');
+      return undefined;
+    });
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', {});
+    await docker.buildImage(buildOptions());
+    expect(calls.map((call) => call.args.slice(0, 3))).toEqual([
+      ['image', 'inspect', '--format'],
+      ['image', 'inspect', '--format'],
+      ['pull', PINNED],
+      ['tag', PINNED, TAG],
+      ['image', 'rm', PINNED],
+      ['image', 'inspect', '--format'],
+      ['build', '-t', 'devspaces-worker:abc'],
+      ['image', 'ls', '--filter'],
+      ['image', 'ls', '--filter'],
+    ]);
+  });
+
   it('uses the tag that another window gave the build image while this one prepared it', async () => {
     let tagged = false;
     const { runner, calls } = runnerOf((call) => {
