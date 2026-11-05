@@ -367,7 +367,8 @@ export class RemoteDockerCommands {
     if (!check.ok) {
       this.deps.logger.warn(`The Docker host ${host} cannot be reached: ${check.detail}`);
       // A damaged disk of the WSL distribution of Devspaces: its button removes the distribution and sets it up again.
-      this.showError(Messages.dockerHostUnreachable(host, dockerHostReason(check.problem, host)), check.problem === 'wslDiskCorrupt' ? 'resetWsl' : undefined);
+      const reset = check.problem === 'wslDiskCorrupt' && host === WSL_HOST;
+      this.showError(Messages.dockerHostUnreachable(host, dockerHostReason(check.problem, host)), reset ? 'resetWsl' : undefined);
       return false;
     }
     this.deps.logger.info(`The Docker host ${host} answers: Docker engine ${check.version}${check.rootless ? ' (rootless)' : ''}.`);

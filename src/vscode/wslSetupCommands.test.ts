@@ -620,6 +620,21 @@ describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
     expect(retry).not.toHaveBeenCalled();
   });
 
+  // Mutation: a removal before these checks fails it: without them, the distribution would be gone and no new one set up.
+  it('removes nothing when WSL, its virtual machine or the list of WSL distributions would stop the new setup', async () => {
+    registered('own');
+    setup.checkVirtualMachine.mockRejectedValueOnce(new WslSetupError('vmUnavailable', 'WSL 2 cannot start.'));
+    await commands().removeAndSetUpAgain();
+    setup.image.mockRejectedValueOnce(new WslSetupError('listFailed', 'ECONNRESET'));
+    await commands().removeAndSetUpAgain();
+    expect(window.showErrorMessage.mock.calls).toEqual([
+      [WslSetupTexts.problem('vmUnavailable'), Actions.showDetails],
+      [WslSetupTexts.problem('listFailed'), Actions.showDetails],
+    ]);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(setup.setUp).not.toHaveBeenCalled();
+  });
+
   it('sets up nothing when the removal fails or another window holds the lock, and runs no Try again after a failed setup', async () => {
     const retry = vi.fn();
     registered('own');

@@ -56,13 +56,22 @@ describe('OutputChannelLogger', () => {
     expect(channel.text).toBe('+ docker compose version\nDocker Compose version v5.7.0\n+ apt-get clean\ndone\n');
   });
 
-  it('drops a cut color code when a log line follows, and strips the codes of log lines', () => {
+  it('keeps a cut color code for the next output also when a log line comes between, and strips the codes of log lines', () => {
     const logger = new OutputChannelLogger();
     const channel = fakeVscode.outputChannels[0];
     logger.output('red\n\u001b[9');
     logger.error('failed', new CommandError('docker build', 1, '', '\u001b[91mE: Unable to locate package\u001b[0m'));
     logger.output('1mnext\n');
-    expect(channel.text).toMatch(/^red\n\[[\d:]+\] error failed\ndocker build failed with exit code 1:\nE: Unable to locate package\n1mnext\n$/);
+    expect(channel.text).toMatch(/^red\n\[[\d:]+\] error failed\ndocker build failed with exit code 1:\nE: Unable to locate package\nnext\n$/);
+  });
+
+  it('holds a cut OSC sequence and a cut sequence of ESC and intermediate characters too', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    logger.output('a\u001b]0;building');
+    logger.output(' image\u0007b\u001b(');
+    logger.output('Bc\n');
+    expect(channel.text).toBe('abc\n');
   });
 
   it('strips CSI, OSC and two-character sequences, and leaves other text as it is', () => {

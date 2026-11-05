@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // All user-visible texts.
-import { sshCommandLine, wslDistributionOf, type DockerHostProblem } from './docker/dockerHost';
+import { WSL_HOST, sshCommandLine, wslDistributionOf, type DockerHostProblem } from './docker/dockerHost';
 
 export const Steps = {
   startingDocker: 'Starting Docker',
@@ -495,11 +495,12 @@ export function dockerHostReason(
     case 'wslDistributionMissing':
       return `The WSL distribution ${distribution ?? host} is not installed on this computer.`;
     case 'wslDiskCorrupt':
-      // The message offers the button Actions.resetWsl (the error wslDiskCorrupt, RemoteDockerCommands.switchToRemote).
-      return (
-        `The disk of the WSL distribution ${distribution ?? host} is damaged, so WSL cannot start it. ` +
-        `"${Actions.resetWsl}" deletes the distribution with all devspaces in it, also changes that you did not push, and sets it up again.`
-      );
+      // Only for the distribution of Devspaces, the message offers the button Actions.resetWsl (the error
+      // wslDiskCorrupt, RemoteDockerCommands.switchToRemote, WslSetupCommands): it removes only that distribution.
+      return host === WSL_HOST
+        ? `The disk of the WSL distribution ${distribution ?? host} is damaged, so WSL cannot start it. ` +
+            `"${Actions.resetWsl}" deletes the distribution with all devspaces in it, also changes that you did not push, and sets it up again.`
+        : `The disk of the WSL distribution ${distribution ?? host} is damaged, so WSL cannot start it. The details show why.`;
     case 'pipeNotListening':
       return 'The Docker pipe of Devspaces for it cannot listen on this computer. Devspaces tries again in a few seconds; the details show why.';
     case 'unknown':

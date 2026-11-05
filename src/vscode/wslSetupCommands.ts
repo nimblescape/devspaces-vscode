@@ -406,8 +406,7 @@ export class WslSetupCommands {
           await this.deps.forgetHost(WSL_HOST).catch((error: unknown) => {
             this.deps.logger.warn(`${WSL_HOST} could not be removed from the list of Devspaces: ${errorMessage(error)}`);
           });
-          await setup.removeLeftovers();
-          await this.deps.forgetDistribution?.();
+          await this.removeGone(setup);
           return true;
         });
         if (this.finished(cleaned)) this.inform(WslSetupTexts.notInstalled);
@@ -419,8 +418,7 @@ export class WslSetupCommands {
       const done = await setup.locked(async () =>
         withNotificationProgress({ title: WslSetupTexts.removing }, async () => {
           if ((await this.removalCheck(setup)) !== 'own') return false;
-          const folderGone = await setup.remove();
-          await this.deps.forgetDistribution?.();
+          const folderGone = await this.unregister(setup);
           const forgotten = await this.deps.forgetHost(WSL_HOST).catch((error: unknown) => ({ error }));
           return { folderGone, forgotten };
         }),
@@ -458,18 +456,20 @@ export class WslSetupCommands {
     if (!this.start()) return;
     let removed = false;
     try {
+      // Before anything is removed, what the new setup needs: a WSL that registers a file, its virtual machine, and the
+      // list of WSL distributions (the setup checks them again). A failure keeps the distribution.
+      await this.withProgress(WslSetupTexts.checking, async (signal) => {
+        await setup.checkWsl(signal);
+        await setup.checkVirtualMachine(signal);
+        await setup.image(signal);
+      });
       // `wsl --unregister` is not cancelled, as in remove. Under the lock of all windows, with the registration of then.
       const done = await setup.locked(async () =>
         withNotificationProgress({ title: WslSetupTexts.removing }, async () => {
           const registration = await this.removalCheck(setup);
           if (registration === 'foreign') return registration;
-          if (registration === 'own') {
-            const folderGone = await setup.remove();
-            if (!folderGone) this.deps.logger.warn(`The folder of the WSL distribution ${WSL_DISTRIBUTION} stays: ${folder}`);
-          } else {
-            await setup.removeLeftovers();
-          }
-          await this.deps.forgetDistribution?.();
+          if (registration === 'none') await this.removeGone(setup);
+          else if (!(await this.unregister(setup))) this.deps.logger.warn(`The folder of the WSL distribution ${WSL_DISTRIBUTION} stays: ${folder}`);
           return 'removed' as const;
         }),
       );
@@ -491,6 +491,22 @@ export class WslSetupCommands {
     Promise.resolve()
       .then(retry)
       .catch((error: unknown) => this.deps.logger.error('Try again failed.', error));
+  }
+
+  /**
+   * `wsl --unregister` of the distribution of Devspaces and its folder (WslSetup.remove), and forgetDistribution; true
+   * when the folder is gone. Under the lock of all windows, after removalCheck gave `own`.
+   */
+  private async unregister(setup: NonNullable<WslSetupCommandsDeps['setup']>): Promise<boolean> {
+    const folderGone = await setup.remove();
+    await this.deps.forgetDistribution?.();
+    return folderGone;
+  }
+
+  /** The files of a setup of a distribution that is gone (WslSetup.removeLeftovers), and forgetDistribution. Under the lock. */
+  private async removeGone(setup: NonNullable<WslSetupCommandsDeps['setup']>): Promise<void> {
+    await setup.removeLeftovers();
+    await this.deps.forgetDistribution?.();
   }
 
   /** The registration for the removal (WslSetup.registration, `sure`): `none` without WSL. */

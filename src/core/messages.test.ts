@@ -107,6 +107,12 @@ describe('the messages of a remote Docker host', () => {
     expect(reason).not.toMatch(/SSH|ssh|network|group docker/);
   });
 
+  // The button "Remove and Set Up Again" removes only the distribution of Devspaces.
+  it('offers Remove and Set Up Again only for the damaged disk of the distribution of Devspaces', () => {
+    expect(dockerHostReason('wslDiskCorrupt', 'wsl:devspaces')).toContain('"Remove and Set Up Again"');
+    expect(dockerHostReason('wslDiskCorrupt', 'wsl:ubuntu')).toBe('The disk of the WSL distribution ubuntu is damaged, so WSL cannot start it. The details show why.');
+  });
+
   it('never offers the Docker Desktop start or its installation for a remote host', () => {
     const text = Messages.dockerHostUnreachable('box', dockerHostReason('dockerNotRunning', 'box'));
     expect(text).not.toMatch(/Docker Desktop|install/i);

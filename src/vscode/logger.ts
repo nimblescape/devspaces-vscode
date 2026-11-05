@@ -26,10 +26,14 @@ export function redactSecrets(text: string): string {
  * character.
  */
 const CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[ -/]+[0-~]|[@-Z\\-_])/g;
-/** The start of a CSI sequence (or a lone ESC) at the end of a part of the output: its rest comes with the next part. */
-const CUT_CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*)?$/;
+/**
+ * The start of a control sequence (CONTROL_SEQUENCE) at the end of a part of the output, or a lone ESC: its rest comes
+ * with the next part. Two programs whose output goes to the log at the same time can mix their parts; a cut sequence
+ * then joins the part of the other program (rare: only a sequence that a part cut, and that program's first characters).
+ */
+const CUT_CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?|[ -/]+)?$/;
 /** A cut sequence longer than this is no sequence: it is written as it is. */
-const MAX_CUT_SEQUENCE = 64;
+const MAX_CUT_SEQUENCE = 512;
 
 /** The text without the control sequences of a terminal (CONTROL_SEQUENCE). */
 export function stripControlSequences(text: string): string {
@@ -95,8 +99,7 @@ export class OutputChannelLogger implements Logger, vscode.Disposable {
   private line(level: 'info' | 'warn' | 'error', message: string): void {
     if (this.disposed) return;
     // A log line never continues a line of tool output that has no line break at its end. A control sequence that the
-    // output cut off ends with it.
-    this.cutSequence = '';
+    // output cut off stays for the next output, which has its rest.
     const prefix = this.atLineStart ? '' : '\n';
     this.channel.appendLine(`${prefix}[${clockTime(new Date())}] ${level} ${redactSecrets(stripControlSequences(message))}`);
     this.atLineStart = true;

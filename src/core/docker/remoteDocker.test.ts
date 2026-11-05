@@ -22,6 +22,7 @@ import {
   WSL_INFO_TIMEOUT_MS,
   checkCurrentEngine,
   checkSshLogin,
+  dockerHostUnreachable,
   engineInfoTimeoutOf,
   ensureDockerHostReachable,
   listContextInfos,
@@ -392,6 +393,8 @@ describe('the WSL distribution of Devspaces: no SSH', () => {
     expect(error).toMatchObject({ code: 'wslDiskCorrupt', message: Messages.dockerHostUnreachable(WSL_HOST, dockerHostReason('wslDiskCorrupt', WSL_HOST)), detail: corrupt.detail });
     expect(docker.calls).toEqual([]);
     expect(runner.run).not.toHaveBeenCalled();
+    // Another WSL distribution keeps the error of a host that cannot be reached: the button removes only the one of Devspaces.
+    expect(dockerHostUnreachable('wsl:ubuntu', 'wslDiskCorrupt', corrupt.detail)).toMatchObject({ code: 'dockerHostUnreachable' });
   });
 
   it('checks the distribution with the start of its shell before an operation, also while its Docker pipe listens', async () => {
