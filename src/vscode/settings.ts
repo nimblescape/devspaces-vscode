@@ -38,6 +38,7 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   defaultImage: '',
   startWithDefaultImage: true,
   confirmOpenFromLink: true,
+  installVsCodeUpdateFirst: true,
 });
 
 /** The key of the setting that the button "Always Open" of the question of a link turns off. */
@@ -65,7 +66,8 @@ export const MAX_REFRESH_INTERVAL_MINUTES = Math.floor(0x7fffffff / 60_000);
  * does not decide which window a Start uses, and for `stopAfterMinutes`: one limit per user and computer, as every
  * window sends it in its heartbeats; the same for `stopOnClose` and `respectShutdownActionNone` (read by each window
  * for its heartbeats and its release): a repository's workspace settings cannot keep every devspace of the computer
- * running; and for `confirmOpenFromLink`: a workspace cannot turn off the question before a link creates a devspace.
+ * running; for `confirmOpenFromLink`: a workspace cannot turn off the question before a link creates a devspace; and
+ * for `installVsCodeUpdateFirst`: a workspace does not decide whether VS Code restarts for its update.
  */
 export function readSettings(): ExtensionSettings {
   const configuration = vscode.workspace.getConfiguration(SETTINGS_SECTION);
@@ -321,5 +323,6 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     defaultImage: normalizeDefaultImage(get('defaultImage')) ?? '',
     startWithDefaultImage: bool('startWithDefaultImage', DEFAULT_SETTINGS.startWithDefaultImage ?? true),
     confirmOpenFromLink: bool('confirmOpenFromLink', DEFAULT_SETTINGS.confirmOpenFromLink ?? true),
+    installVsCodeUpdateFirst: bool('installVsCodeUpdateFirst', DEFAULT_SETTINGS.installVsCodeUpdateFirst ?? true),
   };
 }

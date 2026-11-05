@@ -364,6 +364,34 @@ export interface PendingConnection {
 }
 
 /**
+ * A Start that waits for the restart of VS Code for its update (start-after-update.json, docs/requirements.md
+ * R-DS-006): the window that ran the Start writes it before VS Code restarts, and the window of the same kind after the
+ * restart continues the Start (Controller.startAfterUpdate).
+ */
+export interface StartAfterUpdate {
+  /** `owner/name` of the Start. */
+  repository: string;
+  /** The devspace that the Start named (a row, the status bar item, the switcher); else the repository decides. */
+  devspaceId?: string;
+  /** The source of the Start (DevspaceSource): the one of its devspace, or the one that a first open creates it from. */
+  source?: DevspaceSource;
+  /** The GitHub account that the user or the link chose (Start with Account…, a course link). */
+  account?: GitHubAccount;
+  /** The Start opens a new window (true) or connects the window that continues it (false). */
+  newWindow: boolean;
+  /** A first open from a link that the user confirmed already. */
+  confirmed?: boolean;
+  /**
+   * The window that ran the Start: `devspace:<devspace id>`, `empty`, or `folder:<URI of its workspace>`. Only a window
+   * of the same kind continues the Start.
+   */
+  window: string;
+  /** The version of VS Code before the restart (`vscode.version`). After the restart, a window with another version continues. */
+  from: string;
+  createdAt: string;
+}
+
+/**
  * `stop` exists because Stop of the devspace that the window is connected to closes the remote connection first,
  * which reloads the window; the reloaded window finishes the stop.
  */
@@ -463,6 +491,12 @@ export interface ExtensionSettings {
    * the user setting counts (scope `application`).
    */
   confirmOpenFromLink?: boolean;
+  /**
+   * `installVsCodeUpdateFirst`: when VS Code shows its button Update, a Start updates VS Code first (download, install,
+   * restart), and the devspace starts after the restart (true, the default; docs/requirements.md R-DS-006). Only the
+   * user setting counts (scope `application`).
+   */
+  installVsCodeUpdateFirst?: boolean;
 }
 
 /** The values of the setting updateContainer. */

@@ -64,6 +64,8 @@ describe('settings', () => {
       startWithDefaultImage: true,
       // A link asks before it creates a devspace.
       confirmOpenFromLink: true,
+      // A Start updates VS Code first while VS Code shows its button Update.
+      installVsCodeUpdateFirst: true,
     });
   });
 
@@ -93,6 +95,14 @@ describe('settings', () => {
     expect(of(true)).toBe(true);
     expect(of('false')).toBe(true);
     expect(of(0)).toBe(true);
+    expect(of(undefined)).toBe(true);
+  });
+
+  it('reads installVsCodeUpdateFirst as a boolean, true by default', () => {
+    const of = (value: unknown) => normalizeSettings((key) => (key === 'installVsCodeUpdateFirst' ? value : undefined)).installVsCodeUpdateFirst;
+    expect(of(false)).toBe(false);
+    expect(of(true)).toBe(true);
+    expect(of('false')).toBe(true);
     expect(of(undefined)).toBe(true);
   });
 
