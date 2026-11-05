@@ -39,6 +39,7 @@ import { isAbortError, systemClock, type Clock, type Logger, type ProcessRunner,
 import type { RemoteDockerState } from '../storage/remoteDockerState';
 import {
   RUNTIME_DIR_COMMAND,
+  WSL_HOST,
   classifyDockerEndpoint,
   dockerHostProblem,
   hostAccessOf,
@@ -443,9 +444,13 @@ export async function checkSshLogin(
   return { ok: true };
 }
 
-/** UserFacingError('dockerHostUnreachable') for `host`. */
+/**
+ * UserFacingError('dockerHostUnreachable') for `host`; UserFacingError('wslDiskCorrupt') for a damaged disk of the WSL
+ * distribution of Devspaces (WSL_HOST), whose message offers to remove it and set it up again.
+ */
 export function dockerHostUnreachable(host: string, problem: DockerHostProblem, detail: string): UserFacingError {
-  return new UserFacingError('dockerHostUnreachable', Messages.dockerHostUnreachable(host, dockerHostReason(problem, host)), detail);
+  const code = problem === 'wslDiskCorrupt' && host === WSL_HOST ? 'wslDiskCorrupt' : 'dockerHostUnreachable';
+  return new UserFacingError(code, Messages.dockerHostUnreachable(host, dockerHostReason(problem, host)), detail);
 }
 
 /**

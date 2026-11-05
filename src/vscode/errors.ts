@@ -35,7 +35,7 @@ export interface ShowErrorOptions {
   retry?: () => unknown;
 }
 
-type ErrorAction = 'installDocker' | 'startDocker' | 'showDetails' | 'tryAgain' | 'signIn';
+type ErrorAction = 'installDocker' | 'startDocker' | 'showDetails' | 'tryAgain' | 'signIn' | 'resetWsl';
 
 interface Presentation {
   message: string;
@@ -111,6 +111,8 @@ const ACTIONS: Record<UserErrorCode, ErrorAction[] | 'retry' | 'retryOnly'> = {
   cancelled: [],
   // Never Start Docker or Install Docker… for a remote host.
   dockerHostUnreachable: 'retry',
+  // Try again cannot help: WSL cannot start the distribution. Its button runs Try again after the new setup.
+  wslDiskCorrupt: ['showDetails', 'resetWsl'],
   dockerEndpointUnsupported: ['showDetails'],
   otherDockerHost: ['showDetails'],
   // The Monitor container could not be started at an open.
@@ -153,6 +155,11 @@ function runAction(action: ErrorAction, options: ShowErrorOptions): void {
         vscode.commands
           .executeCommand(Commands.signIn)
           .then(undefined, (error: unknown) => options.logger.error('The sign-in failed.', error));
+        return;
+      case 'resetWsl':
+        vscode.commands
+          .executeCommand(Commands.resetWslDistribution, options.retry)
+          .then(undefined, (error: unknown) => options.logger.error('The WSL distribution of Devspaces could not be set up again.', error));
         return;
     }
   } catch (error) {

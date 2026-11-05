@@ -13,6 +13,10 @@ takes the section of a version as the notes of its GitHub release.
 
 **Debian for Windows on Arm:** the setup downloads the Debian file for the architecture of Windows, also when VS Code runs as an x64 program on Windows on Arm.
 
+**A damaged disk of the WSL distribution:** when Windows cannot read the virtual disk of the WSL distribution of Devspaces (`ERROR_FILE_CORRUPT`), WSL cannot start it. The message now says so and offers **Remove and Set Up Again**, which deletes the distribution with all devspaces in it and sets up a new one, without another question. See [The WSL distribution of Devspaces](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-wsl-distribution-of-devspaces-windows).
+
+**Log without color codes:** the log of Devspaces shows the output of tools without the color codes of a terminal, for example the red marks of the classic builder of Docker around the error output of a build step.
+
 ## 0.4.1
 
 **Windows without Docker:** Devspaces uses Docker Desktop when it is installed, and otherwise always its own Docker in WSL. A link to Devspaces, also a course link, on a Windows computer without Docker no longer asks to install Docker Desktop: after the GitHub sign-in, it checks WSL, asks once with the downloads and the folder, sets up the WSL distribution of Devspaces with Docker Engine, downloads the Docker CLI of Devspaces, and uses that distribution as its Docker host. Then the link opens the repository there. When the distribution exists already, the link uses it without a question. The Docker setup of the view on Windows no longer offers to install Docker Desktop: **Set Up Docker for Devspaces** is the setup there. When WSL is missing, the setup and the link install WSL 2 first, after the question that shows the command; Windows asks for administrator permission, and you restart the computer afterwards. See [Installing Docker](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#installing-docker).

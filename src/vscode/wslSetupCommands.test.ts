@@ -587,6 +587,90 @@ describe('Remove the WSL Distribution of Devspaces…', () => {
   });
 });
 
+describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
+  const CORRUPT = 'Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT';
+
+  // Mutation: a question before the removal fails it: the message with the button says what it deletes (Hannes: as few
+  // interactions as possible for students).
+  it('removes the distribution without a question, sets up a new one, uses it, and then runs the Try again of the operation', async () => {
+    const forgetDistribution = vi.fn(async () => undefined);
+    const retry = vi.fn();
+    setup.registration.mockResolvedValueOnce('own');
+    await commands({ forgetDistribution }).removeAndSetUpAgain(retry);
+    expect(questions()).toEqual([]);
+    expect(setup.remove).toHaveBeenCalledTimes(1);
+    expect(setup.setUp).toHaveBeenCalledTimes(1);
+    expect(setup.remove.mock.invocationCallOrder[0]).toBeLessThan(setup.setUp.mock.invocationCallOrder[0]);
+    // The host stays in the list meanwhile, so that no other Docker takes its place; the new distribution is used.
+    expect(forgetHost).not.toHaveBeenCalled();
+    expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
+    expect(forgetDistribution).toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(WslSetupTexts.removedToSetUpAgain);
+    await vi.waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    expect(useHost.mock.invocationCallOrder[0]).toBeLessThan(retry.mock.invocationCallOrder[0]);
+  });
+
+  it('never removes a distribution devspaces that Devspaces did not set up, and sets up nothing', async () => {
+    const retry = vi.fn();
+    registered('foreign');
+    await commands().removeAndSetUpAgain(retry);
+    expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.foreignRemove);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(setup.setUp).not.toHaveBeenCalled();
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a removal before these checks fails it: without them, the distribution would be gone and no new one set up.
+  it('removes nothing when WSL, its virtual machine or the list of WSL distributions would stop the new setup', async () => {
+    registered('own');
+    setup.checkVirtualMachine.mockRejectedValueOnce(new WslSetupError('vmUnavailable', 'WSL 2 cannot start.'));
+    await commands().removeAndSetUpAgain();
+    setup.image.mockRejectedValueOnce(new WslSetupError('listFailed', 'ECONNRESET'));
+    await commands().removeAndSetUpAgain();
+    expect(window.showErrorMessage.mock.calls).toEqual([
+      [WslSetupTexts.problem('vmUnavailable'), Actions.showDetails],
+      [WslSetupTexts.problem('listFailed'), Actions.showDetails],
+    ]);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(setup.setUp).not.toHaveBeenCalled();
+  });
+
+  it('sets up nothing when the removal fails or another window holds the lock, and runs no Try again after a failed setup', async () => {
+    const retry = vi.fn();
+    registered('own');
+    setup.remove.mockRejectedValueOnce(new WslSetupError('removeFailed', 'Access is denied.'));
+    await commands().removeAndSetUpAgain(retry);
+    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('removeFailed'), Actions.showDetails);
+    setup.locked.mockResolvedValueOnce(undefined);
+    await commands().removeAndSetUpAgain(retry);
+    expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.busyElsewhere);
+    expect(setup.setUp).not.toHaveBeenCalled();
+    expect(forgetHost).not.toHaveBeenCalled();
+    setup.registration.mockResolvedValueOnce('own').mockResolvedValue('none');
+    setup.setUp.mockRejectedValueOnce(new WslSetupError('downloadFailed', 'ECONNRESET'));
+    await commands().removeAndSetUpAgain(retry);
+    expect(setup.setUp).toHaveBeenCalledTimes(1);
+    expect(retry).not.toHaveBeenCalled();
+    // Without a distribution, the host leaves the list, as after a removal, so that the view offers the setup again.
+    expect(forgetHost.mock.calls).toEqual([[WSL_HOST]]);
+  });
+
+  it('offers Remove and Set Up Again when a setup finds the disk of the distribution damaged', async () => {
+    registered('own');
+    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
+    setup.setUp.mockRejectedValueOnce(new WslSetupError('dockerFailed', `Failed to attach disk: The file or directory is corrupted and unreadable.\r\n${CORRUPT}`));
+    window.showErrorMessage.mockResolvedValue(Actions.resetWsl);
+    await commands().setUp();
+    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.diskCorrupt, Actions.showDetails, Actions.resetWsl);
+    expect(WslSetupTexts.diskCorrupt).toBe(
+      'The disk of the WSL distribution devspaces is damaged, so WSL cannot start it. "Remove and Set Up Again" deletes the distribution with all devspaces in it, also changes that you did not push, and sets it up again.',
+    );
+    // The button removes the distribution and sets it up again.
+    await vi.waitFor(() => expect(setup.remove).toHaveBeenCalledTimes(1));
+    expect(showLog).not.toHaveBeenCalled();
+  });
+});
+
 describe('the texts of the steps', () => {
   it('name each step, with the megabytes of the download', () => {
     expect(WslSetupTexts.step({ kind: 'download', received: 3 * 1_048_576, total: undefined })).toBe('Downloading Debian: 3 MB.');

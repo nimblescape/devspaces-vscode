@@ -95,12 +95,22 @@ describe('the messages of a remote Docker host', () => {
     ['dockerPermission', 'Docker in the WSL distribution devspaces refused the call.'],
     ['wslMissing', 'WSL (wsl.exe) was not found on this computer.'],
     ['wslDistributionMissing', 'The WSL distribution devspaces is not installed on this computer.'],
+    [
+      'wslDiskCorrupt',
+      'The disk of the WSL distribution devspaces is damaged, so WSL cannot start it. "Remove and Set Up Again" deletes the distribution with all devspaces in it, also changes that you did not push, and sets it up again.',
+    ],
     ['pipeNotListening', 'The Docker pipe of Devspaces for it cannot listen'],
     ['unknown', 'The details show why.'],
   ] as const)('%s for the WSL distribution', (problem, text) => {
     const reason = dockerHostReason(problem, 'wsl:devspaces');
     expect(reason).toContain(text);
     expect(reason).not.toMatch(/SSH|ssh|network|group docker/);
+  });
+
+  // The button "Remove and Set Up Again" removes only the distribution of Devspaces.
+  it('offers Remove and Set Up Again only for the damaged disk of the distribution of Devspaces', () => {
+    expect(dockerHostReason('wslDiskCorrupt', 'wsl:devspaces')).toContain('"Remove and Set Up Again"');
+    expect(dockerHostReason('wslDiskCorrupt', 'wsl:ubuntu')).toBe('The disk of the WSL distribution ubuntu is damaged, so WSL cannot start it. The details show why.');
   });
 
   it('never offers the Docker Desktop start or its installation for a remote host', () => {

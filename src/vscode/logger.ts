@@ -19,13 +19,50 @@ export function redactSecrets(text: string): string {
 }
 
 /**
- * Lines have the form `[HH:MM:SS] info|warn|error message`. `output(text)` appends the raw output of a tool as it is.
+ * The control sequences of a terminal, which the output channel shows as they are (`ESC[91m`): a CSI sequence
+ * (`ESC [`, parameters, a final character; colors, for example the classic builder of Docker, which marks the error
+ * output of a RUN step red), an OSC sequence that ends with BEL or `ESC \` (titles, links), a sequence of ESC,
+ * intermediate characters and a final one (`ESC ( B`, the character set), and the other sequences of ESC and one
+ * character (`ESC 7`, `ESC =`, `ESC c`; every one but `[` and `]`, which start the sequences before).
+ */
+const CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[ -/]+[0-~]|[0-Z\\^-~])/g;
+/**
+ * The start of a control sequence (CONTROL_SEQUENCE) at the end of a part of the output: its rest comes with the next
+ * part. Two programs whose output goes to the log at the same time can mix their parts; a cut sequence then joins the
+ * part of the other program (rare: only a sequence that a part cut, and that program's first characters).
+ */
+const CUT_CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?|[ -/]+)$/;
+/**
+ * A lone ESC at the end of a part of the output is dropped, not held: held, it would take the first character of the
+ * next output (`ESC B`), also the one of another program after a program that was stopped.
+ */
+const LONE_ESCAPE = /\u001b$/;
+/** A cut sequence longer than this is no sequence: it is written as it is. */
+const MAX_CUT_SEQUENCE = 512;
+/**
+ * A cut sequence that waited longer than this for its rest is dropped: its program wrote no more (it was stopped), and
+ * the next output is another one. A program writes a sequence at once, so its rest comes within milliseconds.
+ */
+const MAX_CUT_WAIT_MS = 1000;
+
+/** The text without the control sequences of a terminal (CONTROL_SEQUENCE). */
+export function stripControlSequences(text: string): string {
+  return text.includes('\u001b') ? text.replace(CONTROL_SEQUENCE, '') : text;
+}
+
+/**
+ * Lines have the form `[HH:MM:SS] info|warn|error message`. `output(text)` appends the raw output of a tool as it is,
+ * without the control sequences of a terminal (stripControlSequences), also when a sequence is cut between two parts.
  */
 export class OutputChannelLogger implements Logger, vscode.Disposable {
   readonly channel: vscode.OutputChannel;
   private disposed = false;
   /** False while the last raw output did not end with a line break. */
   private atLineStart = true;
+  /** The start of a control sequence at the end of the last raw output (CUT_CONTROL_SEQUENCE), not written yet. */
+  private cutSequence = '';
+  /** When cutSequence was held (Date.now()). */
+  private cutAt = 0;
 
   constructor(name: string = OUTPUT_CHANNEL_NAME) {
     this.channel = vscode.window.createOutputChannel(name);
@@ -48,8 +85,23 @@ export class OutputChannelLogger implements Logger, vscode.Disposable {
 
   output(text: string): void {
     if (this.disposed || text === '') return;
-    this.channel.append(redactSecrets(text));
-    this.atLineStart = /[\r\n]$/.test(text);
+    const now = Date.now();
+    let whole = this.cutSequence !== '' && now - this.cutAt <= MAX_CUT_WAIT_MS ? this.cutSequence + text : text;
+    this.cutSequence = '';
+    if (whole.includes('\u001b')) {
+      const cut = CUT_CONTROL_SEQUENCE.exec(whole);
+      if (cut !== null && cut[0].length <= MAX_CUT_SEQUENCE) {
+        this.cutSequence = cut[0];
+        this.cutAt = now;
+        whole = whole.slice(0, cut.index);
+      } else {
+        whole = whole.replace(LONE_ESCAPE, '');
+      }
+    }
+    const shown = stripControlSequences(whole);
+    if (shown === '') return;
+    this.channel.append(redactSecrets(shown));
+    this.atLineStart = /[\r\n]$/.test(shown);
   }
 
   show(): void {
@@ -64,9 +116,10 @@ export class OutputChannelLogger implements Logger, vscode.Disposable {
 
   private line(level: 'info' | 'warn' | 'error', message: string): void {
     if (this.disposed) return;
-    // A log line never continues a line of tool output that has no line break at its end.
+    // A log line never continues a line of tool output that has no line break at its end. A control sequence that the
+    // output cut off stays for the next output, which has its rest.
     const prefix = this.atLineStart ? '' : '\n';
-    this.channel.appendLine(`${prefix}[${clockTime(new Date())}] ${level} ${redactSecrets(message)}`);
+    this.channel.appendLine(`${prefix}[${clockTime(new Date())}] ${level} ${redactSecrets(stripControlSequences(message))}`);
     this.atLineStart = true;
   }
 }

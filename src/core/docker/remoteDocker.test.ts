@@ -22,6 +22,7 @@ import {
   WSL_INFO_TIMEOUT_MS,
   checkCurrentEngine,
   checkSshLogin,
+  dockerHostUnreachable,
   engineInfoTimeoutOf,
   ensureDockerHostReachable,
   listContextInfos,
@@ -373,6 +374,27 @@ describe('the WSL distribution of Devspaces: no SSH', () => {
     expect(deps.runner.run).not.toHaveBeenCalled();
     expect(dockerHostReason('wslDistributionMissing', WSL_HOST)).toBe('The WSL distribution devspaces is not installed on this computer.');
     expect(dockerHostReason('wslMissing', WSL_HOST)).toBe('WSL (wsl.exe) was not found on this computer.');
+  });
+
+  it('names a damaged disk of the distribution with its own error, whose button sets the distribution up again', async () => {
+    const corrupt = {
+      ok: false,
+      detail:
+        "Failed to attach disk 'C:\\Users\\student\\AppData\\Local\\nimblescape\\devspaces\\wsl\\disk\\ext4.vhdx' to WSL2: The file or directory is corrupted and unreadable.\r\n" +
+        'Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT',
+      timedOut: false,
+    } as const;
+    const docker = fakeDocker(() => info());
+    const runner = sshRunner();
+    await expect(testRemoteDockerHost(docker, WSL_HOST, { runner, sshPath: undefined, env: {}, shells: wslShells(corrupt) })).resolves.toMatchObject({ ok: false, problem: 'wslDiskCorrupt' });
+    const error = await ensureDockerHostReachable(remoteDockerTarget(WSL_HOST), { docker, runner, state, logger, sshPath: undefined, env: {}, shells: wslShells(corrupt) }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({ code: 'wslDiskCorrupt', message: Messages.dockerHostUnreachable(WSL_HOST, dockerHostReason('wslDiskCorrupt', WSL_HOST)), detail: corrupt.detail });
+    expect(docker.calls).toEqual([]);
+    expect(runner.run).not.toHaveBeenCalled();
+    // Another WSL distribution keeps the error of a host that cannot be reached: the button removes only the one of Devspaces.
+    expect(dockerHostUnreachable('wsl:ubuntu', 'wslDiskCorrupt', corrupt.detail)).toMatchObject({ code: 'dockerHostUnreachable' });
   });
 
   it('checks the distribution with the start of its shell before an operation, also while its Docker pipe listens', async () => {
