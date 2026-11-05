@@ -57,6 +57,8 @@ export class StoragePaths {
   readonly disconnectDir: string;
   /** Reopen record. */
   readonly reopen: string;
+  /** A Start that waits for the restart of VS Code for its update (StartAfterUpdate). */
+  readonly startAfterUpdate: string;
   /** State of the workspace helper images: base image digests, last check, last use, last cleanup. */
   readonly helperState: string;
   /** Remote Docker hosts: the list of SSH hosts, the Docker host of Devspaces, and the rootless sockets (RemoteDockerState). */
@@ -91,6 +93,7 @@ export class StoragePaths {
     this.operationsDir = path.join(root, 'operations');
     this.disconnectDir = path.join(root, DISCONNECT_DIR_NAME);
     this.reopen = path.join(root, 'reopen.json');
+    this.startAfterUpdate = path.join(root, 'start-after-update.json');
     this.helperState = path.join(root, 'helper.json');
     this.remoteDocker = path.join(root, 'remote-docker.json');
     this.dockerEngines = path.join(root, 'docker-engines.json');
@@ -128,6 +131,11 @@ export class StoragePaths {
   /** `disconnect/<devspace-id>.json`. Throws for an invalid ID. */
   disconnectFile(devspaceId: string): string {
     return path.join(this.disconnectDir, `${checkedId('devspace ID', devspaceId)}.json`);
+  }
+
+  /** `start-after-update.json.claimed.<window-id>`: the record of a Start after the update, claimed by a window. Throws for an invalid ID. */
+  claimedStartAfterUpdateFile(windowId: string): string {
+    return `${this.startAfterUpdate}${CLAIM_MARKER}${checkedId('window ID', windowId)}`;
   }
 
   /** `operations/<devspace-id>.claimed.<time in ms>.<window-id>`. Throws for an invalid ID. */

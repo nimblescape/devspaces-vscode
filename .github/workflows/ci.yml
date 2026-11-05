@@ -20,7 +20,7 @@
 # macOS, against the packaged VSIX and on Linux also against the development
 # build. The job "vscode attach" starts VS Code in the windows of containers on
 # the Docker Engine of the runner, through the real Dev Containers extension, in
-# two parts side by side, each on a runner of its own. The job "vscode attach
+# six parts side by side, each on a runner of its own. The job "vscode attach
 # remote" starts VS Code in the window of a devspace on a Docker Engine over
 # SSH, and the job "vscode update" in the window of a devspace before and after
 # the update from the last released version. The VSIX of the job "package" stays
@@ -32,10 +32,9 @@
 # version and publishes the VSIX of that call. A push or a pull request that
 # changes only documentation, Markdown files and the files of docs/, starts no
 # run; the release calls this workflow for each version, where these path
-# filters do not apply. A change of this file changes the release process: its
-# pull request needs a dry run (rule 4). The workflow "VS Code versions" calls
-# it once per week with another VS Code version for the VS Code jobs; such a
-# call runs only the job "package", for the VSIX, and the VS Code jobs.
+# filters do not apply. The workflow "VS Code versions" calls it once per week
+# with another VS Code version for the VS Code jobs; such a call runs only the
+# job "package", for the VSIX, and the VS Code jobs.
 
 name: CI
 
@@ -305,24 +304,25 @@ jobs:
   vscode-attach:
     # The attach tests (.vscode-test.mjs, label attach): VS Code starts in the window of a container on the Docker
     # Engine of the runner, through the real Dev Containers extension. test/vscode/attach/prepare.ts prepares the engine
-    # and the test VS Code. Some runs take several minutes, so they run in two parts side by side, each on its own runner
-    # and engine; both parts run the run `devspace`, in which the devspace gets its container. The part
-    # `restarts`: the first start opens a container that is no devspace, the second a devspace that the window restores
-    # from its volume labels, the third the same devspace again with the user data folder of the second (a restart of VS
-    # Code), the fourth the same window under another GitHub account, and the fifth the same window when the start of
-    # its stopped container takes several minutes. The part `stopped`: after the run `devspace`, VS Code starts with a
-    # local folder and starts a second VS Code, with the extension installed from its VSIX, in the window of the
-    # devspace, whose container the tests stop and then remove. The runner gets a Git configuration and an SSH agent, so
-    # that the tests see which of them reach the containers. The extension creates its objects with the names of a real
-    # installation, which is why these tests run only on CI.
+    # and the test VS Code. Each run that needs no other run before it is a part of its own, and the parts run side by
+    # side, each on its own runner and engine. The part `plain` opens a container that is no devspace. Every other part
+    # first runs the run `devspace`, in which the window restores a devspace from its volume labels and the devspace
+    # gets its container, and then its own run: `reattach` the same devspace again with the user data folder of the run
+    # `devspace` (a restart of VS Code), `account` the same window under another GitHub account, and `longopen` the same
+    # window when the start of its stopped container takes several minutes. `stop` and `removal` start VS Code with a
+    # local folder and start a second VS Code, with the extension installed from its VSIX, in the window of the
+    # devspace, whose container the tests stop (`stop`) or remove (`removal`); DEVSPACE_TEST_STOPPED selects the part
+    # (test/vscode/attach/stopped.test.ts). The runner gets a Git configuration and an SSH agent, so that the tests see
+    # which of them reach the containers. The extension creates its objects with the names of a real installation, which
+    # is why these tests run only on CI.
     name: vscode attach (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      # Every part reports its failures, also when the other part failed.
+      # Every part reports its failures, also when another part failed.
       fail-fast: false
       matrix:
-        part: [restarts, stopped]
+        part: [plain, reattach, account, longopen, stop, removal]
     steps:
       # .vscode-test.mjs, test/vscode/attach/prepare.ts and scripts/install-attach-extensions.mjs download the VS Code
       # version of VSCODE_TEST_VERSION; empty (also for every event but a call) gives stable. @vscode/test-electron
@@ -376,13 +376,13 @@ jobs:
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
 
       - name: Run the tests in the window of a container that is no devspace
-        if: matrix.part == 'restarts'
+        if: matrix.part == 'plain'
         env:
           DEVSPACE_TEST_ATTACH: plain
         run: xvfb-run -a npm run test:vscode:attach
 
       - name: Run the tests in the window of a restored devspace
-        if: ${{ !cancelled() }}
+        if: matrix.part != 'plain'
         env:
           DEVSPACE_TEST_ATTACH: devspace
         run: xvfb-run -a npm run test:vscode:attach
@@ -390,24 +390,25 @@ jobs:
       # The Dev Containers extension stops no container when its window closes (shutdownAction none of the override);
       # only the Monitor does, after its waiting time.
       - name: Check that the devspace still runs after VS Code quit
+        if: matrix.part != 'plain'
         run: |
           name=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.containerName")
           test "$(docker inspect -f '{{.State.Running}}' "$name")" = true
 
       - name: Run the tests in the window of the devspace after a restart of VS Code
-        if: matrix.part == 'restarts'
+        if: matrix.part == 'reattach'
         env:
           DEVSPACE_TEST_ATTACH: reattach
         run: xvfb-run -a npm run test:vscode:attach
 
       - name: Run the tests in the window of the devspace under another GitHub account
-        if: matrix.part == 'restarts'
+        if: matrix.part == 'account'
         env:
           DEVSPACE_TEST_ATTACH: account
         run: xvfb-run -a npm run test:vscode:attach
 
       - name: Check that the devspace of the owner still runs
-        if: matrix.part == 'restarts'
+        if: matrix.part == 'account'
         run: |
           name=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.containerName")
           test "$(docker inspect -f '{{.State.Running}}' "$name")" = true
@@ -415,7 +416,7 @@ jobs:
       # The open pipeline of the next run starts the container, and its postStartCommand waits several minutes once
       # (test/vscode/attach/prepare.ts). The file of postAttachCommand starts empty, so that the run counts its attaches.
       - name: Stop the devspace, with a long postStartCommand at its next start
-        if: matrix.part == 'restarts'
+        if: matrix.part == 'longopen'
         run: |
           name=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.containerName")
           user=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.user")
@@ -424,20 +425,21 @@ jobs:
           docker stop "$name"
 
       - name: Run the tests in the window of the devspace with an open pipeline of several minutes
-        if: matrix.part == 'restarts'
+        if: matrix.part == 'longopen'
         env:
           DEVSPACE_TEST_ATTACH: longopen
         run: xvfb-run -a npm run test:vscode:attach
 
       # The second VS Code of the next run loads the extension as users install it (scripts/install-attach-extensions.mjs).
       - name: Install the extension and the test sign-in provider into the test VS Code from VSIX files
-        if: matrix.part == 'stopped'
+        if: matrix.part == 'stop' || matrix.part == 'removal'
         run: node scripts/install-attach-extensions.mjs
 
-      - name: Run the tests in the window of the devspace whose container stops
-        if: matrix.part == 'stopped'
+      - name: Run the tests in the window of the devspace whose container stops or is removed
+        if: matrix.part == 'stop' || matrix.part == 'removal'
         env:
           DEVSPACE_TEST_ATTACH: stopped
+          DEVSPACE_TEST_STOPPED: ${{ matrix.part }}
         run: xvfb-run -a npm run test:vscode:attach
 
       - name: Show the Docker objects
