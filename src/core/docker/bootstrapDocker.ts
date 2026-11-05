@@ -220,6 +220,22 @@ export interface BootstrapDockerOptions {
 /** `docker <args>` with the Docker CLI on the computer of a remote engine (BootstrapDockerOptions.hostCli). */
 export type HostDockerCli = (args: readonly string[], options: RunOptions) => Promise<RunResult>;
 
+/** The Docker CLI on the computer of the engine for one build (hostBuilder): its buildx and the packed context. */
+interface HostBuilder {
+  host: string;
+  run: HostDockerCli;
+  /** `buildx v0.38.1`, for the log. */
+  buildx: string;
+  /** The build context as a tar archive (contextTar). */
+  context: Buffer;
+}
+
+/** An error of the start of a program (`spawn …`: ENOENT, EACCES), before it ran. */
+function isStartError(error: unknown): boolean {
+  const syscall = (error as NodeJS.ErrnoException | undefined)?.syscall;
+  return typeof syscall === 'string' && syscall.startsWith('spawn');
+}
+
 /**
  * The identity of the file at `path`: its inode, size and modification time (fs.stat, which follows a link). Another
  * value means another file, for example Docker Engine installed after the package podman-docker was removed.
@@ -840,8 +856,9 @@ export class BootstrapDocker {
    *
    * Within an operation on a remote engine whose computer has a Docker CLI with buildx that Devspaces runs there
    * (BootstrapDockerOptions.hostCli, the WSL distribution of Devspaces; hostBuilder), the build runs with that Docker CLI,
-   * so that it uses BuildKit: `docker build … -f <name of the Dockerfile> -`, with the context as a tar archive on its
-   * standard input (contextTar). Only for a Dockerfile at the top of its context folder (the helper image).
+   * so that it uses BuildKit: `docker buildx build --builder default --load … -f <name of the Dockerfile> -`, with the
+   * context as a tar archive on its standard input (contextTar). Only for a Dockerfile at the top of its context folder
+   * (the helper image). A Docker CLI there that cannot be started builds here (buildThere).
    */
   async buildImage(options: {
     tag: string;
@@ -858,40 +875,22 @@ export class BootstrapDocker {
     const flagText = flags.length > 0 ? ` (${flags.join(' ')})` : '';
     const onOutput = options.onOutput ?? ((text: string) => this.logger.output(text));
     const buildLabel = `${LABEL_BUILD_ID}=${crypto.randomBytes(16).toString('hex')}`;
-    const build = (dockerfile: string, context: string, builder: string[] = []): string[] => [
-      'build',
-      ...builder,
-      '-t',
-      options.tag,
-      '-f',
-      dockerfile,
-      ...flags,
-      ...labelArgs(options.labels, '--label'),
-      '--label',
-      buildLabel,
-      ...labelArgs(options.buildArgs, '--build-arg'),
-      context,
-    ];
+    const rest = [...flags, ...labelArgs(options.labels, '--label'), '--label', buildLabel, ...labelArgs(options.buildArgs, '--build-arg')];
     const onHost = await this.hostBuilder(options.dockerfile, options.context, options.signal);
-    let built = false;
-    if (onHost !== undefined) {
-      this.logger.info(`Building image ${options.tag}${flagText} on ${onHost.host} with its Docker CLI and ${onHost.buildx} (BuildKit).`);
-      // The builder of the engine there (the docker driver, `--builder default`), which keeps the image in the engine,
-      // also when `docker buildx use` chose another builder there.
-      const args = build(path.basename(options.dockerfile), '-', ['--builder', 'default']);
-      try {
-        const result = await this.logged(args, () => onHost.run(args, { input: onHost.context, signal: options.signal, onStdout: onOutput, onStderr: onOutput }));
-        if (result.exitCode !== 0) throw this.commandError(args, result);
-        built = true;
-      } catch (error) {
-        // A build that ran there and failed is the result. Only a Docker CLI there that did not start builds here.
-        if (isAbortError(error) || error instanceof CommandError) throw error;
-        this.logger.warn(`The Docker CLI on ${onHost.host} could not be started, so the image is built from this computer, as before: ${errorMessage(error)}`);
-      }
-    }
-    if (!built) {
+    const builtThere =
+      onHost !== undefined &&
+      (await this.buildThere(
+        onHost,
+        // `docker buildx build`, which the check of hostBuilder found. The builder of the engine there (the docker
+        // driver, `--builder default`) keeps the image in the engine, also when `docker buildx use` chose another builder
+        // there; `--load` asks for it.
+        ['buildx', 'build', '--builder', 'default', '--load', '-t', options.tag, '-f', path.basename(options.dockerfile), ...rest, '-'],
+        `${options.tag}${flagText}`,
+        { signal: options.signal, onStdout: onOutput, onStderr: onOutput },
+      ));
+    if (!builtThere) {
       this.logger.info(`Building image ${options.tag}${flagText}.`);
-      await this.runChecked(build(options.dockerfile, options.context), { signal: options.signal, onStdout: onOutput, onStderr: onOutput });
+      await this.runChecked(['build', '-t', options.tag, '-f', options.dockerfile, ...rest, options.context], { signal: options.signal, onStdout: onOutput, onStderr: onOutput });
     }
     let images: ImageInfo[];
     try {
@@ -917,7 +916,7 @@ export class BootstrapDocker {
     dockerfile: string,
     context: string,
     signal: AbortSignal | undefined,
-  ): Promise<{ host: string; run: HostDockerCli; buildx: string; context: Buffer } | undefined> {
+  ): Promise<HostBuilder | undefined> {
     const target = operationDockerTarget();
     if (target?.kind !== 'remote' || this.hostCli === undefined) return undefined;
     if (path.resolve(path.dirname(dockerfile)) !== path.resolve(context)) return undefined;
@@ -937,6 +936,25 @@ export class BootstrapDocker {
       if (isAbortError(error)) throw error;
       this.logger.warn(`The image cannot be built with the Docker CLI on ${target.host}, ${elsewhere}: ${errorMessage(error)}`);
       return undefined;
+    }
+  }
+
+  /**
+   * `docker <args>` of buildImage with the Docker CLI on the computer of the engine (hostBuilder), with the build context
+   * as its standard input. True when it built the image; false when that Docker CLI could not be started (an error of
+   * the start of the program, logged), and the build runs here then. Throws CommandError when the build there ran and
+   * failed (no second build here), and an AbortError when `options.signal` aborts.
+   */
+  private async buildThere(onHost: HostBuilder, args: readonly string[], image: string, options: RunOptions): Promise<boolean> {
+    this.logger.info(`Building image ${image} on ${onHost.host} with its Docker CLI and ${onHost.buildx} (BuildKit).`);
+    try {
+      const result = await this.logged(args, () => onHost.run(args, { ...options, input: onHost.context }));
+      if (result.exitCode !== 0) throw this.commandError(args, result);
+      return true;
+    } catch (error) {
+      if (!isStartError(error)) throw error;
+      this.logger.warn(`The Docker CLI on ${onHost.host} could not be started, so the image is built from this computer, as before: ${errorMessage(error)}`);
+      return false;
     }
   }
 

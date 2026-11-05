@@ -9,18 +9,22 @@
 // buildx), and the engine then stops their build. No `vscode`.
 import * as crypto from 'crypto';
 import { errorMessage } from '../errors';
-import { isAbortError, type Logger, type RunOptions, type RunResult } from '../ports';
+import { abortError, isAbortError, type Logger, type RunOptions, type RunResult } from '../ports';
 import type { HostDockerCli } from './bootstrapDocker';
-import { wslCommandArgs } from './dockerHost';
+import { wslCommandArgs, wslText } from './dockerHost';
+import { endOf, outputOf } from './wslSetup';
 
 /** The variable of the environment that marks the processes of one call (wslMarkedCommand). */
 const MARK_VARIABLE = 'DEVSPACES_RUN';
 
 /**
  * The script that sends SIGTERM to each process whose environment has the line `$1` (`DEVSPACES_RUN=<mark>`), as root
- * (it reads /proc/<pid>/environ of every process). Errors of processes that ended meanwhile are not shown.
+ * (it reads /proc/<pid>/environ of every process); twice, 2 seconds apart, for a process that `wsl.exe` started only
+ * just before its Cancel. Errors of processes that ended meanwhile are not shown.
  */
-const END_SCRIPT = 'exec 2>/dev/null; for p in /proc/[0-9]*; do if tr "\\000" "\\n" < "$p/environ" | grep -qxF -e "$1"; then kill "${p#/proc/}"; fi; done; exit 0';
+const END_SCRIPT =
+  'exec 2>/dev/null; end() { for p in /proc/[0-9]*; do if tr "\\000" "\\n" < "$p/environ" | grep -qxF -e "$1"; then kill "${p#/proc/}"; fi; done; }; ' +
+  'end "$1"; sleep 2; end "$1"; exit 0';
 
 /** Time limit of the call that ends the processes of a call. */
 export const WSL_END_TIMEOUT_MS = 60_000;
@@ -37,18 +41,20 @@ export function wslEndCommand(mark: string): string[] {
 
 /**
  * `docker <args>` in the WSL distribution `distribution` (wslCommandArgs, wslMarkedCommand), with `runWsl`, which runs
- * `wsl.exe <args>`. When the call is cancelled (AbortError) or ends by its time limit, the processes of its mark are
- * ended in the background (wslEndCommand); a failure of that is logged.
+ * `wsl.exe <args>`; its output is read with wslText (the messages of an older `wsl.exe` are UTF-16). When the call is
+ * cancelled (AbortError) or ends by its time limit, the processes of its mark are ended in the background
+ * (wslEndCommand); a failure of that is logged. A signal that aborted before the call starts nothing.
  */
 export function wslDockerCli(runWsl: (args: readonly string[], options: RunOptions) => Promise<RunResult>, distribution: string, logger: Logger): HostDockerCli {
   return async (args, options) => {
+    if (options.signal?.aborted) throw abortError();
     const mark = crypto.randomBytes(16).toString('hex');
     const end = (): void => {
       const failed = (detail: string): void =>
         logger.warn(`The Docker CLI in the WSL distribution ${distribution} could not be ended after its stop, so its work may go on there: ${detail}`);
       runWsl(wslCommandArgs(distribution, wslEndCommand(mark)), { timeoutMs: WSL_END_TIMEOUT_MS }).then(
         (result) => {
-          if (result.exitCode !== 0) failed((`${result.stdout.trim()} ${result.stderr.trim()}`.trim() || (result.timedOut ? 'no answer within the time limit' : `exit code ${result.exitCode}`)).slice(-500));
+          if (result.exitCode !== 0) failed(`${endOf(result, WSL_END_TIMEOUT_MS)}: ${outputOf(result).slice(-500)}`);
         },
         (error: unknown) => failed(errorMessage(error)),
       );
@@ -61,6 +67,6 @@ export function wslDockerCli(runWsl: (args: readonly string[], options: RunOptio
       throw error;
     }
     if (result.timedOut) end();
-    return result;
+    return { ...result, stdout: wslText(result.stdout), stderr: wslText(result.stderr) };
   };
 }

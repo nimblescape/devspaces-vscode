@@ -913,6 +913,7 @@ describe('BootstrapDocker: every call runs directly', () => {
       'logged',
       // The Docker CLI on the computer of the engine (hostCli), not this one: bootstrapDocker.hostBuild.test.ts.
       'hostBuilder',
+      'buildThere',
       'run',
     ]);
     const { docker, runner } = recordingAdapter((call) => {

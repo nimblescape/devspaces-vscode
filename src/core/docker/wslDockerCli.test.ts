@@ -90,6 +90,21 @@ describe('wslDockerCli', () => {
     expect(calls.filter(isEnd)).toHaveLength(1);
   });
 
+  it('starts nothing for a signal that aborted before the call', async () => {
+    const { runWsl, calls } = recorder(async () => ok());
+    const controller = new AbortController();
+    controller.abort();
+    const error = await wslDockerCli(runWsl, 'devspaces', silentLogger)(['build', '-'], { signal: controller.signal }).catch((caught: unknown) => caught);
+    expect(isAbortError(error)).toBe(true);
+    expect(calls).toEqual([]);
+  });
+
+  it('reads the output with wslText, without the NUL characters of the UTF-16 messages of an older wsl.exe', async () => {
+    const { runWsl } = recorder(async () => ({ exitCode: 1, stdout: 'W\u0000s\u0000l\u0000', stderr: '\uFEFFdocker: error', timedOut: false }));
+    const result = await wslDockerCli(runWsl, 'devspaces', silentLogger)(['buildx', 'version'], {});
+    expect(result).toEqual({ exitCode: 1, stdout: 'Wsl', stderr: 'docker: error', timedOut: false });
+  });
+
   it('logs when the processes of the mark could not be ended', async () => {
     const warnings: string[] = [];
     const logger: Logger = { ...silentLogger, warn: (message) => warnings.push(message) };
@@ -105,7 +120,7 @@ describe('wslDockerCli', () => {
     await cli(['build', '-'], {}).catch(() => undefined);
     await vi.waitFor(() => expect(warnings).toHaveLength(2));
     expect(warnings).toEqual([
-      'The Docker CLI in the WSL distribution devspaces could not be ended after its stop, so its work may go on there: Wsl/Service/CreateInstance/ERROR_TIMEOUT',
+      'The Docker CLI in the WSL distribution devspaces could not be ended after its stop, so its work may go on there: exit code 1: Wsl/Service/CreateInstance/ERROR_TIMEOUT',
       'The Docker CLI in the WSL distribution devspaces could not be ended after its stop, so its work may go on there: spawn wsl.exe ENOENT',
     ]);
   });
@@ -119,7 +134,7 @@ function exitOf(command: readonly string[], env: NodeJS.ProcessEnv = process.env
 
 // The script of wslEndCommand on Linux, as root of a WSL distribution runs it (a process of the same user here).
 describe.skipIf(process.platform !== 'linux')('wslEndCommand with real processes', () => {
-  it('ends the processes of its mark and leaves the others', async () => {
+  it('ends the processes of its mark, also one that starts within its first 2 seconds, and leaves the others', async () => {
     const mark = 'a'.repeat(32);
     const marked = exitOf(wslMarkedCommand(mark, ['sh', '-c', 'sleep 30 & wait']));
     const other = exitOf(wslMarkedCommand('b'.repeat(32), ['sleep', '30']));
@@ -127,8 +142,12 @@ describe.skipIf(process.platform !== 'linux')('wslEndCommand with real processes
     for (const pid of [marked.pid, other.pid]) {
       await vi.waitFor(() => expect(fs.readFileSync(`/proc/${pid}/environ`, 'latin1')).toContain('DEVSPACES_RUN='), { timeout: 5000 });
     }
-    expect(await exitOf(wslEndCommand(mark)).exited).toBe(0);
+    const ending = exitOf(wslEndCommand(mark));
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const late = exitOf(wslMarkedCommand(mark, ['sleep', '30']));
+    expect(await ending.exited).toBe(0);
     expect(await marked.exited).toBe(-1);
+    expect(await late.exited).toBe(-1);
     if (other.pid !== undefined) process.kill(other.pid);
     expect(await other.exited).toBe(-1);
   });

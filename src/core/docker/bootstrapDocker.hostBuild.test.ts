@@ -66,6 +66,11 @@ function withoutBuildLabel(args: readonly string[]): string[] {
   return [...args.slice(0, index - 1), ...args.slice(index + 1)];
 }
 
+/** The error of a program that could not be started, as Node.js gives it. */
+function startError(): NodeJS.ErrnoException {
+  return Object.assign(new Error('spawn wsl.exe ENOENT'), { code: 'ENOENT', syscall: 'spawn wsl.exe' });
+}
+
 function recordingLogger(): { logger: Logger; infos: string[]; warnings: string[] } {
   const infos: string[] = [];
   const warnings: string[] = [];
@@ -100,7 +105,7 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     const { runner, calls } = localRunner();
     const output: string[] = [];
     const host = hostCliOf((call) => {
-      if (call.args[0] === 'buildx') return ok(BUILDX_VERSION);
+      if (call.args[1] === 'version') return ok(BUILDX_VERSION);
       call.options.onStderr?.('#1 [internal] load remote build context\n');
       return ok();
     });
@@ -110,14 +115,16 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     const id = await runWithDockerTarget(WSL, () => docker.buildImage(buildOptions({ onOutput: (text) => output.push(text) })));
     expect(id).toBe(`sha256:${'a'.repeat(64)}`);
     expect(hostCli).toHaveBeenCalledWith(WSL);
-    expect(host.calls.map((call) => call.args[0])).toEqual(['buildx', 'build']);
     expect(host.calls[0].args).toEqual(['buildx', 'version']);
+    expect(host.calls).toHaveLength(2);
     expect(host.calls[0].options.timeoutMs).toBeGreaterThan(0);
     const build = host.calls[1];
     expect(withoutBuildLabel(build.args)).toEqual([
+      'buildx',
       'build',
       '--builder',
       'default',
+      '--load',
       '-t',
       'devspaces-worker:abc',
       '-f',
@@ -139,7 +146,7 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     const label = build.args.find((arg) => arg.startsWith('nimblescape.devspaces.build-id='));
     expect(calls[0].args).toEqual(['image', 'ls', '--filter', `label=${label}`, '--no-trunc', '--format', '{{json .}}']);
     expect(infos).toContain(`Building image devspaces-worker:abc (--pull) on ${WSL_HOST} with its Docker CLI and buildx v0.38.1 (BuildKit).`);
-    expect(infos.some((line) => /^docker build: exit code 0 after \d+\.\d s\.$/.test(line))).toBe(true);
+    expect(infos.some((line) => /^docker buildx build: exit code 0 after \d+\.\d s\.$/.test(line))).toBe(true);
   });
 
   it('builds here as before when the Docker CLI there has no buildx', async () => {
@@ -211,7 +218,7 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
 
   it('builds here as before when the Docker CLI there could not be started for the build', async () => {
     const { runner, calls } = localRunner();
-    const host = hostCliOf((call) => (call.args[0] === 'buildx' ? ok(BUILDX_VERSION) : Promise.reject(new Error('spawn wsl.exe ENOENT'))));
+    const host = hostCliOf((call) => (call.args[1] === 'version' ? ok(BUILDX_VERSION) : Promise.reject(startError())));
     const { logger, warnings } = recordingLogger();
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'win32', { dockerPipe, hostCli: () => host.cli });
     expect(await runWithDockerTarget(WSL, () => docker.buildImage(buildOptions()))).toBe(`sha256:${'a'.repeat(64)}`);
@@ -219,24 +226,32 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     expect(calls.filter((call) => call.args[0] === 'build').map((call) => call.args.at(-1))).toEqual([folder]);
   });
 
+  it('throws another failure of the Docker CLI there, and builds nothing here', async () => {
+    const { runner, calls } = localRunner();
+    const host = hostCliOf((call) => (call.args[1] === 'version' ? ok(BUILDX_VERSION) : Promise.reject(new Error('The output of the program is too large.'))));
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'win32', { dockerPipe, hostCli: () => host.cli });
+    await expect(runWithDockerTarget(WSL, () => docker.buildImage(buildOptions()))).rejects.toThrow('too large');
+    expect(calls).toEqual([]);
+  });
+
   it('throws CommandError when the build there fails, and builds nothing here', async () => {
     const { runner, calls } = localRunner();
-    const host = hostCliOf((call) => (call.args[0] === 'buildx' ? ok(BUILDX_VERSION) : { exitCode: 1, stdout: '', stderr: 'ERROR: failed to solve\n', timedOut: false }));
+    const host = hostCliOf((call) => (call.args[1] === 'version' ? ok(BUILDX_VERSION) : { exitCode: 1, stdout: '', stderr: 'ERROR: failed to solve\n', timedOut: false }));
     const { logger, infos } = recordingLogger();
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'win32', { dockerPipe, hostCli: () => host.cli });
     const error = await runWithDockerTarget(WSL, () => docker.buildImage(buildOptions())).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(CommandError);
     expect((error as CommandError).stderr).toContain('failed to solve');
     expect(calls).toEqual([]);
-    expect(infos.some((line) => /^docker build: exit code 1 after \d+\.\d s\.$/.test(line))).toBe(true);
+    expect(infos.some((line) => /^docker buildx build: exit code 1 after \d+\.\d s\.$/.test(line))).toBe(true);
   });
 
   it('rejects with an AbortError when the signal aborts during the check or the build, and builds nothing here', async () => {
     const { runner, calls } = localRunner();
     let stage: 'check' | 'build' = 'check';
     const host = hostCliOf((call) => {
-      if (call.args[0] === 'buildx' && stage === 'check') return Promise.reject(abortError());
-      if (call.args[0] === 'buildx') return ok(BUILDX_VERSION);
+      if (call.args[1] === 'version' && stage === 'check') return Promise.reject(abortError());
+      if (call.args[1] === 'version') return ok(BUILDX_VERSION);
       return Promise.reject(abortError());
     });
     const { logger, infos } = recordingLogger();
@@ -250,6 +265,6 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     expect(isAbortError(second)).toBe(true);
     expect(host.calls[2].options.signal).toBe(signal);
     expect(calls).toEqual([]);
-    expect(infos.some((line) => /^docker build: cancelled after \d+\.\d s\.$/.test(line))).toBe(true);
+    expect(infos.some((line) => /^docker buildx build: cancelled after \d+\.\d s\.$/.test(line))).toBe(true);
   });
 });
