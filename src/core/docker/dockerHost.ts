@@ -507,9 +507,10 @@ const WSL_DISTRIBUTION_MISSING = /WSL_E_DISTRO_NOT_FOUND|There is no distributio
 /**
  * The error code of `wsl.exe` for a distribution whose virtual disk (ext4.vhdx) Windows cannot read:
  * `Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT` ("The file or directory is corrupted and unreadable";
- * older versions of WSL name the step MountVhd). WSL cannot start the distribution then.
+ * older versions of WSL name the step MountVhd), or ERROR_DISK_CORRUPT, also as their HRESULT (0x80070570, 0x80070571)
+ * where WSL has no name for the code. WSL cannot start the distribution then.
  */
-const WSL_DISK_CORRUPT = /CreateInstance\/Mount(?:Disk|Vhd)\/(?:\S+\/)?ERROR_(?:FILE|DISK)_CORRUPT\b/;
+const WSL_DISK_CORRUPT = /CreateInstance\/Mount(?:Disk|Vhd)\/(?:\S+\/)?(?:ERROR_(?:FILE|DISK)_CORRUPT|0x8007057[01])\b/i;
 
 /** True when the output `text` of `wsl.exe` says that the virtual disk of the distribution is damaged (WSL_DISK_CORRUPT). */
 export function wslDiskCorrupt(text: string): boolean {

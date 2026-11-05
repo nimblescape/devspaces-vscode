@@ -659,8 +659,8 @@ describe('useHost and forgetHost (the WSL distribution of Devspaces after its se
     await expect(commands.useHost(WSL_HOST)).resolves.toBe(false);
     expect(window.showErrorMessage).toHaveBeenCalledWith(
       Messages.dockerHostUnreachable(WSL_HOST, dockerHostReason('wslDiskCorrupt', WSL_HOST)),
-      Actions.resetWsl,
       Actions.showDetails,
+      Actions.resetWsl,
     );
     await vi.waitFor(() => expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.resetWslDistribution'));
     expect(await state.dockerHost()).toBeUndefined();

@@ -581,9 +581,9 @@ export class RemoteDockerCommands {
     this.showError(RemoteDockerTexts.switchFailed);
   }
 
-  /** An error with Show details, and Remove and Set Up Again before it (`resetWsl`, its command). */
+  /** An error with Show details, and Remove and Set Up Again after it (`resetWsl`, its command; as errors.ts shows it). */
   private showError(message: string, action?: 'resetWsl'): void {
-    const items = action === undefined ? [Actions.showDetails] : [Actions[action], Actions.showDetails];
+    const items = action === undefined ? [Actions.showDetails] : [Actions.showDetails, Actions[action]];
     showErrorMessage(message, ...items).then(
       (choice) => {
         if (choice === Actions.showDetails) this.deps.showLog();

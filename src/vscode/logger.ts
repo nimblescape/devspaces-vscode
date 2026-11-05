@@ -27,11 +27,16 @@ export function redactSecrets(text: string): string {
  */
 const CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[ -/]+[0-~]|[@-Z\\-_])/g;
 /**
- * The start of a control sequence (CONTROL_SEQUENCE) at the end of a part of the output, or a lone ESC: its rest comes
- * with the next part. Two programs whose output goes to the log at the same time can mix their parts; a cut sequence
- * then joins the part of the other program (rare: only a sequence that a part cut, and that program's first characters).
+ * The start of a control sequence (CONTROL_SEQUENCE) at the end of a part of the output: its rest comes with the next
+ * part. Two programs whose output goes to the log at the same time can mix their parts; a cut sequence then joins the
+ * part of the other program (rare: only a sequence that a part cut, and that program's first characters).
  */
-const CUT_CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?|[ -/]+)?$/;
+const CUT_CONTROL_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*\u001b?|[ -/]+)$/;
+/**
+ * A lone ESC at the end of a part of the output is dropped, not held: held, it would take the first character of the
+ * next output (`ESC B`), also the one of another program after a program that was stopped.
+ */
+const LONE_ESCAPE = /\u001b$/;
 /** A cut sequence longer than this is no sequence: it is written as it is. */
 const MAX_CUT_SEQUENCE = 512;
 
@@ -79,6 +84,8 @@ export class OutputChannelLogger implements Logger, vscode.Disposable {
     if (cut !== null && cut[0].length <= MAX_CUT_SEQUENCE) {
       this.cutSequence = cut[0];
       whole = whole.slice(0, cut.index);
+    } else {
+      whole = whole.replace(LONE_ESCAPE, '');
     }
     const shown = stripControlSequences(whole);
     if (shown === '') return;

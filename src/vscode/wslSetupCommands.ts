@@ -444,8 +444,8 @@ export class WslSetupCommands {
    * wslDiskCorrupt): the removal without its question, because that message says what it deletes, and then the setup of
    * a new distribution as for a link (ensureDockerHost), which Devspaces uses afterwards. Then `retry`, the Try again of
    * the operation that failed, when Devspaces uses the new distribution. The host stays in the list of Devspaces
-   * meanwhile, so that no other Docker takes its place. A distribution that Devspaces did not set up is not removed.
-   * Never throws.
+   * meanwhile, so that no other Docker takes its place; when the new setup does not end, it leaves the list
+   * (forgetHostWhenGone). A distribution that Devspaces did not set up is not removed. Never throws.
    */
   async removeAndSetUpAgain(retry?: () => unknown): Promise<void> {
     const { setup, folder } = this.deps;
@@ -486,11 +486,33 @@ export class WslSetupCommands {
     }
     if (!removed) return;
     this.deps.logger.info(WslSetupTexts.removedToSetUpAgain);
-    if (!(await this.run('flow')) || retry === undefined) return;
+    if (!(await this.run('flow'))) {
+      await this.forgetHostWhenGone(setup);
+      return;
+    }
+    if (retry === undefined) return;
     // A failed async retry must reach the log, not end as an unhandled rejection in the extension host.
     Promise.resolve()
       .then(retry)
       .catch((error: unknown) => this.deps.logger.error('Try again failed.', error));
+  }
+
+  /**
+   * After "Remove and Set Up Again" whose setup did not end (its message says why): without a distribution, the host
+   * leaves the list of Devspaces, as after a removal, so that the view shows the setup of Docker and a link sets the
+   * distribution up. Under the lock of all windows, and only while no other window has set it up meanwhile. Never throws.
+   */
+  private async forgetHostWhenGone(setup: NonNullable<WslSetupCommandsDeps['setup']>): Promise<void> {
+    try {
+      await setup.locked(async () => {
+        if ((await this.removalCheck(setup)) !== 'none') return false;
+        await this.deps.forgetHost(WSL_HOST);
+        this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up again, so ${WSL_HOST} left the list of Devspaces.`);
+        return true;
+      });
+    } catch (error) {
+      this.deps.logger.warn(`${WSL_HOST} could not be removed from the list of Devspaces: ${errorMessage(error)}`);
+    }
   }
 
   /**
@@ -596,11 +618,11 @@ export class WslSetupCommands {
   }
 
   /**
-   * An error with Show details, and `action` before it: Install WSL 2 runs the button of the Docker setup, Remove and Set
-   * Up Again runs removeAndSetUpAgain.
+   * An error with Show details, and `action`: Install WSL 2 (before Show details) runs the button of the Docker setup;
+   * Remove and Set Up Again (after Show details, as errors.ts and RemoteDockerCommands show it) runs removeAndSetUpAgain.
    */
   private showError(message: string, action?: string): void {
-    const items = action === undefined ? [Actions.showDetails] : [action, Actions.showDetails];
+    const items = action === undefined ? [Actions.showDetails] : action === Actions.resetWsl ? [Actions.showDetails, action] : [action, Actions.showDetails];
     showErrorMessage(message, ...items).then(
       (choice) => {
         if (choice === Actions.showDetails) {

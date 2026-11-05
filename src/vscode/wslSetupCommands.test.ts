@@ -645,11 +645,14 @@ describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
     await commands().removeAndSetUpAgain(retry);
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.busyElsewhere);
     expect(setup.setUp).not.toHaveBeenCalled();
+    expect(forgetHost).not.toHaveBeenCalled();
     setup.registration.mockResolvedValueOnce('own').mockResolvedValue('none');
     setup.setUp.mockRejectedValueOnce(new WslSetupError('downloadFailed', 'ECONNRESET'));
     await commands().removeAndSetUpAgain(retry);
     expect(setup.setUp).toHaveBeenCalledTimes(1);
     expect(retry).not.toHaveBeenCalled();
+    // Without a distribution, the host leaves the list, as after a removal, so that the view offers the setup again.
+    expect(forgetHost.mock.calls).toEqual([[WSL_HOST]]);
   });
 
   it('offers Remove and Set Up Again when a setup finds the disk of the distribution damaged', async () => {
@@ -658,7 +661,7 @@ describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
     setup.setUp.mockRejectedValueOnce(new WslSetupError('dockerFailed', `Failed to attach disk: The file or directory is corrupted and unreadable.\r\n${CORRUPT}`));
     window.showErrorMessage.mockResolvedValue(Actions.resetWsl);
     await commands().setUp();
-    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.diskCorrupt, Actions.resetWsl, Actions.showDetails);
+    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.diskCorrupt, Actions.showDetails, Actions.resetWsl);
     expect(WslSetupTexts.diskCorrupt).toBe(
       'The disk of the WSL distribution devspaces is damaged, so WSL cannot start it. "Remove and Set Up Again" deletes the distribution with all devspaces in it, also changes that you did not push, and sets it up again.',
     );

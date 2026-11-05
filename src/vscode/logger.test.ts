@@ -50,8 +50,8 @@ describe('OutputChannelLogger', () => {
     const channel = fakeVscode.outputChannels[0];
     // The classic builder of Docker marks the error output of a RUN step red.
     logger.output('\u001b[91m+ docker compose version\n\u001b[0mDocker Compose version v5.7.0\n\u001b[9');
-    logger.output('1m+ apt-get clean\n\u001b');
-    logger.output('[0m');
+    logger.output('1m+ apt-get clean\n\u001b[');
+    logger.output('0m');
     logger.output('\u001b]0;title\u0007done\n');
     expect(channel.text).toBe('+ docker compose version\nDocker Compose version v5.7.0\n+ apt-get clean\ndone\n');
   });
@@ -63,6 +63,14 @@ describe('OutputChannelLogger', () => {
     logger.error('failed', new CommandError('docker build', 1, '', '\u001b[91mE: Unable to locate package\u001b[0m'));
     logger.output('1mnext\n');
     expect(channel.text).toMatch(/^red\n\[[\d:]+\] error failed\ndocker build failed with exit code 1:\nE: Unable to locate package\nnext\n$/);
+  });
+
+  it('drops a lone ESC at the end of an output, so that it never takes the first character of the next one', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    logger.output('stopped\n\u001b');
+    logger.output('Building image\n');
+    expect(channel.text).toBe('stopped\nBuilding image\n');
   });
 
   it('holds a cut OSC sequence and a cut sequence of ESC and intermediate characters too', () => {

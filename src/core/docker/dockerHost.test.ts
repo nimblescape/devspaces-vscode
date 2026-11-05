@@ -365,6 +365,10 @@ describe('wslDiskCorrupt', () => {
   it('is true only for the error of a damaged virtual disk', () => {
     expect(wslDiskCorrupt(WSL_DISK_CORRUPT_TEXT)).toBe(true);
     expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_DISK_CORRUPT')).toBe(true);
+    // The HRESULT, where WSL has no name for the code.
+    expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/0x80070570')).toBe(true);
+    expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountVhd/HCS/0x80070571')).toBe(true);
+    expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/0x80070057')).toBe(false);
     expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/ERROR_TIMEOUT')).toBe(false);
     expect(wslDiskCorrupt('Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_SHARING_VIOLATION')).toBe(false);
     expect(wslDiskCorrupt('The file or directory is corrupted and unreadable.')).toBe(false);
