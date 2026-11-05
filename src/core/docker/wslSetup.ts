@@ -72,7 +72,10 @@ const SHORT_CALL_MS = 15_000;
 const REGISTER_MS = 15 * 60_000;
 const PROVISION_MS = 30 * 60_000;
 const TERMINATE_MS = 60_000;
-/** The script that waits for Docker waits 180 seconds itself, and each `docker info` of it waits for Docker. */
+/**
+ * The start of the distribution and the script that waits for Docker (DOCKER_WAIT_SCRIPT): the script ends within about
+ * 4 minutes (180 seconds of waits, then calls with their own limits), so a failure still gives its reason.
+ */
 const START_MS = 5 * 60_000;
 const UNREGISTER_MS = 5 * 60_000;
 /**
@@ -515,21 +518,21 @@ main < /dev/null
 /**
  * The script that waits up to 180 seconds for Docker after the restart (`sh -s`, as root): in a slow virtual machine,
  * Docker needs about 45 seconds to start, after the start of the distribution. Each `docker info` waits for the start of
- * Docker (the socket of systemd), at most 60 seconds, so that a start that hangs still ends the script with its reason
- * before START_MS. Standard output: the version of the engine. On a failure, standard error gets the answer of
- * `docker info` and the state of the service.
+ * Docker (the socket of systemd), at most 30 seconds, and every other command has a limit too, so that a start that
+ * hangs still ends the script with its reason within about 4 minutes, before START_MS. Standard output: the version of
+ * the engine. On a failure, standard error gets the answer of `docker info` and the state of the service.
  */
 export const DOCKER_WAIT_SCRIPT = `end=$(($(date +%s) + 180))
-until timeout 60 docker info > /dev/null 2>&1; do
+until timeout 30 docker info > /dev/null 2>&1; do
 if [ "$(date +%s)" -ge "$end" ]; then
 [ -d /run/systemd/system ] || echo "systemd does not run in the distribution." >&2
-timeout 10 docker info 2>&1 | tail -n 5 >&2
-systemctl --no-pager status docker.service 2>&1 | tail -n 20 >&2
+timeout 10 docker info > /dev/null 2>&1 || timeout 10 docker info 2>&1 | tail -n 5 >&2
+timeout 10 systemctl --no-pager status docker.service 2>&1 | tail -n 20 >&2
 exit 1
 fi
 sleep 2
 done
-timeout 60 docker version --format '{{.Server.Version}}'
+timeout 30 docker version --format '{{.Server.Version}}'
 `;
 
 export type WslSetupProblem =

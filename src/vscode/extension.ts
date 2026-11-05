@@ -224,8 +224,9 @@ async function activateExtension(
     logger.info(`Docker publishes no Docker CLI for ${platform} on ${process.arch} that runs here, so this window uses the Docker CLI of this computer.`);
   }
   const presentOwnCli = (): string | undefined => (ownCliBuild ? presentOwnDockerCli(paths.dockerCliDir, platform, process.arch) : undefined);
-  // Without a Docker CLI of this computer, the log names the Docker CLI of Devspaces, which runs the calls on a remote host.
-  if (installedCli === undefined) {
+  // Without a Docker CLI of this computer, the log names the Docker CLI of Devspaces, which runs the calls on a remote
+  // host (the window of a devspace names it below, when it puts it first in PATH).
+  if (installedCli === undefined && !pipeWindow) {
     const present = presentOwnCli();
     if (present !== undefined) logger.info(`The Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces is installed: ${present}`);
   }

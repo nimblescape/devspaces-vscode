@@ -640,7 +640,7 @@ export class DockerSetup implements vscode.Disposable {
     }
     // The first check only sets the keys: the sidebar reads `setupRequired` when it renders.
     if (!first && before.cliFound !== this.state.cliFound) {
-      this.deps.logger.info(this.state.cliFound ? 'The Docker CLI of this computer was found.' : 'The Docker CLI of this computer was not found.');
+      this.deps.logger.info(this.state.cliFound ? 'The Docker CLI was found.' : 'The Docker CLI was not found.');
       this.deps.onDidChangeInstalled();
       if (this.state.cliFound && this.watchTimer) {
         this.stopInstallWatch();
