@@ -37,6 +37,8 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'archive.ts',
     'attachDiagnostics.ts',
     'bootstrapDocker.ts',
+    // The build context of the helper image as a tar archive, for its build with the Docker CLI of the WSL distribution.
+    'contextTar.ts',
     // The check of the Docker API versions of an engine against the Docker CLI of Devspaces, at the open of a worker.
     'dockerApiVersion.ts',
     'dockerCli.ts',

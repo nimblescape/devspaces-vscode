@@ -15,6 +15,8 @@ takes the section of a version as the notes of its GitHub release.
 
 **A damaged disk of the WSL distribution:** when Windows cannot read the virtual disk of the WSL distribution of Devspaces (`ERROR_FILE_CORRUPT`), WSL cannot start it. The message now says so and offers **Remove and Set Up Again**, which deletes the distribution with all devspaces in it and sets up a new one, without another question. See [The WSL distribution of Devspaces](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-wsl-distribution-of-devspaces-windows).
 
+**Faster first build in WSL:** Devspaces builds its helper image on the WSL distribution of Devspaces with the Docker CLI there and its buildx (BuildKit). Before, the Docker CLI of Devspaces built it with the classic builder of Docker, which runs each metadata step of the Dockerfile as a container and took one to two minutes for each such step in a slow virtual machine. A distribution without buildx builds it as before.
+
 **Log without color codes:** the log of Devspaces shows the output of tools without the color codes of a terminal, for example the red marks of the classic builder of Docker around the error output of a build step.
 
 ## 0.4.1

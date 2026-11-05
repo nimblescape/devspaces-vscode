@@ -323,6 +323,19 @@ async function activateExtension(
     sshEnv: (host, callEnv) => keyOffer?.dockerSshEnv(host, callEnv),
     // The calls of an operation on a remote host: the Docker CLI of Devspaces when it is installed.
     ownCli: presentOwnCli,
+    // The build of the helper image on the WSL distribution of Devspaces: with the Docker CLI there and its buildx
+    // (BuildKit), `wsl.exe -d devspaces -u root --cd / --exec docker …`, because the Docker CLI of Devspaces has no
+    // buildx. None for an SSH host.
+    hostCli: (target) => {
+      const access = hostAccessOf(target.host);
+      const wsl = access?.kind === 'wsl' ? wslPath() : undefined;
+      if (access?.kind !== 'wsl' || wsl === undefined) return undefined;
+      const distribution = access.distribution;
+      return (args, options) => {
+        wslLifetime?.use(target.host);
+        return runner.run(wsl, wslCommandArgs(distribution, ['docker', ...args]), { ...options, env: wslEnv(env) });
+      };
+    },
     onCliFound: shareDockerFolder,
     onDaemonStatus: (running) => {
       if (running && !daemonRunning) helperChannels?.clearFailures();
