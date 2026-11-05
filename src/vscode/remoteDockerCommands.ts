@@ -324,6 +324,7 @@ export class RemoteDockerCommands {
 
   /** Test, rootless socket, use. True when Devspaces uses `host` afterwards. */
   private async switchToRemote(host: string): Promise<boolean> {
+    this.deps.logger.info(`Devspaces tests the Docker host ${host}.`);
     const check = await withNotificationProgress(
       { title: RemoteDockerTexts.testing(host), cancellable: true },
       async (_progress, token) => {

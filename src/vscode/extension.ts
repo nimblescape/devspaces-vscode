@@ -209,7 +209,7 @@ async function activateExtension(
   // The window of an attached container, also in the names of its workers (ConnectionAdapter.windowName).
   const connection = new ConnectionAdapter(logger);
   const installedCli = findDockerCli(env, platform);
-  logger.info(installedCli ? `Docker CLI: ${installedCli}` : 'The Docker CLI was not found.');
+  logger.info(installedCli ? `Docker CLI: ${installedCli}` : 'This computer has no Docker CLI of its own (Docker Desktop or Docker Engine).');
   // The Docker CLI of Devspaces, one tested version (docs/architecture.md "The Docker CLI of Devspaces"), where Docker
   // publishes one that runs here. In every window, the Docker calls of Devspaces on a remote host take it when it is
   // installed, also on a computer without a Docker CLI (BootstrapDocker option ownCli); the other calls keep the Docker
@@ -224,6 +224,11 @@ async function activateExtension(
     logger.info(`Docker publishes no Docker CLI for ${platform} on ${process.arch} that runs here, so this window uses the Docker CLI of this computer.`);
   }
   const presentOwnCli = (): string | undefined => (ownCliBuild ? presentOwnDockerCli(paths.dockerCliDir, platform, process.arch) : undefined);
+  // Without a Docker CLI of this computer, the log names the Docker CLI of Devspaces, which runs the calls on a remote host.
+  if (installedCli === undefined) {
+    const present = presentOwnCli();
+    if (present !== undefined) logger.info(`The Docker CLI ${OWN_DOCKER_CLI_VERSION} of Devspaces is installed: ${present}`);
+  }
   // Whether this window put the Docker CLI of Devspaces first in PATH (useOwnDockerCli).
   let ownCliInPath = false;
   const useOwnDockerCli = (cli: string): void => {

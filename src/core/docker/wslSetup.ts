@@ -473,13 +473,14 @@ fi
 step() { echo "${STEP_PREFIX}$1"; echo "== $1" >> "$log"; }
 fail() { echo "The setup failed. The last lines of $log:" >&2; tail -n 40 "$log" >&2; exit 1; }
 run() { "$@" >> "$log" 2>&1 || fail; }
-# apt-get writes its progress to standard output (APT::Status-Fd, parseAptStatus), and the rest to the log.
+# apt-get install writes its progress to standard output (APT::Status-Fd, parseAptStatus), and the rest to the log.
+# apt-get update only writes to the log: its downloads would start the percent of the step again at 0.
 run_apt() { apt-get -o APT::Status-Fd=3 "$@" 3>&1 >> "$log" 2>&1 || fail; }
 export DEBIAN_FRONTEND=noninteractive
 ${WSL_POLICY_INSTALL}
 step packages
 run dpkg --configure -a
-run_apt update
+run apt-get update
 run_apt install -y ca-certificates curl systemd systemd-sysv
 cat > /etc/wsl.conf <<'WSLCONF'
 ${WSL_CONF}
@@ -503,7 +504,7 @@ Architectures: $arch
 Signed-By: /etc/apt/keyrings/docker.asc
 SOURCES
 step docker
-run_apt update
+run apt-get update
 run_apt install -y ${DOCKER_ENGINE_PACKAGES}
 run systemctl enable docker.service containerd.service
 run apt-get clean
@@ -513,21 +514,22 @@ main < /dev/null
 
 /**
  * The script that waits up to 180 seconds for Docker after the restart (`sh -s`, as root): in a slow virtual machine,
- * Docker needs about 45 seconds to start, after the start of the distribution. Standard output: the version
- * of the engine. On a failure, standard error gets the answer of `docker info` and the state of the service.
+ * Docker needs about 45 seconds to start, after the start of the distribution. Each `docker info` waits for the start of
+ * Docker (the socket of systemd), at most 60 seconds, so that a start that hangs still ends the script with its reason
+ * before START_MS. Standard output: the version of the engine. On a failure, standard error gets the answer of
+ * `docker info` and the state of the service.
  */
-export const DOCKER_WAIT_SCRIPT = `i=0
-until docker info > /dev/null 2>&1; do
-i=$((i + 1))
-if [ "$i" -ge 90 ]; then
+export const DOCKER_WAIT_SCRIPT = `end=$(($(date +%s) + 180))
+until timeout 60 docker info > /dev/null 2>&1; do
+if [ "$(date +%s)" -ge "$end" ]; then
 [ -d /run/systemd/system ] || echo "systemd does not run in the distribution." >&2
-docker info > /dev/null 2>&1 || docker info 2>&1 | tail -n 5 >&2
+timeout 10 docker info 2>&1 | tail -n 5 >&2
 systemctl --no-pager status docker.service 2>&1 | tail -n 20 >&2
 exit 1
 fi
 sleep 2
 done
-docker version --format '{{.Server.Version}}'
+timeout 60 docker version --format '{{.Server.Version}}'
 `;
 
 export type WslSetupProblem =
