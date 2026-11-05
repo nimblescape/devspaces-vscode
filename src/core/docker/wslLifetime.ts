@@ -11,7 +11,7 @@
 // call in the background leaves a distribution that does not run stopped, unless its Monitor runs permanently
 // (`leavesStopped`); a flow of the user starts it. No `vscode`.
 import { errorMessage } from '../errors';
-import { LABEL_DEVSPACE_ID, LABEL_HELPER } from '../names';
+import { LABEL_BUILD_RUN, LABEL_DEVSPACE_ID, LABEL_HELPER } from '../names';
 import type { Logger, ProcessRunner, RunResult, StartedProcess } from '../ports';
 import { LABEL_MONITOR } from '../remoteMonitor/protocol';
 import { sshPromptsAllowed } from '../sshAskpass';
@@ -40,10 +40,11 @@ export const IDLE_RETRY_MS = 60_000;
 /**
  * The output of `docker ps` in the idle session: one line per running container, with the values of its labels of a
  * devspace, of the Monitor and of a helper container (a worker or a relay, which close 10 minutes after their last use;
- * they inherit the label from the helper image), or empty for a container without any of them. The names are raw
+ * they inherit the label from the helper image) and of a build container of the helper image (buildxImage.ts), or
+ * empty for a container without any of them. The names are raw
  * strings of Go (in backquotes), so that the script has no double quote (IDLE_SESSION_SCRIPT).
  */
-export const IDLE_PS_FORMAT = `{{.Label \`${LABEL_DEVSPACE_ID}\`}}{{.Label \`${LABEL_MONITOR}\`}}{{.Label \`${LABEL_HELPER}\`}}`;
+export const IDLE_PS_FORMAT = `{{.Label \`${LABEL_DEVSPACE_ID}\`}}{{.Label \`${LABEL_MONITOR}\`}}{{.Label \`${LABEL_HELPER}\`}}{{.Label \`${LABEL_BUILD_RUN}\`}}`;
 /** The last characters of the error output of an idle session that are logged. */
 const MAX_LOGGED_ERROR = 2000;
 

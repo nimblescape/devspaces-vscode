@@ -46,11 +46,18 @@ async function token() {
   return body.token;
 }
 
-/** The tags x.y.z of IMAGE. */
+/** The tags x.y.z of IMAGE, from all pages of the list (the header Link names the next one). */
 async function versions(auth) {
-  const url = `${REGISTRY}/v2/${IMAGE}/tags/list?n=10000`;
-  const body = await (await fetchOk(url, { Authorization: `Bearer ${auth}` })).json();
-  return (body.tags ?? []).filter((tag) => /^\d+\.\d+\.\d+$/.test(tag));
+  const tags = [];
+  let url = `${REGISTRY}/v2/${IMAGE}/tags/list?n=1000`;
+  for (let page = 0; url !== undefined; page++) {
+    if (page === 100) throw new Error(`${IMAGE}: more than 100 pages of tags`);
+    const response = await fetchOk(url, { Authorization: `Bearer ${auth}` });
+    tags.push(...((await response.json()).tags ?? []));
+    const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get('link') ?? '');
+    url = next === null ? undefined : new URL(next[1], REGISTRY).href;
+  }
+  return tags.filter((tag) => /^\d+\.\d+\.\d+$/.test(tag));
 }
 
 /**

@@ -139,9 +139,6 @@ async function helperImages(docker: Pick<BootstrapDocker, 'listImagesByLabel'>):
   return (await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => ({ id: image.id, tags: [...image.tags] }));
 }
 
-/** The build reference filter of `docker image ls` for the tags of the build image (devspaces-buildx). */
-const BUILDX_REFERENCE = BUILDX_REFERENCE_FILTER;
-
 /** The tags of the build image (devspaces-buildx:<version>), each with the ID of its image. */
 async function buildxImages(docker: Pick<BootstrapDocker, 'run'>, signal: AbortSignal | undefined): Promise<Array<{ id: string; tags: string[] }>> {
   const stdout = await read(docker, [...BUILDX_IMAGE_LS_ARGS], signal);
@@ -204,7 +201,7 @@ export function manualCommand(item: Pick<RemovalItem, 'kind' | 'name'>, remoteHo
     case 'container':
       return byLabel ? `${docker} rm -f $(${docker} ps -aq --filter ${item.name})` : `${docker} rm -f ${item.name}`;
     case 'image':
-      if (item.name === BUILDX_REFERENCE) return buildxRemovalCommand(docker);
+      if (item.name === BUILDX_REFERENCE_FILTER) return buildxRemovalCommand(docker);
       return byLabel ? `${docker} image prune -a -f --filter ${item.name}` : `${docker} image rm ${item.name}`;
     case 'volume':
       return `${docker} volume rm ${item.name}`;
@@ -213,7 +210,7 @@ export function manualCommand(item: Pick<RemovalItem, 'kind' | 'name'>, remoteHo
 
 /** The command that removes every tag of the build image. */
 function buildxRemovalCommand(docker: string): string {
-  return `${docker} image rm $(${docker} image ls --format '{{.Repository}}:{{.Tag}}' --filter ${BUILDX_REFERENCE})`;
+  return `${docker} image rm $(${docker} image ls --format '{{.Repository}}:{{.Tag}}' --filter ${BUILDX_REFERENCE_FILTER})`;
 }
 
 /**
@@ -297,7 +294,7 @@ class RemovalRun {
       this.ended ??= 'cancelled';
       return false;
     }
-    const name = filter === BUILDX_REFERENCE ? filter : `label=${filter}`;
+    const name = filter === BUILDX_REFERENCE_FILTER ? filter : `label=${filter}`;
     return this.record({ kind, name, outcome: 'failed', detail: errorMessage(error).slice(-500) });
   }
 
@@ -402,7 +399,7 @@ class RemovalRun {
     try {
       images = await buildxImages(this.docker, this.options.signal);
     } catch (error) {
-      return this.listFailed('image', BUILDX_REFERENCE, error);
+      return this.listFailed('image', BUILDX_REFERENCE_FILTER, error);
     }
     for (const reference of images.flatMap((image) => image.tags)) {
       if (!(await this.remove('image', reference, ['image', 'rm', reference]))) return false;

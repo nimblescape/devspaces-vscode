@@ -957,11 +957,12 @@ export class BootstrapDocker {
   /**
    * `docker pull` of each base image of a build in the build container, with `pull` always, else only when the engine
    * does not have it: the Docker CLI sends its logins, and the engine pulls through its proxy, as for `docker build
-   * --pull`. Its output goes to the output of the build. Throws CommandError when a pull fails.
+   * --pull`. Its output goes to the output of the build. A check that fails counts as missing. Throws CommandError
+   * when a pull fails.
    */
   private async pullBaseImages(images: readonly string[], pull: boolean, output: RunOptions): Promise<void> {
     for (const base of images) {
-      if (!pull && (await this.imageExists(base))) continue;
+      if (!pull && (await this.imageExists(base).catch(() => false))) continue;
       await this.runChecked(['pull', base], output);
     }
   }
