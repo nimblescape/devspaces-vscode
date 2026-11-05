@@ -73,7 +73,7 @@ describe('wslDockerCli', () => {
     expect(calls[1].options).toEqual({ timeoutMs: WSL_END_TIMEOUT_MS });
   });
 
-  it('ends the processes of the mark after the time limit, and not after another failure', async () => {
+  it('ends the processes of the mark after the time limit and after a failure of a started wsl.exe, not after a failed build or start', async () => {
     let answer: RunResult | Error = { exitCode: null, stdout: '', stderr: '', timedOut: true };
     const { runWsl, calls } = recorder(async (call) => {
       if (isEnd(call)) return ok();
@@ -83,11 +83,35 @@ describe('wslDockerCli', () => {
     const cli = wslDockerCli(runWsl, 'devspaces', silentLogger);
     expect((await cli(['buildx', 'version'], { timeoutMs: 1 })).timedOut).toBe(true);
     await vi.waitFor(() => expect(calls.filter(isEnd)).toHaveLength(1));
+    answer = new Error('The output of wsl.exe is larger than 64 MiB.');
+    await expect(cli(['build', '-'], {})).rejects.toThrow('larger');
+    await vi.waitFor(() => expect(calls.filter(isEnd)).toHaveLength(2));
     answer = { exitCode: 1, stdout: '', stderr: 'failed to solve', timedOut: false };
     await cli(['build', '-'], {});
-    answer = new Error('spawn wsl.exe ENOENT');
+    answer = Object.assign(new Error('spawn wsl.exe ENOENT'), { code: 'ENOENT', syscall: 'spawn wsl.exe' });
     await expect(cli(['build', '-'], {})).rejects.toThrow('ENOENT');
-    expect(calls.filter(isEnd)).toHaveLength(1);
+    expect(calls.filter(isEnd)).toHaveLength(2);
+  });
+
+  it('runs the call again when WSL ran out of time to start the distribution, at most 3 times', async () => {
+    const infos: string[] = [];
+    const logger: Logger = { ...silentLogger, info: (message) => infos.push(message) };
+    const timeout: RunResult = { exitCode: 4294967295, stdout: 'Wsl/Service/CreateInstance/ERROR_TIMEOUT\n', stderr: '', timedOut: false };
+    let failures = 2;
+    const { runWsl, calls } = recorder(async () => (failures-- > 0 ? timeout : ok('github.com/docker/buildx v0.38.1\n')));
+    const cli = wslDockerCli(runWsl, 'devspaces', logger);
+    expect(await cli(['buildx', 'version'], {})).toEqual(ok('github.com/docker/buildx v0.38.1\n'));
+    expect(calls).toHaveLength(3);
+    // The same call, with the same mark.
+    expect(calls[2].args).toEqual(calls[0].args);
+    expect(infos).toEqual([
+      'WSL ran out of time to start the distribution devspaces (attempt 1 of 3), so Devspaces starts it again: Wsl/Service/CreateInstance/ERROR_TIMEOUT',
+      'WSL ran out of time to start the distribution devspaces (attempt 2 of 3), so Devspaces starts it again: Wsl/Service/CreateInstance/ERROR_TIMEOUT',
+    ]);
+    failures = 5;
+    calls.length = 0;
+    expect(await cli(['buildx', 'version'], {})).toEqual(timeout);
+    expect(calls).toHaveLength(3);
   });
 
   it('starts nothing for a signal that aborted before the call', async () => {

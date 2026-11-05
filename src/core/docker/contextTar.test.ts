@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The build context as a tar archive (ustar) for `docker build -`: the regular files at the top of the folder, sorted,
-// with the mode 0644, the owner 0 and the time 0.
+// with the mode 0755 (as the Docker CLI on Windows sends them), the owner 0 and the time 0.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -83,11 +83,11 @@ describe('contextTar', () => {
     }
   });
 
-  it('gives each file the mode 0644, the owner 0, the time 0, the kind of a regular file and the ustar mark', async () => {
+  it('gives each file the mode 0755, the owner 0, the time 0, the kind of a regular file and the ustar mark', async () => {
     await fs.promises.writeFile(path.join(folder, 'Dockerfile'), 'FROM scratch\n');
-    await fs.promises.chmod(path.join(folder, 'Dockerfile'), 0o755);
+    await fs.promises.chmod(path.join(folder, 'Dockerfile'), 0o600);
     const [entry] = entries(await contextTar(folder));
-    expect(text(entry.header, 100, 8)).toBe('0000644');
+    expect(text(entry.header, 100, 8)).toBe('0000755');
     expect(text(entry.header, 108, 8)).toBe('0000000');
     expect(text(entry.header, 116, 8)).toBe('0000000');
     expect(text(entry.header, 124, 12)).toBe('00000000015');

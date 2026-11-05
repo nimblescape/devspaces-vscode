@@ -5,8 +5,9 @@
 // The build context of an image as a tar archive, for `docker build -` on another computer, whose Docker CLI reads the
 // context from its standard input (BootstrapDocker.buildImage with BootstrapDockerOptions.hostCli: the build in the
 // WSL distribution of Devspaces with its own Docker CLI and buildx). Only the files at the top of the folder (the folder
-// of the helper image has only its Dockerfile), each with the mode 0644 and the time 0, so that the same files give
-// the same archive. No `vscode`.
+// of the helper image has only its Dockerfile), each with the mode 0755 and the time 0, so that the same files give
+// the same archive. The mode is the one that the Docker CLI on Windows gives every file of a context that it sends to an
+// engine on Linux (Windows has no such mode), so the image is the same as from that Docker CLI. No `vscode`.
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -29,7 +30,7 @@ function header(name: string, size: number): Buffer {
   /** A number in octal with its NUL, in a field of `length` bytes. */
   const octal = (offset: number, length: number, value: number): void => field(offset, length, `${value.toString(8).padStart(length - 1, '0')}\0`);
   field(0, MAX_NAME_BYTES, name);
-  octal(100, 8, 0o644);
+  octal(100, 8, 0o755);
   octal(108, 8, 0);
   octal(116, 8, 0);
   octal(124, 12, size);

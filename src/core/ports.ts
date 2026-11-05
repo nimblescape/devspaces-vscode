@@ -62,6 +62,12 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+/** True for an error of the start of a program (`spawn …`, for example ENOENT or EACCES): the program never ran. */
+export function isStartError(error: unknown): boolean {
+  const syscall = (error as NodeJS.ErrnoException | undefined)?.syscall;
+  return typeof syscall === 'string' && syscall.startsWith('spawn');
+}
+
 /**
  * `run` within `ms`, the one time-limited call of the worker (EngineDocker's calls, the engine of the Monitor's
  * ensure, the stops of Stop). `run` gets a signal that aborts at `signal` or

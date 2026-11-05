@@ -28,7 +28,7 @@ import * as path from 'path';
 import { CommandError, errorMessage, UserFacingError } from '../errors';
 import { Messages, dockerHostReason } from '../messages';
 import { LABEL_BUILD_ID } from '../names';
-import { abortError, isAbortError, sleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
+import { abortError, isAbortError, isStartError, sleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
 import { contextTar } from './contextTar';
 import { deleteEnv, dockerCommandWords, dockerProcessEnv, isReadOnlyDockerCall } from './dockerCli';
 import { hostAccessOf, hostEndpoint, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
@@ -230,11 +230,11 @@ interface HostBuilder {
   context: Buffer;
 }
 
-/** An error of the start of a program (`spawn …`: ENOENT, EACCES), before it ran. */
-function isStartError(error: unknown): boolean {
-  const syscall = (error as NodeJS.ErrnoException | undefined)?.syscall;
-  return typeof syscall === 'string' && syscall.startsWith('spawn');
-}
+/**
+ * Time limit of `docker buildx version` on the computer of the engine (hostBuilder): the first start of a WSL
+ * distribution in a slow virtual machine can take more than a minute (WSL_SHELL_LOGIN_TIMEOUT_MS).
+ */
+export const HOST_BUILDX_CHECK_TIMEOUT_MS = 2 * 60_000;
 
 /**
  * The identity of the file at `path`: its inode, size and modification time (fs.stat, which follows a link). Another
@@ -924,14 +924,16 @@ export class BootstrapDocker {
     try {
       const run = this.hostCli(target);
       if (run === undefined) return undefined;
-      const check = await run(['buildx', 'version'], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, signal });
+      // The context first: packing it needs no call there.
+      const packed = await contextTar(context);
+      const check = await run(['buildx', 'version'], { timeoutMs: HOST_BUILDX_CHECK_TIMEOUT_MS, signal });
       if (check.exitCode !== 0 || check.timedOut) {
         const output = `${check.stdout.trim()} ${check.stderr.trim()}`.trim().slice(-500) || (check.timedOut ? 'no answer within the time limit' : `exit code ${check.exitCode}`);
-        this.logger.info(`The Docker CLI on ${target.host} has no buildx that runs (docker buildx version: ${output}), ${elsewhere}.`);
+        this.logger.info(`The Docker CLI on ${target.host} could not run \`docker buildx version\` (${output}), ${elsewhere}.`);
         return undefined;
       }
       const buildx = /\bv\d+\.\d+\.\d+\S*/.exec(check.stdout)?.[0];
-      return { host: target.host, run, buildx: buildx === undefined ? 'buildx' : `buildx ${buildx}`, context: await contextTar(context) };
+      return { host: target.host, run, buildx: buildx === undefined ? 'buildx' : `buildx ${buildx}`, context: packed };
     } catch (error) {
       if (isAbortError(error)) throw error;
       this.logger.warn(`The image cannot be built with the Docker CLI on ${target.host}, ${elsewhere}: ${errorMessage(error)}`);

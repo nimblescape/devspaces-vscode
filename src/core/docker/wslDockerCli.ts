@@ -9,9 +9,9 @@
 // buildx), and the engine then stops their build. No `vscode`.
 import * as crypto from 'crypto';
 import { errorMessage } from '../errors';
-import { abortError, isAbortError, type Logger, type RunOptions, type RunResult } from '../ports';
+import { abortError, isStartError, type Logger, type RunOptions, type RunResult } from '../ports';
 import type { HostDockerCli } from './bootstrapDocker';
-import { wslCommandArgs, wslText } from './dockerHost';
+import { WSL_START_ATTEMPTS, wslCommandArgs, wslStartTimedOut, wslText } from './dockerHost';
 import { endOf, outputOf } from './wslSetup';
 
 /** The variable of the environment that marks the processes of one call (wslMarkedCommand). */
@@ -41,9 +41,11 @@ export function wslEndCommand(mark: string): string[] {
 
 /**
  * `docker <args>` in the WSL distribution `distribution` (wslCommandArgs, wslMarkedCommand), with `runWsl`, which runs
- * `wsl.exe <args>`; its output is read with wslText (the messages of an older `wsl.exe` are UTF-16). When the call is
- * cancelled (AbortError) or ends by its time limit, the processes of its mark are ended in the background
- * (wslEndCommand); a failure of that is logged. A signal that aborted before the call starts nothing.
+ * `wsl.exe <args>`; its output is read with wslText (the messages of an older `wsl.exe` are UTF-16). When WSL ran out of
+ * time to start the distribution (wslStartTimedOut), the call runs again, at most WSL_START_ATTEMPTS times, as the other
+ * calls of Devspaces in WSL. When the call is cancelled (AbortError), ends by its time limit, or fails after `wsl.exe`
+ * started (for example too much output), the processes of its mark are ended in the background (wslEndCommand); a
+ * failure of that is logged. A signal that aborted before the call starts nothing.
  */
 export function wslDockerCli(runWsl: (args: readonly string[], options: RunOptions) => Promise<RunResult>, distribution: string, logger: Logger): HostDockerCli {
   return async (args, options) => {
@@ -59,14 +61,19 @@ export function wslDockerCli(runWsl: (args: readonly string[], options: RunOptio
         (error: unknown) => failed(errorMessage(error)),
       );
     };
-    let result: RunResult;
-    try {
-      result = await runWsl(wslCommandArgs(distribution, wslMarkedCommand(mark, ['docker', ...args])), options);
-    } catch (error) {
-      if (isAbortError(error)) end();
-      throw error;
+    for (let attempt = 1; ; attempt++) {
+      let result: RunResult;
+      try {
+        result = await runWsl(wslCommandArgs(distribution, wslMarkedCommand(mark, ['docker', ...args])), options);
+      } catch (error) {
+        // `wsl.exe` that did not start started nothing in the distribution.
+        if (!isStartError(error)) end();
+        throw error;
+      }
+      if (result.timedOut) end();
+      const text = { ...result, stdout: wslText(result.stdout), stderr: wslText(result.stderr) };
+      if (result.exitCode === 0 || result.timedOut || attempt >= WSL_START_ATTEMPTS || !wslStartTimedOut(`${text.stdout}\n${text.stderr}`)) return text;
+      logger.info(`WSL ran out of time to start the distribution ${distribution} (attempt ${attempt} of ${WSL_START_ATTEMPTS}), so Devspaces starts it again: ${outputOf(text)}`);
     }
-    if (result.timedOut) end();
-    return { ...result, stdout: wslText(result.stdout), stderr: wslText(result.stderr) };
   };
 }

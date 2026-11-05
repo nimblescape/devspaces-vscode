@@ -11,7 +11,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CommandError } from '../errors';
 import { abortError, isAbortError, silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
-import { BootstrapDocker, type HostDockerCli } from './bootstrapDocker';
+import { BootstrapDocker, HOST_BUILDX_CHECK_TIMEOUT_MS, type HostDockerCli } from './bootstrapDocker';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget } from './dockerHost';
 import { runWithDockerTarget } from './dockerTargets';
 import { firstTarFile } from './tarFile';
@@ -117,7 +117,7 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     expect(hostCli).toHaveBeenCalledWith(WSL);
     expect(host.calls[0].args).toEqual(['buildx', 'version']);
     expect(host.calls).toHaveLength(2);
-    expect(host.calls[0].options.timeoutMs).toBeGreaterThan(0);
+    expect(host.calls[0].options.timeoutMs).toBe(HOST_BUILDX_CHECK_TIMEOUT_MS);
     const build = host.calls[1];
     expect(withoutBuildLabel(build.args)).toEqual([
       'buildx',
@@ -171,7 +171,7 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     ]);
     expect(calls[0].options.input).toBeUndefined();
     expect(infos).toContain(
-      `The Docker CLI on ${WSL_HOST} has no buildx that runs (docker buildx version: docker: 'buildx' is not a docker command.), so the image is built from this computer, as before.`,
+      `The Docker CLI on ${WSL_HOST} could not run \`docker buildx version\` (docker: 'buildx' is not a docker command.), so the image is built from this computer, as before.`,
     );
     expect(infos).toContain('Building image devspaces-worker:abc (--pull).');
   });
@@ -184,7 +184,7 @@ describe('BootstrapDocker.buildImage with the Docker CLI on the computer of the 
     let hostCli: () => HostDockerCli | undefined = () => host.cli;
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'win32', { dockerPipe, hostCli: () => hostCli() });
     await runWithDockerTarget(WSL, () => docker.buildImage(buildOptions()));
-    expect(infos.some((line) => line.includes('(docker buildx version: no answer within the time limit)'))).toBe(true);
+    expect(infos.some((line) => line.includes('`docker buildx version` (no answer within the time limit)'))).toBe(true);
     answer = () => Promise.reject(new Error('spawn wsl.exe EACCES'));
     await runWithDockerTarget(WSL, () => docker.buildImage(buildOptions()));
     hostCli = () => {
