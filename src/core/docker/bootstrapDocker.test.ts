@@ -909,6 +909,11 @@ describe('BootstrapDocker: every call runs directly', () => {
       'podmanCheckCall',
       'isMissing',
       'commandError',
+      // Logs a call of `run` or of the Docker CLI on the computer of the engine, no call of its own.
+      'logged',
+      // The Docker CLI on the computer of the engine (hostCli), not this one: bootstrapDocker.hostBuild.test.ts.
+      'hostBuilder',
+      'buildThere',
       'run',
     ]);
     const { docker, runner } = recordingAdapter((call) => {

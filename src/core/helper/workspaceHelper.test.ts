@@ -717,7 +717,7 @@ describe('WorkspaceHelper Dev Container CLI calls', () => {
       '--user-data-folder',
       '/devspace-cache',
     ]);
-    expect(JSON.parse(docker.runs[0].options.input ?? '')).toEqual({ files: {} });
+    expect(JSON.parse(String(docker.runs[0].options.input ?? ''))).toEqual({ files: {} });
   });
 
   it('build filters the result line also when it arrives in pieces', async () => {
@@ -771,7 +771,7 @@ describe('WorkspaceHelper Dev Container CLI calls', () => {
     });
     expect(result).toMatchObject({ outcome: 'success', containerId: 'c1', remoteWorkspaceFolder: '/workspaces/api' });
     const run = docker.runs[0];
-    expect(JSON.parse(run.options.input ?? '')).toEqual(override);
+    expect(JSON.parse(String(run.options.input ?? ''))).toEqual(override);
     // The only variable of up is the entitlement check of bake turned off (Buildx 0.37.2).
     expect(run.args.filter((_arg, index) => run.args[index - 1] === '-e')).toEqual(['BUILDX_BAKE_ENTITLEMENTS_FS=0']);
     expect(commandOf(run.args)).toEqual([
@@ -815,7 +815,7 @@ describe('WorkspaceHelper Dev Container CLI calls', () => {
     // The token is only redacted: it is no argument, variable, or input of the helper.
     expect(JSON.stringify(docker.calls)).not.toContain(TOKEN);
     const run = docker.runs[0];
-    expect(JSON.parse(run.options.input ?? '')).toEqual(override);
+    expect(JSON.parse(String(run.options.input ?? ''))).toEqual(override);
     expect(run.args).not.toContain('-e');
     expect(commandOf(run.args)).toEqual([
       'sh',
@@ -960,7 +960,7 @@ describe('WorkspaceHelper Docker Compose runs', () => {
       '--override-config',
       OVERRIDE_CONFIG_PATH,
     ]);
-    expect(JSON.parse(run.options.input ?? '')).toEqual({
+    expect(JSON.parse(String(run.options.input ?? ''))).toEqual({
       files: { [COMPOSE_MODEL_PATH]: '{"services":{}}', [OVERRIDE_CONFIG_PATH]: JSON.stringify(override, null, 2) },
     });
   });
@@ -996,7 +996,7 @@ describe('WorkspaceHelper Docker Compose runs', () => {
       '--user-data-folder',
       '/devspace-cache',
     ]);
-    expect(Object.keys(JSON.parse(run.options.input ?? '').files)).toEqual([COMPOSE_MODEL_PATH, COMPOSE_DEV_DOCKERFILE, OVERRIDE_CONFIG_PATH]);
+    expect(Object.keys(JSON.parse(String(run.options.input ?? '')).files)).toEqual([COMPOSE_MODEL_PATH, COMPOSE_DEV_DOCKERFILE, OVERRIDE_CONFIG_PATH]);
   });
 
   it('up with files writes them with the override configuration and passes the project name', async () => {
@@ -1017,7 +1017,7 @@ describe('WorkspaceHelper Docker Compose runs', () => {
     const command = commandOf(run.args);
     expect(command.slice(0, 7)).toEqual(['node', '-e', WRITE_AND_RUN_SCRIPT, '/tmp/devspace-override', '', '', 'up']);
     expect(command).toContain('--override-config');
-    expect(JSON.parse(run.options.input ?? '')).toEqual({
+    expect(JSON.parse(String(run.options.input ?? ''))).toEqual({
       files: { [COMPOSE_MODEL_PATH]: `{"name":"${PROJECT}"}`, [OVERRIDE_CONFIG_PATH]: JSON.stringify(override, null, 2) },
     });
   });
@@ -1054,7 +1054,7 @@ describe('WorkspaceHelper Docker Compose runs', () => {
       '/devspace-cache',
       '--skip-post-attach',
     ]);
-    expect(JSON.parse(run.options.input ?? '')).toEqual({
+    expect(JSON.parse(String(run.options.input ?? ''))).toEqual({
       files: { [COMPOSE_MODEL_PATH]: `{"name":"${PROJECT}"}`, [OVERRIDE_CONFIG_PATH]: JSON.stringify(override, null, 2) },
     });
   });

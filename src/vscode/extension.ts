@@ -17,6 +17,7 @@ import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, prese
 import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { WslKeeper } from '../core/docker/wslKeeper';
+import { wslDockerCli } from '../core/docker/wslDockerCli';
 import { WslLifetime } from '../core/docker/wslLifetime';
 import { WslUpgrade } from '../core/docker/wslUpgrade';
 import {
@@ -60,7 +61,7 @@ import { Messages } from '../core/messages';
 import { nodeHttpsTransport, takeUserAgentVersion } from '../core/http';
 import { DockerCredentialStore } from '../core/imageCheck/credentials';
 import { RegistryClient } from '../core/imageCheck/registryClient';
-import { abortError, isoTime, systemClock, type RunResult, type StartedByteProcess } from '../core/ports';
+import { abortError, isoTime, systemClock, type RunOptions, type RunResult, type StartedByteProcess } from '../core/ports';
 import { usableTimeZone } from '../core/remoteMonitor/cron';
 import { monitorSettingsOf } from './monitorSettings';
 import { REMOTE_MONITOR_VOLUME } from '../core/remoteMonitor/protocol';
@@ -323,6 +324,20 @@ async function activateExtension(
     sshEnv: (host, callEnv) => keyOffer?.dockerSshEnv(host, callEnv),
     // The calls of an operation on a remote host: the Docker CLI of Devspaces when it is installed.
     ownCli: presentOwnCli,
+    // The build of the helper image on the WSL distribution of Devspaces: with the Docker CLI there and its buildx
+    // (BuildKit), `wsl.exe -d devspaces -u root --cd / --exec env DEVSPACES_RUN=<mark> docker …` (wslDockerCli; the mark
+    // ends it after a Cancel), because the Docker CLI of Devspaces has no buildx. None for an SSH host.
+    hostCli: (target) => {
+      const access = hostAccessOf(target.host);
+      if (access?.kind !== 'wsl') return undefined;
+      const wsl = wslPath();
+      if (wsl === undefined) return undefined;
+      const runWsl = (args: readonly string[], options: RunOptions): Promise<RunResult> => {
+        wslLifetime?.use(target.host);
+        return runner.run(wsl, args, { ...options, env: wslEnv(env) });
+      };
+      return wslDockerCli(runWsl, access.distribution, logger);
+    },
     onCliFound: shareDockerFolder,
     onDaemonStatus: (running) => {
       if (running && !daemonRunning) helperChannels?.clearFailures();

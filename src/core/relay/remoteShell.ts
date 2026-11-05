@@ -261,7 +261,7 @@ export class RemoteShell {
    * ended or was taken over
    * before the command started, and with an Error for a command or input that the line cannot carry (shellCommandLine).
    */
-  run(command: string, options: Pick<RunOptions, 'input' | 'timeoutMs' | 'signal'> = {}): Promise<RunResult> {
+  run(command: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string } = {}): Promise<RunResult> {
     const marker = newMarker('done');
     let line: string;
     try {

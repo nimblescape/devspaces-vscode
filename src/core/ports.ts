@@ -62,6 +62,12 @@ export function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+/** True for an error of the start of a program (`spawn …`, for example ENOENT or EACCES): the program never ran. */
+export function isStartError(error: unknown): boolean {
+  const syscall = (error as NodeJS.ErrnoException | undefined)?.syscall;
+  return typeof syscall === 'string' && syscall.startsWith('spawn');
+}
+
 /**
  * `run` within `ms`, the one time-limited call of the worker (EngineDocker's calls, the engine of the Monitor's
  * ensure, the stops of Stop). `run` gets a signal that aborts at `signal` or
@@ -82,8 +88,11 @@ export interface RunOptions {
   /** Complete environment of the process. Default: the environment of this process. */
   env?: NodeJS.ProcessEnv;
   cwd?: string;
-  /** Written to standard input, then standard input is closed. Without it, standard input is closed at once. */
-  input?: string;
+  /**
+   * Written to standard input, then standard input is closed: a text, or bytes (the build context of `docker build -`).
+   * Without it, standard input is closed at once.
+   */
+  input?: string | Uint8Array;
   /** The process is killed after this time. */
   timeoutMs?: number;
   /** The process is killed when the signal aborts, and `run` rejects with an `AbortError`. */

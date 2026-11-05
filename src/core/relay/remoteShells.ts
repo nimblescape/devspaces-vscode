@@ -184,7 +184,7 @@ export class RemoteShells {
    * `wsl.exe`): exit code 255 (none after its time limit) and its error output. Rejects with an AbortError when
    * `options.signal` aborts.
    */
-  async run(host: string, command: string, options: Pick<RunOptions, 'input' | 'timeoutMs' | 'signal'> = {}): Promise<RunResult | undefined> {
+  async run(host: string, command: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string } = {}): Promise<RunResult | undefined> {
     for (let attempt = 0; ; attempt++) {
       let shell: RemoteShell | undefined;
       try {
