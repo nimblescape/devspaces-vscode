@@ -75,18 +75,30 @@ describe('WslAfterInstall', () => {
     expect(await files.readWslSetupAfterInstall()).toBeUndefined();
   });
 
+  it('forgets the record when Devspaces uses its distribution, so that no window goes on with it after a later restart', async () => {
+    await afterInstall().started(LINK);
+    await afterInstall().forget();
+    expect(await files.readWslSetupAfterInstall()).toBeUndefined();
+    bootTime = START + 300_000;
+    now = START + 600_000;
+    await expect(afterInstall().take('window-1')).resolves.toBeUndefined();
+    // Without a record, nothing happens.
+    await expect(afterInstall().forget()).resolves.toBeUndefined();
+  });
+
   it('never throws when the record cannot be written or read', async () => {
     const broken = {
       writeWslSetupAfterInstall: vi.fn(async () => Promise.reject(new Error('EACCES'))),
       readWslSetupAfterInstall: vi.fn(async () => Promise.reject(new Error('EIO'))),
       claimWslSetupAfterInstall: vi.fn(),
-      removeWslSetupAfterInstall: vi.fn(),
+      removeWslSetupAfterInstall: vi.fn(async () => Promise.reject(new Error('EBUSY'))),
     };
     const log = logger();
     const after = new WslAfterInstall({ files: broken, logger: log, clock: { now: () => now }, bootTime: () => bootTime });
     await expect(after.started()).resolves.toBeUndefined();
     await expect(after.restartPending()).resolves.toBe(false);
     await expect(after.take('window-1')).resolves.toBeUndefined();
-    expect(log.warn).toHaveBeenCalledTimes(3);
+    await expect(after.forget()).resolves.toBeUndefined();
+    expect(log.warn).toHaveBeenCalledTimes(4);
   });
 });

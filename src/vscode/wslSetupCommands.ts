@@ -189,6 +189,11 @@ export interface WslSetupCommandsDeps {
   installWsl: (link?: LinkUri) => Promise<void>;
   /** True while Windows has not restarted since Devspaces started the installation of WSL (WslAfterInstall.restartPending). */
   restartPending?: () => Promise<boolean>;
+  /**
+   * Devspaces uses the distribution: the record of the installation of WSL is not needed anymore (WslAfterInstall.forget),
+   * so that no window opens its link again after a later restart. Never rejects.
+   */
+  wslInstallDone?: () => Promise<void>;
   /** Devspaces uses the host after its test (RemoteDockerCommands.useHost); true when it does. */
   useHost: (host: string) => Promise<boolean>;
   /**
@@ -289,9 +294,17 @@ export class WslSetupCommands {
         if (registration !== 'none') return { registration };
         const version = await setup.checkWsl(signal);
         this.deps.logger.info(`WSL ${version} is installed.`);
-        // Before the download: WSL 2 runs only after the restart of Windows that its installation asks for.
-        if (await this.deps.restartPending?.()) throw new WslSetupError('restartNeeded', 'Windows has not restarted since Devspaces started the installation of WSL.');
-        await setup.checkVirtualMachine(signal);
+        // Before the download: WSL 2 runs only after the restart of Windows that its installation asks for, when it
+        // turned on the virtual machine of WSL. An installation that needed no restart passes the check.
+        const restartPending = (await this.deps.restartPending?.()) === true;
+        try {
+          await setup.checkVirtualMachine(signal);
+        } catch (error) {
+          if (restartPending && isWslSetupError(error) && error.problem === 'vmUnavailable') {
+            throw new WslSetupError('restartNeeded', `Windows has not restarted since Devspaces started the installation of WSL: ${error.message}`);
+          }
+          throw error;
+        }
         return { registration, image: await setup.image(signal) };
       });
       if (plan.registration === 'foreign') {
@@ -299,7 +312,7 @@ export class WslSetupCommands {
         if (mode === 'flow') {
           // The flow waits for the answer, so the question is modal: it cannot stay open unnoticed.
           const choice = await showInformationMessage(WslSetupTexts.foreign, { modal: true }, WslSetupTexts.useIt);
-          return choice === WslSetupTexts.useIt && (await this.deps.useHost(WSL_HOST));
+          return await this.usedNow(choice === WslSetupTexts.useIt && (await this.deps.useHost(WSL_HOST)));
         }
         // Not awaited: a message that nobody answers must not block the next setup or removal here.
         showInformationMessage(WslSetupTexts.foreign, WslSetupTexts.useIt)
@@ -312,7 +325,7 @@ export class WslSetupCommands {
         // lock of all windows, so that a removal in another window does not come between.
         this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} of Devspaces exists, so Devspaces uses it.`);
         const done = await setup.locked(async () => ((await setup.registration()) === 'own' ? { used: await this.deps.useHost(WSL_HOST) } : false));
-        return this.finished(done)?.used === true;
+        return await this.usedNow(this.finished(done)?.used === true);
       }
       // A new distribution needs no question: the click or the link is the decision, and the log names the downloads and
       // the folder. The setup of an existing one asks, because it restarts the distribution and its devspaces.
@@ -340,7 +353,7 @@ export class WslSetupCommands {
       if (result !== undefined) await this.warnDockerDesktop(result.separation);
       // This message says that the setup itself is done.
       if (result !== undefined && !result.used) this.inform(WslSetupTexts.readyNotUsed);
-      return result?.used === true;
+      return await this.usedNow(result?.used === true);
     } catch (error) {
       if (isWslSetupError(error) && error.problem === 'wslMissing') {
         // Docker for Devspaces needs WSL: its installation comes next, in a terminal (Windows asks for administrator
@@ -514,6 +527,12 @@ export class WslSetupCommands {
       },
       (error: unknown) => this.deps.logger.error('Could not show the message.', error),
     );
+  }
+
+  /** `used`, after the record of the installation of WSL is forgotten when Devspaces uses the distribution (wslInstallDone). */
+  private async usedNow(used: boolean): Promise<boolean> {
+    if (used) await this.deps.wslInstallDone?.();
+    return used;
   }
 
   /** "Install WSL 2" of the Docker setup (`wsl --install --no-distribution` in a terminal), with the link of a flow. Not awaited. */

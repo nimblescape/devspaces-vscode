@@ -10,6 +10,7 @@
 // takes the login over (takeOver: RelayConnection.open writes its start script into the idle shell), so the open of a
 // window logs in to the host once. A shell that no call used for SHELL_IDLE_CLOSE_MS is closed. No `vscode`.
 import { randomBytes } from 'crypto';
+import { wslText } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';
 import { abortError, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
@@ -240,7 +241,12 @@ export class RemoteShell {
           stderrReady = true;
           check();
         },
-        ended: () => fail(this.stderrReason() || 'The login ended before the shell answered.'),
+        // wsl.exe writes its errors to the standard output (for example "Error code: Wsl/Service/CreateInstance/ERROR_TIMEOUT"):
+        // for it, what came there before the marker is a part of the reason. The text of an SSH login stays unlogged.
+        ended: () => {
+          const output = options.program === 'wsl.exe' ? readableStderr(wslText(before.toString('utf8')), MAX_OUTPUT_BEFORE_MARKER) : '';
+          fail([this.stderrReason(), output].filter((text) => text !== '').join('\n') || 'The login ended before the shell answered.');
+        },
       };
       process.write(Buffer.from(`printf '%s\\n' ${marker}; printf '%s\\n' ${marker} >&2\n`, 'utf8'));
     });

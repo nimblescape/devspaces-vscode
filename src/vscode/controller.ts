@@ -4241,9 +4241,16 @@ export class Controller implements vscode.Disposable {
   async goOnAfterWslInstall(): Promise<void> {
     const { wslAfterInstall, wslSetup } = this.deps;
     if (wslAfterInstall === undefined || wslSetup === undefined || this.disposed) return;
+    let holdsReopen = false;
     try {
       const record = await wslAfterInstall.take(this.deps.coordinator.windowId);
       if (record === undefined) return;
+      // As openLink: the automatic reopen of the last devspace in an empty window does not overtake the link while the
+      // check of WSL runs.
+      if (record.link !== undefined) {
+        this.linksOpening += 1;
+        holdsReopen = true;
+      }
       if (!(await wslSetup.wslInstalled())) {
         this.logger.info('Windows restarted, but WSL is still not installed, so the setup of Docker for Devspaces does not go on. Set up Docker for Devspaces again in the view.');
         return;
@@ -4257,6 +4264,8 @@ export class Controller implements vscode.Disposable {
       await this.dockerForLink();
     } catch (error) {
       this.logger.warn(`The setup of Docker for Devspaces after the restart of Windows could not go on: ${errorMessage(error)}`);
+    } finally {
+      if (holdsReopen) this.linksOpening -= 1;
     }
   }
 

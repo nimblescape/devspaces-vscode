@@ -15,7 +15,7 @@
 import * as fs from 'fs';
 import { LOCAL_DOCKER_TARGET, describeDockerHost, hostAccessOf, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
 import { runWithDockerTarget } from '../docker/dockerTargets';
-import { REMOTE_INFO_TIMEOUT_MS, checkSshLogin, type SshCheckDeps } from '../docker/remoteDocker';
+import { checkSshLogin, engineInfoTimeoutOf, type SshCheckDeps } from '../docker/remoteDocker';
 import { errorMessage } from '../errors';
 import { isAbortError, type Logger } from '../ports';
 import { helperImageTag, helperTimeLimit } from './helperImage';
@@ -137,7 +137,7 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
         deps.logger.info(`The workspace helper image is not prepared in the background on ${target.host}: it is no SSH address that can be checked without questions.`);
         return false;
       }
-      return (await deps.daemonStatus(signal, REMOTE_INFO_TIMEOUT_MS)).running;
+      return (await deps.daemonStatus(signal, engineInfoTimeoutOf(target.host))).running;
     }
   }
 }

@@ -18,7 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ImageInfo } from '../docker/dockerObjects';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import { operationDockerTarget } from '../docker/dockerTargets';
-import { REMOTE_INFO_TIMEOUT_MS } from '../docker/remoteDocker';
+import { REMOTE_INFO_TIMEOUT_MS, WSL_INFO_TIMEOUT_MS } from '../docker/remoteDocker';
 import { CommandError, UserFacingError, isUserFacingError } from '../errors';
 import { abortError, isAbortError, type Logger, type RunOptions, type RunResult } from '../ports';
 import { HELPER_CHECK_INTERVAL_MS, HELPER_GENERATION, helperImageTag, type BaseDigestLookup, type HelperImageUse } from './helperImage';
@@ -937,7 +937,7 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
       expect(daemonStatus).not.toHaveBeenCalled();
     });
 
-    it('checks the WSL distribution with the start of its shell, never with ssh, then docker info with the remote time limit', async () => {
+    it('checks the WSL distribution with the start of its shell, never with ssh, then docker info with the time limit of WSL', async () => {
       const runner = sshRunner({});
       const daemonStatus = vi.fn(async (_signal: AbortSignal, _timeoutMs?: number) => ({ running: true }));
       const shells = { login: vi.fn(async () => ({ ok: true }) as const), run: vi.fn(async () => undefined) };
@@ -945,7 +945,8 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
       expect(await dockerEngineAnswers(WSL_TARGET, deps, new AbortController().signal)).toBe(true);
       expect(shells.login).toHaveBeenCalledTimes(1);
       expect(runner.run).not.toHaveBeenCalled();
-      expect(daemonStatus).toHaveBeenCalledWith(expect.any(AbortSignal), REMOTE_INFO_TIMEOUT_MS);
+      // Docker starts with the distribution, which takes longer than 45 seconds in a slow virtual machine.
+      expect(daemonStatus).toHaveBeenCalledWith(expect.any(AbortSignal), WSL_INFO_TIMEOUT_MS);
     });
 
     // The shell of the check would start a WSL distribution that does not run (WslLifetime.leavesStopped).

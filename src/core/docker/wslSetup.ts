@@ -761,28 +761,34 @@ export class WslSetup {
     // The first start of a new distribution can take minutes (in a virtual machine), before the script says its first step.
     onStep({ kind: 'launch' });
     try {
-      provision = await this.runWsl(wslCommandArgs(WSL_DISTRIBUTION, ['sh', '-s']), {
-        input: PROVISION_SCRIPT,
-        timeoutMs: PROVISION_MS,
-        signal,
-        onStdout: (text) => {
-          pending += wslText(text);
-          const lines = pending.split(/\r?\n/);
-          pending = lines.pop() ?? '';
-          for (const line of lines) {
-            const phase = line.startsWith(STEP_PREFIX) ? (line.slice(STEP_PREFIX.length).trim() as ProvisionPhase) : undefined;
-            if (phase !== undefined && PHASES.includes(phase)) {
-              current = phase;
-              this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION}: ${phase}.`);
-              onStep({ kind: 'docker', phase });
-              continue;
+      for (let attempt = 1; ; attempt++) {
+        pending = '';
+        provision = await this.runWsl(wslCommandArgs(WSL_DISTRIBUTION, ['sh', '-s']), {
+          input: PROVISION_SCRIPT,
+          timeoutMs: PROVISION_MS,
+          signal,
+          onStdout: (text) => {
+            pending += wslText(text);
+            const lines = pending.split(/\r?\n/);
+            pending = lines.pop() ?? '';
+            for (const line of lines) {
+              const phase = line.startsWith(STEP_PREFIX) ? (line.slice(STEP_PREFIX.length).trim() as ProvisionPhase) : undefined;
+              if (phase !== undefined && PHASES.includes(phase)) {
+                current = phase;
+                this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION}: ${phase}.`);
+                onStep({ kind: 'docker', phase });
+                continue;
+              }
+              // The progress of apt-get in the step (not logged: it changes every second).
+              const progress = current === undefined ? undefined : parseAptStatus(line);
+              if (current !== undefined && progress !== undefined) onStep({ kind: 'docker', phase: current, progress });
             }
-            // The progress of apt-get in the step (not logged: it changes every second).
-            const progress = current === undefined ? undefined : parseAptStatus(line);
-            if (current !== undefined && progress !== undefined) onStep({ kind: 'docker', phase: current, progress });
-          }
-        },
-      });
+          },
+        });
+        // WSL ran out of time to start the distribution, so the script did not run (it said no step): it starts again.
+        if (current !== undefined || provision.timedOut || attempt >= WSL_START_ATTEMPTS || !startTimedOut(provision)) break;
+        this.deps.logger.info(`WSL ran out of time to start the distribution ${WSL_DISTRIBUTION} (attempt ${attempt} of ${WSL_START_ATTEMPTS}), so Devspaces starts it again: ${outputOf(provision)}`);
+      }
     } catch (error) {
       if (isAbortError(error)) await this.stopDistribution('the setup was cancelled');
       throw error;

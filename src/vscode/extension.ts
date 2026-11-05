@@ -1096,6 +1096,7 @@ async function activateExtension(
     showLog: () => logger.show(),
     installWsl: (link) => setup.installWsl(link),
     restartPending: async () => (await wslAfterInstall?.restartPending()) === true,
+    wslInstallDone: async () => wslAfterInstall?.forget(),
     useHost: (host) => remoteDocker.useHost(host),
     forgetHost: (host) => remoteDocker.forgetHost(host),
     // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes.

@@ -101,8 +101,9 @@ export class RemoteShells {
     }
     const started = this.options.start(host);
     if (started === undefined) return Promise.resolve(undefined);
-    const { process, prompts, afterLogin } = started;
-    const entry: Entry = { process, flow: currentSshPromptFlow() };
+    // The start of the last login (a new one after WSL ran out of time to start the distribution).
+    let latest = started;
+    const entry: Entry = { process: started.process, flow: currentSshPromptFlow() };
     const forget = () => {
       if (this.entries.get(host) === entry) this.entries.delete(host);
     };
@@ -117,12 +118,13 @@ export class RemoteShells {
           const onEnd = (): void => {
             if (entry.shell !== undefined) forget();
           };
-          return await RemoteShell.open(entry.process, { logger, name: host, program: transportProgramOf(host), loginTimeoutMs, idleCloseMs, onEnd, prompts });
+          return await RemoteShell.open(latest.process, { logger, name: host, program: transportProgramOf(host), loginTimeoutMs, idleCloseMs, onEnd, prompts: latest.prompts });
         } catch (error) {
           if (distribution === undefined || attempt >= WSL_START_ATTEMPTS || this.disposed || !(error instanceof RemoteShellError) || error.timedOut || !wslStartTimedOut(error.detail)) throw error;
           const next = this.options.start(host);
           if (next === undefined) throw error;
           logger.info(`WSL ran out of time to start the distribution ${distribution} (attempt ${attempt} of ${WSL_START_ATTEMPTS}), so Devspaces starts it again: ${error.detail}`);
+          latest = next;
           entry.process = next.process;
         }
       }
@@ -136,6 +138,7 @@ export class RemoteShells {
           return shell;
         }
         logger.info(`The shell on ${host} is open: one login for the checks before the relay.`);
+        const { afterLogin } = latest;
         if (afterLogin !== undefined) {
           const step: Promise<void> = shell
             .keepOpenDuring(() => afterLogin(shell))

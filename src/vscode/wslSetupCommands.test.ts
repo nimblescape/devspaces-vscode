@@ -200,15 +200,33 @@ describe('Docker for a flow on Windows without Docker', () => {
   // Mutation: a check of the restart after the download fails it (some 100 MB that WSL cannot register before the restart).
   it('says that Windows must restart first, before any download, while the restart after the installation of WSL is missing', async () => {
     const restartPending = vi.fn(async () => true);
-    expect(await commands({ restartPending }).ensureDockerHost(LINK)).toBe('notUsed');
+    const wslInstallDone = vi.fn(async () => undefined);
+    setup.checkVirtualMachine.mockRejectedValue(new WslSetupError('vmUnavailable', 'wsl.exe --status says that WSL 2 cannot start'));
+    expect(await commands({ restartPending, wslInstallDone }).ensureDockerHost(LINK)).toBe('notUsed');
     expect(setup.image).not.toHaveBeenCalled();
     expect(setup.setUp).not.toHaveBeenCalled();
     expect(installWsl).not.toHaveBeenCalled();
     expect(window.showInformationMessage).toHaveBeenCalledWith(DockerSetupTexts.wslRestartToGoOn);
     expect(window.showErrorMessage).not.toHaveBeenCalled();
-    // A distribution that exists needs no new check of WSL.
+    // The record stays for the window after the restart.
+    expect(wslInstallDone).not.toHaveBeenCalled();
+    // A distribution that exists needs no new check of WSL; its use makes the record needless.
     registered('own');
-    expect(await commands({ restartPending }).ensureDockerHost()).toBe('used');
+    expect(await commands({ restartPending, wslInstallDone }).ensureDockerHost()).toBe('used');
+    expect(wslInstallDone).toHaveBeenCalledTimes(1);
+  });
+
+  // An installation of WSL that needed no restart (its virtual machine was on before) must not block the setup for days.
+  it('goes on without the restart when WSL 2 can start its virtual machine, and forgets the record after the use', async () => {
+    const wslInstallDone = vi.fn(async () => undefined);
+    expect(await commands({ restartPending: async () => true, wslInstallDone }).ensureDockerHost(LINK)).toBe('used');
+    expect(setup.setUp).toHaveBeenCalledTimes(1);
+    expect(wslInstallDone).toHaveBeenCalledTimes(1);
+    // Not used: the record stays.
+    wslInstallDone.mockClear();
+    useHost.mockResolvedValue(false);
+    expect(await commands({ restartPending: async () => true, wslInstallDone }).ensureDockerHost(LINK)).toBe('notUsed');
+    expect(wslInstallDone).not.toHaveBeenCalled();
   });
 
   it('says why WSL 2 cannot start its virtual machine, with Show details, before any download', async () => {

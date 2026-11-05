@@ -78,6 +78,18 @@ export class WslAfterInstall {
     }
   }
 
+  /**
+   * Devspaces uses its WSL distribution (also when the installation of WSL needed no restart): the record goes, so that no
+   * window goes on with it after a later restart. Never throws (logged).
+   */
+  async forget(): Promise<void> {
+    try {
+      await this.deps.files.removeWslSetupAfterInstall();
+    } catch (error) {
+      this.deps.logger.warn(`Devspaces could not remove its note of the installation of WSL: ${errorMessage(error)}`);
+    }
+  }
+
   private fresh(record: WslSetupAfterInstall): boolean {
     return Math.abs(this.clock.now() - Date.parse(record.createdAt)) <= WSL_AFTER_INSTALL_MAX_AGE_MS;
   }

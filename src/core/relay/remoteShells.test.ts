@@ -82,7 +82,8 @@ describeUnix('RemoteShells', () => {
   // In a slow virtual machine, WSL can run out of time to start the distribution (its own limit of 30 seconds).
   it('starts a WSL distribution again when WSL ran out of time to start it, at most 3 times, and no other host', async () => {
     const timeout = 'This operation returned because the timeout period expired. \nError code: Wsl/Service/CreateInstance/ERROR_TIMEOUT';
-    const failing = `printf '%s\\n' '${timeout}' >&2; exit 1`;
+    // wsl.exe writes its errors to the standard output.
+    const failing = `printf '%s\\n' '${timeout}'; exit 1`;
     let failures = 2;
     const lines: string[] = [];
     const logins: string[] = [];
@@ -108,9 +109,9 @@ describeUnix('RemoteShells', () => {
     const again = new RemoteShells({ logger: silentLogger, loginTimeoutMs: 5_000, start: (host) => (logins.push(host), { process: runner.startBytes('sh', ['-c', failing]) }) });
     await expect(again.login('wsl:devspaces')).resolves.toMatchObject({ ok: false, timedOut: false, detail: expect.stringContaining('ERROR_TIMEOUT') });
     expect(logins).toHaveLength(3);
-    // An SSH host, and another error of WSL, log in once.
+    // An SSH host, and another error of WSL, log in once; the output of an SSH login before the marker is no reason.
     logins.length = 0;
-    await expect(again.login('box')).resolves.toMatchObject({ ok: false });
+    await expect(again.login('box')).resolves.toEqual({ ok: false, detail: 'The login ended before the shell answered.', timedOut: false });
     expect(logins).toEqual(['box']);
     const other = new RemoteShells({
       logger: silentLogger,

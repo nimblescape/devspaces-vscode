@@ -927,6 +927,29 @@ describe('WslSetup.setUp', () => {
     }
   });
 
+  it('starts the distribution again for the script when WSL ran out of time to start it, but not after the script began', async () => {
+    // wsl.exe writes its errors to the standard output.
+    const timeout: RunResult = { exitCode: 4294967295, stdout: 'This operation returned because the timeout period expired. \r\nError code: Wsl/Service/CreateInstance/ERROR_TIMEOUT\r\n', stderr: '', timedOut: false };
+    let starts = 0;
+    const runner = distribution((args, options) => (isScript(args) && options?.input === PROVISION_SCRIPT && ++starts === 1 ? timeout : undefined));
+    const log = logger();
+    await expect(setup({ runner, log }).setUp(undefined, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
+    expect(starts).toBe(2);
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('WSL ran out of time to start the distribution devspaces (attempt 1 of 3), so Devspaces starts it again: This operation returned'));
+    // Three times, then the problem.
+    const always = distribution((args, options) => (isScript(args) && options?.input === PROVISION_SCRIPT ? timeout : undefined));
+    await expect(setup({ runner: always }).setUp(undefined, () => undefined)).rejects.toMatchObject({ problem: 'dockerFailed', message: expect.stringContaining('ERROR_TIMEOUT') });
+    expect(always.calls.filter((call) => isScript(call.args) && call.options?.input === PROVISION_SCRIPT)).toHaveLength(3);
+    // A script that said its first step ran: it is not started again.
+    const began = distribution((args, options) => {
+      if (!isScript(args) || options?.input !== PROVISION_SCRIPT) return undefined;
+      options.onStdout?.('devspaces-step packages\n');
+      return timeout;
+    });
+    await expect(setup({ runner: began }).setUp(undefined, () => undefined)).rejects.toMatchObject({ problem: 'dockerFailed' });
+    expect(began.calls.filter((call) => isScript(call.args) && call.options?.input === PROVISION_SCRIPT)).toHaveLength(1);
+  });
+
   it('fails with dockerFailed and the lines of the log that the script wrote to standard error', async () => {
     const runner = distribution((args, options) =>
       isScript(args) && options?.input === PROVISION_SCRIPT ? failed('The setup failed. The last lines of /var/log/devspaces-setup.log:\nE: Unable to locate package curl', 1) : undefined,
