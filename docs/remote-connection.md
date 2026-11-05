@@ -509,7 +509,7 @@ On Windows, Devspaces can use Docker Engine in its own WSL distribution `devspac
 5. **Download** to `%LOCALAPPDATA%\nimblescape\devspaces\wsl\download\debian.wsl`, checked against the SHA-256 of the list.
 6. **Register**: `wsl.exe --install --from-file <file> --name devspaces --location <folder>\disk --version 2 --no-launch`, for the Windows user, without administrator rights.
 7. **Docker inside**: a script as root installs systemd and Docker Engine from `download.docker.com`, and writes `/etc/wsl.conf` (systemd on, root as the default user, no drives of Windows mounted, no start of Windows programs).
-8. **Restart**: `wsl.exe --terminate devspaces`, then a wait of up to 120 seconds for `docker info`. A start that WSL ends with `Wsl/Service/CreateInstance/ERROR_TIMEOUT` runs again, up to 3 times.
+8. **Restart**: `wsl.exe --terminate devspaces`, then a wait of up to 180 seconds for `docker info`. A start that WSL ends with `Wsl/Service/CreateInstance/ERROR_TIMEOUT` runs again, up to 3 times.
 9. **Use**: Devspaces makes `wsl:devspaces` the Docker host of Devspaces, as **Use a Remote Docker Host…** does.
 
 After the setup and at the start of each window, Devspaces checks whether its distribution is the default distribution of WSL, and then makes another distribution the default. It warns when the WSL integration of Docker Desktop is on for its distribution.

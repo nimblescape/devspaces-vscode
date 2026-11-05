@@ -16,10 +16,13 @@ import { UNREADABLE_DOCKER_TARGET, operationDockerTarget } from './dockerTargets
 import {
   CONTEXT_COMMAND_TIMEOUT_MS,
   ENGINE_INFO_FORMAT,
+  REMOTE_INFO_TIMEOUT_MS,
   SSH_CHECK_CACHE_MS,
   SshLoginCache,
+  WSL_INFO_TIMEOUT_MS,
   checkCurrentEngine,
   checkSshLogin,
+  engineInfoTimeoutOf,
   ensureDockerHostReachable,
   listContextInfos,
   noPromptEnv,
@@ -335,6 +338,10 @@ describe('the WSL distribution of Devspaces: no SSH', () => {
     await expect(testRemoteDockerHost(docker, WSL_HOST, { runner, sshPath: undefined, env: {}, shells, sshLogins })).resolves.toEqual({ ok: true, version: '28.1.0', rootless: false });
     expect(shells.login).toHaveBeenCalledWith(WSL_HOST, undefined, { fresh: true });
     expect(shells.run.mock.calls.map((call) => call[1])).toEqual([`'docker' 'info' '--format' '${ENGINE_INFO_FORMAT}'`]);
+    // The start of the distribution starts Docker, which takes about 45 seconds in a slow virtual machine.
+    expect(shells.run.mock.calls[0][2]?.timeoutMs).toBe(WSL_INFO_TIMEOUT_MS);
+    expect(engineInfoTimeoutOf(WSL_HOST)).toBe(3 * 60_000);
+    expect(engineInfoTimeoutOf('box')).toBe(REMOTE_INFO_TIMEOUT_MS);
     expect(sshLogins.isFresh(WSL_HOST)).toBe(true);
     expect(docker.calls).toEqual([]);
     expect(runner.run).not.toHaveBeenCalled();
@@ -480,6 +487,15 @@ describe('ensureDockerHostReachable (the Docker start of a remote host)', () => 
     // Only the ssh check runs; no read of a socket.
     expect(runner.run.mock.calls.map((call) => call[1])).toEqual([['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-T', '--', 'box', 'true']]);
     expect(await state.rootlessSocket('box')).toBeUndefined();
+  });
+
+  it('gives docker info of the WSL distribution of Devspaces 3 minutes, and 45 seconds on another host', async () => {
+    const docker = fakeDocker(() => info(false));
+    const shells = { login: vi.fn(async () => ({ ok: true as const })), run: vi.fn(async () => undefined) };
+    const deps = { docker, runner: sshRunner(), state, logger, sshPath: '/usr/bin/ssh', env: {}, shells };
+    await ensureDockerHostReachable(remoteDockerTarget(WSL_HOST), deps);
+    await ensureDockerHostReachable(target, { ...deps, viaDockerPipe: () => true });
+    expect(docker.calls.map((call) => call.options?.timeoutMs)).toEqual([WSL_INFO_TIMEOUT_MS, REMOTE_INFO_TIMEOUT_MS]);
   });
 
   it('asks only docker info while the Docker calls to the host go through the Docker pipe of the extension', async () => {

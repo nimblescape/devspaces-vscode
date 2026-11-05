@@ -72,8 +72,8 @@ const SHORT_CALL_MS = 15_000;
 const REGISTER_MS = 15 * 60_000;
 const PROVISION_MS = 30 * 60_000;
 const TERMINATE_MS = 60_000;
-/** The script that waits for Docker waits 120 seconds itself. */
-const START_MS = 3 * 60_000;
+/** The script that waits for Docker waits 180 seconds itself, and each `docker info` of it waits for Docker. */
+const START_MS = 5 * 60_000;
 const UNREGISTER_MS = 5 * 60_000;
 /**
  * The name of the downloaded file in the folder `download`; it is removed after the registration, and it stays only when
@@ -512,13 +512,14 @@ main < /dev/null
 `;
 
 /**
- * The script that waits up to 120 seconds for Docker after the restart (`sh -s`, as root). Standard output: the version
+ * The script that waits up to 180 seconds for Docker after the restart (`sh -s`, as root): in a slow virtual machine,
+ * Docker needs about 45 seconds to start, after the start of the distribution. Standard output: the version
  * of the engine. On a failure, standard error gets the answer of `docker info` and the state of the service.
  */
 export const DOCKER_WAIT_SCRIPT = `i=0
 until docker info > /dev/null 2>&1; do
 i=$((i + 1))
-if [ "$i" -ge 60 ]; then
+if [ "$i" -ge 90 ]; then
 [ -d /run/systemd/system ] || echo "systemd does not run in the distribution." >&2
 docker info > /dev/null 2>&1 || docker info 2>&1 | tail -n 5 >&2
 systemctl --no-pager status docker.service 2>&1 | tail -n 20 >&2
