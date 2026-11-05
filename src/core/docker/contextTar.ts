@@ -2,9 +2,9 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The build context of an image as a tar archive, for `docker build -` on another computer, whose Docker CLI reads the
-// context from its standard input (BootstrapDocker.buildImage with BootstrapDockerOptions.hostCli: the build in the
-// WSL distribution of Devspaces with its own Docker CLI and buildx). Only the files at the top of the folder (the folder
+// The build context of an image as a tar archive, for a build that reads the context from its standard input (`-`):
+// the build of the helper image in a container of the build image on the engine (BootstrapDocker.buildImage,
+// buildxImage.ts), whose buildx gets the context through `docker run -i`. Only the files at the top of the folder (the folder
 // of the helper image has only its Dockerfile), each with the mode 0755 and the time 0, so that the same files give
 // the same archive. The mode is the one that the Docker CLI on Windows gives every file of a context that it sends to an
 // engine on Linux (Windows has no such mode), so the image is the same as from that Docker CLI. No `vscode`.

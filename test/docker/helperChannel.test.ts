@@ -356,7 +356,8 @@ describe('the helper channel with the real Docker engine', () => {
 
   // The Docker pipe of the extension (docs/architecture.md "The Docker pipe"): the Docker CLI of the extension
   // (BootstrapDocker) in an operation on the host, through the connection of the relay that the worker opened, once that
-  // connection passed its checks; a build too (the context and the session of BuildKit on Docker streams).
+  // connection passed its checks; a build too (the build container of the build image, its attach with the context on
+  // Docker streams).
   it('carries the Docker calls of the extension through its Docker pipe and the relay: a query and a build', async () => {
     let hostPipes: HostPipes | undefined;
     const connections = new RelayConnections({ logger: log, onUse: (host) => void hostPipes?.serve(host) });
@@ -473,8 +474,9 @@ describe('the helper channel with the real Docker engine', () => {
       expect(probe?.engine).toEqual(engineIdentity(cli.ok([...ENGINE_IDENTITY_ARGS])));
 
       // The Docker calls of the extension in an operation there: through its pipe, each connection with its own
-      // dial-stdio (never through the connection of the relay); a build, whose BuildKit session takes its connection
-      // over. The filter of the pipe (dockerPipeRules.ts) refuses a call that the extension does not make.
+      // dial-stdio (never through the connection of the relay); a build in a container of the build image, whose
+      // attach takes its connection over. The filter of the pipe (dockerPipeRules.ts) refuses a call that the
+      // extension does not make.
       const opened = connections.get(WSL_HOST)!.streamsOpened;
       const wslTarget = remoteDockerTarget(WSL_HOST);
       const version = await runWithDockerTarget(wslTarget, () => extensionDocker.run(['version', '--format', '{{.Server.Version}}']));
@@ -486,10 +488,10 @@ describe('the helper channel with the real Docker engine', () => {
         ),
       );
       expect(built).toBe(cli.ok(['image', 'inspect', '--format', '{{.Id}}', buildTag]));
-      const ran = await runWithDockerTarget(wslTarget, () => extensionDocker.run(['run', '--rm', ...runLabelArgs, '--entrypoint', 'true', helperTag], { timeoutMs: 120_000 }));
-      expect(ran.exitCode).not.toBe(0);
-      expect(ran.stderr).toContain(`Devspaces does not allow POST /containers/create through the Docker pipe of the extension on ${WSL_HOST}: Devspaces does not need it.`);
-      expect(refusals).toEqual([`The Docker pipe of the extension on ${WSL_HOST} refused POST /containers/create: Devspaces does not need it.`]);
+      const refused = await runWithDockerTarget(wslTarget, () => extensionDocker.run(['volume', 'create', ...runLabelArgs], { timeoutMs: 120_000 }));
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.stderr).toContain(`Devspaces does not allow POST /volumes/create through the Docker pipe of the extension on ${WSL_HOST}: Devspaces does not need it.`);
+      expect(refusals).toEqual([`The Docker pipe of the extension on ${WSL_HOST} refused POST /volumes/create: Devspaces does not need it.`]);
       expect(connections.get(WSL_HOST)!.streamsOpened).toBe(opened);
       expect(calls().filter((line) => line.endsWith('--exec docker system dial-stdio')).length).toBeGreaterThanOrEqual(2);
       expect(hostPipes.dockerHost(WSL_HOST)).toMatch(/^unix:\/\/.*\/docker\.sock$/);

@@ -18,17 +18,18 @@
 // the Docker pipe of the extension for it (BootstrapDockerOptions.servePipe), which needs no connection of the relay; it
 // never logs in with `ssh://`. The calls of an operation on a remote host run with the Docker CLI of Devspaces
 // when it is installed (BootstrapDockerOptions.ownCli, one tested version), also on a computer without a Docker CLI of
-// its own; the other calls with the Docker CLI of this computer. The build of an image on the WSL distribution of
-// Devspaces runs with the Docker CLI there and its buildx (BuildKit), when it has buildx (BootstrapDockerOptions.hostCli,
-// buildImage). A call that does not only read is logged with its command (directCommandName), never its arguments. Output is read as JSON (`docker --version` as its one line), never
+// its own; the other calls with the Docker CLI of this computer. The build of the helper image runs in a container of
+// the build image of Devspaces on the engine (buildx, BuildKit; buildxImage.ts, buildImage), the same on every engine:
+// only the way to the engine differs. A call that does not only read is logged with its command (directCommandName), never its arguments. Output is read as JSON (`docker --version` as its one line), never
 // as a table. No `vscode`.
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CommandError, errorMessage, UserFacingError } from '../errors';
 import { Messages, dockerHostReason } from '../messages';
-import { LABEL_BUILD_ID } from '../names';
-import { abortError, isAbortError, isStartError, sleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
+import { HELPER_DOCKER_SOCKET, LABEL_BUILD_ID } from '../names';
+import { abortError, isAbortError, sleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
+import { BUILD_CONTAINER_PREFIX, BUILDX_PIN, BUILDX_REPOSITORY, DOCKER_RUN_FAILED_EXIT_CODE, buildxImageTag, buildxPulledReference, buildxRunArgs, isOlderBuildxTag } from './buildxImage';
 import { contextTar } from './contextTar';
 import { deleteEnv, dockerCommandWords, dockerProcessEnv, isReadOnlyDockerCall } from './dockerCli';
 import { hostAccessOf, hostEndpoint, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
@@ -204,37 +205,19 @@ export interface BootstrapDockerOptions {
    */
   sshEnv?: (host: string, env: NodeJS.ProcessEnv) => void;
   /**
-   * The Docker CLI on the computer of the remote engine `target`, where Devspaces runs it without a login: a function
-   * that runs `docker <args>` there and resolves as ProcessRunner.run (the WSL distribution of Devspaces: wslDockerCli,
-   * `wsl.exe -d <distribution> -u root --cd / --exec env DEVSPACES_RUN=<mark> docker <args>`). Undefined for another
-   * host (an SSH host). buildImage builds there when that Docker CLI has buildx, so that the build uses BuildKit also
-   * when the Docker CLI here has no buildx (the Docker CLI of Devspaces).
+   * The source of the mount of the Docker socket of the engine of the operation `target` (undefined: the local Docker
+   * outside an operation), a path on the computer of that engine, for the build container of buildImage: the socket
+   * mount of the worker there. Default: /var/run/docker.sock.
    */
-  hostCli?: (target: DockerTarget) => HostDockerCli | undefined;
+  engineSocket?: (target: DockerTarget | undefined) => Promise<string>;
   /** Only for tests. Default: SSH_DROP_RETRY_DELAY_MS. */
   sshDropRetryDelayMs?: number;
   /** Only for tests. Default: cliFileIdentity. */
   fileIdentity?: (path: string) => Promise<string | undefined>;
 }
 
-/** `docker <args>` with the Docker CLI on the computer of a remote engine (BootstrapDockerOptions.hostCli). */
-export type HostDockerCli = (args: readonly string[], options: RunOptions) => Promise<RunResult>;
-
-/** The Docker CLI on the computer of the engine for one build (hostBuilder): its buildx and the packed context. */
-interface HostBuilder {
-  host: string;
-  run: HostDockerCli;
-  /** `buildx v0.38.1`, for the log. */
-  buildx: string;
-  /** The build context as a tar archive (contextTar). */
-  context: Buffer;
-}
-
-/**
- * Time limit of `docker buildx version` on the computer of the engine (hostBuilder): the first start of a WSL
- * distribution in a slow virtual machine can take more than a minute (WSL_SHELL_LOGIN_TIMEOUT_MS).
- */
-export const HOST_BUILDX_CHECK_TIMEOUT_MS = 2 * 60_000;
+/** Time limit of `docker rm -f` of a build container after a cancel or a failure of its `docker run`. */
+export const BUILD_CONTAINER_REMOVE_TIMEOUT_MS = 60_000;
 
 /**
  * The identity of the file at `path`: its inode, size and modification time (fs.stat, which follows a link). Another
@@ -300,7 +283,7 @@ export class BootstrapDocker {
   private readonly remoteShell: BootstrapDockerOptions['remoteShell'];
   private readonly sshEnv: BootstrapDockerOptions['sshEnv'];
   private readonly ownCli: BootstrapDockerOptions['ownCli'];
-  private readonly hostCli: BootstrapDockerOptions['hostCli'];
+  private readonly engineSocket: BootstrapDockerOptions['engineSocket'];
   private readonly sshDropRetryDelayMs: number;
   private lookedUpAt: number | undefined;
   private readonly fileIdentity: (path: string) => Promise<string | undefined>;
@@ -338,7 +321,7 @@ export class BootstrapDocker {
     this.remoteShell = options.remoteShell;
     this.sshEnv = options.sshEnv;
     this.ownCli = options.ownCli;
-    this.hostCli = options.hostCli;
+    this.engineSocket = options.engineSocket;
     this.sshDropRetryDelayMs = options.sshDropRetryDelayMs ?? SSH_DROP_RETRY_DELAY_MS;
     this.fileIdentity = options.fileIdentity ?? cliFileIdentity;
     // The caller has just looked the CLI up.
@@ -843,8 +826,8 @@ export class BootstrapDocker {
   }
 
   /**
-   * `docker build -t <tag> -f <dockerfile> [--pull] [--no-cache] [--label k=v]… --label nimblescape.devspaces.build-id=<nonce>
-   * [--build-arg k=v]… <context>`. `pull`: pull the base images even if they exist locally; `noCache`: build every step
+   * Builds the image `tag` from `dockerfile` and the folder `context`, as `docker build -t <tag> -f <dockerfile> [--pull]
+   * [--no-cache] [--label k=v]… --label nimblescape.devspaces.build-id=<nonce> [--build-arg k=v]… <context>`. `pull`: pull the base images even if they exist locally; `noCache`: build every step
    * again. Docker moves the tag only when the build succeeds. Throws CommandError when the build fails.
    *
    * Returns the ID of the image that this build made, found by its build label (LABEL_BUILD_ID with a random nonce of
@@ -854,11 +837,10 @@ export class BootstrapDocker {
    * does not resolve. The lookup never decides whether the build succeeded: when it fails, or does not find exactly one
    * image, the result is `undefined` (with a warning).
    *
-   * Within an operation on a remote engine whose computer has a Docker CLI with buildx that Devspaces runs there
-   * (BootstrapDockerOptions.hostCli, the WSL distribution of Devspaces; hostBuilder), the build runs with that Docker CLI,
-   * so that it uses BuildKit: `docker buildx build --builder default --load … -f <name of the Dockerfile> -`, with the
-   * context as a tar archive on its standard input (contextTar). Only for a Dockerfile at the top of its context folder
-   * (the helper image). A Docker CLI there that cannot be started builds here (buildThere).
+   * The build runs in a container of the build image of Devspaces on the engine (buildInContainer): buildx with
+   * BuildKit, the same on every engine, whatever Docker CLI sends the calls. It falls back to `docker build` of the
+   * Docker CLI here when the Dockerfile is not at the top of its context folder, when the build image cannot be
+   * prepared (for example without a connection to Docker Hub), and when Docker cannot run the container.
    */
   async buildImage(options: {
     tag: string;
@@ -876,21 +858,10 @@ export class BootstrapDocker {
     const onOutput = options.onOutput ?? ((text: string) => this.logger.output(text));
     const buildLabel = `${LABEL_BUILD_ID}=${crypto.randomBytes(16).toString('hex')}`;
     const rest = [...flags, ...labelArgs(options.labels, '--label'), '--label', buildLabel, ...labelArgs(options.buildArgs, '--build-arg')];
-    const onHost = await this.hostBuilder(options.dockerfile, options.context, options.signal);
-    const builtThere =
-      onHost !== undefined &&
-      (await this.buildThere(
-        onHost,
-        // `docker buildx build`, which the check of hostBuilder found. The builder of the engine there (the docker
-        // driver, `--builder default`) keeps the image in the engine, also when `docker buildx use` chose another builder
-        // there; `--load` asks for it.
-        ['buildx', 'build', '--builder', 'default', '--load', '-t', options.tag, '-f', path.basename(options.dockerfile), ...rest, '-'],
-        `${options.tag}${flagText}`,
-        { signal: options.signal, onStdout: onOutput, onStderr: onOutput },
-      ));
-    if (!builtThere) {
-      this.logger.info(`Building image ${options.tag}${flagText}.`);
-      await this.runChecked(['build', '-t', options.tag, '-f', options.dockerfile, ...rest, options.context], { signal: options.signal, onStdout: onOutput, onStderr: onOutput });
+    const output: RunOptions = { signal: options.signal, onStdout: onOutput, onStderr: onOutput };
+    if (!(await this.buildInContainer(options, rest, `${options.tag}${flagText}`, output))) {
+      this.logger.info(`Building image ${options.tag}${flagText} with \`docker build\`.`);
+      await this.runChecked(['build', '-t', options.tag, '-f', options.dockerfile, ...rest, options.context], output);
     }
     let images: ImageInfo[];
     try {
@@ -907,57 +878,124 @@ export class BootstrapDocker {
   }
 
   /**
-   * The Docker CLI on the computer of the remote engine of the operation (BootstrapDockerOptions.hostCli) for a build of
-   * `dockerfile` there: only when the Dockerfile is at the top of the folder `context`, which contextTar packs, and when
-   * `docker buildx version` succeeds there. Undefined otherwise, and the build runs here as before; a reason that is not
-   * plain (no buildx there, a failure) is logged. Rejects only with an AbortError when `signal` aborts.
+   * The build of buildImage in a container of the build image on the engine (buildxImage.ts): `docker run --rm -i …
+   * devspaces-buildx:<version> build … -t <tag> -f <name of the Dockerfile> … -`, with the context as a tar archive on
+   * its standard input (contextTar), and the Docker socket of the engine (engineSocket). True when it built the image.
+   * False (logged) when it cannot run there: a Dockerfile that is not at the top of its context folder, a context that
+   * cannot be packed, a build image that cannot be prepared (buildxImage), or Docker that cannot create or start the
+   * container (exit code 125); buildImage then runs `docker build`. Throws CommandError when the build ran and failed,
+   * and an AbortError when `output.signal` aborts. After a cancel or a failure of its `docker run`, the container is
+   * removed (removeBuildContainer): the Docker CLI on Windows ends without stopping it.
    */
-  private async hostBuilder(
-    dockerfile: string,
-    context: string,
-    signal: AbortSignal | undefined,
-  ): Promise<HostBuilder | undefined> {
-    const target = operationDockerTarget();
-    if (target?.kind !== 'remote' || this.hostCli === undefined) return undefined;
-    if (path.resolve(path.dirname(dockerfile)) !== path.resolve(context)) return undefined;
-    const elsewhere = 'so the image is built from this computer, as before';
+  private async buildInContainer(
+    options: { tag: string; dockerfile: string; context: string },
+    rest: readonly string[],
+    image: string,
+    output: RunOptions,
+  ): Promise<boolean> {
+    if (path.resolve(path.dirname(options.dockerfile)) !== path.resolve(options.context)) return false;
+    const fallback = 'so the image is built with `docker build`';
+    let context: Buffer;
     try {
-      const run = this.hostCli(target);
-      if (run === undefined) return undefined;
-      // The context first: packing it needs no call there.
-      const packed = await contextTar(context);
-      const check = await run(['buildx', 'version'], { timeoutMs: HOST_BUILDX_CHECK_TIMEOUT_MS, signal });
-      if (check.exitCode !== 0 || check.timedOut) {
-        const output = `${check.stdout.trim()} ${check.stderr.trim()}`.trim().slice(-500) || (check.timedOut ? 'no answer within the time limit' : `exit code ${check.exitCode}`);
-        this.logger.info(`The Docker CLI on ${target.host} could not run \`docker buildx version\` (${output}), ${elsewhere}.`);
-        return undefined;
+      context = await contextTar(options.context);
+    } catch (error) {
+      this.logger.warn(`The build context ${options.context} cannot be packed, ${fallback}: ${errorMessage(error)}`);
+      return false;
+    }
+    const buildx = await this.buildxImage(output.signal);
+    if (buildx === undefined) return false;
+    const target = operationDockerTarget();
+    let socket: string;
+    try {
+      socket = (await this.engineSocket?.(target)) ?? HELPER_DOCKER_SOCKET;
+    } catch (error) {
+      this.logger.warn(`The Docker socket of the engine could not be looked up, ${fallback}: ${errorMessage(error)}`);
+      return false;
+    }
+    const name = `${BUILD_CONTAINER_PREFIX}${crypto.randomBytes(8).toString('hex')}`;
+    const args = buildxRunArgs({ name, image: buildx, socket, tag: options.tag, dockerfile: path.basename(options.dockerfile), buildArgs: rest });
+    this.logger.info(`Building image ${image} in the container ${name} with buildx ${BUILDX_PIN.version} (BuildKit).`);
+    let result: RunResult;
+    try {
+      result = await this.run(args, { ...output, input: context });
+    } catch (error) {
+      this.removeBuildContainer(name);
+      throw error;
+    }
+    if (result.exitCode === 0) return true;
+    this.removeBuildContainer(name);
+    if (result.exitCode === DOCKER_RUN_FAILED_EXIT_CODE && !result.timedOut) {
+      this.logger.warn(`Docker could not run the build container ${name}, ${fallback}: ${result.stderr.trim().slice(-500)}`);
+      return false;
+    }
+    throw this.commandError(args, result);
+  }
+
+  /**
+   * The tag of the build image on the engine of the operation (buildxImageTag, `devspaces-buildx:<version>`). When it is
+   * missing: the pinned image by its digest (buildxPulledReference), pulled when no image of that digest is there, gets
+   * the tag; the name of that pull is removed again (only an image that was not there before the pull, so no name of
+   * the user goes), so that the tag is its only name, and the tags of older versions are removed (removeOlderBuildxImages).
+   * Undefined (logged) when it cannot be prepared, for example without a connection to Docker Hub. Rejects only with an
+   * AbortError when `signal` aborts.
+   */
+  private async buildxImage(signal: AbortSignal | undefined): Promise<string | undefined> {
+    const tag = buildxImageTag();
+    const pinned = buildxPulledReference();
+    try {
+      if (await this.imageExists(tag)) return tag;
+      const present = await this.imageExists(pinned);
+      if (!present) {
+        this.logger.info(`Pulling the build image ${pinned} (buildx ${BUILDX_PIN.version}).`);
+        const log = (text: string): void => this.logger.output(text);
+        await this.runChecked(['pull', pinned], { signal, onStdout: log, onStderr: log });
       }
-      const buildx = /\bv\d+\.\d+\.\d+\S*/.exec(check.stdout)?.[0];
-      return { host: target.host, run, buildx: buildx === undefined ? 'buildx' : `buildx ${buildx}`, context: packed };
+      await this.runChecked(['tag', pinned, tag], { signal, timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
+      if (!present) {
+        const removed = await this.run(['image', 'rm', pinned], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
+        if (removed.exitCode !== 0 && !this.isMissing(removed)) this.logger.warn(`The name ${pinned} of the pull of the build image stays: ${removed.stderr.trim()}`);
+      }
+      await this.removeOlderBuildxImages();
+      return tag;
     } catch (error) {
       if (isAbortError(error)) throw error;
-      this.logger.warn(`The image cannot be built with the Docker CLI on ${target.host}, ${elsewhere}: ${errorMessage(error)}`);
+      // Another window may have tagged it meanwhile.
+      if (await this.imageExists(tag).catch(() => false)) return tag;
+      this.logger.warn(`The build image ${pinned} could not be prepared, so the image is built with \`docker build\`: ${errorMessage(error)}`);
       return undefined;
     }
   }
 
   /**
-   * `docker <args>` of buildImage with the Docker CLI on the computer of the engine (hostBuilder), with the build context
-   * as its standard input. True when it built the image; false when that Docker CLI could not be started (an error of
-   * the start of the program, logged), and the build runs here then. Throws CommandError when the build there ran and
-   * failed (no second build here), and an AbortError when `options.signal` aborts.
+   * `docker image rm` (never with force) of each tag of the build image of an older version than the pin
+   * (isOlderBuildxTag); a tag that a container uses stays. Failures are logged.
    */
-  private async buildThere(onHost: HostBuilder, args: readonly string[], image: string, options: RunOptions): Promise<boolean> {
-    this.logger.info(`Building image ${image} on ${onHost.host} with its Docker CLI and ${onHost.buildx} (BuildKit).`);
+  private async removeOlderBuildxImages(): Promise<void> {
     try {
-      const result = await this.logged(args, () => onHost.run(args, { ...options, input: onHost.context }));
-      if (result.exitCode !== 0) throw this.commandError(args, result);
-      return true;
+      const stdout = await this.runChecked(['image', 'ls', '--filter', `reference=${BUILDX_REPOSITORY}`, '--format', '{{json .}}'], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
+      for (const item of parseJsonLines(stdout)) {
+        if (!isRecord(item) || item.Repository !== BUILDX_REPOSITORY || typeof item.Tag !== 'string') continue;
+        const reference = `${BUILDX_REPOSITORY}:${item.Tag}`;
+        if (isOlderBuildxTag(reference)) await this.removeImage(reference);
+      }
     } catch (error) {
-      if (!isStartError(error)) throw error;
-      this.logger.warn(`The Docker CLI on ${onHost.host} could not be started, so the image is built from this computer, as before: ${errorMessage(error)}`);
-      return false;
+      this.logger.warn(`The older build images could not be removed: ${errorMessage(error)}`);
     }
+  }
+
+  /**
+   * `docker rm -f <name>` of a build container in the background, after a cancel or a failure of its `docker run`: the
+   * build in it stops. A container that is not there anymore (its `--rm`) is no failure; another failure is logged.
+   */
+  private removeBuildContainer(name: string): void {
+    this.run(['rm', '-f', name], { timeoutMs: BUILD_CONTAINER_REMOVE_TIMEOUT_MS }).then(
+      (result) => {
+        if (result.exitCode !== 0 && !/no such container/i.test(result.stderr)) {
+          this.logger.warn(`The build container ${name} could not be removed, so its build may go on: ${result.timedOut ? 'no answer within the time limit' : result.stderr.trim()}`);
+        }
+      },
+      (error: unknown) => this.logger.warn(`The build container ${name} could not be removed, so its build may go on: ${errorMessage(error)}`),
+    );
   }
 
   /** The image of a failed call does not exist (IMAGE_MISSING_PATTERN). */

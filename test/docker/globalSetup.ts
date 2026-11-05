@@ -14,6 +14,7 @@ import type { TestProject } from 'vitest/node';
 import { devcontainerCliVersion } from '../../scripts/cliVersion.mjs';
 import { findDockerCli } from '../../src/core/docker/dockerCli';
 import { extractBaseImages } from '../../src/core/imageCheck/dockerfile';
+import { buildxImageTag, isOlderBuildxTag } from '../../src/core/docker/buildxImage';
 import { HELPER_CACHE_VOLUME } from '../../src/core/names';
 import {
   DockerCli,
@@ -67,14 +68,15 @@ export default async function setup(project: TestProject): Promise<() => void> {
   console.log(`Docker tests: run ${runId}, engine ${info.out}, logs in ${runDir}`);
 
   const helperDockerfile = fs.readFileSync(HELPER_DOCKERFILE, 'utf8');
-  const allowedTags = [helperImageTag(helperDockerfile), ...extractBaseImages(helperDockerfile), TEST_BASE_IMAGE, OLD_GIT_BASE_IMAGE];
+  // The build of the helper image tags the build image of Devspaces and removes the tags of its older versions.
+  const allowedTags = [helperImageTag(helperDockerfile), buildxImageTag(), ...extractBaseImages(helperDockerfile), TEST_BASE_IMAGE, OLD_GIT_BASE_IMAGE];
 
   return () => {
     // The test files remove their objects themselves; this is the safety net after a crash.
     const removed = removeRunObjects(cli, runId);
     if (removed.length > 0) console.warn(`The teardown removed what the tests left: ${removed.join(', ')}`);
     if (!baseline.volumes.includes(HELPER_CACHE_VOLUME)) cli.run(['volume', 'rm', HELPER_CACHE_VOLUME]);
-    const changes = unexpectedChanges(baseline, takeSnapshot(cli), allowedTags);
+    const changes = unexpectedChanges(baseline, takeSnapshot(cli), allowedTags, (tag) => isOlderBuildxTag(tag));
     const keep = changes.length > 0 || fs.existsSync(failureMarker(run)) || process.env.DEVSPACE_TEST_KEEP_LOGS === '1';
     if (!keep) {
       fs.rmSync(runDir, { recursive: true, force: true });

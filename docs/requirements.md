@@ -16,7 +16,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-GEN-003
 
-**Platforms.** Devspaces runs in VS Code 1.125 or later (the Microsoft build) on Windows, macOS and Linux, with accounts on github.com. GitHub Enterprise Server and GHE.com are not supported. It works with Docker Desktop, with Docker Engine on Linux, with Docker Engine on another computer over SSH ([R-ENG-002](#r-eng-002)), and on Windows with Docker Engine in its own WSL distribution ([R-ENG-005](#r-eng-005)). Podman is not supported.
+**Platforms.** Devspaces runs in VS Code 1.125 or later (the Microsoft build) on Windows, also Windows Home, on macOS and on Linux, with accounts on github.com. GitHub Enterprise Server and GHE.com are not supported. It works with Docker Desktop, with Docker Engine on Linux, with Docker Engine on another computer over SSH ([R-ENG-002](#r-eng-002)), and on Windows with Docker Engine in its own WSL distribution ([R-ENG-005](#r-eng-005)). Podman is not supported.
 
 ### R-GEN-004
 
@@ -111,6 +111,10 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 ### R-ENG-005
 
 **Windows without Docker Desktop.** On Windows, Devspaces uses Docker Desktop when it is installed. Otherwise, the Docker setup of the view and a link ([R-LINK-001](#r-link-001)) check WSL and install WSL 2 first when it is missing, without a question of Devspaces (Windows asks for administrator permission); after the restart of Windows, the first window goes on with the setup, and with the link, by itself. Then Devspaces sets up, without a question and without administrator rights, its own WSL 2 distribution `devspaces` from the Debian file for the architecture of Windows of the list of WSL distributions of Microsoft (checked against its SHA-256), with Docker Engine, and uses it as a host of its list through `wsl.exe`, without SSH, with the Docker CLI of Devspaces ([R-ENG-004](#r-eng-004)). The setup shows its progress, also of the downloads and the installation of the packages, and says before the download when WSL 2 cannot start its virtual machine (no restart after the installation of WSL, or no virtualization); a download that WSL could not register stays for the next setup. Devspaces starts the distribution again when WSL runs out of time to start it, which happens in a slow virtual machine. A link uses a distribution that Devspaces set up before as it is. The distribution is never the default distribution of WSL, and a distribution with that name that the user made is never changed or removed. It runs while a window, a devspace or the Monitor needs it, and stops when nothing needs it; after **Keep Running** for its Monitor, a start entry of the Windows user starts it at logon. Devspaces upgrades its packages about once a week without stopping the running devspaces, and removes the distribution only after a question.
+
+### R-ENG-006
+
+**The same processes on every engine.** Once a Linux system with Docker Engine is there, Devspaces runs the same processes on every engine: the local Docker, its WSL distribution ([R-ENG-005](#r-eng-005)), and a remote host over SSH ([R-ENG-002](#r-eng-002)). Only the transport to the engine differs: the Docker context of the computer, `wsl.exe`, or the SSH login. No engine gets a build, a check or a tool of its own. The setup of the WSL distribution is the one exception. So the helper image is built in a container on the engine with buildx (BuildKit) from a build image that Devspaces pins by its digest, whatever Docker CLI sends the calls.
 
 ## Security
 

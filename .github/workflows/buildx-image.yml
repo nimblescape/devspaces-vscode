@@ -1,0 +1,158 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# Keep the pin of the build image of Devspaces (src/core/docker/buildxPin.json,
+# docs/architecture.md "The helper image") up to date, once per week and on a
+# manual start. The job "pin" first checks that Docker Hub still has the image
+# index of the pinned digest of docker/buildx-bin, with an image for
+# linux/amd64 and linux/arm64, because every engine pulls it by that digest.
+# Then it looks for a newer tag x.y.z of docker/buildx-bin and writes its
+# version and the digest of its image index with scripts/buildx-pin.mjs. Only
+# this job reads Docker Hub, and it gets no write scope. When the pin changed,
+# the job "pull request" commits the new pin to the branch buildx-<version>,
+# opens a pull request for it, and starts the workflow "CI" on that branch,
+# because a pull request of a workflow starts no workflow: the checks of that
+# run appear on the pull request, also the Docker tests, which build the helper
+# image in a container of the new build image. A branch buildx-<version> that
+# has a pull request already, open, closed or merged, gets nothing new. Opening
+# the pull request needs the repository setting "Allow GitHub Actions to create
+# and approve pull requests" (Settings > Actions > General); without it, the
+# job fails after the push, and the next run tries again. A pull request that
+# changes this workflow, the script or the pin runs the job "pin", which writes
+# nothing there. GitHub starts a scheduled run only from the workflow on the
+# default branch.
+
+name: Buildx image
+
+on:
+  schedule:
+    # Tuesdays at 04:53 UTC.
+    - cron: '53 4 * * 2'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/buildx-image.yml
+      - scripts/buildx-pin.mjs
+      - src/core/docker/buildxPin.json
+
+permissions:
+  # Checkout needs repository reads; only the job "pull request" gets more.
+  contents: read
+
+concurrency:
+  group: buildx-image
+  cancel-in-progress: false
+
+jobs:
+  pin:
+    name: pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+      version: ${{ steps.update.outputs.version }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Check the image of the current pin
+        run: node scripts/buildx-pin.mjs --check
+
+      - name: Look for a newer version
+        id: update
+        run: |
+          node scripts/buildx-pin.mjs
+          version=$(node -p 'require("./src/core/docker/buildxPin.json").version')
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The pin names the version \"$version\", not x.y.z." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- src/core/docker/buildxPin.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "The pin has the newest buildx, $version." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "The pin changes to buildx $version:"
+              echo
+              echo '```diff'
+              git diff -- src/core/docker/buildxPin.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Keep the new pin
+        if: steps.update.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: buildx-pin
+          path: src/core/docker/buildxPin.json
+          if-no-files-found: error
+
+  pull-request:
+    name: pull request
+    needs: pin
+    if: needs.pin.outputs.changed == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The push of the branch buildx-<version>.
+      contents: write
+      # The pull request of that branch.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
+      actions: write
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Take the new pin of the job "pin"
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: buildx-pin
+          path: src/core/docker
+
+      - name: Push the branch, open the pull request, and start CI on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.pin.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          branch="buildx-$VERSION"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if [[ -n "$(git ls-remote --heads "$remote" "refs/heads/$branch")" ]]; then
+            if [[ "$(gh pr list --head "$branch" --state all --json number --jq length)" != "0" ]]; then
+              echo "The branch $branch has a pull request already." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "The branch $branch exists without a pull request: it gets one now."
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch --create "$branch"
+            git add src/core/docker/buildxPin.json
+            git commit --quiet --message "Pin the build image to buildx $VERSION" --message "The workflow \"Buildx image\" read the digest of the image index of docker/buildx-bin:$VERSION from Docker Hub and checked it against its bytes: $RUN_URL"
+            git push "$remote" "HEAD:refs/heads/$branch"
+          fi
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          The workflow "Buildx image" found buildx $VERSION as docker/buildx-bin on Docker Hub, with an image for linux/amd64 and linux/arm64. It wrote the version and the digest of its image index into \`src/core/docker/buildxPin.json\` ([run]($RUN_URL)). Every Docker engine pulls the build image of Devspaces by this digest and tags it \`devspaces-buildx:$VERSION\`.
+
+          The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. The Docker tests build the helper image in a container of this build image. Merge when CI passes. The next release of Devspaces uses this version.
+          EOF
+          if ! gh pr create --base main --head "$branch" --title "Pin the build image to buildx $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
+            exit 1
+          fi
+          gh workflow run ci.yml --ref "$branch"
+          echo "The pull request of buildx $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"

@@ -151,6 +151,11 @@ export const LABEL_HELPER = 'nimblescape.devspaces.worker';
 export const LABEL_HELPER_BASE_DIGEST = 'nimblescape.devspaces.worker-base-digest';
 export const LABEL_HELPER_RUN = 'nimblescape.devspaces.worker-run';
 /**
+ * A label of the build containers of the helper image (buildxImage.ts, BootstrapDocker.buildImage): `--rm` removes each
+ * after its build, and "Remove Devspaces from This Docker Engine…" removes one that runs.
+ */
+export const LABEL_BUILD_RUN = 'nimblescape.devspaces.build-run';
+/**
  * A label with a random nonce per build of BootstrapDocker.buildImage, by which it finds the ID of the image that the
  * build made (`docker image ls --filter label=…`).
  */
@@ -194,6 +199,7 @@ export const EXTENSION_LABEL_KEYS: ReadonlySet<string> = new Set([
   LABEL_HELPER,
   LABEL_HELPER_BASE_DIGEST,
   LABEL_HELPER_RUN,
+  LABEL_BUILD_RUN,
   LABEL_BUILD_ID,
   LABEL_BUILD_RECORD,
   LABEL_PREPARED,
