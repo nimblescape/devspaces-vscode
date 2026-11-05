@@ -73,6 +73,20 @@ describe('OutputChannelLogger', () => {
     expect(channel.text).toBe('stopped\nBuilding image\n');
   });
 
+  it('drops a cut sequence whose rest did not come within a second: the next output is another one', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      logger.output('stopped\n\u001b[');
+      now.mockReturnValue(1_002_000);
+      logger.output('Step 1/5\n');
+    } finally {
+      now.mockRestore();
+    }
+    expect(channel.text).toBe('stopped\nStep 1/5\n');
+  });
+
   it('holds a cut OSC sequence and a cut sequence of ESC and intermediate characters too', () => {
     const logger = new OutputChannelLogger();
     const channel = fakeVscode.outputChannels[0];
@@ -86,6 +100,7 @@ describe('OutputChannelLogger', () => {
     expect(stripControlSequences('a\u001b[1;31mb\u001b[0mc')).toBe('abc');
     expect(stripControlSequences('a\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\b')).toBe('alinkb');
     expect(stripControlSequences('a\u001b(Bb\u001bMc')).toBe('abc');
+    expect(stripControlSequences('a\u001b7b\u001b8c\u001b=d\u001b>e\u001bcf')).toBe('abcdef');
     expect(stripControlSequences('Step 1/13 : FROM node [ok]')).toBe('Step 1/13 : FROM node [ok]');
   });
 
