@@ -18,7 +18,7 @@ import { isAbortError, type Logger, type RunOptions, type RunResult } from '../p
 import { LABEL_MONITOR, LABEL_MONITOR_OWNER, REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, type BootstrapDocker } from './bootstrapDocker';
-import { BUILDX_IMAGE_LS_ARGS, BUILDX_REPOSITORY, buildxImageTags } from './buildxImage';
+import { BUILDX_IMAGE_LS_ARGS, BUILDX_REFERENCE_FILTER, buildxImageTags } from './buildxImage';
 import { describeDockerHost, sshEndpoint, wslDistributionOf } from './dockerHost';
 import { DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 
@@ -140,7 +140,7 @@ async function helperImages(docker: Pick<BootstrapDocker, 'listImagesByLabel'>):
 }
 
 /** The build reference filter of `docker image ls` for the tags of the build image (devspaces-buildx). */
-const BUILDX_REFERENCE = `reference=${BUILDX_REPOSITORY}`;
+const BUILDX_REFERENCE = BUILDX_REFERENCE_FILTER;
 
 /** The tags of the build image (devspaces-buildx:<version>), each with the ID of its image. */
 async function buildxImages(docker: Pick<BootstrapDocker, 'run'>, signal: AbortSignal | undefined): Promise<Array<{ id: string; tags: string[] }>> {

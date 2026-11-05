@@ -925,7 +925,6 @@ export class BootstrapDocker {
     }
     const buildx = await this.buildxImage(output.signal);
     if (buildx === undefined) return false;
-    await this.pullBaseImages(baseImages, options.pull === true, output);
     const target = operationDockerTarget();
     let socket: string;
     try {
@@ -934,6 +933,7 @@ export class BootstrapDocker {
       this.logger.warn(`The Docker socket of the engine could not be looked up, ${fallback}: ${errorMessage(error)}`);
       return false;
     }
+    await this.pullBaseImages(baseImages, options.pull === true, output);
     const name = `${BUILD_CONTAINER_PREFIX}${crypto.randomBytes(8).toString('hex')}`;
     const args = buildxRunArgs({ name, image: buildx, socket, tag: options.tag, dockerfile: path.basename(options.dockerfile), buildArgs: rest });
     this.logger.info(`Building image ${image} in the container ${name} with buildx ${BUILDX_PIN.version} (BuildKit).`);
@@ -1034,7 +1034,8 @@ export class BootstrapDocker {
     this.run(['rm', '-f', name], { timeoutMs: BUILD_CONTAINER_REMOVE_TIMEOUT_MS }).then(
       (result) => {
         if (result.exitCode === 0) return;
-        if (!result.timedOut && /no such container/i.test(result.stderr)) {
+        // Gone already, or its `--rm` removes it now.
+        if (!result.timedOut && /no such container|removal of container .* is already in progress/i.test(result.stderr)) {
           if (again) setTimeout(() => this.removeBuildContainer(name), BUILD_CONTAINER_REMOVE_AGAIN_MS).unref();
           return;
         }

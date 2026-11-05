@@ -42,8 +42,11 @@ export function buildxPulledReference(buildx: BuildxPin = BUILDX_PIN): string {
   return `${buildx.image}@${buildx.digest}`;
 }
 
+/** The filter of `docker image ls` for the tags of the build image. */
+export const BUILDX_REFERENCE_FILTER = `reference=${BUILDX_REPOSITORY}`;
+
 /** The arguments of `docker image ls` of the tags of the build image, one JSON line each (buildxImageTags). */
-export const BUILDX_IMAGE_LS_ARGS: readonly string[] = ['image', 'ls', '--filter', `reference=${BUILDX_REPOSITORY}`, '--format', '{{json .}}'];
+export const BUILDX_IMAGE_LS_ARGS: readonly string[] = ['image', 'ls', '--filter', BUILDX_REFERENCE_FILTER, '--format', '{{json .}}'];
 
 /** The tags `devspaces-buildx:<tag>` of the JSON lines of BUILDX_IMAGE_LS_ARGS, each with the ID of its image. */
 export function buildxImageTags(items: readonly unknown[]): Array<{ id: string; tag: string }> {
