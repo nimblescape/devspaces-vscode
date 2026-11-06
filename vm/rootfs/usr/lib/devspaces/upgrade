@@ -29,10 +29,13 @@
 # between. `APT::Update::Error-Mode=any` makes a network failure of
 # `apt-get update` a failure (by default only a warning, and the upgrade would
 # count as done with the old lists). `--with-new-pkgs` also installs a new
-# package that an upgrade needs, but removes none. Standard output: one line,
-# "devspaces-upgrade busy", "devspaces-upgrade skipped" or
-# "devspaces-upgrade done <the summary of apt-get>"; on a failure, standard
-# error gets the last lines of the log.
+# package that an upgrade needs, for example a new kernel, but removes none;
+# `apt-get autoremove` then removes the packages that nothing needs any more,
+# such as old kernels (APT keeps the running and the newest kernel).
+#
+# Standard output: one line, "devspaces-upgrade busy", "devspaces-upgrade
+# skipped" or "devspaces-upgrade done <the summary of apt-get>"; on a
+# failure, standard error gets the last lines of the log.
 set -eu
 
 log=/var/log/devspaces-upgrade.log
@@ -79,9 +82,12 @@ main() {
   again dpkg --configure -a
   again apt-get -o APT::Update::Error-Mode=any update
   run apt-get -o DPkg::Lock::Timeout=300 -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade --with-new-pkgs
+  # The summary of the upgrade, before the one of the autoremove.
+  summary=$(grep -E '^[0-9]+ upgraded, |^ *Upgrading: [0-9]+, ' "$log" | tail -n 1 | sed 's/^ *//')
+  run apt-get -o DPkg::Lock::Timeout=300 -y --purge autoremove
   run apt-get clean
   echo "$now" > "$state/upgraded"
-  echo "devspaces-upgrade done $(grep -E '^[0-9]+ upgraded, |^ *Upgrading: [0-9]+, ' "$log" | tail -n 1 | sed 's/^ *//')"
+  echo "devspaces-upgrade done $summary"
 }
 
 # The seconds since the time in the file $1 (0 when there is none).

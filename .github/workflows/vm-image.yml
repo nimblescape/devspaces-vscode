@@ -67,8 +67,13 @@ permissions:
   # Checkout needs repository reads; only the jobs push, pull request and prune get more.
   contents: read
 
+# The runs that can push (main branch, daily run, manual start) run one after
+# the other. Each pull request has its own group, so that its pushes never
+# cancel a daily run that waits. On a pull request that also changes
+# daily-checks.yml, its two runs of this workflow share the group, so that
+# they never build at the same time.
 concurrency:
-  group: vm-image
+  group: vm-image-${{ github.head_ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
