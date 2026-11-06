@@ -69,6 +69,8 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'wslAfterInstall.ts',
     // The daily upgrade of the packages of the WSL distribution of Devspaces.
     'wslUpgrade.ts',
+    // The scheduled task of Task Scheduler that starts the WSL distribution of Devspaces at the times of the schedule.
+    'wslTask.ts',
   ],
   // missingHelperBuild.ts: the background build of a helper image that the refresh found missing.
   'src/core/helper': ['analysisLimits.ts', 'batchStepKinds.ts', 'helperImage.ts', 'helperImageBuild.ts', 'helperImages.ts', 'helperPrebuild.ts', 'helperState.ts', 'missingHelperBuild.ts'],

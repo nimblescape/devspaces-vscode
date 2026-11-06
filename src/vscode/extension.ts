@@ -16,7 +16,8 @@ import { LOCAL_CLI_VERSION_FORMAT, LOCAL_CLI_VERSION_TIMEOUT_MS, localDockerCliA
 import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
 import { WslSetup, dockerDesktopIntegrates, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslAfterInstall } from '../core/docker/wslAfterInstall';
-import { WslKeeper } from '../core/docker/wslKeeper';
+import { WslKeeper, wslgPathOf } from '../core/docker/wslKeeper';
+import { WslTask } from '../core/docker/wslTask';
 import { WslLifetime } from '../core/docker/wslLifetime';
 import { WslUpgrade } from '../core/docker/wslUpgrade';
 import {
@@ -1240,16 +1241,19 @@ async function activateExtension(
     installWsl: (link) => setup.installWsl(link),
     restartPending: async () => (await wslAfterInstall?.restartPending()) === true,
     wslInstallDone: async () => wslAfterInstall?.forget(),
-    // After the setup, the Docker context of the setting createDockerContext, which waited for the distribution.
+    // After the setup, the Docker context of the setting createDockerContext, which waited for the distribution, and the
+    // scheduled task of the distribution.
     useHost: async (host) => {
       const used = await remoteDocker.useHost(host);
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+      background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
       return used;
     },
     forgetHost: (host) => remoteDocker.forgetHost(host),
-    // Without the distribution, the Docker context of the setting createDockerContext goes too.
+    // Without the distribution, the Docker context of the setting createDockerContext and the scheduled task go too.
     forgetDistribution: async () => {
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+      background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
     },
   });
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
@@ -1284,10 +1288,12 @@ async function activateExtension(
         : undefined,
   });
   context.subscriptions.push(limaSetup);
-  // The scheduled task of the user on macOS and Linux (R-VM-005, src/core/vm/vmTask.ts): it starts the Lima VM and its
-  // Monitor at the times of devspaces.cacheUpdateSchedule, in the time zone of this computer. Each window brings it to the
-  // current settings at its start, after the setup of the VM and after a change of the schedule; it writes only what
-  // changed. Without the VM, the task goes; before the pinned Lima is installed, nothing changes.
+  // The scheduled task of the user (R-VM-005): on macOS and Linux (src/core/vm/vmTask.ts) it starts the Lima VM and its
+  // Monitor at the times of devspaces.cacheUpdateSchedule, in the time zone of this computer; on Windows
+  // (src/core/docker/wslTask.ts) a task of Task Scheduler starts the WSL distribution of Devspaces and its Monitor at
+  // those times. Each window brings it to the current settings at its start, after the setup or the removal of the VM
+  // and after a change of the schedule; it writes only what changed. Without the VM (on Windows: without the
+  // distribution that Devspaces set up), the task goes; before the pinned Lima is installed, nothing changes.
   const vmTask =
     limaVm === undefined
       ? undefined
@@ -1300,7 +1306,37 @@ async function activateExtension(
           bundledProgram: context.asAbsolutePath(path.join('dist', 'vmTask.js')),
           uid: () => os.userInfo().uid,
         });
+  const wslTask =
+    wslFolder === undefined
+      ? undefined
+      : new WslTask({
+          runner,
+          logger,
+          env,
+          // Next to the folder of the distribution: %LOCALAPPDATA%\nimblescape\devspaces\task.
+          folder: path.win32.join(path.win32.dirname(wslFolder), 'task'),
+          // wslg.exe has no console window; the task falls back to wsl.exe as the keeper does.
+          program: () => {
+            const wslg = wslgPathOf(env);
+            return fs.existsSync(wslg) ? wslg : wslPath();
+          },
+        });
+  const updateWslTask = async (): Promise<void> => {
+    if (wslTask === undefined || wslSetupCore === undefined) return;
+    // Without WSL, no call of wsl.exe: only a task that this computer registered goes (WslTask.remove).
+    if (wslPath() === undefined) return wslTask.remove();
+    // When the registry cannot be read, the task stays as it is until a later window can tell.
+    const registration = await wslSetupCore.registration().catch((error: unknown) => {
+      logger.info(`Whether the WSL distribution of Devspaces exists could not be read, so its scheduled task stays as it is: ${errorMessage(error)}`);
+      return undefined;
+    });
+    if (registration === undefined) return;
+    if (registration !== 'own') return wslTask.remove();
+    const { schedule, timeZone } = await monitorSettings.forOpen(WSL_HOST);
+    await wslTask.update({ schedule, timeZone });
+  };
   const updateVmTask = async (): Promise<void> => {
+    if (wslTask !== undefined) return updateWslTask();
     if (limaVm === undefined || vmTask === undefined) return;
     if (!(await limaVm.exists())) return vmTask.remove();
     const limactl = presentLima(limaVm.paths.lima, platform, vmArch);

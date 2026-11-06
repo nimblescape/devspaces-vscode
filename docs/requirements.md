@@ -140,7 +140,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-VM-005
 
-**Start at the update schedule.** A task of the user (Task Scheduler on Windows, without administrator rights; a launch agent on macOS; a systemd user timer on Linux) starts the VM of Devspaces, when there is one, and then the Monitor ([R-DS-003](#r-ds-003)) at the times of `devspaces.cacheUpdateSchedule`, in the time zone of the computer, and gives the Monitor the current schedule and time zone at each start. The task waits 5 minutes before it starts the VM. A time that the computer missed because it slept or was off runs 5 minutes after the wake or the login, also on battery: the task of Windows may run on battery, has no time limit and starts when it was missed; on macOS and Linux, an agent at login starts the VM only when a time was missed. Devspaces never wakes the computer. When the setting changes, Devspaces writes the task again. Apart from this catch-up, nothing starts at login, and Devspaces asks no question about the Monitor; when a window is open at that time, the VM and the Monitor run already, and the task changes nothing.
+**Start at the update schedule.** A task of the user (Task Scheduler on Windows, without administrator rights; a launch agent on macOS; a systemd user timer on Linux) starts the VM of Devspaces, when there is one, and then the Monitor ([R-DS-003](#r-ds-003)) at the times of `devspaces.cacheUpdateSchedule`, in the time zone of the computer, and gives the Monitor the current schedule and time zone at each start. The task starts the VM 5 minutes after a time of the schedule. A time that the computer missed because it slept or was off runs once after the wake or the login, also on battery: on macOS and Linux 5 minutes after it, where an agent at login starts the VM only when a time was missed; on Windows 10 minutes after it, the wait of Task Scheduler for a time that was missed, and the task may run on battery and has no time limit. Devspaces never wakes the computer. When the setting changes, Devspaces writes the task again. Apart from this catch-up, nothing starts at login, and Devspaces asks no question about the Monitor; when a window is open at that time, the VM and the Monitor run already, and the task changes nothing.
 
 ### R-VM-006
 
@@ -156,7 +156,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-VM-009
 
-**Tests.** CI tests the VM where the runners of GitHub allow it: on Linux with KVM, the start of the image, the scheduled task with a time in the past, the update of the Monitor and the stop by the idle script after it. The runners of Windows have no WSL 2 and those of macOS no nested virtualization, so each step that changes the VM on Windows or macOS has a written list of manual tests.
+**Tests.** CI tests the VM where the runners of GitHub allow it: on Linux with KVM, the start of the image, the scheduled task with a time in the past, the update of the Monitor and the stop by the idle script after it. The runners of Windows have no WSL 2 and those of macOS no nested virtualization, so each step that changes the VM on Windows or macOS has a written list of manual tests ([manual-tests.md](manual-tests.md)).
 
 ## Security
 
