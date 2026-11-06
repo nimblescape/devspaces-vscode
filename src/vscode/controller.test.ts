@@ -806,7 +806,7 @@ describe('Controller commands', () => {
     const setUpWsl =
       '2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first, and goes on after the restart of Windows. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)';
     const setUpLinux =
-      'Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. The VM needs QEMU and access to /dev/kvm. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)';
+      'Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. Without QEMU, Devspaces first installs it in a terminal, where sudo asks for your password. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)';
     // The last step on every platform: Docker on another computer, without Docker on this one.
     const remote =
       'Or use Docker on another computer that you reach over SSH, without Docker on this computer. Devspaces downloads the Docker CLI that it needs into its own folder; this needs no administrator permission.\n[Use a Remote Docker Host…](command:devspaces.useRemoteDockerHost)';

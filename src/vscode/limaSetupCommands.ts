@@ -5,7 +5,9 @@
 // "Set Up Docker for Devspaces in Its VM…" on macOS and Linux (docs/architecture.md "The Lima VM of Devspaces"): the
 // setup asks nothing (the click or the link is the decision; the log names the downloads and the folder), shows its
 // steps in a progress notification, and then makes the Lima VM the Docker host of Devspaces, as "Use a Remote Docker
-// Host…" does. A computer that cannot run the VM is told why, with the offer of a remote host (R-ENG-001). The work is
+// Host…" does. A computer that cannot run the VM is told why, with the offer of a remote host (R-ENG-001). On Linux
+// without QEMU, or without access to /dev/kvm, it installs QEMU and adds the user to the group kvm in a visible terminal
+// (qemuInstall.ts), without a question of Devspaces, as Windows installs WSL: `sudo` asks for the password. The work is
 // in src/core/vm/limaSetup.ts.
 import { LIMA_HOST } from '../core/docker/dockerHost';
 import { errorMessage } from '../core/errors';
@@ -13,6 +15,7 @@ import { Actions } from '../core/messages';
 import { isAbortError, type Logger } from '../core/ports';
 import type { LinkUri } from '../core/types';
 import { LimaSetupError, type LimaSetup, type LimaSetupProblem, type LimaSetupStep } from '../core/vm/limaSetup';
+import { qemuInstallPlan, type QemuInstallInput } from '../core/vm/qemuInstall';
 import { showErrorMessage, showInformationMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 
@@ -63,7 +66,25 @@ export const LimaSetupTexts = {
   cancelled: 'The setup of Docker for Devspaces in its VM was cancelled.',
   useRemoteHost: 'Use a Remote Docker Host…',
   readyNotUsed: `Docker Engine runs in the VM of Devspaces, but Devspaces does not use it yet. To use it, choose "${LIMA_HOST}" in "Use a Remote Docker Host…".`,
+  /** The name of the terminal of the installation of QEMU. */
+  qemuTerminal: 'Install QEMU',
+  /** The installation of QEMU, and of the group kvm, runs in the terminal. */
+  qemuInstalling: (qemu: boolean, kvmGroup: boolean): string => {
+    const what = qemu && kvmGroup ? 'installs QEMU, which runs its VM on Linux, and adds your user to the group kvm' : qemu ? 'installs QEMU, which runs its VM on Linux,' : 'adds your user to the group kvm, which may use the virtualization of this computer,';
+    const then = kvmGroup
+      ? 'Then log out of this computer and in again, and set up Docker for Devspaces again.'
+      : 'Then Devspaces goes on with the setup of its Docker by itself.';
+    return `Devspaces ${what} in the terminal "${LimaSetupTexts.qemuTerminal}". Enter your password there. ${then}`;
+  },
+  /** The installation of QEMU needs a terminal on this computer. */
+  qemuLocalWindow: 'QEMU is installed only from a local window of VS Code. Open a local window and set up Docker for Devspaces there.',
+  /** QEMU was not found within 30 minutes after the installation started. */
+  qemuNotFound: 'QEMU was not found within 30 minutes after its installation started. Set up Docker for Devspaces again when it is installed.',
 } as const;
+
+/** How often the window looks for QEMU after its installation started, and for how long. */
+const QEMU_WATCH_INTERVAL_MS = 5_000;
+const QEMU_WATCH_MS = 30 * 60_000;
 
 /** The part of the progress bar where each step starts; the download fills its part with its bytes. */
 function barPosition(step: LimaSetupStep): number {
@@ -83,7 +104,7 @@ function barPosition(step: LimaSetupStep): number {
 
 export interface LimaSetupCommandsDeps {
   /** The setup of this computer; undefined where there is none (not macOS or Linux). */
-  setup: Pick<LimaSetup, 'precondition' | 'setUp'> | undefined;
+  setup: Pick<LimaSetup, 'precondition' | 'setUp' | 'linuxNeeds'> | undefined;
   /** The folder of the VM (LimaPaths.root), for the log. */
   folder: string | undefined;
   logger: Logger;
@@ -92,13 +113,31 @@ export interface LimaSetupCommandsDeps {
   useRemoteHost: () => Promise<void>;
   /** Devspaces uses the host after its test (RemoteDockerCommands.useHost); true when it does. */
   useHost: (host: string) => Promise<boolean>;
+  /**
+   * Linux: the installation of QEMU and of the group kvm in a visible terminal: what the plan needs to know about this
+   * computer, whether this window can run a terminal on this computer (not in a remote window), and the terminal.
+   * Without it, a missing QEMU is only named.
+   */
+  installQemu?: {
+    input: () => Promise<Pick<QemuInstallInput, 'arch' | 'osRelease' | 'userName'>>;
+    localWindow: () => boolean;
+    runInTerminal: (commands: string[]) => void;
+  };
+  /** For tests: the timing of the look for QEMU after its installation started. */
+  qemuWatch?: { intervalMs: number; forMs: number };
 }
 
 export class LimaSetupCommands {
   /** A setup runs in this window. */
   private running = false;
+  /** The look for QEMU after its installation started (watchQemu). */
+  private qemuWatch: ReturnType<typeof setInterval> | undefined;
 
   constructor(private readonly deps: LimaSetupCommandsDeps) {}
+
+  dispose(): void {
+    this.stopQemuWatch();
+  }
 
   /** "Set Up Docker for Devspaces in Its VM…": the setup without a question, then the VM as the Docker host. Never throws. */
   async setUp(): Promise<void> {
@@ -130,7 +169,11 @@ export class LimaSetupCommands {
     this.running = true;
     try {
       const blocked = setup.precondition();
-      if (blocked !== undefined) throw blocked;
+      if (blocked !== undefined) {
+        // Linux: QEMU and the group kvm with one administrator prompt in a terminal; the setup goes on afterwards.
+        if ((blocked.problem === 'qemuMissing' || blocked.problem === 'kvmAccess') && (await this.installQemu())) return false;
+        throw blocked;
+      }
       if (folder !== undefined) logger.info(LimaSetupTexts.setUpLog(folder));
       await this.withProgress((signal, report) => setup.setUp(report, signal));
       // useHost shows its own problem.
@@ -143,6 +186,54 @@ export class LimaSetupCommands {
     } finally {
       this.running = false;
     }
+  }
+
+  /**
+   * Starts the installation of QEMU, and of the group kvm, in a visible terminal, without a question (qemuInstallPlan).
+   * True when it started, or when this window cannot run it (a message says so); false when there is no plan for this
+   * computer: then the problem is shown as it is.
+   */
+  private async installQemu(): Promise<boolean> {
+    const { installQemu, setup, logger } = this.deps;
+    if (installQemu === undefined || setup === undefined) return false;
+    const needs = setup.linuxNeeds();
+    const qemu = needs.qemuMissing.length > 0;
+    const kvmGroup = needs.kvm === 'access';
+    const plan = qemuInstallPlan({ ...(await installQemu.input()), qemu, kvmGroup });
+    if (plan.kind !== 'terminal' || plan.commands.length === 0) return false;
+    if (!installQemu.localWindow()) {
+      this.inform(LimaSetupTexts.qemuLocalWindow);
+      return true;
+    }
+    for (const command of plan.commands) logger.info(`Terminal "${LimaSetupTexts.qemuTerminal}": ${command}`);
+    installQemu.runInTerminal(plan.commands);
+    this.inform(LimaSetupTexts.qemuInstalling(qemu, kvmGroup));
+    // The group kvm counts only after a new login, so only the installation of QEMU alone goes on by itself.
+    if (!plan.newLogin) this.watchQemu();
+    return true;
+  }
+
+  /** Looks for QEMU every 5 seconds for at most 30 minutes; when the setup can run, it runs (the click was the decision). */
+  private watchQemu(): void {
+    this.stopQemuWatch();
+    const { intervalMs, forMs } = this.deps.qemuWatch ?? { intervalMs: QEMU_WATCH_INTERVAL_MS, forMs: QEMU_WATCH_MS };
+    const started = Date.now();
+    this.qemuWatch = setInterval(() => {
+      if (this.deps.setup?.precondition() === undefined) {
+        this.stopQemuWatch();
+        this.deps.logger.info('QEMU is installed: Devspaces goes on with the setup of its Docker.');
+        void this.setUp();
+      } else if (Date.now() - started >= forMs) {
+        this.stopQemuWatch();
+        this.deps.logger.info(LimaSetupTexts.qemuNotFound);
+        this.inform(LimaSetupTexts.qemuNotFound);
+      }
+    }, intervalMs);
+  }
+
+  private stopQemuWatch(): void {
+    if (this.qemuWatch !== undefined) clearInterval(this.qemuWatch);
+    this.qemuWatch = undefined;
   }
 
   /** `task` with a cancellable progress notification; `report` shows a step of the setup. */

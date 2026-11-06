@@ -18,7 +18,7 @@ const FOLDER = '/Users/ana/.nimblescape/devspaces';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
 
 type Setup = NonNullable<LimaSetupCommandsDeps['setup']>;
-let setup: { precondition: Mock<Setup['precondition']>; setUp: Mock<Setup['setUp']> };
+let setup: { precondition: Mock<Setup['precondition']>; setUp: Mock<Setup['setUp']>; linuxNeeds: Mock<Setup['linuxNeeds']> };
 let useHost: Mock<LimaSetupCommandsDeps['useHost']>;
 let useRemoteHost: Mock<LimaSetupCommandsDeps['useRemoteHost']>;
 let showLog: Mock<() => void>;
@@ -41,6 +41,7 @@ beforeEach(() => {
   cancel = () => undefined;
   setup = {
     precondition: vi.fn(() => undefined),
+    linuxNeeds: vi.fn(() => ({ kvm: 'ok' as const, qemuMissing: [] })),
     setUp: vi.fn(async (onStep: (step: LimaSetupStep) => void, _signal?: AbortSignal) => {
       onStep({ kind: 'lima' });
       onStep({ kind: 'download', received: 0, total: undefined });
@@ -148,5 +149,70 @@ describe('LimaSetupCommands', () => {
     expect(window.showInformationMessage).not.toHaveBeenCalled();
     await commands({ setup: undefined }).setUp();
     expect(window.showInformationMessage.mock.calls).toEqual([[LimaSetupTexts.notAvailable]]);
+  });
+
+  describe('the installation of QEMU on Linux', () => {
+    const UBUNTU = { ID: 'ubuntu', ID_LIKE: 'debian', VERSION_CODENAME: 'noble' };
+    let runInTerminal: Mock<(commands: string[]) => void>;
+    let local: boolean;
+    const installQemu = () => ({ input: async () => ({ arch: 'x64', osRelease: UBUNTU, userName: 'ada' }), localWindow: () => local, runInTerminal });
+
+    beforeEach(() => {
+      runInTerminal = vi.fn();
+      local = true;
+    });
+
+    // Mutation: a question before the terminal, or a setup that does not go on once QEMU is there, fails it.
+    it('installs QEMU in a terminal without a question, and goes on with the setup once QEMU is found', async () => {
+      const missing = new LimaSetupError('qemuMissing', 'QEMU is not installed: qemu-img not found.');
+      setup.precondition.mockReturnValue(missing);
+      setup.linuxNeeds.mockReturnValue({ kvm: 'ok', qemuMissing: ['qemu-img'] });
+      await expect(commands({ installQemu: installQemu(), qemuWatch: { intervalMs: 1, forMs: 60_000 } }).ensureDockerHost()).resolves.toBe('notUsed');
+      expect(window.showWarningMessage).not.toHaveBeenCalled();
+      expect(window.showErrorMessage).not.toHaveBeenCalled();
+      expect(runInTerminal.mock.calls).toEqual([[['sudo apt-get update', 'sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf']]]);
+      expect(window.showInformationMessage.mock.calls).toEqual([[LimaSetupTexts.qemuInstalling(true, false)]]);
+      expect(LimaSetupTexts.qemuInstalling(true, false)).toBe(
+        'Devspaces installs QEMU, which runs its VM on Linux, in the terminal "Install QEMU". Enter your password there. Then Devspaces goes on with the setup of its Docker by itself.',
+      );
+      // QEMU arrives: the setup runs, and Devspaces uses the VM.
+      setup.precondition.mockReturnValue(undefined);
+      await vi.waitFor(() => expect(useHost).toHaveBeenCalledWith(LIMA_HOST));
+      expect(setup.setUp).toHaveBeenCalledTimes(1);
+    });
+
+    it('adds the user to the group kvm and says to log in again, without going on by itself', async () => {
+      setup.precondition.mockReturnValue(new LimaSetupError('kvmAccess', 'Your user may not use /dev/kvm.'));
+      setup.linuxNeeds.mockReturnValue({ kvm: 'access', qemuMissing: [] });
+      const subject = commands({ installQemu: installQemu(), qemuWatch: { intervalMs: 1, forMs: 60_000 } });
+      await subject.setUp();
+      expect(runInTerminal.mock.calls).toEqual([[['sudo usermod -aG kvm ada']]]);
+      expect(window.showInformationMessage.mock.calls).toEqual([[LimaSetupTexts.qemuInstalling(false, true)]]);
+      expect(LimaSetupTexts.qemuInstalling(false, true)).toContain('Then log out of this computer and in again, and set up Docker for Devspaces again.');
+      setup.precondition.mockReturnValue(undefined);
+      await settle();
+      await settle();
+      expect(setup.setUp).not.toHaveBeenCalled();
+      subject.dispose();
+    });
+
+    it('names the problem on a distribution without a plan, and installs nothing from a remote window', async () => {
+      setup.precondition.mockReturnValue(new LimaSetupError('qemuMissing', 'QEMU is not installed: qemu-img not found.'));
+      setup.linuxNeeds.mockReturnValue({ kvm: 'ok', qemuMissing: ['qemu-img'] });
+      await commands({ installQemu: { ...installQemu(), input: async () => ({ arch: 'x64', osRelease: { ID: 'rhel' }, userName: 'ada' }) } }).setUp();
+      expect(window.showErrorMessage.mock.calls).toEqual([[LimaSetupTexts.problem('qemuMissing'), Actions.showDetails]]);
+      local = false;
+      await commands({ installQemu: installQemu() }).setUp();
+      expect(runInTerminal).not.toHaveBeenCalled();
+      expect(window.showInformationMessage.mock.calls).toEqual([[LimaSetupTexts.qemuLocalWindow]]);
+    });
+
+    it('stops looking for QEMU after its time, and says so', async () => {
+      setup.precondition.mockReturnValue(new LimaSetupError('qemuMissing', 'QEMU is not installed: qemu-img not found.'));
+      setup.linuxNeeds.mockReturnValue({ kvm: 'ok', qemuMissing: ['qemu-img'] });
+      await commands({ installQemu: installQemu(), qemuWatch: { intervalMs: 1, forMs: 0 } }).setUp();
+      await vi.waitFor(() => expect(window.showInformationMessage).toHaveBeenLastCalledWith(LimaSetupTexts.qemuNotFound));
+      expect(setup.setUp).not.toHaveBeenCalled();
+    });
   });
 });

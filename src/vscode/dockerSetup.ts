@@ -147,14 +147,7 @@ export async function readInstallPlanInput(
   let existingDockerSource = false;
   if (platform === 'linux') {
     existingDockerSource = await hasDockerAptSource();
-    for (const file of OS_RELEASE_FILES) {
-      try {
-        osRelease = parseOsRelease(await fs.promises.readFile(file, 'utf8'));
-        break;
-      } catch {
-        // The next file.
-      }
-    }
+    osRelease = await readOsRelease();
   }
   const brewPath = platform === 'darwin' ? findExecutable('brew', env, platform) : undefined;
   return {
@@ -198,7 +191,20 @@ export function dockerAppLocations(caskOpts: string | undefined, home: string | 
   return [...new Set(locations)];
 }
 
-function currentUserName(): string | undefined {
+/** Linux: the fields of /etc/os-release, else of /usr/lib/os-release; undefined when neither can be read. */
+export async function readOsRelease(): Promise<Record<string, string> | undefined> {
+  for (const file of OS_RELEASE_FILES) {
+    try {
+      return parseOsRelease(await fs.promises.readFile(file, 'utf8'));
+    } catch {
+      // The next file.
+    }
+  }
+  return undefined;
+}
+
+/** The login name of the user, or undefined when it cannot be read. */
+export function currentUserName(): string | undefined {
   try {
     return os.userInfo().username;
   } catch {
