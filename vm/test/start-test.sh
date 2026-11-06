@@ -128,7 +128,10 @@ echo "== The idle check"
 vm docker rm --force keep > /dev/null
 stopped=$SECONDS
 while kill -0 "$qemu_pid" 2>/dev/null; do
-  [ $((SECONDS - stopped)) -lt 300 ] || fail "The VM still runs 5 minutes after its last container stopped."
+  if [ $((SECONDS - stopped)) -ge 300 ]; then
+    vm 'sudo journalctl --unit devspaces-idle.service --no-pager; sudo ss -xp | grep -F docker.sock; docker ps --all; systemctl list-jobs --no-pager' || true
+    fail "The VM still runs 5 minutes after its last container stopped."
+  fi
   sleep 5
 done
 qemu_pid=

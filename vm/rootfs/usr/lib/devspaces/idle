@@ -22,37 +22,55 @@ set -u
 
 interval=60
 
-# Whether something runs (exit status 0).
+# Whether something runs (exit status 0); `reason` says what, for the journal.
 busy() {
   case "$(systemctl show --property=ActiveState --value devspaces-upgrade.service 2>/dev/null)" in
-    active|activating|deactivating|reloading|refreshing) return 0 ;;
+    active|activating|deactivating|reloading|refreshing)
+      reason="the package upgrade runs"
+      return 0
+      ;;
   esac
   case "$(systemctl show --property=ActiveState --value docker.service 2>/dev/null)" in
     active) ;;
-    activating|deactivating|reloading|refreshing) return 0 ;;
+    activating|deactivating|reloading|refreshing)
+      reason="Docker Engine starts or stops"
+      return 0
+      ;;
     # Docker does not run (inactive, failed): no container runs.
     *) return 1 ;;
   esac
   # A program connected to the socket of Docker Engine: the table of the Unix
   # sockets has a connected one (state 03) at the path of that socket.
   if awk '$6 == "03" && ($8 == "/run/docker.sock" || $8 == "/var/run/docker.sock") { found = 1 } END { exit !found }' /proc/net/unix; then
+    reason="a program is connected to Docker Engine"
     return 0
   fi
   # A running container. Docker that does not answer counts as busy.
-  ids=$(timeout 30 docker ps --quiet 2>/dev/null) || return 0
+  if ! ids=$(timeout 30 docker ps --quiet 2>/dev/null); then
+    reason="Docker Engine does not answer"
+    return 0
+  fi
+  reason="a container runs"
   [ -n "$ids" ]
 }
 
+# Each check that finds nothing writes one line to the journal, and a check
+# that finds something only when the reason changed.
 idle=0
+last=
 while :; do
   sleep "$interval"
   if busy; then
     idle=0
+    [ "$reason" = "$last" ] || echo "Busy: $reason."
+    last=$reason
   else
     idle=$((idle + 1))
+    last=
+    echo "Nothing runs in the VM of Devspaces ($idle of 2 checks)."
   fi
   if [ "$idle" -ge 2 ]; then
-    echo "Nothing runs in the VM of Devspaces: it stops."
+    echo "The VM of Devspaces stops."
     exit 0
   fi
 done
