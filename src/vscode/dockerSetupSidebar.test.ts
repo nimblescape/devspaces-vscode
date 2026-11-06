@@ -628,7 +628,7 @@ describe('the Docker setup in the sidebar welcome view', () => {
     expect(links).toContain(`(command:${Commands.setUpWslDistribution})`);
     expect(links).toContain(`(command:${Commands.setUpLimaVm})`);
     // Devspaces uses its own VM on every platform (R-VM-001): no installation of Docker Desktop or Docker Engine.
-    expect(links).not.toContain(`(command:${Commands.dockerSetupInstall})`);
+    expect(links).not.toContain('(command:devspaces.dockerSetup.install)');
     expect(links).toContain(`(command:${Commands.signIn})`);
     expect(links).toContain(`(command:${Commands.useRemoteDockerHost})`);
   });

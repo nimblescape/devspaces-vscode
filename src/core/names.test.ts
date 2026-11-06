@@ -149,8 +149,8 @@ const FOREIGN_TEST_LABELS = new Set(['devspace.', 'devspace.fingerprint', 'devsp
 /**
  * The IDs of the extension in VS Code (commands, settings, views, context keys) start with `devspaces.`. They are no
  * labels: every `devspaces.…` text of package.json, and the few IDs that the code gives VS Code without declaring them
- * there (the status bar item, the webview type, the focus command of the view, the context keys of the Docker setup, a
- * command name that must not exist).
+ * there (the status bar item, the webview type, the focus command of the view, the context keys of the Docker setup, the
+ * command names that must not exist).
  */
 const VSCODE_IDS: ReadonlySet<string> = new Set([
   ...(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8').match(/devspaces\.[A-Za-z0-9._-]*[A-Za-z0-9]/g) ?? []),
@@ -160,8 +160,10 @@ const VSCODE_IDS: ReadonlySet<string> = new Set([
   'devspaces.dockerInstalled',
   'devspaces.dockerMissing',
   'devspaces.dockerReady',
-  // A command name that dockerSetupSidebar.test.ts checks is absent.
+  // Command names that the tests check are absent (dockerSetupSidebar.test.ts, controller.test.ts, dockerSetup.test.ts).
   'devspaces.installDocker',
+  'devspaces.dockerSetup.install',
+  'devspaces.dockerSetup.start',
 ]);
 
 describe('EXTENSION_LABEL_KEYS', () => {

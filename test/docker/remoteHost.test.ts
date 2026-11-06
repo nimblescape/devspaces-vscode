@@ -258,7 +258,7 @@ describe('Docker on another computer over SSH, a host of the list of Devspaces',
       startDocker: async ({ onStarting, signal }) =>
         startDockerFor(
           await targets.current(),
-          () => ensureDockerRunning(docker, runner, log, { platform: process.platform, env, onStarting, signal }),
+          () => ensureDockerRunning(docker, log, { platform: process.platform, env, onStarting, signal }),
           { docker, runner, state, logger: log, sshPath, env },
           signal,
         ),

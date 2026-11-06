@@ -354,16 +354,6 @@
         "category": "Devspaces"
       },
       {
-        "command": "devspaces.dockerSetup.install",
-        "title": "Install Docker",
-        "category": "Devspaces"
-      },
-      {
-        "command": "devspaces.dockerSetup.start",
-        "title": "Start Docker",
-        "category": "Devspaces"
-      },
-      {
         "command": "devspaces.dockerSetup.installWsl",
         "title": "Install WSL 2",
         "category": "Devspaces"
@@ -469,14 +459,6 @@
         {
           "command": "devspaces.showAllRepositories",
           "when": "devspaces.devspacesOnly"
-        },
-        {
-          "command": "devspaces.dockerSetup.install",
-          "when": "false"
-        },
-        {
-          "command": "devspaces.dockerSetup.start",
-          "when": "false"
         },
         {
           "command": "devspaces.dockerSetup.installWsl",

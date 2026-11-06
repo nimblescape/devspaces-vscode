@@ -10,9 +10,9 @@ import { PassThrough, Readable } from 'stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { isAbortError } from '../ports';
 import { downloadFile, type DownloadResponse, type HttpGet } from './dockerDownload';
-import { DOCKER_DESKTOP_DOWNLOADS } from './dockerSetup';
 
-const URL_DMG = DOCKER_DESKTOP_DOWNLOADS.macArm64;
+const URL_DMG = 'https://desktop.docker.com/mac/main/arm64/Docker.dmg';
+const HOST = 'desktop.docker.com';
 
 let dir: string;
 let target: string;
@@ -47,7 +47,7 @@ describe('downloadFile', () => {
   it('writes the file and reports the progress with the length', async () => {
     const { get, urls } = fakeGet({ [URL_DMG]: () => respond(200, 'installer', { 'content-length': '9' }) });
     const progress: Array<[number, number | undefined]> = [];
-    await downloadFile({ url: URL_DMG, target, get, onProgress: (received, total) => progress.push([received, total]) });
+    await downloadFile({ host: HOST, url: URL_DMG, target, get, onProgress: (received, total) => progress.push([received, total]) });
     expect(fs.readFileSync(target, 'utf8')).toBe('installer');
     expect(urls).toEqual([URL_DMG]);
     expect(progress).toEqual([[9, 9]]);
@@ -59,7 +59,7 @@ describe('downloadFile', () => {
     fs.writeFileSync(victim, 'ORIGINAL');
     fs.symlinkSync(victim, `${target}.download`);
     const { get } = fakeGet({ [URL_DMG]: () => respond(200, 'installer') });
-    await downloadFile({ url: URL_DMG, target, get });
+    await downloadFile({ host: HOST, url: URL_DMG, target, get });
     expect(fs.readFileSync(victim, 'utf8')).toBe('ORIGINAL');
     expect(fs.lstatSync(target).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe('installer');
@@ -71,14 +71,14 @@ describe('downloadFile', () => {
       [URL_DMG]: () => respond(302, '', { location: '/mac/main/arm64/123456/Docker.dmg' }),
       [mirror]: () => respond(200, 'dmg'),
     });
-    await downloadFile({ url: URL_DMG, target, get });
+    await downloadFile({ host: HOST, url: URL_DMG, target, get });
     expect(urls).toEqual([URL_DMG, mirror]);
     expect(fs.readFileSync(target, 'utf8')).toBe('dmg');
   });
 
   it('refuses a redirect that leaves HTTPS', async () => {
     const { get } = fakeGet({ [URL_DMG]: () => respond(301, '', { location: 'http://desktop.docker.com/Docker.dmg' }) });
-    await expect(downloadFile({ url: URL_DMG, target, get })).rejects.toThrow(/not HTTPS on desktop\.docker\.com/);
+    await expect(downloadFile({ host: HOST, url: URL_DMG, target, get })).rejects.toThrow(/not HTTPS on desktop\.docker\.com/);
     expect(fs.existsSync(target)).toBe(false);
   });
 
@@ -91,7 +91,7 @@ describe('downloadFile', () => {
     ['a versioned file of the download host', 'https://desktop.docker.com/mac/main/arm64/1/Docker.dmg', true],
   ])('follows a redirect to %s only on desktop.docker.com', async (_name, location, allowed) => {
     const { get } = fakeGet({ [URL_DMG]: () => respond(302, '', { location }), [location]: () => respond(200, 'dmg') });
-    const result = downloadFile({ url: URL_DMG, target, get });
+    const result = downloadFile({ host: HOST, url: URL_DMG, target, get });
     if (allowed) await expect(result).resolves.toBeUndefined();
     else await expect(result).rejects.toThrow(/not HTTPS on desktop\.docker\.com/);
   });
@@ -99,26 +99,26 @@ describe('downloadFile', () => {
   it('refuses a URL that is not HTTPS on desktop.docker.com, without a request', async () => {
     const { get, urls } = fakeGet({});
     for (const url of ['http://desktop.docker.com/mac/main/arm64/Docker.dmg', 'https://example.com/Docker.dmg']) {
-      await expect(downloadFile({ url, target, get })).rejects.toThrow(/desktop\.docker\.com/);
+      await expect(downloadFile({ host: HOST, url, target, get })).rejects.toThrow(/desktop\.docker\.com/);
     }
     expect(urls).toEqual([]);
   });
 
   it('stops after too many redirects', async () => {
     const { get } = fakeGet({ [URL_DMG]: () => respond(302, '', { location: URL_DMG }) });
-    await expect(downloadFile({ url: URL_DMG, target, get })).rejects.toThrow(/Too many redirects/);
+    await expect(downloadFile({ host: HOST, url: URL_DMG, target, get })).rejects.toThrow(/Too many redirects/);
   });
 
   it('fails on an HTTP error and keeps an existing file', async () => {
     fs.writeFileSync(target, 'old');
     const { get } = fakeGet({ [URL_DMG]: () => respond(404, 'not found') });
-    await expect(downloadFile({ url: URL_DMG, target, get })).rejects.toThrow(/HTTP status 404/);
+    await expect(downloadFile({ host: HOST, url: URL_DMG, target, get })).rejects.toThrow(/HTTP status 404/);
     expect(fs.readFileSync(target, 'utf8')).toBe('old');
   });
 
   it('fails on a short download and removes the partial file', async () => {
     const { get } = fakeGet({ [URL_DMG]: () => respond(200, 'inst', { 'content-length': '9' }) });
-    await expect(downloadFile({ url: URL_DMG, target, get })).rejects.toThrow(/4 of 9 bytes/);
+    await expect(downloadFile({ host: HOST, url: URL_DMG, target, get })).rejects.toThrow(/4 of 9 bytes/);
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
@@ -127,6 +127,7 @@ describe('downloadFile', () => {
     const { get } = fakeGet({ [URL_DMG]: () => respond(200, body) });
     const controller = new AbortController();
     const done = downloadFile({
+      host: HOST,
       url: URL_DMG,
       target,
       get,
@@ -143,7 +144,7 @@ describe('downloadFile', () => {
     const { get, urls } = fakeGet({ [URL_DMG]: () => respond(200, 'x') });
     const controller = new AbortController();
     controller.abort();
-    const error = await downloadFile({ url: URL_DMG, target, get, signal: controller.signal }).catch((e: unknown) => e);
+    const error = await downloadFile({ host: HOST, url: URL_DMG, target, get, signal: controller.signal }).catch((e: unknown) => e);
     expect(isAbortError(error)).toBe(true);
     expect(urls).toEqual([]);
   });
@@ -171,7 +172,7 @@ describe('downloadFile with another host and a pinned file', () => {
 
   it('refuses another host, also as the target of a redirect, and the default host for another host', async () => {
     await expect(downloadFile({ url: URL_DMG, target, host: 'download.docker.com', get: fakeGet({}).get })).rejects.toThrow('Downloads come only from https://download.docker.com');
-    await expect(downloadFile({ url: URL_CLI, target, get: fakeGet({}).get })).rejects.toThrow('Downloads come only from https://desktop.docker.com');
+    await expect(downloadFile({ host: HOST, url: URL_CLI, target, get: fakeGet({}).get })).rejects.toThrow('Downloads come only from https://desktop.docker.com');
     const { get } = fakeGet({ [URL_CLI]: () => respond(302, '', { location: 'https://download.docker.com.example/x.tgz' }) });
     await expect(downloadFile({ url: URL_CLI, target, get, host: 'download.docker.com' })).rejects.toThrow('which is not HTTPS on download.docker.com');
     await expect(downloadFile({ url: 'https://download.docker.com:8443/x.tgz', target, host: 'download.docker.com', get: fakeGet({}).get })).rejects.toThrow('Downloads come only');

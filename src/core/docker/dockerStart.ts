@@ -2,13 +2,14 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// Docker start.
+// Docker start: Docker Desktop on Windows, the only Docker of this computer that Devspaces uses (docs/requirements.md
+// R-ENG-001). On macOS and Linux, Devspaces starts no Docker of this computer.
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { errorMessage, UserFacingError } from '../errors';
 import { Messages } from '../messages';
-import { abortError, isAbortError, sleep as defaultSleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunResult } from '../ports';
+import { abortError, isAbortError, sleep as defaultSleep, systemClock, type Clock, type Logger, type RunResult } from '../ports';
 import type { BootstrapDocker } from './bootstrapDocker';
 import { DOCKER_INFO_TIMEOUT_MS } from './dockerTimeouts';
 import { windowsDockerDesktopFolders } from './dockerCli';
@@ -18,8 +19,6 @@ export const START_COMMAND_WAIT_MS = 10_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_INTERVAL_MS = 2_000;
 const MIN_INFO_TIMEOUT_MS = 2_000;
-/** macOS: the `open` tool (Docker Desktop's start, and the disk image of its installation in src/vscode/dockerSetup.ts). */
-export const MAC_OPEN = '/usr/bin/open';
 const WINDOWS_DESKTOP_EXE = 'Docker Desktop.exe';
 /** `docker info` of a user without access to the socket of a running engine. */
 const SOCKET_PERMISSION_DENIED = /permission denied/i;
@@ -50,8 +49,6 @@ export interface DockerStarterOptions {
 type StartOutcome =
   /** A start command succeeded, or a program was launched. Docker gets ready later. */
   | { kind: 'started'; detail: string }
-  /** Linux without the Docker Desktop CLI: Docker Engine, which needs administrator rights to start. */
-  | { kind: 'engine'; detail: string }
   /** Nothing could start Docker. */
   | { kind: 'failed'; detail: string };
 
@@ -93,13 +90,13 @@ export function launchDetachedProcess(
 
 async function startDocker(
   docker: BootstrapDocker,
-  runner: ProcessRunner,
   logger: Logger,
   options: DockerStarterOptions,
   timeoutMs: number,
   signal: AbortSignal,
 ): Promise<StartOutcome> {
-  const hasFallback = options.platform === 'darwin' || options.platform === 'win32';
+  // On macOS and Linux, Devspaces never uses the Docker of this computer, so it starts none there.
+  if (options.platform !== 'win32') return { kind: 'failed', detail: 'Devspaces starts the Docker of this computer only on Windows.' };
   let desktopDetail: string;
   logger.info('Starting Docker: docker desktop start');
   try {
@@ -109,29 +106,13 @@ async function startDocker(
     const unsupported = desktopStartUnsupported(result);
     if (result.exitCode === 0 && !unsupported) return { kind: 'started', detail: 'docker desktop start succeeded.' };
     desktopDetail = `docker desktop start: ${outputOf(result) || `exit code ${result.exitCode}`}`;
-    // Linux: without the Docker Desktop CLI, this is Docker Engine (a system service). With it, there is no other
-    // documented way to start Docker Desktop.
-    if (!hasFallback) return { kind: unsupported ? 'engine' : 'failed', detail: desktopDetail };
   } catch (error) {
     if (isAbortError(error)) return { kind: 'failed', detail: 'The start was cancelled.' };
     desktopDetail = `docker desktop start: ${errorMessage(error)}`;
-    if (!hasFallback) return { kind: 'failed', detail: desktopDetail };
   }
   logger.info(desktopDetail);
 
-  // Assumption: versions of Docker Desktop without `docker desktop start` start with these fallbacks.
-  if (options.platform === 'darwin') {
-    logger.info(`Starting Docker: ${MAC_OPEN} -g -a Docker`);
-    try {
-      const result = await runner.run(MAC_OPEN, ['-g', '-a', 'Docker'], { signal, timeoutMs: 30_000 });
-      if (result.exitCode === 0) return { kind: 'started', detail: 'open -g -a Docker succeeded.' };
-      return { kind: 'failed', detail: `${desktopDetail}\nopen -g -a Docker: ${outputOf(result) || `exit code ${result.exitCode}`}` };
-    } catch (error) {
-      if (isAbortError(error)) return { kind: 'failed', detail: 'The start was cancelled.' };
-      return { kind: 'failed', detail: `${desktopDetail}\nopen -g -a Docker: ${errorMessage(error)}` };
-    }
-  }
-
+  // Assumption: versions of Docker Desktop without `docker desktop start` start with `Docker Desktop.exe`.
   const exists = options.exists ?? ((file: string) => fs.existsSync(file));
   const candidates = windowsDockerDesktopFolders(options.env ?? process.env).map((folder) => path.win32.join(folder, WINDOWS_DESKTOP_EXE));
   const program = candidates.find((file) => exists(file));
@@ -176,11 +157,10 @@ function startFailed(detail: string): UserFacingError {
 }
 
 /**
- * Resolves when `docker info` succeeds. Starts Docker when needed: `docker desktop start`; fallback on darwin `open -g -a Docker`,
- * on win32 `Docker Desktop.exe` from C:\Program Files\Docker\Docker or %LOCALAPPDATA%\Programs\DockerDesktop
- * (windowsDockerDesktopFolders; spawned detached, not awaited); on linux without Docker Desktop
- * (the `desktop` command is missing) → UserFacingError('dockerEngineNotRunning', Messages.dockerEngineNotRunning).
- * No CLI → UserFacingError('dockerNotInstalled'). Timeout, or no way to start Docker → UserFacingError('dockerStartFailed',
+ * Resolves when `docker info` succeeds. Starts Docker Desktop on Windows when needed: `docker desktop start`, with the
+ * fallback `Docker Desktop.exe` from C:\Program Files\Docker\Docker or %LOCALAPPDATA%\Programs\DockerDesktop
+ * (windowsDockerDesktopFolders; spawned detached, not awaited). On macOS and Linux it starts nothing: a Docker that does
+ * not run there is UserFacingError('dockerStartFailed'). No CLI → UserFacingError('dockerNotInstalled'). Timeout, or no way to start Docker → UserFacingError('dockerStartFailed',
  * Messages.dockerStartFailed, detail). Podman as the CLI or as the engine (BootstrapDocker.podmanInUse) →
  * UserFacingError('dockerEndpointUnsupported', Messages.podmanNotSupported), without a start. Rejects with an AbortError
  * when the signal aborts.
@@ -190,7 +170,6 @@ function startFailed(detail: string): UserFacingError {
  */
 export async function ensureDockerRunning(
   docker: BootstrapDocker,
-  runner: ProcessRunner,
   logger: Logger,
   options: DockerStarterOptions,
 ): Promise<void> {
@@ -212,10 +191,10 @@ export async function ensureDockerRunning(
   }
   if (initial.running) return;
   if (SOCKET_PERMISSION_DENIED.test(initial.detail)) {
-    // The engine runs, but this user may not use its socket (Linux: not in the group `docker`). A start does not help.
+    // The engine runs, but this user may not use it (Windows: not in the group docker-users). A start does not help.
     throw startFailed(
-      `The Docker engine runs, but this user has no access to it. On Linux, add the user to the group docker ` +
-        `(sudo usermod -aG docker $USER) and sign in again.\ndocker info: ${initial.detail}`,
+      `The Docker engine runs, but this user has no access to it. Docker Desktop on Windows gives access to the members ` +
+        `of the group docker-users: add the user to that group and sign in again.\ndocker info: ${initial.detail}`,
     );
   }
 
@@ -227,7 +206,7 @@ export async function ensureDockerRunning(
   signal?.addEventListener('abort', forwardAbort, { once: true });
 
   let outcome: StartOutcome | undefined;
-  const startTask = startDocker(docker, runner, logger, options, timeoutMs, startControl.signal).then(
+  const startTask = startDocker(docker, logger, options, timeoutMs, startControl.signal).then(
     (result) => {
       outcome = result;
       logger.info(`Docker start: ${result.detail}`);
@@ -243,10 +222,6 @@ export async function ensureDockerRunning(
     let lastDetail = initial.detail;
     for (;;) {
       if (signal?.aborted) throw abortError();
-      const current = outcome as StartOutcome | undefined;
-      if (current?.kind === 'engine') {
-        throw new UserFacingError('dockerEngineNotRunning', Messages.dockerEngineNotRunning, `${current.detail}\ndocker info: ${lastDetail}`);
-      }
       const remaining = deadline - clock.now();
       const infoTimeout = Math.min(DOCKER_INFO_TIMEOUT_MS, Math.max(MIN_INFO_TIMEOUT_MS, remaining));
       const status = await docker.daemonStatus(signal, infoTimeout);

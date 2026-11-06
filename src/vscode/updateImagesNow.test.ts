@@ -248,7 +248,7 @@ describe('the command Update All Images Now', () => {
     const startDocker: DockerStarter = async ({ onStarting, signal }) =>
       startDockerFor(
         LOCAL,
-        () => ensureDockerRunning(docker, runner, silentLogger, { platform: 'linux', onStarting, signal }),
+        () => ensureDockerRunning(docker, silentLogger, { platform: 'linux', onStarting, signal }),
         { logger: silentLogger } as RemoteReachabilityDeps,
         signal,
       );

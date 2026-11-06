@@ -57,41 +57,10 @@ describe('showError', () => {
     expect(fakeVscode.env.openExternal).not.toHaveBeenCalled();
   });
 
-  it('offers Start Docker when Docker Engine does not run (Linux), which runs Start Docker of the Docker setup', async () => {
-    const { logger } = recordingLogger();
-    const showLog = vi.fn();
-    window.showErrorMessage.mockResolvedValue(Actions.startDocker);
-    showError(new UserFacingError('dockerEngineNotRunning', Messages.dockerEngineNotRunning), { logger, showLog });
-    expect(shown()).toEqual({
-      severity: 'error',
-      message: Messages.dockerEngineNotRunning,
-      actions: ['Show details', 'Start Docker'],
-    });
-    await flush();
-    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledTimes(1);
-    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.dockerSetup.start');
-    expect(showLog).not.toHaveBeenCalled();
-  });
-
-  it('offers no Start Docker in a remote window, where the Docker setup cannot start Docker', async () => {
-    fakeVscode.env.remoteName = 'ssh-remote';
-    const { logger } = recordingLogger();
-    const showLog = vi.fn();
-    window.showErrorMessage.mockResolvedValue(Actions.showDetails);
-    showError(new UserFacingError('dockerEngineNotRunning', Messages.dockerEngineNotRunning), { logger, showLog });
-    // The message names the command (sudo systemctl enable --now docker) to run on the Docker host.
-    expect(shown()).toEqual({
-      severity: 'error',
-      message: Messages.dockerEngineNotRunning,
-      actions: ['Show details'],
-    });
-    await flush();
-    expect(fakeVscode.commands.executeCommand).not.toHaveBeenCalled();
-    expect(showLog).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
     ['dockerStartFailed', Messages.dockerStartFailed],
+    // The engine of the worker does not answer: on the VM, a remote host, or Docker Desktop, never a command here.
+    ['dockerEngineNotRunning', Messages.dockerEngineNotRunning],
     ['buildFailed', Messages.buildFailed],
     ['startFailed', 'The devspace could not be started.'],
   ] as const)('offers Show details and Try again for %s', async (code, message) => {

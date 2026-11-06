@@ -148,7 +148,7 @@ export interface ControllerDeps {
   statusBar: DevspaceStatusBar;
   settings: () => ExtensionSettings;
   /** The Docker setup: the commands of the setup in the sidebar. */
-  dockerSetup: Pick<DockerSetup, 'install' | 'start' | 'installWsl' | 'show'>;
+  dockerSetup: Pick<DockerSetup, 'installWsl' | 'show'>;
   /** The editor of the setting repositoryGroups. */
   repositoryGroupsEditor: Pick<RepositoryGroupsEditor, 'open'>;
   /** True while the sidebar view is visible: only then Docker is asked outside of operations. */
@@ -537,8 +537,6 @@ export class Controller implements vscode.Disposable {
       keepRunning: (argument) => this.setKeepRunning(parseCommandArgument(argument), true),
       stopWhenClosed: (argument) => this.setKeepRunning(parseCommandArgument(argument), false),
       closeAndKeepRunning: () => this.closeAndKeepRunning(),
-      dockerSetupInstall: () => this.deps.dockerSetup.install(),
-      dockerSetupStart: () => this.deps.dockerSetup.start(),
       dockerSetupInstallWsl: () => this.deps.dockerSetup.installWsl(),
       dockerSetupShow: () => this.deps.dockerSetup.show(),
       useRemoteDockerHost: async () => this.deps.remoteDocker?.useRemoteHost(),

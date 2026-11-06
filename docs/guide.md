@@ -210,7 +210,7 @@ All commands are in the category **Devspaces** of the Command Palette. A command
 | Update All Images Now | Runs the background work of the Monitor on the current Docker engine at once (see [Updates](#updates)). |
 | Remove Devspaces from This Docker Engine… | Removes the Monitor, the helper containers and images, and the shared volumes of Devspaces from the current Docker engine, and, if you agree, the devspaces of your accounts there (see [Uninstall](#uninstall)). |
 
-The buttons of the Docker setup (**Install WSL 2**, **Set Up Docker for Devspaces**, **Start Docker**) and the host access switches appear only where they apply.
+The buttons of the Docker setup (**Install WSL 2**, **Set Up Docker for Devspaces**) and the host access switches appear only where they apply. Devspaces has no command that installs or starts Docker Desktop or Docker Engine on your computer.
 
 ## Settings
 
@@ -448,7 +448,6 @@ The checks are a guard rail against mistakes and copied templates, not a sandbox
 - Docker Compose configurations start the dev container together with the other services, for example a database. The same checks apply to every service. A service that mounts files of the repository (for example `./init.sql`) gets them from the volume of the devspace (Docker Engine 26 or newer). Remote `include` and `extends` of compose files do not work.
 - With **Select Organizations…**, GitHub is asked only about the selected owners. Your devspaces of other owners stay in the list, but Devspaces does not check whether their repositories are still on GitHub.
 - Git in the container older than version 2.32 reads the configuration of the devspace only through `~/.gitconfig`. When the image brings a `~/.gitconfig` with content, Git older than 2.31 gets no credential for github.com. Git older than 2.9 may use the credentials of your computer; Devspaces warns about it.
-- On Linux with Docker Engine, Devspaces cannot start the Docker service itself, because that needs administrator rights. **Start Docker** runs the command in a terminal; in a remote window, the message names the command instead.
 
 ## Troubleshooting
 
