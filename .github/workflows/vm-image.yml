@@ -195,14 +195,8 @@ jobs:
           path: image
 
       - name: Let the user of the runner use KVM, and install QEMU
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules > /dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          # The runner image rebuilds the index of its manual pages after each installation, which can take minutes.
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf cloud-image-utils
+        timeout-minutes: 15
+        run: vm/test/install-qemu.sh qemu-system-x86 qemu-utils ovmf cloud-image-utils
 
       - name: Start the disk for Lima and check it
         run: vm/test/start-test.sh image/devspaces-vm-amd64.qcow2 logs
@@ -242,14 +236,8 @@ jobs:
           path: image
 
       - name: Let the user of the runner use KVM, and install QEMU
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules > /dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          # The runner image rebuilds the index of its manual pages after each installation, which can take minutes.
-          sudo rm -f /var/lib/man-db/auto-update
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf
+        timeout-minutes: 15
+        run: vm/test/install-qemu.sh qemu-system-x86 qemu-utils ovmf
 
       - name: Start the disk with the Lima of the pin and the configuration of Devspaces
         env:

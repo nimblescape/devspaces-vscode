@@ -41,6 +41,7 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   confirmOpenFromLink: true,
   vmMemoryGiB: DEFAULT_VM_MEMORY_GIB,
   vmCpus: DEFAULT_VM_CPUS,
+  createDockerContext: false,
 });
 
 /** The key of the setting that the button "Always Open" of the question of a link turns off. */
@@ -328,6 +329,7 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     // and warnVmResources names a larger value.
     vmMemoryGiB: wholeNumber(get('vmMemoryGiB'), DEFAULT_VM_MEMORY_GIB),
     vmCpus: wholeNumber(get('vmCpus'), DEFAULT_VM_CPUS),
+    createDockerContext: bool('createDockerContext', DEFAULT_SETTINGS.createDockerContext ?? false),
   };
 }
 

@@ -10,6 +10,7 @@ import {
   LimaError,
   LimaInstance,
   limaConfig,
+  limaDockerSocket,
   limaEnv,
   limaPaths,
   limaResources,
@@ -104,14 +105,30 @@ describe('limaConfig', () => {
       containerd: { system: false, user: false },
       ssh: { localPort: 0, loadDotSSHPubKeys: false, forwardAgent: false, forwardX11: false },
       portForwards: [
+        { guestSocket: '/run/docker.sock', hostSocket: '{{.Dir}}/sock/docker.sock' },
         { guestIP: '127.0.0.1', guestPortRange: [1, 65535], ignore: true },
         { guestIP: '0.0.0.0', guestPortRange: [1, 65535], ignore: true },
+      ],
+      provision: [
+        {
+          mode: 'system',
+          script: [
+            '#!/bin/sh',
+            'mkdir -p /run/systemd/system/docker.socket.d',
+            "printf '[Socket]\\nExecStartPost=-/bin/chown {{.UID}} /run/docker.sock\\n' > /run/systemd/system/docker.socket.d/50-devspaces-lima.conf",
+            'systemctl daemon-reload',
+            '[ ! -S /run/docker.sock ] || chown {{.UID}} /run/docker.sock',
+            '',
+          ].join('\n'),
+        },
       ],
       upgradePackages: false,
       video: { display: 'none' },
     });
     const linux = JSON.parse(limaConfig({ platform: 'linux', arch: 'x64', image, resources: { memoryGiB: 2, cpus: 1 } })) as Record<string, unknown>;
     expect(linux).toMatchObject({ vmType: 'qemu', arch: 'x86_64', cpus: 1, memory: '2GiB' });
+    // The Docker socket of the VM on this computer, where the template {{.Dir}} of the instance puts it.
+    expect(limaDockerSocket(limaPaths('/home/ada'))).toBe('/home/ada/.nimblescape/devspaces/vm/devspaces/sock/docker.sock');
   });
 });
 

@@ -68,6 +68,8 @@ describe('settings', () => {
       // The Lima VM of Devspaces: 4 GiB and 4 CPUs, each at most half of the computer where the VM gets them.
       vmMemoryGiB: 4,
       vmCpus: 4,
+      // No Docker context for the VM.
+      createDockerContext: false,
     });
   });
 

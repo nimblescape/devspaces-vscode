@@ -489,6 +489,11 @@ export interface ExtensionSettings {
    */
   vmMemoryGiB?: number;
   vmCpus?: number;
+  /**
+   * The Docker context `devspaces` for the Lima VM of Devspaces on macOS and Linux (R-ENG-007, dockerContext.ts): created
+   * when true, removed when false (the default). Ignored on Windows for now. Scope `machine`.
+   */
+  createDockerContext?: boolean;
 }
 
 /** The values of the setting updateContainer. */

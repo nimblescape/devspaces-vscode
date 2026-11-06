@@ -65,6 +65,30 @@ export function limaEnv(base: NodeJS.ProcessEnv, paths: LimaPaths): NodeJS.Proce
   return { ...base, LIMA_HOME: paths.home };
 }
 
+/**
+ * The provision script of Lima at each start of the VM: the user of Lima (by its UID, which exists also before the user)
+ * owns the Docker socket, so that the SSH of Lima can carry it to this computer. The socket exists already, or
+ * docker.socket creates it later in this boot: then its drop-in in /run, which ends with the boot, gives it that owner.
+ * Neither can fail docker.socket (`-`), and the upgrade never restarts it (vm/rootfs/usr/lib/devspaces/upgrade). The group
+ * stays `docker`.
+ */
+const LIMA_SOCKET_SCRIPT = [
+  '#!/bin/sh',
+  'mkdir -p /run/systemd/system/docker.socket.d',
+  "printf '[Socket]\\nExecStartPost=-/bin/chown {{.UID}} /run/docker.sock\\n' > /run/systemd/system/docker.socket.d/50-devspaces-lima.conf",
+  'systemctl daemon-reload',
+  '[ ! -S /run/docker.sock ] || chown {{.UID}} /run/docker.sock',
+  '',
+].join('\n');
+
+/** The Docker socket of the VM in the folder of the instance, relative to it (limaConfig, portForwards). */
+const LIMA_DOCKER_SOCKET = 'sock/docker.sock';
+
+/** The Docker socket of the VM on this computer, while the VM runs (the Docker context of dockerContext.ts). */
+export function limaDockerSocket(paths: LimaPaths): string {
+  return path.join(paths.home, LIMA_INSTANCE, ...LIMA_DOCKER_SOCKET.split('/'));
+}
+
 /** The SSH configuration that Lima writes for the instance of Devspaces. */
 export function limaSshConfigFile(paths: LimaPaths): string {
   return path.join(paths.home, LIMA_INSTANCE, 'ssh.config');
@@ -127,11 +151,18 @@ export function limaConfig(options: LimaConfigOptions): string {
     containerd: { system: false, user: false },
     // Lima makes a key of its own for the login; no key of the user goes into the VM, and nothing is forwarded.
     ssh: { localPort: 0, loadDotSSHPubKeys: false, forwardAgent: false, forwardX11: false },
-    // No port of the VM on this computer: VS Code reaches the ports of a devspace through its own connection.
+    // No port of the VM on this computer: VS Code reaches the ports of a devspace through its own connection. Only the
+    // Docker socket goes into the folder of the instance (limaDockerSocket), for the Docker context of the setting
+    // devspaces.createDockerContext (dockerContext.ts); while the VM runs, Lima carries each connection there over its
+    // SSH, as the user of Lima.
     portForwards: [
+      { guestSocket: '/run/docker.sock', hostSocket: `{{.Dir}}/${LIMA_DOCKER_SOCKET}` },
       { guestIP: '127.0.0.1', guestPortRange: [1, 65535], ignore: true },
       { guestIP: '0.0.0.0', guestPortRange: [1, 65535], ignore: true },
     ],
+    // At each start, the user of Lima gets the Docker socket of the VM (LIMA_SOCKET_SCRIPT). It may use sudo without a
+    // password already, so this gives it nothing new.
+    provision: [{ mode: 'system', script: LIMA_SOCKET_SCRIPT }],
     // The image upgrades itself (devspaces-upgrade); Lima installs no packages at the start.
     upgradePackages: false,
     video: { display: 'none' },

@@ -44,8 +44,9 @@ import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransp
 import { deferredByteProcess } from '../core/relay/deferredProcess';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
-import { limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
+import { DOCKER_CONTEXT_TIMEOUT_MS, dockerConfigDir, dockerContextFile, syncDockerContext } from '../core/vm/dockerContext';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
 import { HostPipes } from '../core/relay/hostPipes';
@@ -391,6 +392,55 @@ async function activateExtension(
   const limaVm = hasLimaVm
     ? new LimaVm({ runner, logger, platform, arch: process.arch, env, resources: () => limaResources(machine.totalMemory, machine.cpus, vmWish()) })
     : undefined;
+  // The Docker context `devspaces` for the Docker socket of the Lima VM (R-ENG-007): created while the setting
+  // createDockerContext is on, removed when it is off; only a context with the description of Devspaces. It reads the
+  // context store first and runs the Docker CLI (of this computer, else of Devspaces) only for a change, without
+  // DOCKER_HOST and DOCKER_CONTEXT, so that it sees the current context of the Docker CLI. At the start of the window
+  // and after the setup of the VM it only logs; a change of the setting also shows what went wrong. One run at a time, so
+  // that two runs never both create the context.
+  let dockerContextRun: Promise<void> = Promise.resolve();
+  const syncVmDockerContext = (byUser: boolean): Promise<void> => (dockerContextRun = dockerContextRun.catch(() => undefined).then(() => syncVmDockerContextNow(byUser)));
+  const syncVmDockerContextNow = async (byUser: boolean): Promise<void> => {
+    if (limaVm === undefined) return;
+    const cli = installedCli ?? presentOwnCli();
+    const cliEnv: NodeJS.ProcessEnv = cli === undefined ? {} : dockerProcessEnv(env, platform, cli);
+    delete cliEnv.DOCKER_HOST;
+    delete cliEnv.DOCKER_CONTEXT;
+    const result = await syncDockerContext(
+      {
+        file: dockerContextFile(dockerConfigDir(env, platform)),
+        docker: cli === undefined ? undefined : (args) => runner.run(cli, args, { env: cliEnv, timeoutMs: DOCKER_CONTEXT_TIMEOUT_MS }),
+      },
+      settings.createDockerContext === true ? limaDockerSocket(limaVm.paths) : undefined,
+    );
+    let problem: string | undefined;
+    switch (result.kind) {
+      case 'unchanged':
+        return;
+      case 'created':
+      case 'updated':
+        logger.info(Messages.dockerContextCreated);
+        return;
+      case 'removed':
+        logger.info(Messages.dockerContextRemoved);
+        return;
+      case 'noCli':
+        logger.info(Messages.dockerContextNoCli);
+        return;
+      case 'taken':
+        problem = Messages.dockerContextTaken;
+        break;
+      case 'current':
+        problem = Messages.dockerContextCurrent;
+        logger.info(`docker context rm: ${result.detail}`);
+        break;
+      case 'failed':
+        problem = Messages.dockerContextFailed(result.detail);
+        break;
+    }
+    logger.warn(problem);
+    if (byUser) showSettingWarning(logger, 'createDockerContext', problem);
+  };
   /**
    * The transport `command` to the Lima VM of Devspaces with the program `ssh` (limaHostTransport): its `ssh` starts when
    * the VM runs. Undefined without `ssh` or where Devspaces has no Lima VM.
@@ -1185,7 +1235,12 @@ async function activateExtension(
     logger,
     showLog: () => logger.show(),
     useRemoteHost: () => remoteDocker.useRemoteHost(),
-    useHost: (host) => remoteDocker.useHost(host),
+    // After the setup, the Docker context of the setting createDockerContext, which may have waited for a Docker CLI.
+    useHost: async (host) => {
+      const used = await remoteDocker.useHost(host);
+      background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+      return used;
+    },
     // Linux: QEMU and the group kvm with one administrator prompt (sudo) in a visible terminal of this computer, with a
     // fixed shell, folder and environment, as the installation of Docker had.
     installQemu:
@@ -1468,6 +1523,7 @@ async function activateExtension(
       warnInvalidDefaultImage(logger, defaultImageWarnings, event);
       warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings, event);
       if (hasLimaVm) warnVmResources(logger, vmResourceWarnings, settings, machine, event);
+      if (event.affectsConfiguration(`${SETTINGS_SECTION}.createDockerContext`)) background(syncVmDockerContext(true), 'update the Docker context of the VM of Devspaces');
       updateOwnersContextKey(settings.owners, logger);
       updateDevspacesOnlyContextKey(settings.showOnlyDevspaces === true, logger);
       // Another scan scope loads the list again at once.
@@ -1486,6 +1542,8 @@ async function activateExtension(
   context.subscriptions.push(watchGitHubEnterpriseSettings(logger));
   // The Docker host of the view title (every later read of the context updates it too).
   background(targets.resolve(), 'read the Docker host');
+  // The Docker context of the VM as the setting createDockerContext asks (usually only a read of the context store).
+  background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
   // The stored list at once, then the background refresh.
   const listed = sidebar.initialize();
   background(listed, 'show the repository list');
