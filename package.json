@@ -772,15 +772,15 @@
           "type": "string",
           "scope": "application",
           "default": "7 6 * * *",
-          "pattern": "^\\s*(0*([5-9]|[1-9]\\d|[1-9]\\d\\d|1[0-3]\\d\\d|14[0-3]\\d|1440)|\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+)\\s*$",
-          "patternErrorMessage": "An interval in whole minutes from 5 to 1440 (a day), for example 60, or a cron schedule of five fields (minute hour day-of-month month day-of-week) with at least 5 minutes between two of its times, for example 7 6 * * * (every day at 06:07).",
+          "pattern": "^\\s*(0*([6-9]\\d|[1-9]\\d\\d|1[0-3]\\d\\d|14[0-3]\\d|1440)|\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+)\\s*$",
+          "patternErrorMessage": "An interval in whole minutes from 60 (an hour) to 1440 (a day), for example 120, or a cron schedule of five fields (minute hour day-of-month month day-of-week) with at least 60 minutes between two of its times, for example 7 6 * * * (every day at 06:07).",
           "examples": [
             "7 6 * * *",
             "7 6 * * 1-5",
             "7 */6 * * *",
             "60"
           ],
-          "markdownDescription": "When the Monitor on each Docker engine updates the images, the VS Code server and the extensions of your devspaces: a cron expression in your time zone, with at least 5 minutes between two of its times, for example `7 6 * * *` (daily at 06:07, the default), or the minutes between two runs (5 to 1440).\n\n[The background run in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run)"
+          "markdownDescription": "When the Monitor on each Docker engine updates the images, the VS Code server and the extensions of your devspaces: a cron expression in your time zone, with at least 60 minutes between two of its times, for example `7 6 * * *` (daily at 06:07, the default), or the minutes between two runs (60 to 1440).\n\n[The background run in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run)"
         },
         "devspaces.stopMonitorWhenIdle": {
           "order": 10,

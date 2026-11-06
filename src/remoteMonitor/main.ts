@@ -15,7 +15,8 @@
 //   run                          the loop: a tick every 15 s (rules.ts); each automatic stop under the devspace
 //                                lock; exits with 0 after REMOTE_IDLE_EXIT_MS without a running devspace container
 //                                and without a fresh record while it maintains no images (a created container does not
-//                                count), unless it runs permanently (DEVSPACE_MONITOR_PERMANENT: the user answered
+//                                count) and no retry of its background run waits (up to the retry after 30 minutes,
+//                                CacheSchedule.heldRetryAt), unless it runs permanently (DEVSPACE_MONITOR_PERMANENT: the user answered
 //                                the question about it, and stopMonitorWhenIdle is off), image updates or not; and its
 //                                background run
 //                                (background.ts) by the schedule of cacheUpdateSchedule (CacheSchedule). A permanent
@@ -88,7 +89,7 @@ import {
 } from '../core/remoteMonitor/protocol';
 import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, type SelfEngine, type VscodeEngine } from './engine';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
-import { CLOCK_RESET_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from './backgroundRules';
+import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from './backgroundRules';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
@@ -1177,7 +1178,7 @@ export async function writeRunRequest(stateDir: string, now: number): Promise<vo
  * internet) does not count as a run: the end of the last run stays, and the run is tried again after runRetryDelay
  * (2, 5, 10, 20, 30 minutes, then every hour) until one reaches it; the retry is kept in the volume too, so a restart of
  * the monitor keeps it. While it waits, the next run comes at its time, or earlier at a time of the schedule counted
- * from the last attempt (`lastAttemptAt`), so a schedule shorter than the wait still runs at its times.
+ * from the last attempt (`lastAttemptAt`), so a time of a cron schedule that comes before the retry still runs.
  */
 export class CacheSchedule {
   /** The end of the last run (the stored one at first; undefined: none is known). */
@@ -1285,6 +1286,15 @@ export class CacheSchedule {
    */
   get busy(): boolean {
     return this.running;
+  }
+
+  /**
+   * The time of the retry that a Monitor that ends when idle waits for: a retry waits, its wait is at most
+   * IDLE_RETRY_MAX_WAIT_MS (runRetryDelay), and a run that is only due is not paused. Undefined: none.
+   */
+  get heldRetryAt(): number | undefined {
+    if (this.retryAt === undefined || this.deps.paused?.() === true) return undefined;
+    return runRetryDelay(this.retries) <= IDLE_RETRY_MAX_WAIT_MS ? this.retryAt : undefined;
   }
 
   /**
@@ -1571,8 +1581,9 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         }
       }, firstMs).unref?.();
       const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-      // The wait for a run is logged once per idle time.
+      // The wait for a run is logged once per idle time, the wait for a retry once per retry.
       let waitLogged = false;
+      let retryLoggedAt: number | undefined;
       for (;;) {
         await loop.tick();
         // A permanent monitor that no window used for 30 days ends itself (UnusedEnd): between two ticks as the exit
@@ -1601,6 +1612,16 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
           if (schedule.busy || (await schedule.runIfRequested())) {
             if (!waitLogged) log('No devspace container runs, but a background run is running; the Monitor exits after its end.');
             waitLogged = true;
+            await sleep(tickMs);
+            continue;
+          }
+          // A run that did not reach the network (a computer that woke up before its Wi-Fi or VPN): the monitor waits
+          // for its retries up to the one after 30 minutes, which the checks of the schedule start. Not with the fixed
+          // interval of the Docker tests, which has no checks.
+          const retryAt = intervalMs === undefined ? schedule.heldRetryAt : undefined;
+          if (retryAt !== undefined) {
+            if (retryLoggedAt !== retryAt) log(`No devspace container runs, but the background run did not reach the network and is tried again at ${new Date(retryAt).toISOString()}; the Monitor waits for it.`);
+            retryLoggedAt = retryAt;
             await sleep(tickMs);
             continue;
           }

@@ -445,8 +445,8 @@ export interface ExtensionSettings {
   /**
    * When the Monitor container of each engine runs its background run (the images in use, the newest VS Code
    * server, the cleanup of the store at most once a day): a cron expression of five fields (minute hour day-of-month
-   * month day-of-week) in the time zone of this computer, or an interval in whole minutes (at least 5), as
-   * normalizeCacheSchedule gives it. Default `17` (every 17 minutes).
+   * month day-of-week) in the time zone of this computer, or an interval in whole minutes (60 to 1440), with at least 60
+   * minutes between two runs, as normalizeCacheSchedule gives it. Default `7 6 * * *` (daily at 06:07).
    */
   cacheUpdateSchedule?: string;
   /**

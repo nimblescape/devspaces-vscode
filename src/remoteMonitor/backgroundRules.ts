@@ -34,7 +34,7 @@ export interface CacheRunState {
   retries?: number;
   /**
    * When the last run that did not reach the network ended (with `retryAt`): the schedule counts from it while a retry
-   * waits, so a schedule shorter than the wait still runs at its times.
+   * waits, so a time of a cron schedule that comes before the retry still runs.
    */
   lastAttemptAt?: number;
 }
@@ -63,6 +63,13 @@ export interface RunNetwork {
  * minutes later, and one that stays offline costs one run an hour.
  */
 export const RUN_RETRY_DELAYS_MS: readonly number[] = [2, 5, 10, 20, 30, 60].map((minutes) => minutes * 60_000);
+
+/**
+ * The longest wait of a retry for which a Monitor that ends when idle stays (CacheSchedule.heldRetryAt): it waits for the
+ * retries after 2, 5, 10, 20 and 30 minutes, so a computer that woke up before its network is back gets them; a retry an
+ * hour later does not keep it.
+ */
+export const IDLE_RETRY_MAX_WAIT_MS = 30 * 60_000;
 
 /** The wait before the retry after `retries` runs in a row that did not reach the network (1 or more). */
 export function runRetryDelay(retries: number): number {

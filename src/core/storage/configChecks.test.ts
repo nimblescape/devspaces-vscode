@@ -124,8 +124,8 @@ describe("the worker's read of the Monitor's registry answers", () => {
   it('reads a regular file only; a link, a folder or a missing file is none', async () => {
     const file = path.join(root, REGISTRY_ANSWERS_FILE);
     expect(await readRegistryAnswers(root)).toBeUndefined();
-    fs.writeFileSync(file, JSON.stringify({ schedule: '17', digests: {} }));
-    expect(await readRegistryAnswers(root)).toEqual({ schedule: '17', digests: {} });
+    fs.writeFileSync(file, JSON.stringify({ schedule: '90', digests: {} }));
+    expect(await readRegistryAnswers(root)).toEqual({ schedule: '90', digests: {} });
     fs.rmSync(file);
     const target = path.join(root, 'target.json');
     fs.writeFileSync(target, JSON.stringify({ digests: {} }));

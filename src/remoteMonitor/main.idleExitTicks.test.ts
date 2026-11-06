@@ -110,7 +110,7 @@ describe('the end of a background run is stored before it counts as ended', () =
     const schedule = new CacheSchedule({
       now: () => T0,
       log: () => {},
-      settings: new CurrentCacheSettings({ DEVSPACE_IMAGE_SCHEDULE: '17', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {}),
+      settings: new CurrentCacheSettings({ DEVSPACE_IMAGE_SCHEDULE: '90', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {}),
       pass: async () => {},
       state: {
         read: async () => state,
@@ -137,7 +137,7 @@ describe('the end of a background run is stored before it counts as ended', () =
     const schedule = new CacheSchedule({
       now: () => T0,
       log: (message) => log.push(message),
-      settings: new CurrentCacheSettings({ DEVSPACE_IMAGE_SCHEDULE: '17', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {}),
+      settings: new CurrentCacheSettings({ DEVSPACE_IMAGE_SCHEDULE: '90', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {}),
       pass: async () => {},
       state: {
         read: async () => ({}),

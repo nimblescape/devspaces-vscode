@@ -72,7 +72,7 @@ describe('the use of the engine', () => {
     expect(lastUse()).toEqual({ at: T0, createId: CREATE });
     expect(await run(['run-now'], T0 + HOUR)).toBe(0);
     expect(lastUse()).toEqual({ at: T0 + HOUR, createId: CREATE });
-    expect(await run(['settings', '-'], T0 + 2 * HOUR, JSON.stringify({ schedule: '17', timeZone: 'UTC' }))).toBe(0);
+    expect(await run(['settings', '-'], T0 + 2 * HOUR, JSON.stringify({ schedule: '90', timeZone: 'UTC' }))).toBe(0);
     expect(lastUse()?.at).toBe(T0 + 2 * HOUR);
     expect(await run(['images', '-'], T0 + 3 * HOUR, JSON.stringify({ source: SOURCE, references: ['node:20'] }))).toBe(0);
     expect(lastUse()?.at).toBe(T0 + 3 * HOUR);

@@ -201,7 +201,7 @@ describe('settings', () => {
     const logged = () => logger.warn.mock.calls.map((call: unknown[]) => call[0]);
     const hour25 = Messages.cacheUpdateScheduleInvalid('0 25 * * *');
     const everyMinute = Messages.cacheUpdateScheduleInvalid('* * * * *');
-    const threeMinutes = Messages.cacheUpdateScheduleInvalid('3');
+    const thirtyMinutes = Messages.cacheUpdateScheduleInvalid('30');
     warnInvalidCacheUpdateSchedule(logger, warned);
     expect(fakeVscode.window.showWarningMessage).toHaveBeenCalledWith(hour25, Actions.openSettings);
     expect(logged()).toEqual([hour25]);
@@ -214,14 +214,14 @@ describe('settings', () => {
     warnInvalidCacheUpdateSchedule(logger, warned, change('cacheUpdateSchedule'));
     expect(shown()).toEqual([hour25]);
     expect(logged()).toEqual([hour25, hour25]);
-    // Every minute is less than 5 minutes apart; a number of minutes below 5 is named too.
+    // Every minute is less than 60 minutes apart; a number of minutes below 60 is named too.
     value = '* * * * *';
     warnInvalidCacheUpdateSchedule(logger, warned, change('cacheUpdateSchedule'));
-    value = 3;
+    value = 30;
     warnInvalidCacheUpdateSchedule(logger, warned, change('cacheUpdateSchedule'));
-    expect(shown()).toEqual([hour25, everyMinute, threeMinutes]);
+    expect(shown()).toEqual([hour25, everyMinute, thirtyMinutes]);
     // A valid value, and none: nothing to warn about, and the window forgets its warnings.
-    for (const valid of ['7 6 * * *', '*/5 * * * *', '60', 60, undefined, '']) {
+    for (const valid of ['7 6 * * *', '0 */2 * * *', '60', 60, undefined, '']) {
       value = valid;
       warnInvalidCacheUpdateSchedule(logger, warned, change('cacheUpdateSchedule'));
     }
@@ -229,7 +229,7 @@ describe('settings', () => {
     // The same invalid value entered again is a new warning.
     value = '0 25 * * *';
     warnInvalidCacheUpdateSchedule(logger, warned, change('cacheUpdateSchedule'));
-    expect(shown()).toEqual([hour25, everyMinute, threeMinutes, hour25]);
+    expect(shown()).toEqual([hour25, everyMinute, thirtyMinutes, hour25]);
     expect(logged()).toHaveLength(5);
   });
 
@@ -239,7 +239,7 @@ describe('settings', () => {
     const settings = normalizeSettings((key) => (String(key) === 'imageUpdates' ? ['ghcr.io/acme/base*'] : undefined));
     expect(settings).not.toHaveProperty('imageUpdates');
     expect(DEFAULT_SETTINGS).not.toHaveProperty('imageUpdates');
-    // A cron schedule; an invalid one (also a time HH:MM) gives the default. A whole number of at least 5 minutes is an
+    // A cron schedule; an invalid one (also a time HH:MM) gives the default. A whole number of at least 60 minutes is an
     // interval.
     const schedule = (value: unknown) => normalizeSettings((key) => (key === 'cacheUpdateSchedule' ? value : undefined)).cacheUpdateSchedule;
     expect(schedule('30 5 * * 1-5')).toBe('30 5 * * 1-5');
@@ -250,18 +250,17 @@ describe('settings', () => {
     expect(schedule(530)).toBe('530');
   });
 
-  // cacheUpdateSchedule is a cron schedule of five fields or an interval of whole minutes, at least 5; anything else is
+  // cacheUpdateSchedule is a cron schedule of five fields or an interval of whole minutes, at least 60; anything else is
   // the default (daily at 06:07).
-  it('reads cacheUpdateSchedule: five cron fields or whole minutes from 5 on; junk, fewer minutes and fractions give the default', () => {
+  it('reads cacheUpdateSchedule: five cron fields or whole minutes from 60 on; junk, fewer minutes and fractions give the default', () => {
     const schedule = (value: unknown) => normalizeSettings((key) => (key === 'cacheUpdateSchedule' ? value : undefined)).cacheUpdateSchedule;
     expect(schedule(undefined)).toBe('7 6 * * *');
-    expect(schedule('17')).toBe('17');
-    expect(schedule(' 5 ')).toBe('5');
-    expect(schedule(5)).toBe('5');
-    expect(schedule('60')).toBe('60');
+    expect(schedule('90')).toBe('90');
+    expect(schedule(' 60 ')).toBe('60');
+    expect(schedule(60)).toBe('60');
     expect(schedule('0060')).toBe('60');
     expect(schedule('7 6 * * *')).toBe('7 6 * * *');
-    for (const junk of ['4', 4, '0', '-5', '5.5', 5.5, '1e3', '17 minutes', '', '   ', '7 6 * *', '7 6 * * * *', null, true, ['17'], { minutes: 17 }, '525601']) {
+    for (const junk of ['59', 59, '5', 5, '17', '0', '-60', '60.5', 60.5, '1e3', '90 minutes', '', '   ', '7 6 * *', '7 6 * * * *', '*/30 * * * *', null, true, ['90'], { minutes: 90 }, '525601']) {
       expect(schedule(junk), JSON.stringify(junk)).toBe('7 6 * * *');
     }
   });
@@ -312,11 +311,11 @@ describe('settings', () => {
     expect(DEFAULT_SETTINGS.stopMonitorWhenIdle).toBe(false);
     expect(properties).not.toHaveProperty(`${SETTINGS_SECTION}.stopLocalMonitorWhenIdle`);
     const pattern = new RegExp(schedule.pattern ?? '');
-    for (const text of ['17', ' 60 ', '7 6 * * *', '7 */6 * * 1-5']) expect(pattern.test(text), text).toBe(true);
-    for (const text of ['17 minutes', '7 6 * *', 'soon', '']) expect(pattern.test(text), text).toBe(false);
-    // The pattern takes exactly the minutes that the parse takes (5 to 1440, leading zeros allowed), so the settings
-    // editor shows its error for `4`, `0` or `1441` instead of a silent default.
-    for (const text of ['4', '0', '1441', '525601', '12345678', '00004']) expect(pattern.test(text), text).toBe(false);
+    for (const text of ['90', ' 60 ', '7 6 * * *', '7 */6 * * 1-5']) expect(pattern.test(text), text).toBe(true);
+    for (const text of ['90 minutes', '7 6 * *', 'soon', '']) expect(pattern.test(text), text).toBe(false);
+    // The pattern takes exactly the minutes that the parse takes (60 to 1440, leading zeros allowed), so the settings
+    // editor shows its error for `59`, `0` or `1441` instead of a silent default.
+    for (const text of ['59', '17', '5', '0', '1441', '525601', '12345678', '00059']) expect(pattern.test(text), text).toBe(false);
     for (let minutes = 0; minutes <= 2000; minutes++) {
       for (const text of [String(minutes), `00${minutes}`]) expect(pattern.test(text), text).toBe(parseCacheSchedule(text)?.kind === 'interval');
     }

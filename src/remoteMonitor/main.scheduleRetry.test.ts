@@ -112,24 +112,27 @@ describe('the retry of a background run that did not reach the network', () => {
     expect(older.passes()).toBe(0);
   });
 
-  it('a schedule shorter than the wait of the retry still runs at its times, counted from the last attempt', async () => {
-    const s = scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: '5', DEVSPACE_IMAGE_TZ: 'UTC' }, T0, [false, false, false, false, false, false, false]);
+  // The shortest interval (an hour) is the longest wait of a retry, but a time of a cron schedule can come first.
+  it('a time of the schedule that comes before the retry still runs, counted from the last attempt', async () => {
+    const s = scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: '0 * * * *', DEVSPACE_IMAGE_TZ: 'UTC' }, T0, [false, false, false, false, false, false]);
     await s.schedule.check();
-    // Five retries later the wait is an hour; the schedule of 5 minutes still runs.
+    // The retries at 06:09, 06:14, 06:24 and 06:44; the fifth waits 30 minutes, until 07:14.
     let time = T0;
-    for (const wait of [2, 5, 10, 20, 30]) {
-      time += Math.min(wait, 5) * MINUTE;
+    for (const wait of [2, 5, 10, 20]) {
+      time += wait * MINUTE;
       s.at(time);
       await s.schedule.check();
     }
-    const runs = s.passes();
-    expect(stored()).toMatchObject({ retries: runs, lastAttemptAt: time });
-    s.at(time + 5 * MINUTE - 1);
+    expect(s.passes()).toBe(5);
+    expect(stored()).toMatchObject({ retries: 5, lastAttemptAt: Date.parse('2026-10-09T06:44:00Z'), retryAt: Date.parse('2026-10-09T07:14:00Z') });
+    s.at(Date.parse('2026-10-09T07:00:00Z') - 1);
     await s.schedule.check();
-    expect(s.passes()).toBe(runs);
-    s.at(time + 5 * MINUTE);
+    expect(s.passes()).toBe(5);
+    // 07:00, a time of the schedule after the last attempt: it runs before the retry.
+    s.at(Date.parse('2026-10-09T07:00:00Z'));
     await s.schedule.check();
-    expect(s.passes()).toBe(runs + 1);
+    expect(s.passes()).toBe(6);
+    expect(stored()).toMatchObject({ retries: 6, lastAttemptAt: Date.parse('2026-10-09T07:00:00Z') });
   });
 
   it('a retry comes after its wait, also when an interval of the schedule is longer', async () => {

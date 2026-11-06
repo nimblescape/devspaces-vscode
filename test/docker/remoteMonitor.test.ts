@@ -712,7 +712,7 @@ describe('the Monitor container: the devspace lock of its stops and its exit whe
     };
     // A permanent monitor of another computer, which a computer with stopMonitorWhenIdle on keeps (its own permanent
     // one would be replaced).
-    const permanent = new RemoteSessionMonitor({ ...options, imageMaintenance: () => ({ schedule: '17', timeZone: 'UTC', permanent: true, computer: 'b'.repeat(32) }) });
+    const permanent = new RemoteSessionMonitor({ ...options, imageMaintenance: () => ({ schedule: '90', timeZone: 'UTC', permanent: true, computer: 'b'.repeat(32) }) });
     expect(await permanent.ensure(helperTag, socket)).toBe('created');
     const details = cli.container(containerName) as unknown as {
       HostConfig: { RestartPolicy: { Name: string }; Mounts?: Array<{ Type: string; Source: string; Target: string; VolumeOptions?: { NoCopy?: boolean } }> };
@@ -730,7 +730,7 @@ describe('the Monitor container: the devspace lock of its stops and its exit whe
     expect(logs()).not.toContain('the Monitor exits');
     // A computer with stopMonitorWhenIdle on keeps it, and its owner label names the other computer.
     expect(cli.container(containerName)!.Config.Labels?.['nimblescape.devspaces.monitor-owner']).toBe('b'.repeat(32));
-    const idle = new RemoteSessionMonitor({ ...options, imageMaintenance: () => ({ schedule: '17', timeZone: 'UTC', permanent: false, computer: 'a'.repeat(32) }) });
+    const idle = new RemoteSessionMonitor({ ...options, imageMaintenance: () => ({ schedule: '90', timeZone: 'UTC', permanent: false, computer: 'a'.repeat(32) }) });
     expect(await idle.ensure(helperTag, socket)).toBe('running');
     expect(cli.container(containerName)!.HostConfig.RestartPolicy?.Name).toBe('unless-stopped');
     cli.ok(['rm', '-f', containerName]);
@@ -750,7 +750,7 @@ describe('the Monitor container: the devspace lock of its stops and its exit whe
       volumeName,
       labels: { [TEST_RUN_LABEL]: run.runId },
       containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_MONITOR_UNUSED_MS: '3000', DEVSPACE_IMAGE_FIRST_MS: '86400000' },
-      imageMaintenance: () => ({ schedule: '17', timeZone: 'UTC', permanent: true, computer: 'a'.repeat(32) }),
+      imageMaintenance: () => ({ schedule: '90', timeZone: 'UTC', permanent: true, computer: 'a'.repeat(32) }),
     });
     expect(await permanent.ensure(helperTag, socket)).toBe('created');
     expect(cli.container(containerName)!.HostConfig.RestartPolicy?.Name).toBe('unless-stopped');

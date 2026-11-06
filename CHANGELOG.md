@@ -29,6 +29,10 @@ takes the section of a version as the notes of its GitHub release.
 
 **Daily package upgrade in WSL:** Devspaces upgrades the packages of its WSL distribution, also Docker Engine, about once a day instead of about once a week, so security fixes arrive sooner. A run that did not end well is tried again after 6 hours instead of a day.
 
+**The background run at most once an hour:** the setting devspaces.cacheUpdateSchedule now needs at least 60 minutes between two runs: an interval of 60 to 1440 minutes, or a cron expression with at least 60 minutes between two of its times. A shorter value means the default, daily at 06:07, and a warning names it. A background run pulls images and builds the next images of the devspaces, so a shorter time only loads the registries and the computer.
+
+**Retries of the background run:** a Monitor that ends when idle no longer exits while a background run that did not reach the network waits for its retry after 2, 5, 10, 20 or 30 minutes. So a computer that wakes up before its Wi-Fi or VPN is back still gets its run; a retry an hour later does not keep the Monitor.
+
 **No update of VS Code before a start:** a Start of a devspace no longer updates VS Code first while VS Code shows its button **Update**, and the setting devspaces.installVsCodeUpdateFirst is gone. VS Code has no stable interface for its updates. VS Code installs a waiting update itself at its next restart, as without Devspaces.
 
 ## 0.4.1

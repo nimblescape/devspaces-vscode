@@ -11,15 +11,15 @@ import { parseMonitorEnsureParams, parseOpenParams } from './protocol';
 
 const ID = '3f2a9c1e-5b7d-4e8a-9c0f-2d1e6a7b8c9d';
 const SOURCE = '0123456789abcdef0123456789abcdef';
-const IMAGES = { schedule: '17', timeZone: 'Europe/Vienna' };
+const IMAGES = { schedule: '90', timeZone: 'Europe/Vienna' };
 const SETTINGS = { updateImagesOnConnect: true, hostAccessChecks: 'on', stopOnClose: true, respectShutdownActionNone: false };
 const EXISTING = { dockerHost: '', owner: { windowId: 'window-1', pid: 7 }, monitorSource: SOURCE, settings: SETTINGS, images: IMAGES, repository: 'acme/app', devspaceId: ID };
 
 describe('the monitor settings of an open and of monitorEnsure', () => {
-  it('takes the schedule as whole minutes from 5 on, or five cron fields', () => {
+  it('takes the schedule as whole minutes from 60 on, or five cron fields', () => {
     expect(parseImageSettingsInput(JSON.stringify(IMAGES))).toEqual(IMAGES);
     expect(parseImageSettingsInput(JSON.stringify({ ...IMAGES, schedule: '7 6 * * *' }))).toEqual({ ...IMAGES, schedule: '7 6 * * *' });
-    for (const schedule of ['4', '5.5', '17 minutes', '7 6 * *']) {
+    for (const schedule of ['59', '17', '60.5', '90 minutes', '7 6 * *', '*/30 * * * *']) {
       expect(parseImageSettingsInput(JSON.stringify({ ...IMAGES, schedule })), schedule).toBeUndefined();
     }
   });
