@@ -27,8 +27,10 @@ export interface Seed {
   longStartSeconds?: number;
   longStartMark?: string;
   /**
-   * The run `remote` only: the host of the other computer in the SSH config, the Docker pipe of the window (in the
-   * folder URI), and the ID of the computer of the test VS Code, for which the pipe was made.
+   * The Docker host of Devspaces in the SSH config (the engine host of prepare.ts, or the other computer of the run
+   * `remote`), the Docker pipe of the window of a devspace (in the folder URI; not for the plain container, which Dev
+   * Containers opens with the Docker of the runner), and the ID of the computer of the test VS Code, for which the pipe
+   * was made.
    */
   remoteHost?: string;
   dockerHost?: string;

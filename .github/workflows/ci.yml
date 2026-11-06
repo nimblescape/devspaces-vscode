@@ -314,7 +314,9 @@ jobs:
     # devspace, whose container the tests stop (`stop`) or remove (`removal`); DEVSPACE_TEST_STOPPED selects the part
     # (test/vscode/attach/stopped.test.ts). The runner gets a Git configuration and an SSH agent, so that the tests see
     # which of them reach the containers. The extension creates its objects with the names of a real installation, which
-    # is why these tests run only on CI.
+    # is why these tests run only on CI. On Linux, Devspaces never uses the Docker of the computer (R-ENG-001), so it
+    # reaches the engine of the runner over SSH, through the container attach-test-engine-host with the Docker socket of
+    # the runner (prepare.ts, the engine host); the steps below check the containers with the Docker of the runner.
     name: vscode attach (${{ matrix.part }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -445,6 +447,7 @@ jobs:
       - name: Show the Docker objects
         if: ${{ failure() }}
         run: |
+          docker logs --tail 200 attach-test-engine-host
           docker ps -a
           docker volume ls
           docker images
@@ -523,7 +526,8 @@ jobs:
     # The update from the last released version (.vscode-test.mjs, label attach, kinds previous and updated).
     # test/vscode/attach/prepare.ts (DEVSPACE_TEST_ATTACH_PREPARE=update) installs that version into the test VS Code
     # from the VSIX of the latest GitHub release (the file that the release workflow publishes to the Marketplace), and
-    # puts the devspace without container on the Docker engine of the runner. The first start runs the released version in
+    # puts the devspace without container on the Docker engine of the runner, which Devspaces reaches through the engine
+    # host, as in the job "vscode attach". The first start runs the released version in
     # the window of the devspace; then the VSIX of this commit is installed over it, and the second start, with the same
     # user data folder, runs the new version in the same window. A job of its own, so that the engine of the runner has
     # no objects of the other attach tests.
@@ -598,6 +602,7 @@ jobs:
       - name: Show the Docker objects
         if: ${{ failure() }}
         run: |
+          docker logs --tail 200 attach-test-engine-host
           docker ps -a
           docker volume ls
           docker images
