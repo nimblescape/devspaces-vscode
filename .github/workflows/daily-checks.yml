@@ -17,6 +17,9 @@
 #                                   its recipe changed
 #   Lima          lima.yml          the Lima of Devspaces on macOS and Linux
 #                                   (src/core/vm/limaPin.json)
+#   Node.js       node-version.yml  the Node.js release of the builds, the
+#                                   tests, CI and the release (.node-version),
+#                                   within its major version
 # A day without a new version opens nothing. The jobs run side by side, and a
 # failed job does not stop the others. Each called workflow also runs alone,
 # on a manual start and on a pull request that changes it, its script or its
@@ -86,4 +89,15 @@ jobs:
       # The pull request of that branch.
       pull-requests: write
       # The start of the workflows "CI" and "VM image" on that branch.
+      actions: write
+
+  node-version:
+    name: Node.js
+    uses: ./.github/workflows/node-version.yml
+    permissions:
+      # The push of the branch node-<version>.
+      contents: write
+      # The pull request of that branch.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
       actions: write

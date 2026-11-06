@@ -1,0 +1,137 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# Keep the Node.js release of the builds, the tests, CI and the release of
+# Devspaces (.node-version, docs/requirements.md R-VM-007) up to date: every
+# day through the workflow "Daily checks" (daily-checks.yml), and on a manual
+# start. The job "version" runs scripts/node-version.mjs, which writes the
+# newest LTS release of the major version of the file from the list of the
+# releases of Node.js (https://nodejs.org/dist/index.json). The major version
+# stays, because it follows the Node.js of VS Code; a new major version is a
+# change by hand. Only this job reads the list, and it gets no write scope.
+# When the release changed, the job "pull request" commits it to the branch
+# node-<version>, opens a pull request for it, and starts the workflow "CI" on
+# that branch, because a pull request of a workflow starts no workflow: the
+# checks of this run appear on the pull request. A branch node-<version> that
+# has a pull request already, open, closed or merged, gets nothing new.
+# Opening the pull request needs the repository setting "Allow GitHub Actions
+# to create and approve pull requests" (Settings > Actions > General);
+# without it, the job fails after the push, and the next run tries again. A
+# pull request that changes this workflow, the script or .node-version runs
+# the job "version", which writes nothing there. The commit and the pull
+# request name the workflow of the run, "Daily checks" or "Node.js".
+
+name: Node.js
+
+on:
+  # The workflow "Daily checks", every day.
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/node-version.yml
+      - scripts/node-version.mjs
+      - .node-version
+
+permissions:
+  # Checkout needs repository reads; only the job "pull request" gets more.
+  contents: read
+
+concurrency:
+  group: node-version
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+      version: ${{ steps.update.outputs.version }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Look for a newer release
+        id: update
+        run: |
+          node scripts/node-version.mjs
+          version=$(tr -d '[:space:]' < .node-version)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo ".node-version names \"$version\", not x.y.z." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git diff --quiet -- .node-version; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo ".node-version names the newest LTS release of its major version, Node.js $version." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo ".node-version changes to Node.js $version." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  pull-request:
+    name: pull request
+    needs: version
+    if: needs.version.outputs.changed == 'true' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The push of the branch node-<version>.
+      contents: write
+      # The pull request of that branch.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
+      actions: write
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Push the branch, open the pull request, and start CI on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # x.y.z: the job "version" checked it.
+          VERSION: ${{ needs.version.outputs.version }}
+          # "Daily checks" when that workflow called this one.
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          branch="node-$VERSION"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if [[ -n "$(git ls-remote --heads "$remote" "refs/heads/$branch")" ]]; then
+            if [[ "$(gh pr list --head "$branch" --state all --json number --jq length)" != "0" ]]; then
+              echo "The branch $branch has a pull request already." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "The branch $branch exists without a pull request: it gets one now."
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch --create "$branch"
+            echo "$VERSION" > .node-version
+            git add .node-version
+            git commit --quiet --message "Use Node.js $VERSION" --message "The workflow \"$WORKFLOW\" found Node.js $VERSION, the newest LTS release of the major version of .node-version, in https://nodejs.org/dist/index.json: $RUN_URL"
+            git push "$remote" "HEAD:refs/heads/$branch"
+          fi
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          The workflow "$WORKFLOW" found Node.js $VERSION, the newest LTS release of the major version of \`.node-version\`, in the [list of the releases of Node.js](https://nodejs.org/dist/index.json), and wrote it into \`.node-version\` ([run]($RUN_URL)). The builds, the tests, CI and the release of Devspaces run on this release; the extension itself runs on the Node.js of VS Code.
+
+          Read the [release notes](https://nodejs.org/en/blog/release/v$VERSION) for changes that need a change of Devspaces. The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. Merge when all checks pass.
+          EOF
+          if ! gh pr create --base main --head "$branch" --title "Use Node.js $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
+            exit 1
+          fi
+          gh workflow run ci.yml --ref "$branch"
+          echo "The pull request of Node.js $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
