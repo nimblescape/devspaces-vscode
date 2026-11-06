@@ -36,7 +36,7 @@ describe('the end of a run that cannot be stored', () => {
     const schedule = new CacheSchedule({
       now: () => T0,
       log: (message) => log.push(message),
-      settings: new CurrentCacheSettings({ DEVSPACE_IMAGE_SCHEDULE: '17', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {}),
+      settings: new CurrentCacheSettings({ DEVSPACE_IMAGE_SCHEDULE: '90', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {}),
       pass: async () => void passes++,
       state: { read: async () => ({}), update: async () => Promise.reject(new Error('no space left on device')) },
     });

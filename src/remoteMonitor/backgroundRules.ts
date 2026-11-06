@@ -64,6 +64,13 @@ export interface RunNetwork {
  */
 export const RUN_RETRY_DELAYS_MS: readonly number[] = [2, 5, 10, 20, 30, 60].map((minutes) => minutes * 60_000);
 
+/**
+ * The longest wait of a retry for which a Monitor that ends when idle stays (CacheSchedule.heldRetryAt): it waits for the
+ * retries after 2, 5, 10, 20 and 30 minutes, so a computer that woke up before its network is back gets them; a retry an
+ * hour later does not keep it.
+ */
+export const IDLE_RETRY_MAX_WAIT_MS = 30 * 60_000;
+
 /** The wait before the retry after `retries` runs in a row that did not reach the network (1 or more). */
 export function runRetryDelay(retries: number): number {
   return RUN_RETRY_DELAYS_MS[Math.min(Math.max(retries, 1), RUN_RETRY_DELAYS_MS.length) - 1];
