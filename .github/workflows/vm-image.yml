@@ -1,0 +1,367 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The image of the VM of Devspaces (docs/requirements.md R-VM-002, R-VM-003,
+# R-VM-009; docs/architecture.md "The image of the VM"): every day through the
+# workflow "Daily checks" (daily-checks.yml), and on a manual start.
+#
+#   build         vm/build.sh builds the .wsl file and the disk for Lima on a
+#                 runner of each architecture (amd64, arm64).
+#   kernel check  The kernel of the disk and the kernel of WSL that Microsoft
+#                 publishes (its newest release) must have each option that
+#                 Docker Engine requires (vm/rootfs/usr/lib/devspaces/
+#                 kernel-check), for both architectures.
+#   start test    vm/test/start-test.sh starts the disk of amd64 with QEMU and
+#                 KVM, as Lima does, and checks cloud-init, the services,
+#                 Docker Engine, the package upgrade and the idle check. The
+#                 runners of GitHub have no WSL 2 and no KVM for arm64, so
+#                 these files get the manual tests of the steps that use them.
+#   push          Only on the main branch, and only when build, kernel check
+#                 and start test passed: scripts/vm-image.mjs pushes the files
+#                 to ghcr.io/nimblescape/devspaces-vm, but only when the list
+#                 of their packages or the recipe changed since the newest
+#                 version there, and writes the pin src/core/vm/vmImagePin.json.
+#                 As long as the pin names no version, nothing is pushed: the
+#                 first push waits for a manual start with "first push". Then
+#                 it reads the files of the pin without a login, as Devspaces
+#                 does: the package on ghcr.io must be public.
+#   pull request  When the pin changed: commits it to the branch
+#                 vm-image-<version>, opens a pull request for it, closes the
+#                 older open pull requests of the image, and starts the
+#                 workflow "CI" on the branch, because a pull request of a
+#                 workflow starts no workflow. Opening the pull request needs
+#                 the repository setting "Allow GitHub Actions to create and
+#                 approve pull requests" (Settings > Actions > General).
+#   prune         Deletes the versions on ghcr.io that are not kept: the
+#                 version of each published release of Devspaces, of the pin
+#                 on the main branch, and the newest 5 stay.
+#
+# A pull request that changes this workflow, the recipe, the script or the pin
+# runs build, kernel check and start test, which write nothing.
+
+name: VM image
+
+on:
+  # The workflow "Daily checks", every day, without the first push.
+  workflow_call:
+    inputs:
+      first-push:
+        description: Push the image although the pin names no version yet (the first push to ghcr.io)
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      first-push:
+        description: Push the image although the pin names no version yet (the first push to ghcr.io)
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/vm-image.yml
+      - vm/**
+      - scripts/vm-image.mjs
+      - src/core/vm/vmImagePin.json
+
+permissions:
+  # Checkout needs repository reads; only the jobs push, pull request and prune get more.
+  contents: read
+
+concurrency:
+  group: vm-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: vm/build.sh ${{ matrix.arch }} out
+
+      - name: List the packages
+        run: |
+          {
+            echo "### The packages of the image (${{ matrix.arch }})"
+            echo
+            echo '```'
+            cat out/packages-lima-${{ matrix.arch }}.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the files of the image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-image-${{ matrix.arch }}
+          path: |
+            out/devspaces-vm-${{ matrix.arch }}.wsl
+            out/devspaces-vm-${{ matrix.arch }}.qcow2
+          if-no-files-found: error
+          # The files are compressed already.
+          compression-level: 0
+          retention-days: 3
+
+      - name: Keep the lists of the packages and the configuration of the kernel
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-image-info-${{ matrix.arch }}
+          path: |
+            out/packages-wsl-${{ matrix.arch }}.txt
+            out/packages-lima-${{ matrix.arch }}.txt
+            out/kernel-config-${{ matrix.arch }}
+          if-no-files-found: error
+
+  kernel-check:
+    name: kernel check
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Take the configurations of the kernels of the image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: vm-image-info-*
+          merge-multiple: true
+          path: info
+
+      - name: Check the kernels of the image and of WSL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh api repos/microsoft/WSL2-Linux-Kernel/releases/latest --jq .tag_name)
+          raw="https://raw.githubusercontent.com/microsoft/WSL2-Linux-Kernel/$tag"
+          curl -fsSL "$raw/arch/x86/configs/config-wsl" -o info/wsl-amd64.config
+          curl -fsSL "$raw/arch/arm64/configs/config-wsl-arm64" -o info/wsl-arm64.config
+          failed=0
+          for config in kernel-config-amd64 kernel-config-arm64 wsl-amd64.config wsl-arm64.config; do
+            if missing=$(vm/rootfs/usr/lib/devspaces/kernel-check "info/$config"); then
+              echo "$config: every option that Docker Engine requires." | tee -a "$GITHUB_STEP_SUMMARY"
+            else
+              echo "$config: missing $(echo $missing)." | tee -a "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+          done
+          echo "The kernel of WSL: the release $tag of microsoft/WSL2-Linux-Kernel." | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$failed"
+
+  start-test:
+    name: start test
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Take the files of the image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vm-image-amd64
+          path: image
+
+      - name: Let the user of the runner use KVM, and install QEMU
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf cloud-image-utils > /dev/null
+
+      - name: Start the disk for Lima and check it
+        run: vm/test/start-test.sh image/devspaces-vm-amd64.qcow2 logs
+
+      - name: Keep the serial console of the VM
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-start-test-console
+          path: logs/
+          if-no-files-found: ignore
+
+  push:
+    name: push
+    needs: [build, kernel-check, start-test]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # The push to ghcr.io/nimblescape/devspaces-vm.
+      packages: write
+    outputs:
+      changed: ${{ steps.push.outputs.changed }}
+      version: ${{ steps.push.outputs.version }}
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Check the files of the current pin
+        run: node scripts/vm-image.mjs check
+
+      - name: Take the files of the image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: vm-image-*
+          merge-multiple: true
+          path: image
+
+      - name: Push the image when its packages or its recipe changed
+        id: push
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          FIRST_PUSH: ${{ inputs.first-push == true }}
+        run: |
+          if [[ "$FIRST_PUSH" == true ]]; then
+            node scripts/vm-image.mjs push image --first-push
+          else
+            node scripts/vm-image.mjs push image
+          fi
+          if git diff --quiet -- src/core/vm/vmImagePin.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "The pin changes:"
+              echo
+              echo '```diff'
+              git diff -- src/core/vm/vmImagePin.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Read the files of the new pin without a login
+        if: steps.push.outputs.changed == 'true'
+        run: |
+          if ! node scripts/vm-image.mjs check; then
+            echo "Devspaces cannot download the image: make the package devspaces-vm of nimblescape public (Package settings > Change visibility); the next run opens the pull request." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Keep the new pin
+        if: steps.push.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vm-image-pin
+          path: src/core/vm/vmImagePin.json
+          if-no-files-found: error
+
+  pull-request:
+    name: pull request
+    needs: push
+    if: needs.push.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The push of the branch vm-image-<version>.
+      contents: write
+      # The pull request of that branch, and the close of the older ones.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
+      actions: write
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Take the new pin of the job "push"
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vm-image-pin
+          path: src/core/vm
+
+      - name: Push the branch, open the pull request, and start CI on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.push.outputs.version }}
+          # "Daily checks" when that workflow called this one.
+          WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          branch="vm-image-$VERSION"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if [[ -n "$(git ls-remote --heads "$remote" "refs/heads/$branch")" ]]; then
+            if [[ "$(gh pr list --head "$branch" --state all --json number --jq length)" != "0" ]]; then
+              echo "The branch $branch has a pull request already." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "The branch $branch exists without a pull request: it gets one now."
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git switch --create "$branch"
+            git add src/core/vm/vmImagePin.json
+            git commit --quiet --message "Pin the image of the VM $VERSION" --message "The workflow \"$WORKFLOW\" built and tested the image, and pushed it to ghcr.io because its packages or its recipe changed: $RUN_URL"
+            git push "$remote" "HEAD:refs/heads/$branch"
+          fi
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          The workflow "$WORKFLOW" built the image of the VM of Devspaces for amd64 and arm64, checked the kernels of the image and of WSL, started the disk of amd64 with QEMU and KVM, and pushed the image to ghcr.io/nimblescape/devspaces-vm as the version $VERSION, because the list of its packages or its recipe changed since the version before ([run]($RUN_URL)). This pull request writes the digests and sizes of its files into \`src/core/vm/vmImagePin.json\`; the job "push" read each file back from ghcr.io without a login, as Devspaces does.
+
+          The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. Merge when CI passes. The next release of Devspaces sets up new VMs from this version; a VM that exists keeps its system and upgrades its packages itself.
+          EOF
+          if ! gh pr create --base main --head "$branch" --title "Pin the image of the VM $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
+            exit 1
+          fi
+          number=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number')
+          for older in $(gh pr list --state open --json number,headRefName --jq ".[] | select(.headRefName | startswith(\"vm-image-\")) | select(.headRefName != \"$branch\") | .number"); do
+            gh pr close "$older" --delete-branch --comment "Replaced by #$number, which pins the newer version $VERSION of the image."
+          done
+          gh workflow run ci.yml --ref "$branch"
+          echo "The pull request of the image $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
+
+  prune:
+    name: prune
+    needs: push
+    if: needs.push.outputs.version != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # The deletion of versions of ghcr.io/nimblescape/devspaces-vm.
+      packages: write
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Take the tags of the releases
+        run: git fetch --quiet --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Delete the versions that are not kept
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/vm-image.mjs prune

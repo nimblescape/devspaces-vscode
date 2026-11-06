@@ -136,7 +136,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-VM-004
 
-**Stop when idle.** One idle script in the VM, the same in WSL and in Lima, checks every minute whether a devspace, the Monitor, a worker, a build container or the package upgrade ([R-VM-007](#r-vm-007)) runs, and stops the VM after two checks in a row with nothing running. On Windows, one hidden `wsl.exe` that is not a child of VS Code runs the script, and WSL stops the distribution when the script ends; in Lima, a systemd service runs it and powers the VM off. No other process on the computer keeps the VM running.
+**Stop when idle.** One idle script in the VM, the same in WSL and in Lima, checks every minute whether a devspace, the Monitor, a worker, a build container or the package upgrade ([R-VM-007](#r-vm-007)) runs, or whether a program is connected to Docker Engine (for example while it downloads an image before the first container), and stops the VM after two checks in a row with nothing running. On Windows, one hidden `wsl.exe` that is not a child of VS Code runs the script, and WSL stops the distribution when the script ends; in Lima, a systemd service runs it and powers the VM off. No other process on the computer keeps the VM running.
 
 ### R-VM-005
 

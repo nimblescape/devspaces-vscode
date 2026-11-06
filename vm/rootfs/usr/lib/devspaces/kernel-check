@@ -1,0 +1,77 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The kernel check of the VM of Devspaces (docs/requirements.md R-VM-003):
+# whether a kernel has each option that Docker Engine requires (kernel-flags
+# next to this script).
+#
+#   kernel-check <file>   checks the configuration in <file> (also .gz), for
+#                         the daily workflow of the image
+#   kernel-check          checks the running kernel (/proc/config.gz, else
+#                         /boot/config-<release>)
+#   kernel-check --record checks the running kernel only when its release
+#                         differs from the one in /var/lib/devspaces/kernel-check,
+#                         and writes that file: the release on the first line,
+#                         then the missing options, one per line (none: all
+#                         there). The service devspaces-kernel-check runs it at
+#                         each start of the VM, and Devspaces reads the file.
+#
+# Standard output: the missing options, one per line. Exit status: 0 when
+# none is missing, 1 when one is, 2 when no configuration is found.
+set -eu
+
+flags="$(dirname "$0")/kernel-flags"
+record=/var/lib/devspaces/kernel-check
+
+# The options of the configuration $1 that are missing.
+missing() {
+  case "$1" in
+    *.gz) config=$(gzip -dc "$1") ;;
+    *) config=$(cat "$1") ;;
+  esac
+  grep -v -e '^#' -e '^$' "$flags" | while read -r flag; do
+    printf '%s\n' "$config" | grep -Eq "^CONFIG_${flag}=(y|m)$" || printf '%s\n' "$flag"
+  done
+}
+
+# The configuration of the running kernel.
+running_config() {
+  if [ -r /proc/config.gz ]; then
+    echo /proc/config.gz
+  elif [ -r "/boot/config-$(uname -r)" ]; then
+    echo "/boot/config-$(uname -r)"
+  else
+    echo "No configuration of the kernel $(uname -r): neither /proc/config.gz nor /boot/config-$(uname -r)." >&2
+    exit 2
+  fi
+}
+
+if [ "${1:-}" = --record ]; then
+  release=$(uname -r)
+  if [ -r "$record" ] && [ "$(head -n 1 "$record")" = "$release" ]; then
+    exit 0
+  fi
+  config=$(running_config)
+  result=$(missing "$config")
+  mkdir -p "$(dirname "$record")"
+  printf '%s\n%s' "$release" "$result" > "$record.new"
+  [ -z "$result" ] || echo >> "$record.new"
+  mv "$record.new" "$record"
+  if [ -n "$result" ]; then
+    echo "The kernel $release lacks options that Docker Engine requires: $(printf '%s' "$result" | tr '\n' ' ')" >&2
+    exit 1
+  fi
+  echo "The kernel $release has every option that Docker Engine requires."
+  exit 0
+fi
+
+if [ $# -gt 0 ]; then
+  config=$1
+  [ -r "$config" ] || { echo "No file $config." >&2; exit 2; }
+else
+  config=$(running_config)
+fi
+result=$(missing "$config")
+[ -z "$result" ] || { printf '%s\n' "$result"; exit 1; }

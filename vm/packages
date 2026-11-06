@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The packages of the image of the VM of Devspaces (vm/recipe.sh), one per
+# line, on top of the variant "minbase" of Debian 13 (trixie), without the
+# packages that they only recommend. Both files of the image get them: the
+# .wsl file for WSL and the disk for Lima (vm/packages-lima adds the kernel).
+
+# systemd starts Docker, the scripts of Devspaces and, in Lima only, the
+# network, the name service and the clock (rootfs/usr/lib/systemd/system).
+systemd
+systemd-sysv
+systemd-resolved
+systemd-timesyncd
+dbus
+libpam-systemd
+
+# Lima: its settings come on a disk for cloud-init, and it logs in over SSH
+# with a user that may use sudo; cloud-init grows the disk to its size.
+cloud-init
+cloud-guest-utils
+openssh-server
+sudo
+
+# Docker Engine from the packages of Docker (download.docker.com), without
+# buildx and compose: Devspaces builds in a container (R-ENG-006).
+docker-ce
+docker-ce-cli
+containerd.io
+
+# What Docker Engine and the scripts of Devspaces use: the firewall rules
+# of Docker, AppArmor (a kernel with AppArmor and without apparmor_parser
+# makes every container fail), the processes and the network, and HTTPS.
+iptables
+apparmor
+procps
+iproute2
+kmod
+e2fsprogs
+ca-certificates
+curl

@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# Starts the package upgrade of the VM of Devspaces one minute after each
+# start of the VM, and then every hour while it runs (docs/requirements.md
+# R-VM-007); the script upgrade runs it only when it is due.
+[Unit]
+Description=Devspaces: check whether the package upgrade of the VM is due
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

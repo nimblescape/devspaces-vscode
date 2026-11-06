@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The packages only of the disk for Lima (vm/recipe.sh): the kernel of
+# Debian for virtual machines, its initramfs, and the files of GRUB, from
+# which the recipe builds the boot loader. WSL always runs the kernel of
+# Microsoft, so the .wsl file has none of them. ARCH is amd64 or arm64.
+linux-image-cloud-ARCH
+initramfs-tools
+grub-efi-ARCH-bin

@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The kernel options that Docker Engine requires: the list "Generally
+# Necessary" of Docker's contrib/check-config.sh
+# (https://github.com/moby/moby/blob/master/contrib/check-config.sh), for a
+# kernel of version 5.3 or later, without the prefix CONFIG_. Each one must be
+# y or m. The script kernel-check next to this file reads the list.
+NAMESPACES
+NET_NS
+PID_NS
+IPC_NS
+UTS_NS
+CGROUPS
+CGROUP_CPUACCT
+CGROUP_DEVICE
+CGROUP_FREEZER
+CGROUP_SCHED
+CPUSETS
+MEMCG
+KEYS
+VETH
+BRIDGE
+BRIDGE_NETFILTER
+IP_NF_FILTER
+IP_NF_MANGLE
+IP_NF_TARGET_MASQUERADE
+IP6_NF_FILTER
+IP6_NF_MANGLE
+IP6_NF_TARGET_MASQUERADE
+NETFILTER_XT_MATCH_ADDRTYPE
+NETFILTER_XT_MATCH_CONNTRACK
+NETFILTER_XT_MATCH_IPVS
+NETFILTER_XT_MARK
+IP_NF_RAW
+IP_NF_NAT
+NF_NAT
+IP6_NF_RAW
+IP6_NF_NAT
+POSIX_MQUEUE
+CGROUP_BPF
