@@ -7,12 +7,12 @@
 // the SHA-256 of the archive of each platform. Lima publishes the file SHA256SUMS with each release; the script
 // downloads each archive, computes its SHA-256 and size, and checks them against that file, so the pin holds only
 // hashes that both agree on. It also checks that each archive has `bin/limactl` and the guest agent of its
-// architecture, the files that Devspaces takes from it. The extension checks every download against the pin. Without
-// --version, the version is the newest release of lima-vm/lima on GitHub (no pre-release). The workflow "Lima" runs
-// this every day (called by the workflow "Daily checks") and opens a pull request when the file changed. --check writes
-// nothing: it downloads the files of the current pin again and fails when a size or a hash differs (a release file was
-// replaced). GITHUB_TOKEN, when set, is used for the API of GitHub (more requests per hour); the downloads need no
-// login.
+// architecture, the files that Devspaces takes from it, and writes the name of that guest agent (`guestAgent`). The
+// extension checks every download against the pin. Without --version, the version is the newest release of lima-vm/lima
+// on GitHub (no pre-release). The workflow "Lima" runs this every day (called by the workflow "Daily checks") and opens
+// a pull request when the file changed. --check writes nothing: it downloads the files of the current pin again and
+// fails when a size or a hash differs (a release file was replaced). GITHUB_TOKEN, when set, is used for the API of
+// GitHub (more requests per hour); the downloads need no login.
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -107,8 +107,11 @@ function tarFiles(tar) {
   return files;
 }
 
-/** Fails unless `files` of the archive of `platform` and `version` has `bin/limactl` and only the guest agent of its architecture. */
-function checkContent(platform, version, files) {
+/**
+ * The name of the guest agent in `files` of the archive of `platform` and `version`. Fails unless the archive has
+ * `bin/limactl` and only the guest agent of its architecture.
+ */
+function guestAgentOf(platform, version, files) {
   const name = archiveName(version, platform);
   if (!files.includes('bin/limactl')) throw new Error(`${name} has no bin/limactl.`);
   const agents = files.filter((file) => GUEST_AGENT.test(file));
@@ -116,9 +119,13 @@ function checkContent(platform, version, files) {
   if (agents.length !== 1 || GUEST_AGENT.exec(agents[0])[1] !== architecture) {
     throw new Error(`${name} has the guest agents [${agents.join(', ')}], not the one of ${architecture}.`);
   }
+  return agents[0];
 }
 
-/** The URL, the size and the SHA-256 of the archive of `platform` and `version`, from a download of the whole file. */
+/**
+ * The URL, the size and the SHA-256 of the archive of `platform` and `version`, from a download of the whole file, and
+ * the name of its guest agent.
+ */
 async function fileOf(platform, version) {
   const url = `${DOWNLOADS}/v${version}/${archiveName(version, platform)}`;
   // GitHub answers with a redirect to its storage; the SHA-256 checks the file wherever it comes from.
@@ -133,8 +140,8 @@ async function fileOf(platform, version) {
   }
   const length = response.headers.get('content-length');
   if (length !== null && Number(length) !== size) throw new Error(`GET ${url}: ${size} of ${length} bytes`);
-  checkContent(platform, version, tarFiles(gunzipSync(Buffer.concat(chunks))));
-  return { url, size, sha256: hash.digest('hex') };
+  const guestAgent = guestAgentOf(platform, version, tarFiles(gunzipSync(Buffer.concat(chunks))));
+  return { url, size, sha256: hash.digest('hex'), guestAgent };
 }
 
 async function main() {
@@ -147,8 +154,8 @@ async function main() {
     }
     for (const [platform, file] of Object.entries(current.files)) {
       const now = await fileOf(platform, current.version);
-      if (now.url !== file.url || now.size !== file.size || now.sha256 !== file.sha256) {
-        throw new Error(`${file.url} changed: ${now.size} bytes, SHA-256 ${now.sha256}`);
+      if (now.url !== file.url || now.size !== file.size || now.sha256 !== file.sha256 || now.guestAgent !== file.guestAgent) {
+        throw new Error(`${file.url} changed: ${now.size} bytes, SHA-256 ${now.sha256}, guest agent ${now.guestAgent}`);
       }
       console.log(`${file.url}: unchanged`);
     }
@@ -173,7 +180,7 @@ async function main() {
     if (published === undefined) throw new Error(`SHA256SUMS of Lima ${version} names no ${archiveName(version, platform)}.`);
     if (published !== file.sha256) throw new Error(`${file.url} has the SHA-256 ${file.sha256}, and SHA256SUMS names ${published}.`);
     files[platform] = file;
-    console.log(`${file.url}: ${file.size} bytes, SHA-256 ${file.sha256}`);
+    console.log(`${file.url}: ${file.size} bytes, SHA-256 ${file.sha256}, guest agent ${file.guestAgent}`);
   }
   writeFileSync(pinFile, `${JSON.stringify({ version, files }, null, 2)}\n`);
   console.log(`The pin is now Lima ${version}.`);
