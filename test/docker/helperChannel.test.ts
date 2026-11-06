@@ -24,6 +24,7 @@ import { testRemoteDockerHost } from '../../src/core/docker/remoteDocker';
 import { outsideOperation, runWithDockerTarget } from '../../src/core/docker/dockerTargets';
 import { HelperChannel } from '../../src/core/helperChannel/helperChannel';
 import { channelRunArgs, openHelperChannel } from '../../src/core/helperChannel/helperChannels';
+import { parseOomKills, vmstatOomKills } from '../../src/core/vm/oomKills';
 import {
   CHANNEL_PROTOCOL_VERSION,
   ENGINE_IDENTITY_ARGS,
@@ -218,6 +219,10 @@ describe('the helper channel with the real Docker engine', () => {
     expect(details.HostConfig.AutoRemove).toBe(true);
     expect(details.HostConfig.CapDrop).toEqual(['ALL']);
     expect(details.HostConfig.RestartPolicy?.Name ?? 'no').toMatch(/^(no|)$/);
+    // Without a capability, the worker reads the processes that the kernel of the engine ended because the memory ran
+    // out (oomKills.ts): the counter oom_kill of /proc/vmstat and the boot id of the kernel.
+    const kernelFile = (file: string): string => cli.ok(['exec', name, 'cat', file]);
+    expect(parseOomKills({ boot: kernelFile('/proc/sys/kernel/random/boot_id').trim(), count: vmstatOomKills(kernelFile('/proc/vmstat')) })).toBeDefined();
     expect(details.Config.Labels?.[LABEL_HELPER_CHANNEL]).toBe(channelLabelValue(script));
     // Outbound network on the default bridge and no published port.
     const host = (details as unknown as { HostConfig: { NetworkMode: string; PortBindings?: Record<string, unknown> | null } }).HostConfig;

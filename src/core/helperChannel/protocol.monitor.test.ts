@@ -46,6 +46,13 @@ describe('the operations of the Monitor in the worker', () => {
     for (const odd of [{ ok: true, helperCheck: { ...helperCheck, builtAt: helperCheck.checkedAt } }, { ok: true, helperCheck: { ...helperCheck, baseDigest: 'sha256:x' } }, { ok: true, helperCheck: null }, { ok: false, missing: false, detail: 'x', helperCheck }]) {
       expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
     }
+    // With the processes that the kernel of the engine ended because the memory ran out (oomKills.ts), strictly.
+    const oomKills = { boot: '0b5c2d7e-1f3a-4c6b-9d8e-7a6b5c4d3e2f', count: 2 };
+    expect(parseHeartbeatValue({ ok: true, oomKills })).toEqual({ ok: true, oomKills });
+    expect(parseHeartbeatValue({ ok: true, helperCheck, oomKills })).toEqual({ ok: true, helperCheck, oomKills });
+    for (const odd of [{ ok: true, oomKills: { ...oomKills, count: -1 } }, { ok: true, oomKills: { ...oomKills, boot: 'x' } }, { ok: true, oomKills: null }, { ok: true, helperCheck: null, oomKills }, { ok: false, missing: false, detail: 'x', oomKills }]) {
+      expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
+    }
     for (const odd of [null, { ok: true, missing: false }, { ok: false, detail: 'x' }, { ok: false, missing: 'no', detail: 'x' }, { ok: false, missing: false, detail: 'x'.repeat(MAX_MONITOR_DETAIL_LENGTH + 1) }, { ok: 'yes' }]) {
       expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
     }

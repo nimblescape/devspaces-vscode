@@ -73,7 +73,7 @@ describe('the operations of the Monitor in the worker', () => {
   it('heartbeat: sends it to the monitor container and answers ok, or why not (missing)', async () => {
     const { engine, execs } = engineOf(ok);
     const { context, controller } = contextOf();
-    expect(await heartbeatOperation(() => engine)({ heartbeat: HEARTBEAT }, context)).toEqual({ ok: true });
+    expect(await heartbeatOperation(() => engine, undefined, () => undefined)({ heartbeat: HEARTBEAT }, context)).toEqual({ ok: true });
     // The command of the entry monitorHeartbeat.
     expect(execs).toEqual([{ container: REMOTE_MONITOR_CONTAINER, command: scriptCommand('monitorHeartbeat', [JSON.stringify(HEARTBEAT)]), options: { timeoutMs: 20_000, signal: controller.signal } }]);
     const missing = engineOf(() => Promise.reject(new EngineError('No such container', 404)));
@@ -84,7 +84,7 @@ describe('the operations of the Monitor in the worker', () => {
     const volume = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-monitor-volume-'));
     try {
       const { engine } = engineOf(ok);
-      const heartbeat = () => heartbeatOperation(() => engine, volume)({ heartbeat: HEARTBEAT }, contextOf().context);
+      const heartbeat = () => heartbeatOperation(() => engine, volume, () => undefined)({ heartbeat: HEARTBEAT }, contextOf().context);
       // No record yet.
       expect(await heartbeat()).toEqual({ ok: true });
       const record = { tag: 'devspaces-worker:0123456789ab', baseImage: 'node:24-trixie-slim', baseDigest: `sha256:${'a'.repeat(64)}`, checkedAt: '2026-11-04T06:08:00.000Z' };
@@ -102,6 +102,15 @@ describe('the operations of the Monitor in the worker', () => {
     } finally {
       fs.rmSync(volume, { recursive: true, force: true });
     }
+  });
+
+  it('heartbeat: answers the processes that the kernel of the engine ended because the memory ran out, when it can read them', async () => {
+    const { engine } = engineOf(ok);
+    const oomKills = { boot: '0b5c2d7e-1f3a-4c6b-9d8e-7a6b5c4d3e2f', count: 3 };
+    expect(await heartbeatOperation(() => engine, undefined, () => oomKills)({ heartbeat: HEARTBEAT }, contextOf().context)).toEqual({ ok: true, oomKills });
+    // A heartbeat that the monitor did not take answers none.
+    const missing = engineOf(() => Promise.reject(new EngineError('No such container', 404)));
+    expect(await heartbeatOperation(() => missing.engine, undefined, () => oomKills)({ heartbeat: HEARTBEAT }, contextOf().context)).toEqual({ ok: false, missing: true, detail: expect.any(String) });
   });
 
   it('heartbeat: refuses parameters that do not fit and a secret before anything runs; a cancel is cancelled', async () => {

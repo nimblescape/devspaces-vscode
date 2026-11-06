@@ -63,6 +63,7 @@ import { monitorImageTag } from '../core/helper/helperState';
 import { REMOTE_MONITOR_DOCKER_TIMEOUT_MS, RemoteSessionMonitor } from '../core/remoteMonitor/remoteSessionMonitor';
 import { imageSettingsOf, isSourceId, type MonitorSettings } from '../core/remoteMonitor/protocol';
 import { helperCheckOf, readEngineHelperRecord } from '../core/remoteMonitor/helperCheck';
+import { readOomKills, type OomKills } from '../core/vm/oomKills';
 import { MONITOR_WORKER_HASH_ENV, storeWorkerScript } from '../core/remoteMonitor/workerScript';
 import { bundleHash } from '../core/loader/pipeLoader';
 import { workerHostSide } from '../core/worker/workerHostSide';
@@ -439,18 +440,21 @@ export function reconcileOperation(engineOf: EngineOfOperation, ownHelperOf: Own
  * `heartbeat`, one heartbeat of a window to the Monitor container of the worker's engine
  * (monitorFlow.sendHeartbeat). `missing` tells the window to start the monitor again. A heartbeat that the monitor
  * took also answers the last check of the helper image by the Monitor (helperCheck.ts), read from its volume at
- * `stateDir` (LOCK_STATE_DIR).
+ * `stateDir` (LOCK_STATE_DIR), and the processes that the kernel of the engine ended because the memory ran out
+ * (`oomKillsOf`, by default readOomKills of the kernel that the worker runs on).
  */
-export function heartbeatOperation(engineOf: EngineOfOperation, stateDir: string = LOCK_STATE_DIR): OperationHandler {
+export function heartbeatOperation(engineOf: EngineOfOperation, stateDir: string = LOCK_STATE_DIR, oomKillsOf: () => OomKills | undefined = readOomKills): OperationHandler {
   return checkedOperation('heartbeat', parseHeartbeatParams, async (checked, context) => {
     const value = await sendHeartbeat(engineOf(context), checked.heartbeat, context.signal).catch((error: unknown) => {
       cancelledIfAborted('heartbeat', context);
       throw error;
     });
     if (!value.ok) return value satisfies HeartbeatValue;
-    // With the last check of the helper image by the Monitor, from its volume, when it has one (helperCheck.ts).
+    // With the last check of the helper image by the Monitor, from its volume, when it has one (helperCheck.ts), and
+    // the processes that the kernel of the engine ended because the memory ran out (oomKills.ts).
     const helperCheck = helperCheckOf(readEngineHelperRecord(stateDir));
-    return (helperCheck === undefined ? value : { ...value, helperCheck }) satisfies HeartbeatValue;
+    const oomKills = oomKillsOf();
+    return { ...value, ...(helperCheck === undefined ? {} : { helperCheck }), ...(oomKills === undefined ? {} : { oomKills }) } satisfies HeartbeatValue;
   });
 }
 
