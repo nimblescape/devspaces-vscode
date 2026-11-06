@@ -241,7 +241,7 @@ Up to version 0.2.1 the prefix was `devspace.`. Settings with the old prefix are
 | `confirmOpenFromLink` | `true` | *User only.* Ask before a link creates a devspace of a repository of your account or of one of your organizations (see [Open from a link](#open-from-a-link)). **Always Open** in that question turns this off. A repository of another owner is always confirmed, also when this setting is off. |
 | `vmMemoryGiB` | `4` | *User only.* macOS and Linux: the memory of the VM of Devspaces in GiB, from its next start. At most half of the memory of this computer: a larger value counts as that half, and Devspaces says so (see [The VM of Devspaces](#the-vm-of-devspaces-macos-and-linux)). On Windows, manage it via WSL. |
 | `vmCpus` | `4` | *User only.* macOS and Linux: the CPUs of the VM of Devspaces, from its next start. At most half of the CPUs of this computer: a larger value counts as that half, and Devspaces says so. On Windows, manage it via WSL. |
-| `createDockerContext` | `false` | *User only.* macOS and Linux: create the Docker context `devspaces` for the VM of Devspaces, for other Docker tools. It never becomes the current Docker context; turning the setting off removes it. See [Other Docker tools](#other-docker-tools). |
+| `createDockerContext` | `false` | *User only.* Create the Docker context `devspaces` for the VM of Devspaces, for other Docker tools. It never becomes the current Docker context; turning the setting off removes it. See [Other Docker tools](#other-docker-tools). |
 
 ### Repository groups
 
@@ -375,10 +375,11 @@ On macOS and Linux, Devspaces uses Docker Engine in a VM of its own, made with [
 
 ### Other Docker tools
 
-By default, Devspaces creates no Docker context, so the `docker` command in your terminals, the Dev Containers extension and the Container Tools extension do not see the containers, images and volumes of the VM of Devspaces. To see them, turn on the setting `devspaces.createDockerContext` (macOS and Linux; on Windows it has no effect yet):
+By default, Devspaces creates no Docker context, so the `docker` command in your terminals, the Dev Containers extension and the Container Tools extension do not see the containers, images and volumes of the VM of Devspaces. To see them, turn on the setting `devspaces.createDockerContext`:
 
-- Devspaces creates the Docker context `devspaces`, with the description "The VM of nimblescape Devspaces". It points to the Docker socket of the VM, which Lima puts into `~/.nimblescape/devspaces/vm/devspaces/sock/docker.sock` while the VM runs. Use it with `docker --context devspaces ps`, or choose it in the other tool. It never becomes the current Docker context, so `docker` without `--context` keeps its target.
-- The context reaches the VM only while the VM runs: nothing but Devspaces starts it. Start a devspace, or the window of one, first.
+- Devspaces creates the Docker context `devspaces`, with the description "The VM of nimblescape Devspaces". Use it with `docker --context devspaces ps`, or choose it in the other tool. It never becomes the current Docker context, so `docker` without `--context` keeps its target.
+- macOS and Linux: the context points to the Docker socket of the VM, which Lima puts into `~/.nimblescape/devspaces/vm/devspaces/sock/docker.sock` while the VM runs. It reaches the VM only while the VM runs: nothing but Devspaces starts it. Start a devspace, or the window of one, first.
+- Windows: the context exists while the WSL distribution of Devspaces exists. It points to a named pipe of Devspaces (`npipe:////./pipe/devspaces-context-<id>`), which a window of Devspaces serves: the context works only while a VS Code window with Devspaces is open, and then it starts the distribution when it does not run.
 - Turning the setting off removes the context. Devspaces changes and removes only its own context: when a context `devspaces` that Devspaces did not create exists, for example one of version 0.2.0, a warning says so and Devspaces leaves it as it is. Devspaces does not remove the context while it is the current Docker context (`docker context use default` first).
 - A Docker context gives full access to the engine. Manage your devspaces only with Devspaces: a deleted volume deletes the work that you did not push, and a container that another tool created has no labels and records of Devspaces.
 

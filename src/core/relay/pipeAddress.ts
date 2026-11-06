@@ -90,6 +90,18 @@ export function dockerPipeAddress(id: string, platform: NodeJS.Platform, base: s
 }
 
 /**
+ * The named pipe of the Docker context `devspaces` on Windows (R-ENG-007, contextPipe.ts): `\\.\pipe\devspaces-context-<id>`,
+ * where the id is the start of a SHA-256 of the Windows user (`<domain>\<name>`, in lower case). The names of the named
+ * pipes are shared by all users of the computer, so each user gets its own pipe; it does not match the pattern of the
+ * pipe of a window (parseDockerPipeHost).
+ */
+export function contextPipeAddress(windowsUser: string): DockerPipeAddress {
+  const id = createHash('sha256').update(windowsUser.toLowerCase(), 'utf8').digest('hex').slice(0, ID_LENGTH);
+  const name = `${PIPE_PREFIX}context-${id}`;
+  return { id, path: `\\\\.\\pipe\\${name}`, dockerHost: `npipe:////./pipe/${name}` };
+}
+
+/**
  * The address of the Docker pipe in `dockerHost` (`settings.host` of the authority of a window), or undefined when it
  * is no address of a Docker pipe of Devspaces on this platform: a named pipe `devspaces-<id>` on Windows; elsewhere a
  * socket `docker.sock` in a folder `devspaces-<id>` with an absolute, normalized path of at most MAX_SOCKET_PATH_BYTES.

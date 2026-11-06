@@ -929,7 +929,7 @@
           "type": "boolean",
           "scope": "machine",
           "default": false,
-          "markdownDescription": "Create the Docker context `devspaces` for the VM of Devspaces, for the `docker` command and other Docker tools. It reaches the VM while the VM runs, and never becomes the current context. Turning this off removes it. It gives full access: manage devspaces only with Devspaces.\n\nmacOS and Linux only.\n\n[Other Docker tools in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#other-docker-tools)"
+          "markdownDescription": "Create the Docker context `devspaces` for the VM of Devspaces, for other Docker tools. It never becomes the current context; turning this off removes it. It gives full access: manage devspaces only with Devspaces.\n\nIt works while the VM runs (macOS, Linux) or while a window of Devspaces is open (Windows).\n\n[Other Docker tools in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#other-docker-tools)"
         }
       }
     }

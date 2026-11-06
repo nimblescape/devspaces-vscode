@@ -170,7 +170,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-SEC-003
 
-**Docker pipes with an allow-list.** The Docker pipe of a window and the Docker pipe of the extension let through only the Docker requests on their allow-list and refuse every other request (see [The request filter](remote-connection.md#the-request-filter)). Only the user of the computer can open them.
+**Docker pipes with an allow-list.** The Docker pipe of a window and the Docker pipe of the extension let through only the Docker requests on their allow-list and refuse every other request (see [The request filter](remote-connection.md#the-request-filter)). The named pipe of the Docker context of [R-ENG-007](#r-eng-007) on Windows has no allow-list, because a Docker context gives full access. Only the user of the computer can open them.
 
 ### R-SEC-004
 
