@@ -75,8 +75,8 @@ describe('showError', () => {
     expect(showLog).not.toHaveBeenCalled();
   });
 
-  // A remote Docker host that cannot be reached gets its own message, never Start Docker or Install Docker….
-  it('offers Show details and Try again, not Start Docker or Install Docker…, for an unreachable remote host', async () => {
+  // A remote Docker host that cannot be reached gets its own message, never Install Docker….
+  it('offers Show details and Try again, not Install Docker…, for an unreachable remote host', async () => {
     const { logger } = recordingLogger();
     const retry = vi.fn();
     window.showErrorMessage.mockResolvedValue(Actions.tryAgain);

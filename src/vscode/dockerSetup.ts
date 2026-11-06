@@ -3,9 +3,10 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Docker setup: the context keys of the welcome view (the setup in the sidebar) and the commands of its buttons: Install
-// WSL 2 on Windows runs its command in a visible terminal, and Start Docker starts Docker Desktop on Windows. Devspaces
-// never installs Docker Desktop or Docker Engine on this computer: Set Up Docker for Devspaces sets up its VM
-// (wslSetupCommands.ts, limaSetupCommands.ts). The rules are pure functions in src/core/docker/dockerSetup.ts.
+// WSL 2 on Windows runs its command in a visible terminal. Devspaces never installs Docker Desktop or Docker Engine on
+// this computer: Set Up Docker for Devspaces sets up its VM (wslSetupCommands.ts, limaSetupCommands.ts). Only an
+// operation starts an installed Docker Desktop on Windows (ensureDockerRunning, src/core/docker/dockerStart.ts). The
+// rules are pure functions in src/core/docker/dockerSetup.ts.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as vscode from 'vscode';
