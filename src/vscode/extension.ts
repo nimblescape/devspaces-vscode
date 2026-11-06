@@ -45,6 +45,7 @@ import { deferredByteProcess } from '../core/relay/deferredProcess';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { OomWatch } from '../core/vm/oomKills';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
 import { HostPipes } from '../core/relay/hostPipes';
@@ -125,6 +126,7 @@ import {
   devContainersDefaultExtensionsValue,
   readSettings,
   SETTINGS_SECTION,
+  showSettingWarning,
   warnInvalidCacheUpdateSchedule,
   warnInvalidDefaultImage,
   warnVmResources,
@@ -218,6 +220,15 @@ async function activateExtension(
   const hasLimaVm = platform === 'darwin' || platform === 'linux';
   if (hasLimaVm) warnVmResources(logger, vmResourceWarnings, settings, machine);
   const vmWish = (): Partial<LimaResources> => ({ memoryGiB: settings.vmMemoryGiB, cpus: settings.vmCpus });
+  const oomWatch = new OomWatch({
+    log: (host, added) => logger.warn(Messages.oomKilled(hostAccessOf(host)?.kind === 'lima' ? 'the VM of Devspaces' : describeDockerHost(host), added)),
+    warn: (host, added) => {
+      if (hostAccessOf(host)?.kind !== 'lima') return;
+      const given = limaResources(machine.totalMemory, machine.cpus, vmWish()).memoryGiB;
+      const most = limaResources(machine.totalMemory, machine.cpus, { memoryGiB: Number.MAX_SAFE_INTEGER }).memoryGiB;
+      showSettingWarning(logger, 'vmMemoryGiB', Messages.vmOutOfMemory(added, given, most));
+    },
+  });
 
   const runner = new NodeProcessRunner();
   // The window of an attached container, also in the names of its workers (ConnectionAdapter.windowName).
@@ -764,6 +775,9 @@ async function activateExtension(
     // image of that engine (its key: '' for the local Docker, else the host), so that this window does not check it
     // while the Monitor did (docs/requirements.md R-DS-003).
     onHelperCheck: (target, check) => void helper.recordEngineCheck(target.host, check),
+    // The processes that the kernel of the engine ended because the memory ran out: in the log on every engine, and on
+    // the Lima VM a warning at the first one of each start of the VM, with the setting of its memory (R-VM-006).
+    onOomKills: (target, kills) => oomWatch.seen(target.host, kills),
   });
   // The source of the heartbeats and the owner of a permanent Monitor (computer.id); created by the first reader, and
   // read once (each open and each repair of the heartbeats asks for it; a failed read is tried again at the next call).

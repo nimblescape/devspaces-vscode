@@ -248,6 +248,17 @@ export const Messages = {
   /** The setting vmMemoryGiB asks for more than half of the memory of this computer (R-VM-006): the VM gets that half. */
   vmMemoryTooLarge: (wish: number, given: number) =>
     `The setting devspaces.vmMemoryGiB asks for ${wish} GiB, but the VM of Devspaces gets at most half of the memory of this computer: ${given} GiB.`,
+  /** The kernel of an engine ended processes because the memory ran out (OomWatch): the log, on every engine. */
+  oomKilled: (engine: string, added: number) => `On ${engine}, the kernel ended ${added === 1 ? 'a process' : `${added} processes`} because the memory ran out.`,
+  /**
+   * The kernel of the Lima VM ended processes because the memory ran out (R-VM-006): the setting that gives it more.
+   * `given`: what the setting gives the VM at its next start; `most`: half of the memory of this computer.
+   */
+  vmOutOfMemory: (added: number, given: number, most: number) =>
+    `The VM of Devspaces ran out of memory, and its kernel ended ${added === 1 ? 'a process' : `${added} processes`} there. ` +
+    (given < most
+      ? `Give the VM more memory with the setting devspaces.vmMemoryGiB: it is ${given} GiB, and at most ${most} GiB are possible on this computer. The VM gets the new value at its next start, after all devspaces stopped.`
+      : `The VM already gets ${given} GiB, half of the memory of this computer, which is the most that the setting devspaces.vmMemoryGiB gives it. Stop the devspaces that you do not need.`),
   /** The setting vmCpus asks for more than half of the CPUs of this computer (R-VM-006): the VM gets that half. */
   vmCpusTooLarge: (wish: number, given: number) =>
     `The setting devspaces.vmCpus asks for ${wish} CPUs, but the VM of Devspaces gets at most half of the CPUs of this computer: ${given}.`,

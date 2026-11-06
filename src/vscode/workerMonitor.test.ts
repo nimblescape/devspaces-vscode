@@ -56,6 +56,14 @@ describe('the calls of a window to the Monitor, as operations of the worker', ()
     expect(checks).toHaveLength(1);
   });
 
+  it('a heartbeat that carries the processes that the kernel ended because the memory ran out hands them on, and answers ok', async () => {
+    const oomKills = { boot: '0b5c2d7e-1f3a-4c6b-9d8e-7a6b5c4d3e2f', count: 1 };
+    const kills: unknown[][] = [];
+    const monitor = workerMonitor({ flow: async () => ({ ok: true, oomKills }), owner: () => ({ windowId: 'w', pid: 7 }), logger: silentLogger, onOomKills: (...args) => kills.push(args) });
+    expect(await monitor.heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: true });
+    expect(kills).toEqual([[TARGET, oomKills]]);
+  });
+
   it('the container of a devspace exists unless the worker reads it as missing; a failure counts as not there', async () => {
     for (const [state, exists] of [['running', true], ['stopped', true], ['missing', false]] as const) {
       const { monitor, calls } = monitorWith(() => ({ state }));

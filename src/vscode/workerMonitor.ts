@@ -4,10 +4,11 @@
 
 // The calls of this window to the Monitor of an engine, as operations of the worker of that engine (every
 // remote action is a worker operation): the heartbeats (`heartbeat`, whose answer also carries the last check of the
-// helper image by the Monitor), the check that the container of a devspace exists there (`windowState`), the Git state
-// of a release (`recordGitState`), the ensure of the monitor (`monitorEnsure`), and "Update All Images Now"
-// (`monitorRunNow`). The image settings and list come with the operation `open`. No `vscode` here; never throws,
-// except the Git state (its caller bounds and logs it).
+// helper image by the Monitor and the processes that the kernel of the engine ended because the memory ran out), the
+// check that the container of a devspace exists there (`windowState`), the Git state of a release (`recordGitState`),
+// the ensure of the monitor (`monitorEnsure`), and "Update All Images Now" (`monitorRunNow`). The image settings and
+// list come with the operation `open`. No `vscode` here; never throws, except the Git state (its caller bounds and logs
+// it).
 import type { DockerTarget } from '../core/docker/dockerHost';
 import { errorMessage } from '../core/errors';
 import {
@@ -31,6 +32,7 @@ import type { HelperCheck } from '../core/remoteMonitor/helperCheck';
 import type { HeartbeatInput, MonitorSettings } from '../core/remoteMonitor/protocol';
 import type { HeartbeatSendResult } from '../core/session/windowHeartbeats';
 import type { Devspace } from '../core/types';
+import type { OomKills } from '../core/vm/oomKills';
 
 /** A flow in the worker of `target` (extensionFlow with its target). */
 export type TargetFlow = (op: string, params: unknown, options: { target: DockerTarget; signal?: AbortSignal; timeoutMs?: number }) => Promise<unknown>;
@@ -46,6 +48,11 @@ export interface WorkerMonitorDeps {
    * Called without a wait; it must not throw.
    */
   onHelperCheck?: (target: DockerTarget, check: HelperCheck) => void;
+  /**
+   * The processes that the kernel of the engine `target` ended because the memory ran out, from the answer of a heartbeat
+   * there (HeartbeatValue.oomKills). Called without a wait; it must not throw.
+   */
+  onOomKills?: (target: DockerTarget, kills: OomKills) => void;
 }
 
 export function workerMonitor(deps: WorkerMonitorDeps) {
@@ -58,6 +65,7 @@ export function workerMonitor(deps: WorkerMonitorDeps) {
         if (value === undefined) return { ok: false, missing: false, detail: 'the worker answered the heartbeat with an invalid value' };
         if (!value.ok) return value;
         if (value.helperCheck !== undefined) deps.onHelperCheck?.(target, value.helperCheck);
+        if (value.oomKills !== undefined) deps.onOomKills?.(target, value.oomKills);
         return { ok: true };
       } catch (error) {
         return { ok: false, missing: false, detail: errorMessage(error) };
