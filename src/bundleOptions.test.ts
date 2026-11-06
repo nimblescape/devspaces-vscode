@@ -15,7 +15,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { packageBundleOptions, sharedBundleOptions } from '../scripts/bundleOptions.mjs';
 
 const ROOT = path.resolve(__dirname, '..');
-const OUTFILES = ['dist/extension.js', 'dist/groupsPreviewWorker.js', 'dist/helperChannel.js'];
+const OUTFILES = ['dist/extension.js', 'dist/groupsPreviewWorker.js', 'dist/helperChannel.js', 'dist/vmTask.js'];
 
 /** The text of each bundle of a production build, by its output file. */
 const bundles = new Map<string, string>();
@@ -45,13 +45,14 @@ describe('the bundles of the package', () => {
     }
   });
 
-  it('have source maps in a development build, except the bundle of the worker', () => {
+  it('have source maps in a development build, except the bundles of the worker and of the scheduled task', () => {
     expect(sharedBundleOptions({ production: false })).toMatchObject({ minify: false, keepNames: true, sourcemap: true });
     const development = packageBundleOptions(sharedBundleOptions({ production: false }));
     expect(development.map((options) => [options.outfile, options.sourcemap])).toEqual([
       ['dist/extension.js', true],
       ['dist/groupsPreviewWorker.js', true],
       ['dist/helperChannel.js', false],
+      ['dist/vmTask.js', false],
     ]);
     for (const options of development) expect(options, options.outfile).toMatchObject({ minify: false, keepNames: true });
   });

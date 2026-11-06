@@ -269,7 +269,7 @@ The monitor sends `User-Agent: nimblescape-devspaces/<version>` with each reques
 How long the monitor runs depends on the Docker engine. Devspaces asks no question about the monitor.
 
 - **On a remote host** (see [Remote Docker host](#remote-docker-host)), the monitor keeps running, also while no devspace runs there and VS Code is closed, and Docker starts it again when Docker or the host restarts. Its background work runs at the scheduled time even when no devspace runs. With the setting `devspaces.stopMonitorWhenIdle` on, it ends when idle, as on your computer.
-- **On the WSL distribution of Devspaces, on the VM of Devspaces and on the Docker of your computer**, the monitor ends 5 minutes after the last devspace there stopped, so that the distribution, the VM or Docker can stop too. It does not end during a background run, and not while it waits for the retry of a run that reached no server, up to the retry after 30 minutes. A time of the schedule that was missed runs at the next start of a devspace there.
+- **On the WSL distribution of Devspaces, on the VM of Devspaces and on the Docker of your computer**, the monitor ends 5 minutes after the last devspace there stopped, so that the distribution, the VM or Docker can stop too. It does not end during a background run, and not while it waits for the retry of a run that reached no server, up to the retry after 30 minutes. On the VM of Devspaces, a scheduled task of your user starts the VM and the monitor at the times of the schedule, also while VS Code is closed (see [The VM of Devspaces](#the-vm-of-devspaces-macos-and-linux)). Elsewhere, a time of the schedule that was missed runs at the next start of a devspace there.
 
 You can change the setting `devspaces.stopMonitorWhenIdle` at any time. A change applies on each engine at the next start of a devspace or **Update All Images Now** there. Until then, a monitor that keeps running goes on; **Remove Devspaces from This Docker Engine…** removes it at once. On an engine that several computers use, a monitor that keeps running and that another computer created stays; the computer that created it replaces it when it turns the setting on (see [Shared Docker engines](#shared-docker-engines)).
 
@@ -372,6 +372,7 @@ On macOS and Linux, Devspaces uses Docker Engine in a VM of its own, made with [
 - **The VM**: 4 GiB of memory and 4 CPUs, each at most half of the computer, and a disk of at most 100 GiB, whose file grows with your devspaces. The settings `devspaces.vmMemoryGiB` and `devspaces.vmCpus` change the memory and the CPUs from the next start of the VM: when the VM is stopped, Devspaces gives it the new values before it starts it. A value above half of the computer counts as that half, and a warning says so. When the VM runs out of memory and its kernel ends a process, for example a build step or the TypeScript server of your devspace, a warning says so and names `devspaces.vmMemoryGiB`, once per start of the VM. No folder of your computer is in the VM.
 - **Use it**: when the VM exists, **Devspaces: Use a Remote Docker Host…** lists it as `lima:devspaces` in the group **Lima**. Devspaces reaches it over the SSH of Lima as root, with the key that Lima made: there is no password and no question.
 - **When it runs**: Devspaces starts the VM when it needs it, for example for a Start, an Open, or the window of a devspace there. The VM powers itself off when no container ran there for some minutes.
+- **At the times of the background run**: a scheduled task of your user starts the VM and its Monitor at the times of `devspaces.cacheUpdateSchedule`, also while VS Code is closed, so that the images of your devspaces are up to date at your next start (see [The background run](#the-background-run)). On macOS it is the launch agent `~/Library/LaunchAgents/com.nimblescape.devspaces.vm.plist`, on Linux the systemd user timer `devspaces-vm.timer` with `devspaces-vm.service` in `~/.config/systemd/user`; neither needs administrator permission. The task starts the VM 5 minutes after a time of the schedule, so that the network is back after a wake or a login. It never wakes the computer: a time that the computer missed while it slept or was off runs once after the wake or the login, after the same 5 minutes. When the Monitor has done its work, it ends, and the VM powers itself off. When a window uses the VM at that time, the VM and the Monitor run already. On Linux, the systemd of your user runs the timer only while you are logged in, unless lingering is on for your user. The task writes what it does to `~/.nimblescape/devspaces/task/task.log`. Devspaces creates the task with the VM, writes it again when the setting changes, and removes it when the VM no longer exists.
 
 ### Other Docker tools
 
@@ -471,6 +472,29 @@ Devspaces keeps a few things on each Docker engine that you used: the Monitor (`
 
 On Windows, when you set up the WSL distribution of Devspaces, run **Devspaces: Remove the WSL Distribution of Devspaces…** after these steps. It deletes the distribution with its Docker engine and its folder (see [The WSL distribution of Devspaces](#the-wsl-distribution-of-devspaces-windows)). Without the extension, `wsl --unregister devspaces` in a terminal deletes it; then remove the folder `%LOCALAPPDATA%\nimblescape\devspaces\wsl`.
 
+On macOS and Linux, when you set up the VM of Devspaces, the VM and its scheduled task stay after these steps and after the uninstall. To remove them, first delete the VM with all devspaces in it. Push your changes first.
+
+```sh
+LIMA_HOME="$HOME/.nimblescape/devspaces/vm" "$HOME"/.nimblescape/devspaces/lima/*/bin/limactl delete --force devspaces
+```
+
+Then remove the scheduled task. On macOS:
+
+```sh
+launchctl bootout gui/$(id -u)/com.nimblescape.devspaces.vm
+rm ~/Library/LaunchAgents/com.nimblescape.devspaces.vm.plist
+```
+
+On Linux:
+
+```sh
+systemctl --user disable --now devspaces-vm.timer
+rm ~/.config/systemd/user/devspaces-vm.service ~/.config/systemd/user/devspaces-vm.timer
+systemctl --user daemon-reload
+```
+
+Then delete the folder of Devspaces with Lima and the files of the task: `rm -rf "$HOME/.nimblescape/devspaces"`. A window of Devspaces that starts while the VM no longer exists removes the scheduled task by itself.
+
 Then uninstall Devspaces in the Extensions view of VS Code, or run `code --uninstall-extension nimblescape.nimblescape-devspaces-2`.
 
 What to know:
@@ -478,7 +502,7 @@ What to know:
 - The command never starts Docker; only the WSL distribution of Devspaces starts, because WSL starts it for every use. When the engine does not answer, it removes nothing and says so.
 - While it removes Devspaces, a Start, a Rebuild, a Stop, a Delete or **Update All Images Now** on that engine in another window is refused with the message "Devspaces is being removed from `<engine>` in another window. Try again after that." An **Update All Images Now** that waits for Docker to start when the removal begins sends no request either. **Refresh** still updates the view, but it does not restore lost records of Devspaces from the volumes there, in any window, and says so. When that window was closed or crashed during the removal, the next Start runs.
 - It deletes only the devspaces of your GitHub accounts in Devspaces, and with several accounts the second question names them. The devspaces of other accounts and of other computers stay, and the first question says so. Without a sign-in, your devspaces stay too.
-- After the removal, this computer does no Docker work on the engine by itself, also not when VS Code starts, until you start or rebuild a devspace there or run **Update All Images Now**. That sets up the engine again and asks again about the Monitor. Until then, the devspaces that you kept there show `State unknown (Devspaces removed from Docker)`, or on a remote host `State unknown (Devspaces removed from <host>)`, and the reopen at startup does not open them. A window of one of them, for example from **Open Recent** or attached by hand with Dev Containers, stays connected while its GitHub account is signed in to Devspaces, and works without Devspaces, so you can still save your changes: nothing is updated in the background, and the container does not stop when you close the window. A message says so. A Start of that devspace in another window shows this window, and a Start in this window sets Devspaces up again and connects this window. A container that runs is never replaced under the window: one of an older version stays as it is, and the window closes its connection, so that a Start from the empty window makes a new one.
+- After the removal, this computer does no Docker work on the engine by itself, also not when VS Code starts, until you start or rebuild a devspace there or run **Update All Images Now**. That sets up the engine again. Until then, the devspaces that you kept there show `State unknown (Devspaces removed from Docker)`, or on a remote host `State unknown (Devspaces removed from <host>)`, and the reopen at startup does not open them. A window of one of them, for example from **Open Recent** or attached by hand with Dev Containers, stays connected while its GitHub account is signed in to Devspaces, and works without Devspaces, so you can still save your changes: nothing is updated in the background, and the container does not stop when you close the window. A message says so. A Start of that devspace in another window shows this window, and a Start in this window sets Devspaces up again and connects this window. A container that runs is never replaced under the window: one of an older version stays as it is, and the window closes its connection, so that a Start from the empty window makes a new one.
 - **Stop** and **Delete** of a devspace that you kept there still work, and so does **Refresh** when the records of Devspaces on your computer were lost (it restores them from the volumes there): they build the helper image and create the volumes `devspaces-monitor` and `devspaces-vscode` there again, but they do not start the Monitor, nothing runs there by itself afterwards, and running the command again removes them again.
 - A build of the helper image that another VS Code window began in the background before the removal, for example right after an update of Devspaces, goes on and can make the image `devspaces-worker:<hash>` there again. When `docker image ls` still lists it after the removal, run the command again.
 - An **Update All Images Now** in another VS Code window that is already sending its request when the removal begins goes on, and can create the container `devspaces-monitor`, the helper image and the volumes there again. When `docker ps -a` still lists `devspaces-monitor` after the removal, run the command again.

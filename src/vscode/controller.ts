@@ -939,7 +939,7 @@ export class Controller implements vscode.Disposable {
       this.logger.info(`The last devspace is not opened: Devspaces was removed from ${describeDockerHost(dockerHost)}. A Start there sets it up again.`);
       return;
     }
-    // A Start of the user in this window (also one that still asks about the Monitor), or a link, is not overtaken.
+    // A Start of the user in this window (also one that still runs its first checks), or a link, is not overtaken.
     if (this.activeConnectRequests.size > 0 || this.linksOpening > 0) {
       this.logger.info('The last devspace is not opened: another devspace is opening in this window.');
       return;
@@ -2411,13 +2411,14 @@ export class Controller implements vscode.Disposable {
       }
     }
     const newWindow = this.opensNewWindow(options.window ?? 'default', reconnecting);
-    // A Start in this window takes its connect request now, before the question below: a flow that connects this window
-    // meanwhile (the automatic reopen) is then older, and does not connect over it (connect: the newest request wins).
+    // A Start in this window takes its connect request now, before its first checks below: a flow that connects this
+    // window meanwhile (the automatic reopen) is then older, and does not connect over it (connect: the newest request
+    // wins).
     const reserved = newWindow ? undefined : this.reserveConnectRequest();
     let started: boolean;
     try {
-      // A Start of the user asks about the Monitor of the engine before its open makes sure of it; the reopen at
-      // startup asks nothing. Refused while Devspaces is being removed from the engine (told).
+      // A Start of the user clears the removal mark of the engine first (beforeUserFlow); the reopen at startup does
+      // not. Refused while Devspaces is being removed from the engine (told).
       if (options.automatic !== true && !(await this.beforeUserFlow('Start', devspace))) return;
       started = await this.operation(
         key,

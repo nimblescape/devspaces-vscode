@@ -15,8 +15,9 @@ export default defineConfig({
     include: ['test/lima/**/*.test.ts'],
     environment: 'node',
     fileParallelism: false,
-    // The first start of the VM runs cloud-init, and the idle check stops it after two quiet minutes.
-    testTimeout: 20 * 60_000,
+    // The first start of the VM runs cloud-init, the idle check stops it after two quiet minutes, and the scheduled task
+    // waits 5 minutes before it starts the VM.
+    testTimeout: 30 * 60_000,
     hookTimeout: 5 * 60_000,
     reporters: ['verbose'],
   },

@@ -40,7 +40,7 @@ const shared = {
   plugins: watch ? [watchReporter] : [],
 };
 
-// The three bundles of the package (scripts/bundleOptions.mjs).
+// The four bundles of the package (scripts/bundleOptions.mjs).
 const bundles = packageBundleOptions(shared);
 
 // A production build writes no source maps: remove maps of an earlier development build, so that no map that does not

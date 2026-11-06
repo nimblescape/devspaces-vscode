@@ -20,6 +20,7 @@ import { WslKeeper } from '../core/docker/wslKeeper';
 import { WslLifetime } from '../core/docker/wslLifetime';
 import { WslUpgrade } from '../core/docker/wslUpgrade';
 import {
+  LIMA_HOST,
   WSL_DISTRIBUTION,
   WSL_HOST,
   WSL_LIST_ARGS,
@@ -43,11 +44,13 @@ import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type Re
 import { RelayConnectionError } from '../core/relay/connection';
 import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
 import { deferredByteProcess } from '../core/relay/deferredProcess';
+import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
+import { VmTask, vmTaskPaths, vscodeElectron } from '../core/vm/vmTask';
 import { DOCKER_CONTEXT_TIMEOUT_MS, dockerConfigDir, dockerContextFile, syncDockerContext } from '../core/vm/dockerContext';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
@@ -1257,10 +1260,12 @@ async function activateExtension(
     logger,
     showLog: () => logger.show(),
     useRemoteHost: () => remoteDocker.useRemoteHost(),
-    // After the setup, the Docker context of the setting createDockerContext, which may have waited for a Docker CLI.
+    // After the setup, the Docker context of the setting createDockerContext, which may have waited for a Docker CLI,
+    // and the scheduled task of the VM.
     useHost: async (host) => {
       const used = await remoteDocker.useHost(host);
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+      background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
       return used;
     },
     // Linux: QEMU and the group kvm with one administrator prompt (sudo) in a visible terminal of this computer, with a
@@ -1279,6 +1284,30 @@ async function activateExtension(
         : undefined,
   });
   context.subscriptions.push(limaSetup);
+  // The scheduled task of the user on macOS and Linux (R-VM-005, src/core/vm/vmTask.ts): it starts the Lima VM and its
+  // Monitor at the times of devspaces.cacheUpdateSchedule, in the time zone of this computer. Each window brings it to the
+  // current settings at its start, after the setup of the VM and after a change of the schedule; it writes only what
+  // changed. Without the VM, the task goes; before the pinned Lima is installed, nothing changes.
+  const vmTask =
+    limaVm === undefined
+      ? undefined
+      : new VmTask({
+          runner,
+          logger,
+          platform,
+          homeDir: os.homedir(),
+          paths: vmTaskPaths(limaVm.paths.root),
+          bundledProgram: context.asAbsolutePath(path.join('dist', 'vmTask.js')),
+          uid: () => os.userInfo().uid,
+        });
+  const updateVmTask = async (): Promise<void> => {
+    if (limaVm === undefined || vmTask === undefined) return;
+    if (!(await limaVm.exists())) return vmTask.remove();
+    const limactl = presentLima(limaVm.paths.lima, platform, vmArch);
+    if (limactl === undefined) return;
+    const { schedule, timeZone } = await monitorSettings.forOpen(LIMA_HOST);
+    await vmTask.update({ config: { schedule, timeZone, limactl, limaHome: limaVm.paths.home }, electron: vscodeElectron(platform, vscode.env.appRoot, process.execPath) });
+  };
   // A Docker context or DOCKER_HOST of the user that reaches a host over SSH while Devspaces uses the local Docker: its
   // host is offered once for the list (in the background; the read that found it goes on).
   context.subscriptions.push({
@@ -1531,6 +1560,7 @@ async function activateExtension(
       warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings, event);
       if (hasLimaVm) warnVmResources(logger, vmResourceWarnings, settings, machine, event);
       if (event.affectsConfiguration(`${SETTINGS_SECTION}.createDockerContext`)) background(syncVmDockerContext(true), 'update the Docker context of the VM of Devspaces');
+      if (event.affectsConfiguration(`${SETTINGS_SECTION}.cacheUpdateSchedule`)) background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
       updateOwnersContextKey(settings.owners, logger);
       updateDevspacesOnlyContextKey(settings.showOnlyDevspaces === true, logger);
       // Another scan scope loads the list again at once.
@@ -1551,6 +1581,8 @@ async function activateExtension(
   background(targets.resolve(), 'read the Docker host');
   // The Docker context of the VM as the setting createDockerContext asks (usually only a read of the context store).
   background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+  // The scheduled task of the VM as the settings ask (usually only reads of its files).
+  background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
   // The stored list at once, then the background refresh.
   const listed = sidebar.initialize();
   background(listed, 'show the repository list');

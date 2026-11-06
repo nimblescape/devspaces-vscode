@@ -51,7 +51,7 @@ export function workerBundleOptions(shared) {
 }
 
 /**
- * The three bundles of the package, with `shared` (sharedBundleOptions, with the plugins and the log level of the
+ * The four bundles of the package, with `shared` (sharedBundleOptions, with the plugins and the log level of the
  * build). The paths are relative to the folder of the repository.
  * @param {import('esbuild').BuildOptions} shared
  * @returns {Array<import('esbuild').BuildOptions & { outfile: string }>}
@@ -64,5 +64,8 @@ export function packageBundleOptions(shared) {
     { ...shared, entryPoints: ['src/vscode/groupsPreviewWorker.ts'], outfile: 'dist/groupsPreviewWorker.js' },
     // The program of the worker, the batch helpers, the Monitor and the analysis threads.
     { ...workerBundleOptions(shared), outfile: 'dist/helperChannel.js' },
+    // The program of the scheduled task on macOS and Linux (src/core/vm/vmTask.ts): Devspaces copies it out of the
+    // extension, so it has no source map.
+    { ...shared, entryPoints: ['src/vmTask/main.ts'], outfile: 'dist/vmTask.js', sourcemap: false },
   ];
 }
