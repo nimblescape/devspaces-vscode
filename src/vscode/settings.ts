@@ -313,7 +313,7 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
       MIN_STOP_AFTER_MINUTES,
       MAX_STOP_AFTER_MINUTES,
     ),
-    // A cron expression of five fields, or an interval of at least 5 whole minutes; anything else: the default, daily
+    // A cron expression of five fields, or an interval of at least 60 whole minutes; anything else: the default, daily
     // at 06:07 (normalizeCacheSchedule; warnInvalidCacheUpdateSchedule names it).
     cacheUpdateSchedule: normalizeCacheSchedule(get('cacheUpdateSchedule')),
     // The Monitor of an engine runs permanently once the user answered the question about it there, unless this is
