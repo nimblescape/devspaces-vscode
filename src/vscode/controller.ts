@@ -4339,8 +4339,8 @@ const usesDevspace = statusNamesDevspace;
 
 /**
  * The window of a devspace on the remote host `host` can get no Docker pipe (windowDockerHost): the program of its
- * transport is missing on this computer (`ssh`, or `wsl.exe` for the WSL distribution of Devspaces), or `host` has no
- * transport that Devspaces can use.
+ * transport is missing on this computer (`ssh`, also for the Lima VM of Devspaces, or `wsl.exe` for its WSL
+ * distribution), or `host` has no transport that Devspaces can use.
  */
 function noWindowPipe(host: string): UserFacingError {
   const access = hostAccessOf(host);

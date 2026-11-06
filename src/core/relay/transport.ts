@@ -11,6 +11,7 @@ import { sshCommandArgs, sshTargetOf, wslCommandArgs, wslEnv, wslText } from '..
 import { noPromptEnv } from '../docker/remoteDocker';
 import { bundleLine } from '../loader/pipeLoader';
 import type { Logger, StartedByteProcess } from '../ports';
+import { limaEnv, limaSshArgs, type LimaPaths } from '../vm/limaInstance';
 import { RelayConnection, RelayConnectionError } from './connection';
 import type { RemoteShellStart } from './remoteShells';
 import { relayStartScript, startMarker } from './startScript';
@@ -32,6 +33,17 @@ export const RELAY_SHELL_COMMAND = 'sh -s';
  */
 export function wslHostTransport(distribution: string, wslPath: string, env: NodeJS.ProcessEnv): RelayTransport {
   return { file: wslPath, args: wslCommandArgs(distribution, RELAY_SHELL_COMMAND.split(' ')), env: wslEnv(env) };
+}
+
+/**
+ * The transport to the engine in the Lima VM of Devspaces (`command` RELAY_SHELL_COMMAND, or `docker system dial-stdio`
+ * for a Docker connection): `ssh -F <instance>/ssh.config -o BatchMode=yes -T lima-devspaces sudo -n <command>`
+ * (limaSshArgs), with LIMA_HOME of Devspaces and SSH_ASKPASS_REQUIRE=never. It asks nothing: the SSH configuration that
+ * Lima wrote has its own key and the port of the VM on this computer, and the user of Lima runs `sudo` without a
+ * password, so the command runs as root, as in the WSL distribution. The VM must run (LimaVm.ready).
+ */
+export function limaHostTransport(paths: LimaPaths, sshPath: string, env: NodeJS.ProcessEnv, command: string = RELAY_SHELL_COMMAND): RelayTransport {
+  return { file: sshPath, args: limaSshArgs(paths, command), env: limaEnv(noPromptEnv(env), paths) };
 }
 
 /**

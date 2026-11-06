@@ -8,14 +8,15 @@
 // connection of the relay to the host is open, the Docker CLI of Devspaces gets the pipe as DOCKER_HOST
 // (BootstrapDocker), so its calls need no SSH login of their own. Each connection of the pipe becomes a Docker stream of
 // that connection (relayDockerDial); when it ended meanwhile, the connection runs its own `ssh … docker system
-// dial-stdio`. For the WSL distribution of Devspaces, from the first Docker call of an operation there (BootstrapDocker,
-// servePipe), and every Docker call of the extension there uses it: each connection runs its own `wsl.exe …
-// docker system dial-stdio`, which needs no login, so the pipe never depends on a connection of the relay. The pipe
+// dial-stdio`. For the VM of Devspaces (isVmHost: its WSL distribution, or its Lima VM), from the first Docker call of
+// an operation there (BootstrapDocker, servePipe), and every Docker call of the extension there uses it: each
+// connection runs its own `wsl.exe … docker system dial-stdio`, or `ssh … lima-devspaces sudo -n docker system
+// dial-stdio`, which needs no login, so the pipe never depends on a connection of the relay. The pipe
 // lets through only the requests that the Docker calls of the extension need (extensionPipeRule, dockerPipeRules.ts).
 // No `vscode`.
 import { randomBytes } from 'crypto';
 import type { Duplex } from 'stream';
-import { hostAccessOf, transportProgramOf } from '../docker/dockerHost';
+import { hostAccessOf, isVmHost, transportProgramOf } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import { abortError, type Logger, type StartedByteProcess } from '../ports';
 import type { RelayConnection } from './connection';
@@ -24,7 +25,7 @@ import { extensionPipeRule } from './dockerPipeRules';
 import { dockerPipeAddress } from './pipeAddress';
 
 /**
- * The wait before the pipe of the WSL distribution of Devspaces tries to listen again after it could not: every Docker
+ * The wait before the pipe of the VM of Devspaces tries to listen again after it could not: every Docker
  * call of an operation there asks for it (BootstrapDocker), and each try would log the same warning. Short, because the
  * calls there that change something have no other way meanwhile.
  */
@@ -52,8 +53,8 @@ export interface HostPipesDeps {
 export class HostPipes {
   /** The pipe of each host that is served, or that is starting to listen (`pipe` undefined, until `listening` ends). */
   private readonly pipes = new Map<string, { pipe?: DockerPipe; listening?: Promise<void> }>();
-  /** When the pipe of a WSL distribution could not listen the last time (WSL_PIPE_RETRY_MS). */
-  private readonly wslFailedAt = new Map<string, number>();
+  /** When the pipe of the VM of Devspaces could not listen the last time (WSL_PIPE_RETRY_MS). */
+  private readonly vmFailedAt = new Map<string, number>();
   /** The waits for the pipe of each host (whenDockerHost): each one checks dockerHost again after a `serve`. */
   private readonly waits = new Map<string, Set<() => void>>();
   private disposed = false;
@@ -69,7 +70,7 @@ export class HostPipes {
   dockerHost(host: string): string | undefined {
     const pipe = this.pipes.get(host)?.pipe;
     if (pipe === undefined || !pipe.isServing()) return undefined;
-    if (hostAccessOf(host)?.kind !== 'wsl' && this.deps.relayConnection(host) === undefined) return undefined;
+    if (!isVmHost(host) && this.deps.relayConnection(host) === undefined) return undefined;
     return pipe.address.dockerHost;
   }
 
@@ -133,7 +134,7 @@ export class HostPipes {
     if (this.disposed || access === undefined) return;
     const { logger, platform } = this.deps;
     const now = this.deps.now ?? Date.now;
-    const failedAt = this.wslFailedAt.get(host);
+    const failedAt = this.vmFailedAt.get(host);
     if (failedAt !== undefined && Math.abs(now() - failedAt) < WSL_PIPE_RETRY_MS) return;
     const name = `the extension on ${host}`;
     const served = this.pipes.get(host);
@@ -158,8 +159,8 @@ export class HostPipes {
       host,
     );
     const connect = async (socket: Duplex): Promise<void> => {
-      // The WSL distribution: always its own `dial-stdio`, so that the calls never depend on a connection of the relay.
-      const connection = access.kind === 'wsl' ? undefined : this.deps.relayConnection(host);
+      // The VM of Devspaces: always its own `dial-stdio`, so that the calls never depend on a connection of the relay.
+      const connection = isVmHost(host) ? undefined : this.deps.relayConnection(host);
       if (connection !== undefined) {
         try {
           relayDockerDial(connection, socket);
@@ -176,14 +177,14 @@ export class HostPipes {
         // A new random address for each pipe: no other window and no other user knows it beforehand.
         const address = dockerPipeAddress((this.deps.randomId ?? (() => randomBytes(8).toString('hex')))(), platform, platform === 'win32' ? '' : this.deps.base());
         const pipe = await DockerPipe.listen({ address, connect, requests: extensionPipeRule, logger, name, platform, inUseWaitMs: 0 });
-        this.wslFailedAt.delete(host);
+        this.vmFailedAt.delete(host);
         if (this.disposed) pipe.close();
         else entry.pipe = pipe;
       } catch (error) {
         if (this.pipes.get(host) === entry) this.pipes.delete(host);
-        if (access.kind === 'wsl') this.wslFailedAt.set(host, now());
+        if (isVmHost(host)) this.vmFailedAt.set(host, now());
         logger.warn(
-          access.kind === 'wsl'
+          isVmHost(host)
             ? `The Docker pipe of ${name} cannot listen, so the Docker calls of the extension cannot reach ${host}; it tries again in ${WSL_PIPE_RETRY_MS / 1000} seconds: ${errorMessage(error)}`
             : `The Docker pipe of ${name} cannot listen, so the Docker calls of the extension log in to ${host} each time: ${errorMessage(error)}`,
         );

@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // All user-visible texts.
-import { WSL_HOST, sshCommandLine, wslDistributionOf, type DockerHostProblem } from './docker/dockerHost';
+import { LIMA_HOST, WSL_HOST, sshCommandLine, wslDistributionOf, type DockerHostProblem } from './docker/dockerHost';
 
 export const Steps = {
   startingDocker: 'Starting Docker',
@@ -447,6 +447,26 @@ export function dockerHostReason(
   problem: DockerHostProblem,
   host: string,
 ): string {
+  // The Lima VM of Devspaces is on this computer: no network, and the SSH of Lima needs no login of the user.
+  if (host === LIMA_HOST) {
+    switch (problem) {
+      case 'unreachable':
+        return 'The VM of Devspaces did not answer. Try again.';
+      case 'closedBeforeLogin':
+      case 'login':
+      case 'hostKey':
+      case 'unknown':
+        return 'Devspaces could not start its VM or a shell in it. The details show why.';
+      case 'dockerMissing':
+        return 'Docker is not installed in the VM of Devspaces.';
+      case 'dockerNotRunning':
+        return 'Docker is not running in the VM of Devspaces.';
+      case 'dockerPermission':
+        return 'Docker in the VM of Devspaces refused the call. The details show why.';
+      default:
+        break;
+    }
+  }
   const distribution = wslDistributionOf(host);
   // The WSL distribution of Devspaces is on this computer: no network, no SSH. The patterns of an SSH problem
   // (dockerHostProblem) can match a message of wsl.exe, so these get a text of WSL too.

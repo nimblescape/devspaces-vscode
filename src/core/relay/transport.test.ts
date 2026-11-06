@@ -7,7 +7,22 @@ import { WSL_HOST } from '../docker/dockerHost';
 import { MAX_BUNDLE_LINE_LENGTH } from '../loader/pipeLoader';
 import { silentLogger, type StartOptions, type StartedByteProcess } from '../ports';
 import { RelayConnectionError } from './connection';
-import { RELAY_SHELL_COMMAND, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from './transport';
+import * as path from 'path';
+import { limaPaths } from '../vm/limaInstance';
+import { RELAY_SHELL_COMMAND, limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from './transport';
+
+describe('limaHostTransport', () => {
+  it('runs sh -s, or another command, as root over the SSH of Lima with LIMA_HOME of Devspaces and without questions', () => {
+    const paths = limaPaths('/home/ada');
+    const config = path.join('/home/ada', '.nimblescape', 'devspaces', 'vm', 'devspaces', 'ssh.config');
+    expect(limaHostTransport(paths, '/usr/bin/ssh', { PATH: '/usr/bin', LIMA_HOME: '/elsewhere' })).toEqual({
+      file: '/usr/bin/ssh',
+      args: ['-F', config, '-o', 'BatchMode=yes', '-T', 'lima-devspaces', 'sudo -n sh -s'],
+      env: { PATH: '/usr/bin', LIMA_HOME: paths.home, SSH_ASKPASS_REQUIRE: 'never' },
+    });
+    expect(limaHostTransport(paths, '/usr/bin/ssh', {}, 'docker system dial-stdio').args.at(-1)).toBe('sudo -n docker system dial-stdio');
+  });
+});
 
 describe('sshHostTransport', () => {
   const env = { PATH: '/usr/bin', ssh_askpass_require: 'force' };
