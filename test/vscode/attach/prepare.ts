@@ -19,6 +19,10 @@
 //   (the run `longopen`).
 // - A plain container that is no devspace, of the same dev image (with Git and the Docker CLI, so that Dev Containers
 //   configures its credential helpers there).
+// - The engine host: the Docker host of Devspaces in every run but `remote` (prepareEngineHost). Devspaces never uses
+//   the Docker of this computer on Linux (docs/requirements.md R-ENG-001), so it reaches the engine of the runner over
+//   SSH, through a container of the runner with an SSH server and the Docker socket of the runner, as it reaches a host
+//   of its list. The engine stays the engine of the runner, where the CI job checks the containers with `docker`.
 // With DEVSPACE_TEST_ATTACH_PREPARE=remote (the run `remote`, a CI job of its own), the devspace is on the Docker engine
 // of another computer instead, reached over SSH, and the engine of the runner gets a container with its name
 // (prepareRemote). That run has no plain container.
@@ -93,12 +97,12 @@ RUN apk add --no-cache openssh-server \\
  && /usr/sbin/sshd -t
 `;
 /**
- * The start of the other computer: the public key of the runner for root, the ForceCommand REMOTE_HOST_SESSION, sshd,
- * and the Docker engine (unix socket only). REMOTE_HOST_SESSION writes `devspaces-test-ssh: <command>` (`(shell)` for a
- * session without a command) to the standard error of the first process of the container, which `docker logs
- * --timestamps` shows with its time, and then runs the command with `sh -c`, as sshd runs it with the shell of root.
+ * The start of the SSH server of a container of REMOTE_HOST_IMAGE: the public key of the runner for root and the
+ * ForceCommand REMOTE_HOST_SESSION. REMOTE_HOST_SESSION writes `devspaces-test-ssh: <command>` (`(shell)` for a session
+ * without a command) to the standard error of the first process of the container, which `docker logs --timestamps`
+ * shows with its time, and then runs the command with `sh -c`, as sshd runs it with the shell of root.
  */
-const REMOTE_HOST_START = `set -eu
+const SSH_HOST_SETUP = `set -eu
 mkdir -p /root/.ssh
 printf '%s\\n' "$AUTHORIZED_KEY" > /root/.ssh/authorized_keys
 chmod 700 /root/.ssh
@@ -110,8 +114,19 @@ if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ]; then exec /bin/sh -c "$SSH_ORIGINAL_COMM
 exec /bin/sh -l
 SESSION
 chmod 755 ${REMOTE_HOST_SESSION}
-/usr/sbin/sshd -D -e &
+`;
+/** The start of the other computer: its SSH server, and its Docker engine (unix socket only). */
+const REMOTE_HOST_START = `${SSH_HOST_SETUP}/usr/sbin/sshd -D -e &
 exec dockerd-entrypoint.sh dockerd --host=unix:///var/run/docker.sock
+`;
+/**
+ * The engine host of the runs on the engine of the runner (prepareEngineHost): a container of REMOTE_HOST_IMAGE with
+ * only its SSH server, whose Docker CLI reaches the engine of the runner through its Docker socket, mounted at the
+ * default path. The host ENGINE_HOST of the SSH config of the runner points to it.
+ */
+const ENGINE_HOST = 'devspaces-test-engine';
+const ENGINE_HOST_CONTAINER = 'attach-test-engine-host';
+const ENGINE_HOST_START = `${SSH_HOST_SETUP}exec /usr/sbin/sshd -D -e
 `;
 /** The longest wait for the Docker engine of the other computer to answer over SSH. */
 const REMOTE_ENGINE_WAIT_MS = 120_000;
@@ -172,6 +187,17 @@ function folderUri(containerName: string, folder: string, docker?: WindowDocker)
 }
 
 /**
+ * The window of the container `name` on the host `host` of the list of Devspaces: it reaches the engine through its
+ * Docker pipe, as a window that Devspaces opens (windowPipe.ts), at the address that this computer makes for the
+ * container, with the ID of this computer that .vscode-test.mjs writes into the storage folder of the extension before
+ * VS Code starts. The fields of the seed for the host.
+ */
+function hostWindow(host: string, computerId: string, name: string, folder: string): { folderUri: string; remoteHost: string; computerId: string; dockerHost: string } {
+  const dockerHost = dockerPipeAddress(dockerPipeId(computerId, host, name), process.platform, dockerPipeBase(process.env, os.tmpdir())).dockerHost;
+  return { folderUri: folderUri(name, folder, { host: dockerHost }), remoteHost: host, computerId, dockerHost };
+}
+
+/**
  * A devspace without container on the engine of `docker`: its workspace volume with the labels of the extension (the
  * test account owns it) and a repository with a devcontainer.json, written by a container of the helper image.
  */
@@ -203,17 +229,84 @@ async function helperImage(docker: BootstrapDocker, started: number): Promise<st
   return helper.tag;
 }
 
-/** The runs on the engine of the runner: the devspace and the plain container. */
-async function prepareLocal(docker: BootstrapDocker, started: number): Promise<Record<string, unknown>> {
+/**
+ * The runs on the engine of the runner: the engine host (prepareEngineHost), the devspace, whose window reaches the
+ * engine through the engine host, and the plain container, which Dev Containers opens with the Docker of the runner, as
+ * "Attach to Running Container" does; the extension there reaches the engine through the engine host too.
+ */
+async function prepareLocal(docker: BootstrapDocker, dockerPath: string, started: number): Promise<Record<string, unknown>> {
+  await prepareEngineHost(docker, dockerPath);
+  const computerId = newComputerId();
   const { devspaceId, name, folder } = await seedDevspace(docker, await helperImage(docker, started));
   // The plain container has the dev image, built here; the build of the devspace finds its layers in the cache.
   await docker.runChecked(['build', '-t', PLAIN_IMAGE, '-'], { input: DOCKERFILE, timeoutMs: 300_000 });
   const plain = `attach-test-plain-${crypto.randomBytes(3).toString('hex')}`;
   await docker.runChecked(['run', '-d', '--name', plain, PLAIN_IMAGE, 'sleep', 'infinity']);
   return {
-    devspace: { containerName: name, folder, folderUri: folderUri(name, folder), user: 'node', devspaceId, longStartSeconds: LONG_START_SECONDS, longStartMark: LONG_START_MARK },
-    plain: { containerName: plain, folder: '/tmp', folderUri: folderUri(plain, '/tmp'), user: 'root' },
+    devspace: { containerName: name, folder, ...hostWindow(ENGINE_HOST, computerId, name, folder), user: 'node', devspaceId, longStartSeconds: LONG_START_SECONDS, longStartMark: LONG_START_MARK },
+    plain: { containerName: plain, folder: '/tmp', folderUri: folderUri(plain, '/tmp'), remoteHost: ENGINE_HOST, computerId, user: 'root' },
   };
+}
+
+/**
+ * A container of the runner with the SSH server of REMOTE_HOST_IMAGE for root (its start script `start`, the options
+ * `options` of `docker run`), and the host `host` in the SSH config of the runner, with its own key and known_hosts
+ * file in ~/.ssh, which points to it.
+ */
+async function startSshHost(local: BootstrapDocker, host: string, container: string, options: string[], start: string): Promise<void> {
+  await local.runChecked(['build', '-t', REMOTE_HOST_IMAGE, '-'], { input: REMOTE_HOST_DOCKERFILE, timeoutMs: 300_000 });
+  const sshFolder = path.join(os.homedir(), '.ssh');
+  fs.mkdirSync(sshFolder, { recursive: true, mode: 0o700 });
+  const key = path.join(sshFolder, host);
+  for (const file of [key, `${key}.pub`]) fs.rmSync(file, { force: true });
+  childProcess.execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', host, '-f', key]);
+  const publicKey = fs.readFileSync(`${key}.pub`, 'utf8').trim();
+  await local.runChecked(['run', '-d', '--name', container, '--init', '-p', '127.0.0.1::22', '-e', `AUTHORIZED_KEY=${publicKey}`, ...options, '--entrypoint', 'sh', REMOTE_HOST_IMAGE, '-c', start]);
+  const port = Number((await local.runChecked(['port', container, '22/tcp'])).trim().split('\n')[0].split(':').pop());
+  if (!Number.isInteger(port) || port <= 0) throw new Error(`The SSH port of ${container} was not found.`);
+  const hostKey = (await local.runChecked(['exec', container, 'cat', '/etc/ssh/ssh_host_ed25519_key.pub'])).trim().split(' ').slice(0, 2).join(' ');
+  const knownHosts = path.join(sshFolder, `${host}.known_hosts`);
+  fs.writeFileSync(knownHosts, `[127.0.0.1]:${port} ${hostKey}\n`, { mode: 0o600 });
+  const config = path.join(sshFolder, 'config');
+  const entry = [`Host ${host}`, '  HostName 127.0.0.1', `  Port ${port}`, '  User root', `  IdentityFile ${key}`, '  IdentitiesOnly yes', '  StrictHostKeyChecking yes', `  UserKnownHostsFile ${knownHosts}`];
+  // ssh takes the first value of each option, so the entry comes first (before a `Host *` of the runner), and the entry
+  // of an earlier preparation on this runner is removed from the rest.
+  const rest = fs.existsSync(config) ? fs.readFileSync(config, 'utf8').replace(new RegExp(`^Host ${host}\\n(?:[ \\t]+.*(?:\\n|$))*`, 'gm'), '').trim() : '';
+  fs.writeFileSync(config, `${entry.join('\n')}\n${rest === '' ? '' : `\n${rest}\n`}`, { mode: 0o600 });
+  fs.chmodSync(config, 0o600);
+  log.info(`${config}: ${entry.join('; ')}`);
+}
+
+/** The Docker CLI with DOCKER_HOST=ssh://`host`, as the extension reaches a host of its list, once its engine answers. */
+async function sshHostDocker(dockerPath: string, host: string): Promise<BootstrapDocker> {
+  const endpoint = sshEndpoint(host);
+  const env: NodeJS.ProcessEnv = { ...process.env, DOCKER_HOST: endpoint };
+  delete env.DOCKER_CONTEXT;
+  const docker = new BootstrapDocker(new NodeProcessRunner(), dockerPath, env, log);
+  for (const deadline = Date.now() + REMOTE_ENGINE_WAIT_MS; ; ) {
+    const info = await docker.run(['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 30_000 });
+    if (info.exitCode === 0) {
+      log.info(`The Docker engine ${info.stdout.trim()} of ${host} answers through ${endpoint}.`);
+      return docker;
+    }
+    if (Date.now() > deadline) throw new Error(`The Docker engine of ${host} does not answer: ${(info.stderr || info.stdout).trim()}`);
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+}
+
+/**
+ * The engine host (ENGINE_HOST_START) with the Docker socket of the runner, and the host ENGINE_HOST in the SSH config
+ * of the runner. .vscode-test.mjs makes it the Docker host of Devspaces in its storage folder, as "Use a Remote Docker
+ * Host…" does. The check that its engine is the engine of the runner: a volume that only the runner made.
+ */
+async function prepareEngineHost(local: BootstrapDocker, dockerPath: string): Promise<void> {
+  await startSshHost(local, ENGINE_HOST, ENGINE_HOST_CONTAINER, ['--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock'], ENGINE_HOST_START);
+  const remote = await sshHostDocker(dockerPath, ENGINE_HOST);
+  const mark = `attach-test-engine-${crypto.randomBytes(3).toString('hex')}`;
+  await local.runChecked(['volume', 'create', mark]);
+  const seen = (await remote.runChecked(['volume', 'ls', '-q', '--filter', `name=^${mark}$`])).trim();
+  await local.runChecked(['volume', 'rm', mark]);
+  if (seen !== mark) throw new Error(`The engine of ${ENGINE_HOST} is not the engine of the runner: it has no volume ${mark}.`);
 }
 
 /**
@@ -225,68 +318,20 @@ async function prepareLocal(docker: BootstrapDocker, started: number): Promise<R
  * does, which changes no Docker context.
  */
 async function prepareRemote(local: BootstrapDocker, dockerPath: string, started: number): Promise<Record<string, unknown>> {
-  await local.runChecked(['build', '-t', REMOTE_HOST_IMAGE, '-'], { input: REMOTE_HOST_DOCKERFILE, timeoutMs: 300_000 });
-  const sshFolder = path.join(os.homedir(), '.ssh');
-  fs.mkdirSync(sshFolder, { recursive: true, mode: 0o700 });
-  const key = path.join(sshFolder, REMOTE_HOST);
-  for (const file of [key, `${key}.pub`]) fs.rmSync(file, { force: true });
-  childProcess.execFileSync('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', REMOTE_HOST, '-f', key]);
-  const publicKey = fs.readFileSync(`${key}.pub`, 'utf8').trim();
-  await local.runChecked([
-    'run', '-d', '--name', REMOTE_HOST_CONTAINER, '--privileged', '--init', '-p', '127.0.0.1::22',
-    '-e', 'DOCKER_TLS_CERTDIR=', '-e', `AUTHORIZED_KEY=${publicKey}`,
-    '--mount', `type=volume,source=${REMOTE_HOST_DOCKER_VOLUME},target=/var/lib/docker`,
-    '--entrypoint', 'sh', REMOTE_HOST_IMAGE, '-c', REMOTE_HOST_START,
-  ]);
-  const port = Number((await local.runChecked(['port', REMOTE_HOST_CONTAINER, '22/tcp'])).trim().split('\n')[0].split(':').pop());
-  if (!Number.isInteger(port) || port <= 0) throw new Error(`The SSH port of ${REMOTE_HOST_CONTAINER} was not found.`);
-  const hostKey = (await local.runChecked(['exec', REMOTE_HOST_CONTAINER, 'cat', '/etc/ssh/ssh_host_ed25519_key.pub'])).trim().split(' ').slice(0, 2).join(' ');
-  const knownHosts = path.join(sshFolder, `${REMOTE_HOST}.known_hosts`);
-  fs.writeFileSync(knownHosts, `[127.0.0.1]:${port} ${hostKey}\n`, { mode: 0o600 });
-  const config = path.join(sshFolder, 'config');
-  const entry = [`Host ${REMOTE_HOST}`, '  HostName 127.0.0.1', `  Port ${port}`, '  User root', `  IdentityFile ${key}`, '  IdentitiesOnly yes', '  StrictHostKeyChecking yes', `  UserKnownHostsFile ${knownHosts}`];
-  // ssh takes the first value of each option, so the entry comes first (before a `Host *` of the runner), and the entry
-  // of an earlier preparation on this runner is removed from the rest.
-  const rest = fs.existsSync(config) ? fs.readFileSync(config, 'utf8').replace(new RegExp(`^Host ${REMOTE_HOST}\\n(?:[ \\t]+.*(?:\\n|$))*`, 'gm'), '').trim() : '';
-  fs.writeFileSync(config, `${entry.join('\n')}\n${rest === '' ? '' : `\n${rest}\n`}`, { mode: 0o600 });
-  fs.chmodSync(config, 0o600);
-  log.info(`${config}: ${entry.join('; ')}`);
-
-  const endpoint = sshEndpoint(REMOTE_HOST);
-  const remoteEnv: NodeJS.ProcessEnv = { ...process.env, DOCKER_HOST: endpoint };
-  delete remoteEnv.DOCKER_CONTEXT;
-  const remote = new BootstrapDocker(new NodeProcessRunner(), dockerPath, remoteEnv, log);
-  for (const deadline = Date.now() + REMOTE_ENGINE_WAIT_MS; ; ) {
-    const info = await remote.run(['info', '--format', '{{.ServerVersion}}'], { timeoutMs: 30_000 });
-    if (info.exitCode === 0) {
-      log.info(`The Docker engine ${info.stdout.trim()} of ${REMOTE_HOST} answers through ${endpoint}.`);
-      break;
-    }
-    if (Date.now() > deadline) throw new Error(`The Docker engine of ${REMOTE_HOST} does not answer: ${(info.stderr || info.stdout).trim()}`);
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-  }
+  await startSshHost(
+    local,
+    REMOTE_HOST,
+    REMOTE_HOST_CONTAINER,
+    ['--privileged', '-e', 'DOCKER_TLS_CERTDIR=', '--mount', `type=volume,source=${REMOTE_HOST_DOCKER_VOLUME},target=/var/lib/docker`],
+    REMOTE_HOST_START,
+  );
+  const remote = await sshHostDocker(dockerPath, REMOTE_HOST);
   const { devspaceId, name, folder } = await seedDevspace(remote, await helperImage(remote, started));
   await local.runChecked(['run', '-d', '--name', name, '--entrypoint', 'sh', REMOTE_HOST_IMAGE, '-c', 'exec tail -f /dev/null']);
   // After the last SSH login of the preparation: remote.test.ts counts the logins from this time.
   const preparedAt = new Date().toISOString();
-  // The window reaches the engine through its Docker pipe, as a window that Devspaces opens (windowPipe.ts): the address
-  // that this computer makes for the devspace, with the ID of this computer that .vscode-test.mjs writes into the
-  // storage folder of the extension before VS Code starts.
-  const computerId = newComputerId();
-  const dockerHost = dockerPipeAddress(dockerPipeId(computerId, REMOTE_HOST, name), process.platform, dockerPipeBase(process.env, os.tmpdir())).dockerHost;
   return {
-    remote: {
-      containerName: name,
-      folder,
-      folderUri: folderUri(name, folder, { host: dockerHost }),
-      computerId,
-      dockerHost,
-      user: 'node',
-      devspaceId,
-      remoteHost: REMOTE_HOST,
-      remoteHostContainer: REMOTE_HOST_CONTAINER,
-      preparedAt,
-    },
+    remote: { containerName: name, folder, ...hostWindow(REMOTE_HOST, newComputerId(), name, folder), user: 'node', devspaceId, remoteHostContainer: REMOTE_HOST_CONTAINER, preparedAt },
   };
 }
 
@@ -379,7 +424,7 @@ function newerVersion(a: string, b: string): boolean {
  * release fails: its VSIX would replace a newer version (a downgrade). Before the first release of the extension ID,
  * the released version is the VSIX of this checkout (checkoutVsix).
  */
-async function prepareUpdate(docker: BootstrapDocker, vscode: TestVscode, started: number, githubToken: string | undefined): Promise<Record<string, unknown>> {
+async function prepareUpdate(docker: BootstrapDocker, dockerPath: string, vscode: TestVscode, started: number, githubToken: string | undefined): Promise<Record<string, unknown>> {
   const previousFolder = path.join(ROOT, 'out', 'test', 'vscode', 'attach', 'previous');
   const release = (await latestReleaseVsix(previousFolder, githubToken)) ?? checkoutVsix(previousFolder);
   const install = childProcess.spawnSync(vscode.cli, [...vscode.cliArgs, '--install-extension', release.file], { encoding: 'utf8' });
@@ -394,10 +439,11 @@ async function prepareUpdate(docker: BootstrapDocker, vscode: TestVscode, starte
   if (newerVersion(version, own)) throw new Error(`The latest release ${version} is newer than the version ${own} of this checkout: the update would be a downgrade. Merge main.`);
   const extensionSha256 = crypto.createHash('sha256').update(fs.readFileSync(path.join(folder, 'dist', 'extension.js'))).digest('hex');
   log.info(`The previous version ${version} is in ${folder} (dist/extension.js ${extensionSha256}).`);
+  await prepareEngineHost(docker, dockerPath);
   const helper = await releasedHelperImage(docker, folder, started);
   const { devspaceId, name, folder: repository } = await seedDevspace(docker, helper);
   return {
-    devspace: { containerName: name, folder: repository, folderUri: folderUri(name, repository), user: 'node', devspaceId, previous: { version, extensionSha256 } },
+    devspace: { containerName: name, folder: repository, ...hostWindow(ENGINE_HOST, newComputerId(), name, repository), user: 'node', devspaceId, previous: { version, extensionSha256 } },
   };
 }
 
@@ -413,7 +459,11 @@ async function main(): Promise<void> {
   const docker = new BootstrapDocker(new NodeProcessRunner(), dockerPath, process.env, log);
   const kind = process.env.DEVSPACE_TEST_ATTACH_PREPARE;
   const seed =
-    kind === 'remote' ? await prepareRemote(docker, dockerPath, started) : kind === 'update' ? await prepareUpdate(docker, vscode, started, githubToken) : await prepareLocal(docker, started);
+    kind === 'remote'
+      ? await prepareRemote(docker, dockerPath, started)
+      : kind === 'update'
+        ? await prepareUpdate(docker, dockerPath, vscode, started, githubToken)
+        : await prepareLocal(docker, dockerPath, started);
   const file = path.join(ROOT, 'out', 'test', 'vscode', 'attach', 'seed.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(seed, null, 2));
