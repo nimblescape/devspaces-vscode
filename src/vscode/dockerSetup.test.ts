@@ -170,8 +170,9 @@ describe('DockerSetup: context keys and CLI checks', () => {
     dockerSetup.dispose();
   });
 
+  // Windows: the Docker of the computer (Docker Desktop) counts until the test of R-VM-008 (R-ENG-001).
   it('looks the CLI up every 10 seconds while it is missing, then stops and updates the sidebar', () => {
-    const { dockerSetup, docker, changed } = setup(false);
+    const { dockerSetup, docker, changed } = setup(false, { platform: 'win32' });
     dockerSetup.initialize();
     expect(docker.isInstalled).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(9_999);
@@ -196,6 +197,32 @@ describe('DockerSetup: context keys and CLI checks', () => {
     vi.advanceTimersByTime(60_000);
     expect(docker.isInstalled).toHaveBeenCalledTimes(3);
     dockerSetup.dispose();
+  });
+
+  // macOS and Linux: Devspaces never uses the Docker of the computer (R-ENG-001); only a host of its list, also its VM,
+  // ends the setup.
+  it('shows the setup on macOS and Linux also with a Docker CLI, until Devspaces has a Docker host of its list', () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      let remote = false;
+      const { dockerSetup, changed } = setup(true, { platform, remoteDockerHost: () => remote });
+      dockerSetup.initialize();
+      expect(dockerSetup.dockerMissing, platform).toBe(false);
+      expect(dockerSetup.setupRequired, platform).toBe(true);
+      expect(contextCalls(), platform).toContainEqual([DockerContextKeys.setupRequired, true]);
+      fakeVscode.commands.executeCommand.mockClear();
+      remote = true;
+      dockerSetup.onDockerHostChanged();
+      expect(dockerSetup.setupRequired, platform).toBe(false);
+      expect(changed, platform).toHaveBeenCalledTimes(1);
+      expect(contextCalls(), platform).toEqual([[DockerContextKeys.setupRequired, false]]);
+      dockerSetup.dispose();
+      fakeVscode.commands.executeCommand.mockClear();
+    }
+    // Windows: the Docker CLI of the computer is enough.
+    const windows = setup(true, { platform: 'win32' });
+    windows.dockerSetup.initialize();
+    expect(windows.dockerSetup.setupRequired).toBe(false);
+    windows.dockerSetup.dispose();
   });
 
   it('does not look up an installed CLI in the background', () => {
@@ -232,7 +259,7 @@ describe('DockerSetup: context keys and CLI checks', () => {
   });
 
   it('Show Docker Setup (action Install Docker… of an error) looks for the CLI again, then shows the sidebar', async () => {
-    const { dockerSetup, docker, changed } = setup(true);
+    const { dockerSetup, docker, changed } = setup(true, { platform: 'win32' });
     dockerSetup.initialize();
     expect(dockerSetup.setupRequired).toBe(false);
     fakeVscode.commands.executeCommand.mockClear();
@@ -258,7 +285,7 @@ describe('DockerSetup: context keys and CLI checks', () => {
     };
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
     let dockerSetup: DockerSetup | undefined;
-    const docker = new BootstrapDocker(runner, found, {}, logger, 'darwin', {
+    const docker = new BootstrapDocker(runner, found, {}, logger, 'win32', {
       findDocker: () => found,
       // As in extension.ts: reportCliLost, which does not look the CLI up at once.
       onCliLost: () => dockerSetup?.reportCliLost(),
@@ -269,7 +296,7 @@ describe('DockerSetup: context keys and CLI checks', () => {
       runner,
       logger,
       showLog: vi.fn(),
-      platform: 'darwin',
+      platform: 'win32',
       env: {},
       onDidChangeInstalled: changed,
       remoteDockerHostConfigured: () => false,

@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import { dockerTargetOf, remoteDockerTarget, LOCAL_DOCKER_TARGET, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
-import { DockerTargets, runWithDockerTarget, operationDockerTarget } from '../core/docker/dockerTargets';
+import { DockerTargets, NO_DOCKER_HOST_TARGET, runWithDockerTarget, operationDockerTarget } from '../core/docker/dockerTargets';
 import { ENGINE_INFO_FORMAT } from '../core/docker/remoteDocker';
 import { Actions, Messages, dockerHostReason } from '../core/messages';
 import type { RunOptions, RunResult } from '../core/ports';
@@ -76,7 +76,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() }
 const { window } = fakeVscode;
 
 function create(extra: Partial<RemoteDockerDeps> = {}): RemoteDockerCommands {
-  targets = new DockerTargets(cli, env, logger, 'linux', state);
+  targets = new DockerTargets(cli, env, logger, 'linux', state, extra.computerDocker !== false);
   const created = new RemoteDockerCommands({
     docker: cli,
     runner,
@@ -603,6 +603,54 @@ describe('Remove a Host from the List…', () => {
     expect(RemoteDockerTexts.removed('box', 3, true)).toBe(
       'box is no longer in the list of Devspaces. Its 3 devspaces stay on that computer: add box again to show them in the sidebar. Devspaces now uses the local Docker.',
     );
+  });
+});
+
+// docs/requirements.md R-ENG-001: on macOS and Linux, Devspaces never uses the Docker of this computer.
+describe('on macOS and Linux, without the Docker of this computer', () => {
+  beforeEach(() => {
+    commands = create({ computerDocker: false });
+  });
+
+  it('the choice of the Docker host has no local Docker, and its title says that there is no host yet', async () => {
+    await commands.chooseDockerHost();
+    expect(shown().map(([label]) => label)).not.toContain(`$(${MonitorIcons.off}) ${RemoteDockerTexts.useLocal}`);
+    expect(shown().map(([label]) => label)).not.toContain(`$(check) ${RemoteDockerTexts.useLocal}`);
+    expect(shown().at(-1)).toEqual([RemoteDockerTexts.enterAddress, RemoteDockerTexts.enterAddressDetail]);
+    const options = window.showQuickPick.mock.calls[0][1] as { title: string; placeHolder: string };
+    expect(options.title).toBe('Docker host: none');
+    expect(options.placeHolder).toBe(RemoteDockerTexts.choosePlaceholderNoLocal);
+    // With a host, the title names it.
+    await listed(['build-box'], 'build-box');
+    await commands.chooseDockerHost();
+    expect((window.showQuickPick.mock.calls[1][1] as { title: string }).title).toBe('Docker host: build-box');
+  });
+
+  it('"Use the Local Docker" is in the Command Palette only on Windows; elsewhere it only says why, and changes nothing', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as { contributes: { menus: { commandPalette: Array<{ command: string; when?: string }> } } };
+    expect(manifest.contributes.menus.commandPalette.filter((entry) => entry.command === 'devspaces.useLocalDocker')).toEqual([{ command: 'devspaces.useLocalDocker', when: 'isWindows' }]);
+    await listed(['build-box'], 'build-box');
+    await commands.useLocalDocker();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.noLocalDocker);
+    expect(await state.dockerHost()).toBe('build-box');
+    expect(onDidSwitch).not.toHaveBeenCalled();
+    expect(cli.calls).toEqual([]);
+  });
+
+  it('removing the host that Devspaces uses leaves it without a Docker host, without a warning', async () => {
+    await listed(['gpu'], 'gpu');
+    pick(RemoteDockerTexts.removeHost, 'gpu');
+    await commands.chooseDockerHost();
+    expect(await state.dockerHost()).toBeUndefined();
+    expect(targets.last).toBe(NO_DOCKER_HOST_TARGET);
+    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.removedNoLocal('gpu', 0, true));
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(onDidSwitch).toHaveBeenCalledTimes(1);
+    expect(RemoteDockerTexts.removedNoLocal('box', 2, true)).toBe(
+      'box is no longer in the list of Devspaces. Its 2 devspaces stay on that computer: add box again to show them in the sidebar. Devspaces has no Docker host now: set up Docker for Devspaces in the Devspaces view, or choose another host.',
+    );
+    // No Docker context of this computer is read for the target (the choice lists only the SSH hosts of the contexts).
+    expect(cli.calls.filter((call) => call.args[0] === 'context' && call.args[1] !== 'ls')).toEqual([]);
   });
 });
 

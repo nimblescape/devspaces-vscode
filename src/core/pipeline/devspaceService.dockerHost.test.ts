@@ -278,6 +278,52 @@ describe('a current Docker context that cannot be read is never used', () => {
   });
 });
 
+// docs/requirements.md R-ENG-001: on macOS and Linux, Devspaces never uses the Docker of this computer, also when one is
+// installed. Until the VM of Devspaces is set up or a host of its list is chosen, nothing is done on any Docker.
+describe('on macOS and Linux, the Docker of this computer is never used', () => {
+  let u: Harness;
+  let cliCalls: string[][];
+  const NOT_READ = 'Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer. Its containers and volumes are not read.';
+
+  beforeEach(async () => {
+    cliCalls = [];
+    const cli = {
+      isInstalled: () => true,
+      run: async (args: string[]) => {
+        cliCalls.push(args);
+        return { exitCode: 0, stdout: JSON.stringify({ Name: 'desktop-linux', Endpoints: { docker: { Host: 'unix:///var/run/docker.sock' } } }), stderr: '', timedOut: false };
+      },
+    };
+    const targets = new DockerTargets(cli, {}, silentLogger, 'darwin', undefined, false);
+    u = createHarness({ dockerTarget: () => targets.current() });
+    await seedDevspace(u, { container: 'running' });
+  });
+
+  afterEach(() => {
+    u.cleanup();
+  });
+
+  it('an operation is refused with the message of the setup before any Docker call, and the reads only log it', async () => {
+    for (const operation of [() => u.service.open(TARGET, { progress: u.progress }), () => u.operations.stop(ENV_ID)]) {
+      const error = await rejection(operation());
+      expect(error.code).toBe('dockerEndpointUnsupported');
+      expect(error.message).toBe(Messages.noDockerHost);
+    }
+    expect(await u.operations.inspectStates()).toEqual(new Map());
+    expect(await u.service.reconcileFromVolumes()).toBe(0);
+    // No message from the reads: the sidebar shows the Docker setup.
+    expect(u.ui.warnings).toEqual([]);
+    expect(u.logger.infos.filter((line) => line === NOT_READ)).toHaveLength(2);
+    expect(u.dockerStarts).toBe(0);
+    expect(u.helper.calls).toEqual([]);
+    expect(u.docker.log).toEqual([]);
+    // The Docker context of this computer is not even read.
+    expect(cliCalls).toEqual([]);
+    // The old local devspace keeps its host (the local Docker): it is not moved.
+    expect((await u.registry.get(ENV_ID))?.dockerHost).toBeUndefined();
+  });
+});
+
 // The docker command is Podman (the package podman-docker): `docker context inspect` gives nothing, and the check of
 // the CLI names Podman. Every operation says that Podman is not supported, not that the context cannot be read.
 describe('a docker command that is Podman is never used', () => {

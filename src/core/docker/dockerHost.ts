@@ -58,6 +58,20 @@ export interface DockerTarget {
    * local Docker (isDockerContextHostTarget): that host, which Devspaces offers once for its list.
    */
   sshHost?: string;
+  /**
+   * Only for the target while Devspaces has no Docker host on macOS or Linux, where it never uses the Docker of this
+   * computer (usesComputerDocker, isNoDockerHostTarget): the sidebar shows the Docker setup.
+   */
+  noHost?: true;
+}
+
+/**
+ * Whether Devspaces uses the Docker of this computer on `platform` (docs/requirements.md R-ENG-001): only on Windows
+ * (Docker Desktop, until the test of R-VM-008 passed). On macOS and Linux, the devspaces run only in the VM of Devspaces
+ * (LIMA_HOST) or on another host of its list, never on Docker Desktop or Docker Engine of this computer.
+ */
+export function usesComputerDocker(platform: NodeJS.Platform): boolean {
+  return platform === 'win32';
 }
 
 /** The Docker of this computer, when nothing else is known (for example without a Docker CLI). */
@@ -113,8 +127,17 @@ export function parseContextInspect(stdout: string): { name: string; endpoint: s
  * another computer, while the operation would record the local Docker. Its endpoint is empty; every other target that
  * is not supported has its endpoint, except Podman (isPodmanDockerTarget).
  */
-export function isUnreadableDockerTarget(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman'>): boolean {
-  return target.kind === 'unsupported' && target.endpoint.trim() === '' && target.podman === undefined;
+export function isUnreadableDockerTarget(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'noHost'>): boolean {
+  return target.kind === 'unsupported' && target.endpoint.trim() === '' && target.podman === undefined && target.noHost === undefined;
+}
+
+/**
+ * True for the target while Devspaces has no Docker host on macOS or Linux (dockerTargets.ts, NO_DOCKER_HOST_TARGET):
+ * there it never uses the Docker of this computer (usesComputerDocker), so every operation is refused until the VM of
+ * Devspaces is set up or a host of its list is chosen, and the sidebar shows the Docker setup.
+ */
+export function isNoDockerHostTarget(target: Pick<DockerTarget, 'kind' | 'noHost'>): boolean {
+  return target.kind === 'unsupported' && target.noHost === true;
 }
 
 /**
@@ -137,7 +160,8 @@ export function isDockerContextHostTarget(target: Pick<DockerTarget, 'kind' | 's
 }
 
 /** Why a target that is not supported is refused, for the log (one sentence). */
-export function unsupportedTargetReason(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context'>): string {
+export function unsupportedTargetReason(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context' | 'noHost'>): string {
+  if (isNoDockerHostTarget(target)) return 'Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer.';
   if (isPodmanDockerTarget(target)) return 'The docker command uses Podman, which Devspaces does not support.';
   if (isDockerContextHostTarget(target)) {
     return `${target.context === undefined ? 'DOCKER_HOST' : `The current Docker context ${target.context}`} reaches ${target.sshHost} over SSH, which is not a host of the list of Devspaces.`;

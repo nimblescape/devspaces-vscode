@@ -7,11 +7,12 @@ import { Messages } from '../messages';
 import { silentLogger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
 // The Docker CLI of the extension (BootstrapDocker).
 import { BootstrapDocker } from './bootstrapDocker';
-import { dockerTargetOf, isDockerContextHostTarget, isOnDockerHost, isPodmanDockerTarget, isUnreadableDockerTarget, remoteDockerTarget } from './dockerHost';
+import { LIMA_HOST, dockerTargetOf, isDockerContextHostTarget, isNoDockerHostTarget, isOnDockerHost, isPodmanDockerTarget, isUnreadableDockerTarget, remoteDockerTarget } from './dockerHost';
 import { ensureDockerRunning } from './dockerStart';
 import {
   CONTEXT_INSPECT_TIMEOUT_MS,
   DockerTargets,
+  NO_DOCKER_HOST_TARGET,
   UNREADABLE_DOCKER_TARGET,
   operationDockerTarget,
   podmanDockerTarget,
@@ -65,6 +66,42 @@ function setup(env: NodeJS.ProcessEnv = { PATH: '/usr/bin' }, cliFound = true) {
   const targets = new DockerTargets(docker, env, silentLogger, 'linux', choice);
   return { cli, docker, targets, choice };
 }
+
+// macOS and Linux (docs/requirements.md R-ENG-001): Devspaces never uses the Docker of the computer.
+describe('DockerTargets without the Docker of this computer (macOS and Linux)', () => {
+  function withoutComputerDocker() {
+    const env = { PATH: '/usr/bin' };
+    const cli = new FakeDockerCli();
+    const choice = new FakeChoice();
+    const docker = new BootstrapDocker(cli, DOCKER, env, silentLogger, 'darwin');
+    return { cli, choice, targets: new DockerTargets(docker, env, silentLogger, 'darwin', choice, false) };
+  }
+
+  it('gives NO_DOCKER_HOST_TARGET without a host of the list, and reads no Docker context of this computer', async () => {
+    const { targets, cli } = withoutComputerDocker();
+    const seen: unknown[] = [];
+    targets.onDidResolve((target) => seen.push(target));
+    await expect(targets.resolve()).resolves.toBe(NO_DOCKER_HOST_TARGET);
+    expect(seen).toEqual([NO_DOCKER_HOST_TARGET]);
+    await expect(targets.ofHost('')).resolves.toBe(NO_DOCKER_HOST_TARGET);
+    await expect(targets.ofContext('default')).resolves.toBeUndefined();
+    expect(cli.calls).toEqual([]);
+    expect(isNoDockerHostTarget(NO_DOCKER_HOST_TARGET)).toBe(true);
+    // Not a context that could not be read: the sidebar shows the Docker setup, and no devspace matches it.
+    expect(isUnreadableDockerTarget(NO_DOCKER_HOST_TARGET)).toBe(false);
+    expect(isOnDockerHost({ dockerHost: '' }, NO_DOCKER_HOST_TARGET.host)).toBe(false);
+  });
+
+  it('uses its VM and the other hosts of its list as on every platform', async () => {
+    const { targets, cli, choice } = withoutComputerDocker();
+    choice.host = LIMA_HOST;
+    await expect(targets.resolve()).resolves.toEqual(remoteDockerTarget(LIMA_HOST));
+    choice.host = 'me@box';
+    await expect(targets.resolve()).resolves.toEqual(remoteDockerTarget('me@box'));
+    await expect(targets.ofHost('me@box')).resolves.toEqual(remoteDockerTarget('me@box'));
+    expect(cli.calls).toEqual([]);
+  });
+});
 
 describe('DockerTargets.resolve (the Docker host of Devspaces, else the current context)', () => {
   it('reads the local Docker of the current context', async () => {

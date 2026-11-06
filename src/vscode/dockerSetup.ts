@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { findExecutable } from '../core/docker/dockerCli';
+import { usesComputerDocker } from '../core/docker/dockerHost';
 import { downloadFile, type DownloadOptions } from '../core/docker/dockerDownload';
 import {
   DockerContextKeys,
@@ -104,7 +105,10 @@ export interface DockerSetupDeps {
    * the sidebar shows the repositories or the Docker setup (`setupRequired`).
    */
   onDidChangeInstalled: () => void;
-  /** True when a remote Docker host is configured: a missing local CLI then needs no setup (see `dockerSetupRequired`). */
+  /**
+   * True when a remote Docker host is configured (a host of the list of Devspaces, also its VM): a missing local CLI then
+   * needs no setup, and on macOS and Linux only such a host needs none (see `dockerSetupRequired`).
+   */
   remoteDockerHostConfigured: () => boolean;
   /**
    * True while the sidebar view is visible. Windows: `wsl --status` runs only while the view shows the Docker setup
@@ -260,10 +264,10 @@ export class DockerSetup implements vscode.Disposable {
 
   /**
    * True while the sidebar shows the Docker setup instead of the repositories (`dockerSetupRequired`: no remote Docker
-   * host is configured and the local Docker is not available).
+   * host is configured and the local Docker is not available; on macOS and Linux, Devspaces never uses it).
    */
   get setupRequired(): boolean {
-    return dockerSetupRequired(this.dockerMissing, this.deps.remoteDockerHostConfigured());
+    return dockerSetupRequired(this.dockerMissing, this.deps.remoteDockerHostConfigured(), usesComputerDocker(this.deps.platform));
   }
 
   /**
@@ -631,7 +635,7 @@ export class DockerSetup implements vscode.Disposable {
     const before = this.state;
     const first = this.shown === undefined;
     this.state = nextDockerSetupState(before, event);
-    const values = dockerContextValues(this.state, this.deps.remoteDockerHostConfigured());
+    const values = dockerContextValues(this.state, this.deps.remoteDockerHostConfigured(), usesComputerDocker(this.deps.platform));
     for (const [key, value] of changedContextValues(this.shown, values)) {
       vscode.commands.executeCommand('setContext', key, value).then(undefined, (error: unknown) => {
         this.deps.logger.warn(`Could not set the context key ${key}: ${errorMessage(error)}`);

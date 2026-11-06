@@ -9,7 +9,7 @@
 // pipeline, so the extension's bundle holds none of it, and no window operation can bypass the worker. No `vscode`.
 import type { VscodeServerLink } from '../helperChannel/protocol';
 import { type BusyMarkView, type DevspaceBusyMarks } from './busyMarks';
-import { dockerHostOf, isOnDockerHost, isUnreadableDockerTarget, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
+import { dockerHostOf, isNoDockerHostTarget, isOnDockerHost, isUnreadableDockerTarget, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
 import { dockerEndpointUnsupported, unsupportedTargetMessage } from '../docker/remoteDocker';
 import { BatchHelperUnavailableError, UserFacingError, errorMessage, isUserFacingError } from '../errors';
 import { type FlowRefusal } from '../helperChannel/protocol';
@@ -480,7 +480,8 @@ export abstract class OperationBase {
     const target = await this.dockerTarget();
     if (target.kind !== 'unsupported') return target.host;
     const reason = `${unsupportedTargetReason(target)} Its containers and volumes are not read.`;
-    if (isUnreadableDockerTarget(target)) {
+    // No Docker host on macOS and Linux: the sidebar shows the Docker setup instead of a message.
+    if (isUnreadableDockerTarget(target) || isNoDockerHostTarget(target)) {
       this.logger.info(reason);
       return undefined;
     }

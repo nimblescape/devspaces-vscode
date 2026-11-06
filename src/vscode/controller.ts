@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { isBlockingBusyMark, isFreshPending, statusNamesDevspace, type WindowMark } from '../core/busy';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
-import { LOCAL_DOCKER_TARGET, describeDockerHost, dockerHostOf, devspacesOfHost, hostAccessOf, isOnDockerHost, transportProgramOf, unsupportedTargetReason, type DockerTarget } from '../core/docker/dockerHost';
+import { LOCAL_DOCKER_TARGET, describeDockerHost, dockerHostOf, devspacesOfHost, hostAccessOf, isNoDockerHostTarget, isOnDockerHost, transportProgramOf, unsupportedTargetReason, type DockerTarget } from '../core/docker/dockerHost';
 import { dockerEndpointUnsupported } from '../core/docker/remoteDocker';
 import { engineInventory, inventoryIsEmpty, removalEndedNote, removeEngineInfrastructure, type EngineInventory, type RemovalResult } from '../core/docker/engineRemoval';
 import { operationDockerTarget, outsideOperation, runWithDockerTarget, type DockerTargets } from '../core/docker/dockerTargets';
@@ -4061,8 +4061,9 @@ export class Controller implements vscode.Disposable {
 
   /**
    * Docker for a link (R-GEN-002, R-ENG-005, R-VM-001), `uri`: when the current engine is the local Docker and no Docker
-   * CLI runs its calls (BootstrapDocker.canRunOn), the VM of Devspaces becomes the Docker host of Devspaces, and the link
-   * goes on there. On Windows its WSL distribution (WslSetupCommands.ensureDockerHost: the check of WSL, the setup without
+   * CLI runs its calls (BootstrapDocker.canRunOn), or when Devspaces has no Docker host on macOS and Linux, where it
+   * never uses the Docker of this computer (isNoDockerHostTarget, R-ENG-001), the VM of Devspaces becomes the Docker host
+   * of Devspaces, and the link goes on there. On Windows its WSL distribution (WslSetupCommands.ensureDockerHost: the check of WSL, the setup without
    * a question, and the Docker CLI of Devspaces); without WSL, Devspaces installs it, and the link opens again after the
    * restart of Windows (goOnAfterWslInstall). On macOS and Linux its Lima VM (LimaSetupCommands.ensureDockerHost, also
    * without a question). False when Devspaces does not use the VM (a closed question, the installation of WSL, or a
@@ -4072,7 +4073,8 @@ export class Controller implements vscode.Disposable {
    */
   private async dockerForLink(uri?: LinkUri): Promise<boolean> {
     const target = await this.operationTarget();
-    if (target.kind !== 'local' || this.deps.docker.canRunOn(target)) return true;
+    const noDocker = isNoDockerHostTarget(target) || (target.kind === 'local' && !this.deps.docker.canRunOn(target));
+    if (!noDocker) return true;
     const { wslSetup, limaSetup } = this.deps;
     let vm = 'the WSL distribution of Devspaces';
     let result = (await wslSetup?.ensureDockerHost(uri)) ?? 'unavailable';
