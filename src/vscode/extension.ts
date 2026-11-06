@@ -47,6 +47,7 @@ import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
+import { readVmArch } from '../core/vm/vmArch';
 import { DOCKER_CONTEXT_TIMEOUT_MS, dockerConfigDir, dockerContextFile, syncDockerContext } from '../core/vm/dockerContext';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
@@ -389,9 +390,11 @@ async function activateExtension(
     return wsl === undefined ? undefined : runner.run(wsl, WSL_LIST_ARGS, { env: wslEnv(env), timeoutMs: WSL_LIST_TIMEOUT_MS });
   };
   // The Lima VM of Devspaces (docs/architecture.md "The Lima VM of Devspaces"); only on macOS and Linux. Each transport to
-  // it starts it first when it is stopped (LimaVm.ready).
+  // it starts it first when it is stopped (LimaVm.ready). Its processor is the one of this computer, also when VS Code for
+  // Intel runs under Rosetta (readVmArch asks sysctl only then).
+  const vmArch = hasLimaVm ? await readVmArch(runner, platform, process.arch, logger) : process.arch;
   const limaVm = hasLimaVm
-    ? new LimaVm({ runner, logger, platform, arch: process.arch, env, resources: () => limaResources(machine.totalMemory, machine.cpus, vmWish()) })
+    ? new LimaVm({ runner, logger, platform, arch: vmArch, env, resources: () => limaResources(machine.totalMemory, machine.cpus, vmWish()) })
     : undefined;
   // The Docker context `devspaces` for the Docker socket of the Lima VM (R-ENG-007): created while the setting
   // createDockerContext is on, removed when it is off; only a context with the description of Devspaces. It reads the
@@ -1223,7 +1226,7 @@ async function activateExtension(
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
   // Devspaces.
   const limaSetup = new LimaSetupCommands({
-    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: process.arch, env, resources: vmWish, machine }),
+    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: vmArch, env, resources: vmWish, machine }),
     folder: limaVm?.paths.root,
     logger,
     showLog: () => logger.show(),
