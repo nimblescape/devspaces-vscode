@@ -2,10 +2,11 @@
 # © 2026 Hannes Stauss (scalarion@nimblescape.com)
 # Licensed under the MIT License. See LICENSE in the repository root for details.
 
-# Keep the pin of the build image of Devspaces (src/core/docker/buildxPin.json,
-# docs/architecture.md "The helper image") up to date, once per day and on a
-# manual start. The job "pin" first checks that Docker Hub still has the image
-# index of the pinned digest of docker/buildx-bin, with an image for
+# Keep the pin of the build image of Devspaces
+# (src/core/docker/buildxPin.json, docs/architecture.md "The helper image") up
+# to date: every day through the workflow "Daily checks" (daily-checks.yml),
+# and on a manual start. The job "pin" first checks that Docker Hub still has
+# the image index of the pinned digest of docker/buildx-bin, with an image for
 # linux/amd64 and linux/arm64, because every engine pulls it by that digest.
 # Then it looks for a newer tag x.y.z of docker/buildx-bin and writes its
 # version and the digest of its image index with scripts/buildx-pin.mjs. Only
@@ -13,22 +14,21 @@
 # the job "pull request" commits the new pin to the branch buildx-<version>,
 # opens a pull request for it, and starts the workflow "CI" on that branch,
 # because a pull request of a workflow starts no workflow: the checks of that
-# run appear on the pull request, also the Docker tests, which build the helper
-# image in a container of the new build image. A branch buildx-<version> that
-# has a pull request already, open, closed or merged, gets nothing new. Opening
-# the pull request needs the repository setting "Allow GitHub Actions to create
-# and approve pull requests" (Settings > Actions > General); without it, the
-# job fails after the push, and the next run tries again. A pull request that
-# changes this workflow, the script or the pin runs the job "pin", which writes
-# nothing there. GitHub starts a scheduled run only from the workflow on the
-# default branch.
+# run appear on the pull request, also the Docker tests, which build the
+# helper image in a container of the new build image. A branch
+# buildx-<version> that has a pull request already, open, closed or merged,
+# gets nothing new. Opening the pull request needs the repository setting
+# "Allow GitHub Actions to create and approve pull requests" (Settings >
+# Actions > General); without it, the job fails after the push, and the next
+# run tries again. A pull request that changes this workflow, the script or
+# the pin runs the job "pin", which writes nothing there. The commit and the
+# pull request name the workflow of the run, "Daily checks" or "Buildx image".
 
 name: Buildx image
 
 on:
-  schedule:
-    # Every day at 04:53 UTC.
-    - cron: '53 4 * * *'
+  # The workflow "Daily checks", every day.
+  workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
@@ -127,6 +127,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.pin.outputs.version }}
+          # "Daily checks" when that workflow called this one.
+          WORKFLOW: ${{ github.workflow }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           branch="buildx-$VERSION"
@@ -142,11 +144,11 @@ jobs:
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git switch --create "$branch"
             git add src/core/docker/buildxPin.json
-            git commit --quiet --message "Pin the build image to buildx $VERSION" --message "The workflow \"Buildx image\" read the digest of the image index of docker/buildx-bin:$VERSION from Docker Hub and checked it against its bytes: $RUN_URL"
+            git commit --quiet --message "Pin the build image to buildx $VERSION" --message "The workflow \"$WORKFLOW\" read the digest of the image index of docker/buildx-bin:$VERSION from Docker Hub and checked it against its bytes: $RUN_URL"
             git push "$remote" "HEAD:refs/heads/$branch"
           fi
           cat > "$RUNNER_TEMP/body.md" <<EOF
-          The workflow "Buildx image" found buildx $VERSION as docker/buildx-bin on Docker Hub, with an image for linux/amd64 and linux/arm64. It wrote the version and the digest of its image index into \`src/core/docker/buildxPin.json\` ([run]($RUN_URL)). Every Docker engine pulls the build image of Devspaces by this digest and tags it \`devspaces-buildx:$VERSION\`.
+          The workflow "$WORKFLOW" found buildx $VERSION as docker/buildx-bin on Docker Hub, with an image for linux/amd64 and linux/arm64. It wrote the version and the digest of its image index into \`src/core/docker/buildxPin.json\` ([run]($RUN_URL)). Every Docker engine pulls the build image of Devspaces by this digest and tags it \`devspaces-buildx:$VERSION\`.
 
           The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. The Docker tests build the helper image in a container of this build image. Merge when CI passes. The next release of Devspaces uses this version.
           EOF

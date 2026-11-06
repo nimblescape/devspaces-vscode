@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The daily checks of the pins of Devspaces, in one run every day and on a
+# manual start. Each job calls the workflow of one pin, which checks the
+# current pin and, when there is a newer version, opens a pull request for it
+# and starts the workflow "CI" on its branch:
+#   Docker CLI    docker-cli.yml    the Docker CLI of Devspaces
+#                                   (src/core/docker/dockerCliPin.json)
+#   Buildx image  buildx-image.yml  the build image of Devspaces
+#                                   (src/core/docker/buildxPin.json)
+# A day without a new version opens nothing. The jobs run side by side, and a
+# failed job does not stop the others. Each called workflow also runs alone,
+# on a manual start and on a pull request that changes it, its script or its
+# pin. Dependabot checks the npm packages and the pinned actions every day as
+# well, at 04:17 and 04:29 UTC (.github/dependabot.yml), because Dependabot
+# cannot run in a workflow. A change of this workflow runs it on its pull
+# request, where the called workflows write nothing: GitHub starts a scheduled
+# run only from the workflow on the default branch.
+
+name: Daily checks
+
+on:
+  schedule:
+    # Every day at 04:41 UTC.
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/daily-checks.yml
+
+permissions:
+  # Only the jobs below get more, for the jobs "pull request" of the called workflows.
+  contents: read
+
+jobs:
+  docker-cli:
+    name: Docker CLI
+    uses: ./.github/workflows/docker-cli.yml
+    permissions:
+      # The push of the branch docker-cli-<version>.
+      contents: write
+      # The pull request of that branch.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
+      actions: write
+
+  buildx-image:
+    name: Buildx image
+    uses: ./.github/workflows/buildx-image.yml
+    permissions:
+      # The push of the branch buildx-<version>.
+      contents: write
+      # The pull request of that branch.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
+      actions: write

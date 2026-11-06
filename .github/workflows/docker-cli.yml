@@ -4,11 +4,12 @@
 
 # Keep the pin of the Docker CLI of Devspaces
 # (src/core/docker/dockerCliPin.json, docs/architecture.md "The Docker CLI of
-# Devspaces") up to date, once per day and on a manual start. The job "pin"
-# first downloads the files of the current pin again and fails when Docker
-# replaced one of them, because then the extension refuses that download. Then
-# it looks for a newer version that download.docker.com has for all platforms
-# of the pin, and computes the size and the SHA-256 of each of its files with
+# Devspaces") up to date: every day through the workflow "Daily checks"
+# (daily-checks.yml), and on a manual start. The job "pin" first downloads the
+# files of the current pin again and fails when Docker replaced one of them,
+# because then the extension refuses that download. Then it looks for a newer
+# version that download.docker.com has for all platforms of the pin, and
+# computes the size and the SHA-256 of each of its files with
 # scripts/docker-cli-pin.mjs. The script also measures the Docker API versions
 # that the CLI speaks, with its Linux build: the check fails when they differ
 # from the pin, and a new pin names them. Nothing checks a new CLI before its
@@ -25,15 +26,14 @@
 # setting "Allow GitHub Actions to create and approve pull requests" (Settings
 # > Actions > General); without it, the job fails after the push, and the next
 # run tries again. A pull request that changes this workflow, the script or
-# the pin runs the job "pin", which writes nothing there. GitHub starts a
-# scheduled run only from the workflow on the default branch.
+# the pin runs the job "pin", which writes nothing there. The commit and the
+# pull request name the workflow of the run, "Daily checks" or "Docker CLI".
 
 name: Docker CLI
 
 on:
-  schedule:
-    # Every day at 04:41 UTC.
-    - cron: '41 4 * * *'
+  # The workflow "Daily checks", every day.
+  workflow_call:
   workflow_dispatch:
   pull_request:
     paths:
@@ -132,6 +132,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.pin.outputs.version }}
+          # "Daily checks" when that workflow called this one.
+          WORKFLOW: ${{ github.workflow }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           branch="docker-cli-$VERSION"
@@ -147,11 +149,11 @@ jobs:
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git switch --create "$branch"
             git add src/core/docker/dockerCliPin.json
-            git commit --quiet --message "Pin the Docker CLI $VERSION" --message "The workflow \"Docker CLI\" computed the sizes and SHA-256 hashes from its download of each file, and measured the Docker API versions of the CLI: $RUN_URL"
+            git commit --quiet --message "Pin the Docker CLI $VERSION" --message "The workflow \"$WORKFLOW\" computed the sizes and SHA-256 hashes from its download of each file, and measured the Docker API versions of the CLI: $RUN_URL"
             git push "$remote" "HEAD:refs/heads/$branch"
           fi
           cat > "$RUNNER_TEMP/body.md" <<EOF
-          The workflow "Docker CLI" found the Docker CLI $VERSION on download.docker.com for all platforms of the pin. It downloaded each file, computed its size and SHA-256, measured the Docker API versions that the CLI speaks, and wrote them into \`src/core/docker/dockerCliPin.json\` ([run]($RUN_URL)). Docker publishes no checksums for these files. Devspaces refuses an engine of a remote host whose API versions do not fit the API versions of the pin, before a window of a devspace there opens.
+          The workflow "$WORKFLOW" found the Docker CLI $VERSION on download.docker.com for all platforms of the pin. It downloaded each file, computed its size and SHA-256, measured the Docker API versions that the CLI speaks, and wrote them into \`src/core/docker/dockerCliPin.json\` ([run]($RUN_URL)). Docker publishes no checksums for these files. Devspaces refuses an engine of a remote host whose API versions do not fit the API versions of the pin, before a window of a devspace there opens.
 
           The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. The job "vscode attach remote" downloads this version in the window of a devspace on a Docker engine over SSH (Linux x86_64), checks it against the pin, and attaches through the Dev Containers extension with it. Merge when CI passes. The next release of Devspaces uses this version.
           EOF

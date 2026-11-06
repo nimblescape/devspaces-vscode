@@ -8,9 +8,9 @@
 // (src/core/docker/buildxImage.ts). Without --version, the version is the newest tag x.y.z of the repository (no
 // release candidate). The index must have an image for linux/amd64 and for linux/arm64, the engines of Devspaces. The
 // script reads the registry anonymously, as the pull of the engine does, and checks the digest of each index against
-// its own SHA-256 of the bytes. The workflow "Buildx image" runs this every week and opens a pull request when the file
-// changed. --check writes nothing: it reads the index of the current pin by its digest and fails when the registry no
-// longer has it or when an engine platform is missing.
+// its own SHA-256 of the bytes. The workflow "Buildx image" runs this every day (called by the workflow "Daily checks")
+// and opens a pull request when the file changed. --check writes nothing: it reads the index of the current pin by its
+// digest and fails when the registry no longer has it or when an engine platform is missing.
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
