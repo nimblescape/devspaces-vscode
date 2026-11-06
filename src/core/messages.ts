@@ -25,7 +25,8 @@ export type ProgressStep = keyof typeof Steps;
 export const Messages = {
   dockerNotInstalled: 'Docker Desktop is not installed.',
   dockerStartFailed: 'Docker could not be started.',
-  dockerEngineNotRunning: 'Docker is not running. Start the Docker service with this command: sudo systemctl enable --now docker',
+  /** The engine of the worker does not answer (on the VM of Devspaces, a remote host, or Docker Desktop on Windows). */
+  dockerEngineNotRunning: 'Docker does not answer on the Docker host of Devspaces. Try again in a moment. On a remote host, check that its Docker service runs.',
   /**
    * The docker command of this computer is Podman (for example the package podman-docker), or the engine that it
    * reaches is the Docker-compatible API of Podman (ensureDockerRunning, and podmanDockerTarget when the current Docker
@@ -570,9 +571,6 @@ export function dockerHostReason(
 export const Actions = {
   /** Shows the sidebar view with the steps of the Docker setup (action of the error dockerNotInstalled). */
   installDocker: 'Install Docker…',
-  /** Starts Docker Engine on Linux with `sudo systemctl enable --now docker` in a terminal, after a confirmation (action
-   *  of the error dockerEngineNotRunning). */
-  startDocker: 'Start Docker',
   showDetails: 'Show details',
   tryAgain: 'Try again',
   signIn: 'Sign in',

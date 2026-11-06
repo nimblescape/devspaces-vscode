@@ -3,7 +3,6 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,30 +11,10 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 // The Docker CLI of the extension (BootstrapDocker).
 import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { findDockerCli } from '../core/docker/dockerCli';
-import type { DownloadOptions } from '../core/docker/dockerDownload';
-import {
-  DOCKER_DESKTOP_DOWNLOADS,
-  DOCKER_ENGINE_INSTALL_URL,
-  DockerContextKeys,
-  DockerSetupTexts,
-  installConfirmation,
-  installPlan,
-  type InstallPlanInput,
-  type SetupTool,
-} from '../core/docker/dockerSetup';
-import { UserFacingError } from '../core/errors';
-import { Messages } from '../core/messages';
-import { abortError, type RunResult } from '../core/ports';
+import { DockerContextKeys, DockerSetupTexts } from '../core/docker/dockerSetup';
+import type { RunResult } from '../core/ports';
 import { Commands } from './commands';
-import {
-  DOCKER_SETUP_START_COMMAND,
-  DockerSetup,
-  DockerSetupUiTexts,
-  INSTALL_TERMINAL_NAME,
-  dockerAppLocations,
-  readBrewCaskState,
-  type DockerSetupDeps,
-} from './dockerSetup';
+import { DockerSetup, DockerSetupUiTexts, type DockerSetupDeps } from './dockerSetup';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -48,11 +27,7 @@ function contextCalls(): Array<[string, boolean]> {
 
 interface SetupOptions {
   platform?: NodeJS.Platform;
-  input?: Partial<InstallPlanInput>;
-  tools?: SetupTool[];
   wsl?: () => RunResult | Promise<RunResult>;
-  download?: (options: DownloadOptions) => Promise<void>;
-  startDocker?: DockerSetupDeps['startDocker'];
   /** Whether Devspaces uses a remote host (as last read); a function for one that changes. */
   remoteDockerHost?: boolean | (() => boolean);
   /** Whether the sidebar view is visible; visible when not given. */
@@ -70,28 +45,18 @@ function setup(installed: boolean, options: SetupOptions = {}) {
       options.wsl ? options.wsl() : { exitCode: 1, stdout: '', stderr: '', timedOut: false },
     ),
   };
-  const launch = vi.fn(async () => {});
-  const showLog = vi.fn();
-  const download = vi.fn(options.download ?? (async () => {}));
-  const tools = options.tools ?? [];
   const dockerSetup = new DockerSetup({
     docker,
     runner,
     logger,
-    showLog,
     platform,
     env: {},
     onDidChangeInstalled: changed,
     remoteDockerHostConfigured: () => (typeof options.remoteDockerHost === 'function' ? options.remoteDockerHost() : (options.remoteDockerHost ?? false)),
     viewVisible: options.viewVisible ?? (() => true),
     wslAfterInstall: options.wslAfterInstall,
-    planInput: async () => ({ platform, arch: 'arm64', has: (tool: SetupTool) => tools.includes(tool), userName: 'octo', ...options.input }),
-    downloadFolder: path.join(os.tmpdir(), 'devspaces-downloads-test'),
-    download,
-    launch,
-    startDocker: options.startDocker ?? (async () => {}),
   } as unknown as DockerSetupDeps);
-  return { dockerSetup, docker, logger, changed, runner, launch, showLog, download };
+  return { dockerSetup, docker, logger, changed, runner };
 }
 
 /** Lets the pending promise callbacks run (the fake timers do not delay them). */
@@ -295,7 +260,6 @@ describe('DockerSetup: context keys and CLI checks', () => {
       docker,
       runner,
       logger,
-      showLog: vi.fn(),
       platform: 'win32',
       env: {},
       onDidChangeInstalled: changed,
@@ -339,7 +303,6 @@ describe('DockerSetup: context keys and CLI checks', () => {
       docker,
       runner,
       logger,
-      showLog: vi.fn(),
       platform: 'darwin',
       env: {},
       onDidChangeInstalled: changed,
@@ -375,404 +338,6 @@ describe('DockerSetup: context keys and CLI checks', () => {
     expect(dockerSetup.checkCli()).toBe(false);
     expect(dockerSetup.dockerMissing).toBe(true);
     expect(logger.warn).toHaveBeenCalled();
-    dockerSetup.dispose();
-  });
-});
-
-describe('DockerSetup: Install Docker (sidebar button Install Docker)', () => {
-  it('runs the Homebrew command in a visible terminal after the modal confirmation, and nothing before it', async () => {
-    const { dockerSetup } = setup(false, { tools: ['brew'] });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    const plan = installPlan({ platform: 'darwin', arch: 'arm64', has: (tool) => tool === 'brew' });
-    const confirmation = installConfirmation(plan)!;
-    expect(modalCalls()).toEqual([[confirmation.message, { modal: true, detail: confirmation.detail }, confirmation.button]]);
-    expect(confirmation.detail).toContain('brew install --cask docker-desktop');
-    expect(fakeVscode.terminals).toHaveLength(1);
-    expect(fakeVscode.terminals[0]).toMatchObject({ name: INSTALL_TERMINAL_NAME, shown: 1, lines: ['brew install --cask docker-desktop'] });
-    dockerSetup.dispose();
-  });
-
-  it('removes a stale Homebrew record first and installs only when that succeeded (joined with &&)', async () => {
-    const { dockerSetup } = setup(false, {
-      tools: ['brew'],
-      input: { brewPath: '/opt/homebrew/bin/brew', brewCaskRecorded: true, dockerAppPresent: false },
-    });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    expect(modalCalls()[0][1].detail).toContain(DockerSetupTexts.brewStaleCask);
-    expect(fakeVscode.terminals[0].lines).toEqual([
-      '/opt/homebrew/bin/brew uninstall --cask --force docker-desktop && /opt/homebrew/bin/brew install --cask docker-desktop',
-    ]);
-    dockerSetup.dispose();
-  });
-
-  it('runs nothing when the confirmation is cancelled', async () => {
-    const { dockerSetup, download } = setup(false, { tools: ['brew'] });
-    confirmWith(undefined);
-    await dockerSetup.install();
-    expect(fakeVscode.terminals).toEqual([]);
-    const withoutBrew = setup(false);
-    await withoutBrew.dockerSetup.install();
-    expect(download).not.toHaveBeenCalled();
-    expect(withoutBrew.download).not.toHaveBeenCalled();
-    expect(withoutBrew.launch).not.toHaveBeenCalled();
-    dockerSetup.dispose();
-    withoutBrew.dockerSetup.dispose();
-  });
-
-  it('joins the Linux commands with && in one terminal line', async () => {
-    const osRelease = { ID: 'ubuntu', VERSION_CODENAME: 'noble' };
-    const { dockerSetup } = setup(false, { platform: 'linux', input: { arch: 'x64', osRelease } });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    const plan = installPlan({ platform: 'linux', arch: 'x64', osRelease, has: () => false, userName: 'octo' });
-    if (plan.kind !== 'terminal') throw new Error('terminal plan expected');
-    expect(fakeVscode.terminals[0].lines).toEqual([plan.commands.join(' && ')]);
-    expect(modalCalls()[0][1].detail).toContain(DockerSetupTexts.adminPassword);
-    dockerSetup.dispose();
-  });
-
-  it('runs the commands in a terminal with a fixed shell, folder, and environment (no setting of the workspace applies)', async () => {
-    const osRelease = { ID: 'ubuntu', VERSION_CODENAME: 'noble' };
-    const { dockerSetup } = setup(false, { platform: 'linux', input: { arch: 'x64', osRelease } });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    const options = fakeVscode.window.createTerminal.mock.calls[0][0] as { name: string; shellPath: string; cwd: string; strictEnv: boolean; env: Record<string, string> };
-    expect(options).toMatchObject({ name: 'Install Docker', shellPath: '/bin/sh', cwd: os.homedir(), strictEnv: true });
-    expect(options.env.PATH).toBe('/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
-    expect(fakeVscode.terminals[0].lines[0]).toMatch(/&& sudo usermod -aG docker octo$/);
-    dockerSetup.dispose();
-  });
-
-  it('installs nothing when Docker is installed already (the command may still run, for example from an older notification)', async () => {
-    const { dockerSetup, download } = setup(true, { tools: ['brew'] });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
-    expect(fakeVscode.terminals).toEqual([]);
-    expect(download).not.toHaveBeenCalled();
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(DockerSetupUiTexts.alreadyInstalled);
-    dockerSetup.dispose();
-  });
-
-  it('sends the winget command as its own line on Windows', async () => {
-    const { dockerSetup } = setup(false, { platform: 'win32', tools: ['winget'], input: { arch: 'x64' } });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    expect(fakeVscode.terminals[0].lines).toEqual([
-      'winget install --exact --id Docker.DockerDesktop --accept-package-agreements --accept-source-agreements',
-    ]);
-    dockerSetup.dispose();
-  });
-
-  it('opens the installation guide for a distribution without a plan', async () => {
-    const { dockerSetup } = setup(false, { platform: 'linux', input: { osRelease: { ID: 'arch' } } });
-    await dockerSetup.install();
-    expect(fakeVscode.env.openExternal).toHaveBeenCalledTimes(1);
-    expect(String(fakeVscode.env.openExternal.mock.calls[0][0])).toBe(DOCKER_ENGINE_INSTALL_URL);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(DockerSetupUiTexts.manualInstall);
-    expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
-    expect(fakeVscode.terminals).toEqual([]);
-    dockerSetup.dispose();
-  });
-
-  it('downloads the .dmg with a cancellable progress after the confirmation, then opens it', async () => {
-    const { dockerSetup, download, launch, runner } = setup(false, {
-      download: async (options) => {
-        options.onProgress?.(3 * 1_048_576, 10 * 1_048_576);
-      },
-    });
-    const reports: unknown[] = [];
-    fakeVscode.window.withProgress.mockImplementation(async (progressOptions: unknown, task: (...args: unknown[]) => Promise<unknown>) => {
-      reports.push(progressOptions);
-      return task({ report: (value: unknown) => reports.push(value) }, { onCancellationRequested: () => ({ dispose() {} }) });
-    });
-    runner.run.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '', timedOut: false });
-    confirmWith(DockerSetupTexts.download);
-    await dockerSetup.install();
-    const target = path.join(os.tmpdir(), 'devspaces-downloads-test', 'Docker.dmg');
-    expect(modalCalls()[0][0]).toBe(DockerSetupTexts.confirmDownload);
-    expect(modalCalls()[0][1].detail).toContain(DOCKER_DESKTOP_DOWNLOADS.macArm64);
-    expect(modalCalls()[0][1].detail).toContain(target);
-    expect(download).toHaveBeenCalledTimes(1);
-    expect(download.mock.calls[0][0]).toMatchObject({ url: DOCKER_DESKTOP_DOWNLOADS.macArm64, target });
-    // The title and the newest message in the message, then the link Show details (progress.ts).
-    expect(reports[0]).toEqual({ location: 15, cancellable: true });
-    expect(reports[1]).toEqual({ message: 'Downloading Docker Desktop… [Show details](command:devspaces.showLog?%5B%22progressNotification%22%5D)' });
-    expect(reports[2]).toEqual({ message: 'Downloading Docker Desktop… 3 of 10 MB. [Show details](command:devspaces.showLog?%5B%22progressNotification%22%5D)', increment: 30 });
-    expect(launch).toHaveBeenCalledWith('/usr/bin/open', [target]);
-    expect(fakeVscode.terminals).toEqual([]);
-    // Marked as downloaded before it opens, so that Gatekeeper checks the signature of Docker.
-    const xattr = runner.run.mock.calls.find((call) => call[0] === '/usr/bin/xattr');
-    expect(xattr?.[1]).toEqual(['-w', 'com.apple.quarantine', expect.stringMatching(/^0081;[0-9a-f]+;Devspaces;$/), target]);
-    expect(runner.run.mock.invocationCallOrder[runner.run.mock.calls.indexOf(xattr!)]).toBeLessThan(launch.mock.invocationCallOrder[0]);
-    dockerSetup.dispose();
-  });
-
-  it('does not open an installer that could not be marked as downloaded (the system would not check it)', async () => {
-    const { dockerSetup, launch, runner } = setup(false);
-    fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
-      task({ report: () => {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
-    );
-    runner.run.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'Operation not permitted', timedOut: false });
-    confirmWith(DockerSetupTexts.download);
-    await dockerSetup.install();
-    const target = path.join(os.tmpdir(), 'devspaces-downloads-test', 'Docker.dmg');
-    expect(launch).not.toHaveBeenCalled();
-    expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledWith(DockerSetupUiTexts.notMarked(target), DockerSetupUiTexts.showDetails);
-    dockerSetup.dispose();
-  });
-
-  it('starts the downloaded installer on Windows through the shell of the system', async () => {
-    const { dockerSetup, launch } = setup(false, { platform: 'win32', input: { arch: 'x64' } });
-    fs.mkdirSync(path.join(os.tmpdir(), 'devspaces-downloads-test'), { recursive: true });
-    fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
-      task({ report: () => {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
-    );
-    confirmWith(DockerSetupTexts.download);
-    await dockerSetup.install();
-    expect(launch).not.toHaveBeenCalled();
-    const opened = fakeVscode.env.openExternal.mock.calls[0][0] as { scheme: string; fsPath: string };
-    expect(opened.scheme).toBe('file');
-    expect(opened.fsPath).toBe(path.join(os.tmpdir(), 'devspaces-downloads-test', 'Docker Desktop Installer.exe'));
-    // Marked as downloaded from the internet (zone 3), so that Windows checks it.
-    const zone = `${opened.fsPath}:Zone.Identifier`;
-    expect(fs.readFileSync(zone, 'utf8')).toContain('ZoneId=3');
-    fs.rmSync(zone, { force: true });
-    dockerSetup.dispose();
-  });
-
-  it('opens nothing after a cancelled download', async () => {
-    const { dockerSetup, launch, logger } = setup(false, {
-      download: async () => {
-        throw abortError();
-      },
-    });
-    fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
-      task({ report: () => {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
-    );
-    confirmWith(DockerSetupTexts.download);
-    await dockerSetup.install();
-    expect(launch).not.toHaveBeenCalled();
-    expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith('The download of Docker Desktop was cancelled.');
-    dockerSetup.dispose();
-  });
-
-  it('shows a failed download with Show details', async () => {
-    const { dockerSetup, launch, showLog } = setup(false, {
-      download: async () => {
-        throw new Error('HTTP status 500');
-      },
-    });
-    fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
-      task({ report: () => {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
-    );
-    fakeVscode.window.showErrorMessage.mockResolvedValue(DockerSetupUiTexts.showDetails);
-    confirmWith(DockerSetupTexts.download);
-    await dockerSetup.install();
-    await flush();
-    expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledWith(DockerSetupUiTexts.downloadFailed, DockerSetupUiTexts.showDetails);
-    expect(showLog).toHaveBeenCalled();
-    expect(launch).not.toHaveBeenCalled();
-    dockerSetup.dispose();
-  });
-
-  it('looks the CLI up every 5 seconds after the installation, then offers Start Docker', async () => {
-    const { dockerSetup, docker, changed } = setup(false, { tools: ['brew'] });
-    dockerSetup.initialize();
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    // Once before the installation (Docker is not installed yet), then every 5 seconds.
-    expect(docker.lookUpCliNow).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(5_000);
-    expect(docker.lookUpCliNow).toHaveBeenCalledTimes(2);
-    docker.lookUpCliNow.mockReturnValue(true);
-    fakeVscode.window.showInformationMessage.mockResolvedValue(DockerSetupUiTexts.startDocker);
-    vi.advanceTimersByTime(5_000);
-    expect(docker.lookUpCliNow).toHaveBeenCalledTimes(3);
-    expect(changed).toHaveBeenCalledTimes(1);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(DockerSetupUiTexts.installedStartNow, DockerSetupUiTexts.startDocker);
-    await flush();
-    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith(DOCKER_SETUP_START_COMMAND);
-    expect(DOCKER_SETUP_START_COMMAND).toBe(Commands.dockerSetupStart);
-    vi.advanceTimersByTime(60_000);
-    expect(docker.lookUpCliNow).toHaveBeenCalledTimes(3);
-    dockerSetup.dispose();
-  });
-
-  it('stops looking after 30 minutes', async () => {
-    const { dockerSetup, docker } = setup(false, { tools: ['brew'] });
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    vi.advanceTimersByTime(30 * 60_000);
-    const calls = docker.lookUpCliNow.mock.calls.length;
-    // The check before the installation, then 360 lookups every 5 seconds.
-    expect(calls).toBe(1 + 360);
-    vi.advanceTimersByTime(60_000);
-    expect(docker.lookUpCliNow).toHaveBeenCalledTimes(calls);
-    dockerSetup.dispose();
-  });
-
-  it('asks for a local window in a remote window, and runs nothing', async () => {
-    fakeVscode.env.remoteName = 'wsl';
-    const { dockerSetup, download, runner, logger } = setup(false, { tools: ['brew'] });
-    await dockerSetup.install();
-    await dockerSetup.start();
-    await dockerSetup.installWsl();
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledTimes(3);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(DockerSetupUiTexts.localWindowNeeded);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('Open a local window to install Docker.');
-    // Start Docker has its own text.
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('Open a local window to start Docker.');
-    expect(fakeVscode.window.showInformationMessage.mock.calls.map((call) => call[0])).toEqual([
-      'Open a local window to install Docker.',
-      'Open a local window to start Docker.',
-      'Open a local window to install Docker.',
-    ]);
-    expect(logger.info).toHaveBeenCalledWith('Docker is started only from a local window (this window: wsl).');
-    expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
-    expect(fakeVscode.terminals).toEqual([]);
-    expect(download).not.toHaveBeenCalled();
-    expect(runner.run).not.toHaveBeenCalled();
-    dockerSetup.dispose();
-  });
-});
-
-describe('Docker.app outside /Applications (a stale cask)', () => {
-  it('counts Docker.app in ~/Applications as present, so a working app is not uninstalled', () => {
-    const state = readBrewCaskState(
-      '/opt/homebrew/bin/brew',
-      (file) => ['/opt/homebrew/Caskroom/docker-desktop', '/Users/u/Applications/Docker.app'].includes(file),
-      undefined,
-      '/Users/u',
-    );
-    expect(state).toEqual({ brewCaskRecorded: true, dockerAppPresent: true });
-  });
-
-  it('counts Docker.app in the --appdir of HOMEBREW_CASK_OPTS as present', () => {
-    for (const opts of ['--appdir=~/Apps', '--no-quarantine --appdir ~/Apps', '--appdir="~/Apps/"']) {
-      const state = readBrewCaskState(
-        '/opt/homebrew/bin/brew',
-        (file) => ['/opt/homebrew/Caskroom/docker-desktop', '/Users/u/Apps/Docker.app'].includes(file),
-        opts,
-        '/Users/u',
-      );
-      expect(state, opts).toEqual({ brewCaskRecorded: true, dockerAppPresent: true });
-    }
-  });
-
-  it('lists /Applications, ~/Applications, and the appdir once each', () => {
-    expect(dockerAppLocations('--appdir=/Applications', '/Users/u')).toEqual([
-      '/Applications/Docker.app',
-      '/Users/u/Applications/Docker.app',
-    ]);
-    expect(dockerAppLocations(undefined, undefined)).toEqual(['/Applications/Docker.app']);
-  });
-});
-
-describe('readBrewCaskState (input of the installation plan on macOS)', () => {
-  const exists = (present: string[]) => (file: string) => present.includes(file);
-
-  it('finds the stale record: the cask is in the Caskroom of /opt/homebrew, Docker.app is gone', () => {
-    expect(readBrewCaskState('/opt/homebrew/bin/brew', exists(['/opt/homebrew/Caskroom/docker-desktop']))).toEqual({
-      brewCaskRecorded: true,
-      dockerAppPresent: false,
-    });
-  });
-
-  it('looks the Caskroom up in the prefix of the brew that was found (/usr/local)', () => {
-    const lookedUp: string[] = [];
-    const state = readBrewCaskState('/usr/local/bin/brew', (file) => {
-      lookedUp.push(file);
-      return file === '/usr/local/Caskroom/docker-desktop' || file === '/Applications/Docker.app';
-    });
-    expect(state).toEqual({ brewCaskRecorded: true, dockerAppPresent: true });
-    expect(lookedUp).toContain('/usr/local/Caskroom/docker-desktop');
-    expect(lookedUp).not.toContain('/opt/homebrew/Caskroom/docker-desktop');
-  });
-
-  it('the cask not recorded: the plain install', () => {
-    const state = readBrewCaskState('/opt/homebrew/bin/brew', exists([]));
-    expect(state).toEqual({ brewCaskRecorded: false, dockerAppPresent: false });
-    const plan = installPlan({ platform: 'darwin', arch: 'arm64', has: () => true, brewPath: '/opt/homebrew/bin/brew', ...state });
-    expect(plan.kind === 'terminal' && plan.commands).toEqual(['/opt/homebrew/bin/brew install --cask docker-desktop']);
-  });
-
-  it('recorded and Docker.app present: the plain install (Homebrew upgrades normally)', () => {
-    const state = readBrewCaskState('/opt/homebrew/bin/brew', exists(['/opt/homebrew/Caskroom/docker-desktop', '/Applications/Docker.app']));
-    const plan = installPlan({ platform: 'darwin', arch: 'arm64', has: () => true, brewPath: '/opt/homebrew/bin/brew', ...state });
-    expect(plan.kind === 'terminal' && plan.commands).toEqual(['/opt/homebrew/bin/brew install --cask docker-desktop']);
-  });
-
-  it('stale record in /usr/local: uninstall, then install, with that brew', () => {
-    const state = readBrewCaskState('/usr/local/bin/brew', exists(['/usr/local/Caskroom/docker-desktop']));
-    const plan = installPlan({ platform: 'darwin', arch: 'x64', has: () => true, brewPath: '/usr/local/bin/brew', ...state });
-    expect(plan.kind === 'terminal' && plan.commands).toEqual([
-      '/usr/local/bin/brew uninstall --cask --force docker-desktop',
-      '/usr/local/bin/brew install --cask docker-desktop',
-    ]);
-  });
-
-  it('without a Homebrew the cask counts as not recorded', () => {
-    expect(readBrewCaskState(undefined, () => true)).toEqual({ brewCaskRecorded: false, dockerAppPresent: true });
-  });
-});
-
-describe('DockerSetup: Start Docker (after an installation, and the action Start Docker of an error)', () => {
-  it('starts Docker with a progress notification', async () => {
-    const startDocker = vi.fn(async () => {});
-    const { dockerSetup } = setup(true, { startDocker });
-    const titles: unknown[] = [];
-    const messages: string[] = [];
-    fakeVscode.window.withProgress.mockImplementation(async (options: unknown, task: (...args: unknown[]) => Promise<unknown>) => {
-      titles.push(options);
-      return task({ report: (value: { message: string }) => messages.push(value.message) }, { onCancellationRequested: () => ({ dispose() {} }) });
-    });
-    await dockerSetup.start();
-    expect(titles).toEqual([{ location: 15, cancellable: true }]);
-    expect(messages).toEqual(['Starting Docker… [Show details](command:devspaces.showLog?%5B%22progressNotification%22%5D)']);
-    expect(startDocker).toHaveBeenCalledTimes(1);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(DockerSetupUiTexts.dockerRunning);
-    dockerSetup.dispose();
-  });
-
-  it('starts Docker Engine on Linux with systemctl in the terminal, after the confirmation', async () => {
-    const { dockerSetup } = setup(true, {
-      platform: 'linux',
-      startDocker: async () => {
-        throw new UserFacingError('dockerEngineNotRunning', Messages.dockerEngineNotRunning);
-      },
-    });
-    fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
-      task({ report: () => {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
-    );
-    confirmWith(DockerSetupTexts.start);
-    await dockerSetup.start();
-    expect(modalCalls()).toEqual([
-      [
-        DockerSetupTexts.confirmStartEngine,
-        { modal: true, detail: `${DockerSetupTexts.confirmCommands}\n\nsudo systemctl enable --now docker\n\n${DockerSetupTexts.adminPassword}` },
-        DockerSetupTexts.start,
-      ],
-    ]);
-    expect(fakeVscode.terminals[0].lines).toEqual(['sudo systemctl enable --now docker']);
-    dockerSetup.dispose();
-  });
-
-  it('passes other errors to the caller, which shows them', async () => {
-    const error = new UserFacingError('dockerStartFailed', Messages.dockerStartFailed);
-    const { dockerSetup } = setup(true, {
-      startDocker: async () => {
-        throw error;
-      },
-    });
-    fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
-      task({ report: () => {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
-    );
-    await expect(dockerSetup.start()).rejects.toBe(error);
-    expect(fakeVscode.terminals).toEqual([]);
     dockerSetup.dispose();
   });
 });
@@ -839,7 +404,7 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     hidden.dockerSetup.initialize();
     await flush();
     expect(hidden.runner.run).not.toHaveBeenCalled();
-    confirmWith(DockerSetupTexts.install);
+    confirmWith('Install');
     await hidden.dockerSetup.installWsl();
     expect(hidden.runner.run).toHaveBeenCalledTimes(1);
     expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
@@ -865,7 +430,7 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     const { dockerSetup } = setup(false, { platform: 'win32', wsl: () => status(0) });
     dockerSetup.initialize();
     await flush();
-    confirmWith(DockerSetupTexts.install);
+    confirmWith('Install');
     await dockerSetup.installWsl();
     expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
     expect(fakeVscode.terminals).toEqual([]);
@@ -892,7 +457,6 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
       docker,
       runner,
       logger,
-      showLog: vi.fn(),
       platform: 'win32',
       env: {},
       onDidChangeInstalled: vi.fn(),
@@ -910,7 +474,7 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     expect(runner.run).toHaveBeenCalledWith('wsl.exe', ['--status'], { timeoutMs: 15_000 });
     expect(contextCalls()).toContainEqual([DockerContextKeys.wslReady, true]);
     // WSL is installed: Install WSL 2 asks nothing and runs no wsl --install.
-    confirmWith(DockerSetupTexts.install);
+    confirmWith('Install');
     await dockerSetup.installWsl();
     expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
     expect(fakeVscode.terminals).toEqual([]);
@@ -920,7 +484,7 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
 
   // The installer of Docker Desktop installs for the user by default (in %LOCALAPPDATA%\Programs\DockerDesktop) and adds
   // the folder to the PATH of the user, which VS Code, started before the installation, does not see.
-  it('finds a per-user Docker Desktop after the installation, with the PATH from before it', async () => {
+  it('finds a per-user Docker Desktop that the user installed, with the PATH from before it', async () => {
     const env = { Path: 'C:\\Windows\\System32', LOCALAPPDATA: 'C:\\Users\\octo\\AppData\\Local' };
     const cli = 'C:\\Users\\octo\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe';
     const files = new Set<string>();
@@ -934,29 +498,23 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
       docker,
       runner,
       logger,
-      showLog: vi.fn(),
       platform: 'win32',
       env,
       onDidChangeInstalled: changed,
       remoteDockerHostConfigured: () => false,
       viewVisible: () => true,
-      planInput: async () => ({ platform: 'win32', arch: 'x64', has: (tool: SetupTool) => tool === 'winget' }),
     });
     dockerSetup.initialize();
     await flush();
     expect(dockerSetup.setupRequired).toBe(true);
-    confirmWith(DockerSetupTexts.install);
-    await dockerSetup.install();
-    expect(fakeVscode.terminals).toHaveLength(1);
-    // The installer puts the CLI in place.
+    // The installer puts the CLI in place; the check of a missing CLI finds it.
     files.add(cli);
-    vi.advanceTimersByTime(5_000);
+    vi.advanceTimersByTime(10_000);
     expect(dockerSetup.setupRequired).toBe(false);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(docker.dockerPath).toBe(cli);
     // The Docker calls find the credential helper of Docker Desktop next to the CLI.
     expect(docker.processEnv().Path).toBe(`C:\\Windows\\System32;${path.win32.dirname(cli)};C:\\Program Files\\Docker\\Docker\\resources\\bin`);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(DockerSetupUiTexts.installedStartNow, DockerSetupUiTexts.startDocker);
     dockerSetup.dispose();
   });
 
@@ -1035,10 +593,14 @@ describe('Docker setup commands (package.json)', () => {
   };
 
   it('declares the buttons as commands, hidden in the Command Palette', () => {
-    const commands = [Commands.dockerSetupInstall, Commands.dockerSetupStart, Commands.dockerSetupInstallWsl, Commands.dockerSetupShow];
+    const commands = [Commands.dockerSetupInstallWsl, Commands.dockerSetupShow];
     for (const command of commands) {
       expect(manifest.contributes.commands.find((entry) => entry.command === command)?.category).toBe('Devspaces');
       expect(manifest.contributes.menus.commandPalette).toContainEqual({ command, when: 'false' });
+    }
+    // Devspaces never installs Docker Desktop or Docker Engine on this computer, and starts no Docker from the setup.
+    for (const gone of ['devspaces.dockerSetup.install', 'devspaces.dockerSetup.start']) {
+      expect(manifest.contributes.commands.map((entry) => entry.command)).not.toContain(gone);
     }
   });
 

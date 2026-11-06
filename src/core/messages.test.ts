@@ -3,7 +3,6 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 import { describe, expect, it } from 'vitest';
-import { LINUX_ENGINE_START_COMMAND } from './docker/dockerSetup';
 import { Messages, dockerHostReason, lastSeenInUse, recordedStateNote } from './messages';
 
 describe('Messages.localEnvNotPassed', () => {
@@ -37,10 +36,11 @@ describe('Messages.containerComposeReplaced', () => {
 });
 
 describe('Messages.dockerEngineNotRunning', () => {
-  // The same command as the action Start Docker of the Docker setup: the service also starts with the computer then.
-  it('names the command that enables and starts the Docker service', () => {
-    expect(Messages.dockerEngineNotRunning).toContain(LINUX_ENGINE_START_COMMAND);
-    expect(LINUX_ENGINE_START_COMMAND).toBe('sudo systemctl enable --now docker');
+  // The engine of the worker: the VM of Devspaces, a remote host, or Docker Desktop on Windows; never a command of this
+  // computer (R-ENG-001: on macOS and Linux, Devspaces never uses its Docker).
+  it('says that Docker does not answer on the Docker host, without a command of this computer', () => {
+    expect(Messages.dockerEngineNotRunning).toContain('Docker host of Devspaces');
+    expect(Messages.dockerEngineNotRunning).not.toContain('sudo');
   });
 });
 

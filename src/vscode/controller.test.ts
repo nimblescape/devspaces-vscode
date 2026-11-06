@@ -244,7 +244,7 @@ interface Harness {
     accounts: ReturnType<typeof vi.fn>;
     addAccount: ReturnType<typeof vi.fn>;
   };
-  dockerSetup: Record<'install' | 'start' | 'installWsl' | 'show', ReturnType<typeof vi.fn>>;
+  dockerSetup: Record<'installWsl' | 'show', ReturnType<typeof vi.fn>>;
   /** The single lookup of a repository on GitHub; by default GitHub does not show it. */
   discovery: { getRepository: Mock<(repository: string, token: string) => Promise<RepositoryInfo | undefined>> };
   repositoryGroupsEditor: { open: ReturnType<typeof vi.fn> };
@@ -440,8 +440,6 @@ function createHarness(
     addAccount: vi.fn(async (): Promise<GitHubAccount | undefined> => undefined),
   };
   const dockerSetup = {
-    install: vi.fn(async () => {}),
-    start: vi.fn(async () => {}),
     installWsl: vi.fn(async () => {}),
     show: vi.fn(async () => {}),
   };
@@ -709,12 +707,13 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 42 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
+    // 40 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), and the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces. The last one that was added
-    // is the setup of the Lima VM of Devspaces (macOS and Linux).
-    expect(declared).toHaveLength(42);
+    // is the setup of the Lima VM of Devspaces (macOS and Linux); the last ones that were removed are the installation
+    // and the start of Docker Desktop or Docker Engine (R-ENG-001).
+    expect(declared).toHaveLength(40);
     expect(declared).toEqual(
       expect.arrayContaining([
         Commands.removeFromDockerEngine,
@@ -4988,19 +4987,15 @@ describe('Connection of this window', () => {
   });
 
   it('runs the buttons of the Docker setup in the sidebar, and Show Docker Setup of the action Install Docker…', async () => {
-    await run('dockerSetupInstall');
-    await run('dockerSetupStart');
     await run('dockerSetupInstallWsl');
     await run('dockerSetupShow');
-    expect(h.dockerSetup.install).toHaveBeenCalledTimes(1);
-    expect(h.dockerSetup.start).toHaveBeenCalledTimes(1);
     expect(h.dockerSetup.installWsl).toHaveBeenCalledTimes(1);
     expect(h.dockerSetup.show).toHaveBeenCalledTimes(1);
   });
 
   it('shows an error of a Docker setup command', async () => {
-    h.dockerSetup.start.mockRejectedValue(new UserFacingError('dockerStartFailed', Messages.dockerStartFailed));
-    await run('dockerSetupStart');
+    h.dockerSetup.installWsl.mockRejectedValue(new UserFacingError('dockerStartFailed', Messages.dockerStartFailed));
+    await run('dockerSetupInstallWsl');
     expect(fakeVscode.window.showErrorMessage).toHaveBeenCalledWith(Messages.dockerStartFailed, Actions.showDetails);
   });
 });

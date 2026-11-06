@@ -247,7 +247,7 @@ describe('DockerTargets.resolve (the Docker host of Devspaces, else the current 
       const docker = new BootstrapDocker(cli, DOCKER, env, silentLogger, 'linux', { fileIdentity: async () => answers.file });
       const targets = new DockerTargets(docker, env, silentLogger, 'linux');
       const startLocal = vi.fn(() =>
-        ensureDockerRunning(docker, cli, silentLogger, {
+        ensureDockerRunning(docker, silentLogger, {
           platform: 'linux',
           timeoutMs: 1,
           sleep: async () => undefined,

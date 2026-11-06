@@ -2,10 +2,10 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// Downloads over HTTPS from one host: the Docker Desktop installer (desktop.docker.com), the Docker CLI of Devspaces
-// (download.docker.com, with its pinned SHA-256; ownDockerCli.ts), the Debian file of the WSL distribution of
-// Devspaces (the host in the list of WSL, with the SHA-256 of that list; wslSetup.ts), and Lima (github.com, with its
-// pinned SHA-256; src/core/vm/lima.ts), whose redirects may lead to another HTTPS host.
+// Downloads over HTTPS from one host: the Docker CLI of Devspaces (download.docker.com, with its pinned SHA-256;
+// ownDockerCli.ts), the Debian file of the WSL distribution of Devspaces (the host in the list of WSL, with the SHA-256
+// of that list; wslSetup.ts), Lima (github.com, with its pinned SHA-256; src/core/vm/lima.ts), whose redirects may lead
+// to another HTTPS host, and the disk of the VM (ghcr.io; src/core/vm/vmImage.ts).
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as https from 'https';
@@ -13,7 +13,7 @@ import { Transform } from 'stream';
 import { pipeline } from 'stream/promises';
 import { userAgent } from '../http';
 import { abortError } from '../ports';
-import { DOCKER_DOWNLOAD_HOST, isHttpsUrl, isHttpsUrlOf } from './dockerSetup';
+import { isHttpsUrl, isHttpsUrlOf } from './dockerSetup';
 
 const MAX_REDIRECTS = 5;
 
@@ -45,11 +45,8 @@ export const nodeHttpsGet: HttpGet = (url, signal, headers = {}) =>
 export interface DownloadOptions {
   /** HTTPS URL of `host`. */
   url: string;
-  /**
-   * The only host of the download and of its redirects (see `anyHttpsRedirect`). Default: desktop.docker.com
-   * (DOCKER_DOWNLOAD_HOST).
-   */
-  host?: string;
+  /** The only host of the download and of its redirects (see `anyHttpsRedirect`). */
+  host: string;
   /** The SHA-256 (hex) and, when known, the size in bytes that the file must have; it is not kept otherwise. */
   expected?: { sha256: string; size?: number };
   /**
@@ -131,7 +128,7 @@ export async function downloadFile(options: DownloadOptions): Promise<void> {
 async function download(options: DownloadOptions, onBytes: () => void): Promise<void> {
   const get = options.get ?? nodeHttpsGet;
   const signal = options.signal ?? new AbortController().signal;
-  const host = options.host ?? DOCKER_DOWNLOAD_HOST;
+  const { host } = options;
   const { expected } = options;
   const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
   if (!isHttpsUrlOf(options.url, host)) throw new Error(`Downloads come only from https://${host}: ${options.url}`);

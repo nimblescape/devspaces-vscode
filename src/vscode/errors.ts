@@ -21,11 +21,6 @@ export const OPERATION_FAILED = 'The operation failed.';
  * the steps of the Docker setup while the CLI is missing (a CLI lost since it was found is reported by BootstrapDocker).
  */
 const INSTALL_DOCKER_COMMAND = 'devspaces.dockerSetup.show';
-/**
- * Command of the action "Start Docker" (Linux, Docker Engine; local windows only): `sudo systemctl enable --now docker`
- * in a terminal, after a confirmation. The extension cannot start Docker Engine by itself (administrator rights).
- */
-const START_DOCKER_COMMAND = 'devspaces.dockerSetup.start';
 
 export interface ShowErrorOptions {
   logger: Logger;
@@ -35,7 +30,7 @@ export interface ShowErrorOptions {
   retry?: () => unknown;
 }
 
-type ErrorAction = 'installDocker' | 'startDocker' | 'showDetails' | 'tryAgain' | 'signIn' | 'resetWsl';
+type ErrorAction = 'installDocker' | 'showDetails' | 'tryAgain' | 'signIn' | 'resetWsl';
 
 interface Presentation {
   message: string;
@@ -86,9 +81,6 @@ function present(error: unknown, canRetry: boolean): Presentation {
   if (rule === 'retry') actions = canRetry ? ['showDetails', 'tryAgain'] : ['showDetails'];
   else if (rule === 'retryOnly') actions = canRetry ? ['tryAgain'] : ['showDetails'];
   else actions = rule;
-  // Start Docker of the Docker setup runs only in a local window (a terminal of a remote window runs on the remote
-  // computer); the message names the command to run on the Docker host.
-  if (vscode.env.remoteName !== undefined) actions = actions.filter((action) => action !== 'startDocker');
   return { message: error.message, severity: WARNINGS.has(error.code) ? 'warning' : 'error', actions };
 }
 
@@ -102,14 +94,14 @@ const ACTIONS: Record<UserErrorCode, ErrorAction[] | 'retry' | 'retryOnly'> = {
   helperFailed: 'retry',
   cloneFailed: 'retry',
   firstOpenOffline: 'retryOnly',
-  dockerEngineNotRunning: ['showDetails', 'startDocker'],
+  dockerEngineNotRunning: 'retry',
   noConfiguration: ['showDetails'],
   filesMissing: ['showDetails'],
   signInRequired: ['signIn'],
   hostAccess: ['showDetails'],
   otherAccount: [],
   cancelled: [],
-  // Never Start Docker or Install Docker… for a remote host.
+  // Never Install Docker… for a remote host.
   dockerHostUnreachable: 'retry',
   // Try again cannot help: WSL cannot start the distribution. Its button runs Try again after the new setup.
   wslDiskCorrupt: ['showDetails', 'resetWsl'],
@@ -138,11 +130,6 @@ function runAction(action: ErrorAction, options: ShowErrorOptions): void {
         vscode.commands
           .executeCommand(INSTALL_DOCKER_COMMAND)
           .then(undefined, (error: unknown) => options.logger.error('Could not open the Docker setup.', error));
-        return;
-      case 'startDocker':
-        vscode.commands
-          .executeCommand(START_DOCKER_COMMAND)
-          .then(undefined, (error: unknown) => options.logger.error('Docker could not be started.', error));
         return;
       case 'showDetails':
         options.showLog();

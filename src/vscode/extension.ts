@@ -1029,7 +1029,7 @@ async function activateExtension(
   const startDocker: DockerStarter = async ({ onStarting, signal }) =>
     startDockerFor(
       await targets.current(),
-      () => ensureDockerRunning(docker, runner, logger, { platform, env, onStarting, signal }),
+      () => ensureDockerRunning(docker, logger, { platform, env, onStarting, signal }),
       remoteDeps(),
       signal,
     );
@@ -1109,7 +1109,6 @@ async function activateExtension(
     docker,
     runner,
     logger,
-    showLog: () => logger.show(),
     platform,
     env,
     // The CLI was found or lost: the sidebar renders again and shows the repositories or the setup.
@@ -1122,14 +1121,6 @@ async function activateExtension(
     // Windows: `wsl --status` only while the view shows the setup (also onViewShown below).
     viewVisible: () => view.visible,
     wslAfterInstall,
-    // Start Docker never starts Docker Desktop for a remote host; it only checks that host.
-    startDocker: async (signal, onStarting) =>
-      startDockerFor(
-        await targets.current(),
-        () => ensureDockerRunning(docker, runner, logger, { platform, env, signal, onStarting }),
-        remoteDeps(),
-        signal,
-      ),
   });
   dockerSetup = setup;
   context.subscriptions.push(setup);
