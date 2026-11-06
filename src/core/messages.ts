@@ -261,7 +261,7 @@ export const Messages = {
       ? `Give the VM more memory with the setting devspaces.vmMemoryGiB: it is ${given} GiB, and at most ${most} GiB are possible on this computer. The VM gets the new value at its next start, after all devspaces stopped.`
       : `The VM already gets ${given} GiB, half of the memory of this computer, which is the most that the setting devspaces.vmMemoryGiB gives it. Stop the devspaces that you do not need.`),
   /** The Docker context `devspaces` of the setting createDockerContext now reaches the VM (R-ENG-007). */
-  dockerContextCreated: 'The Docker context devspaces reaches the VM of Devspaces now, while the VM runs, for example with docker --context devspaces ps. It is not the current Docker context.',
+  dockerContextCreated: 'The Docker context devspaces reaches the VM of Devspaces now, for example with docker --context devspaces ps: on macOS and Linux while the VM runs, on Windows while a window of Devspaces is open. It is not the current Docker context.',
   /** The setting createDockerContext was turned off, and the Docker context `devspaces` of Devspaces was removed. */
   dockerContextRemoved: 'The Docker context devspaces of the VM of Devspaces was removed.',
   /** A Docker context `devspaces` that Devspaces did not create exists: it stays as it is. */

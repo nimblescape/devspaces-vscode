@@ -114,8 +114,8 @@ describe('the Lima VM of Devspaces', () => {
     const engineVersion = await inVm("docker info --format '{{.ServerVersion}}'");
     expect(await socketVersion()).toBe(engineVersion);
     const contextDeps = { file: dockerContextFile(dockerConfig), docker };
-    expect(await syncDockerContext(contextDeps, socket)).toEqual({ kind: 'created' });
-    expect(await syncDockerContext(contextDeps, socket)).toEqual({ kind: 'unchanged' });
+    expect(await syncDockerContext(contextDeps, `unix://${socket}`)).toEqual({ kind: 'created' });
+    expect(await syncDockerContext(contextDeps, `unix://${socket}`)).toEqual({ kind: 'unchanged' });
     const viaContext = await docker(['--context', DOCKER_CONTEXT, 'info', '--format', '{{.ServerVersion}}']);
     expect(viaContext.exitCode, viaContext.stderr).toBe(0);
     expect(viaContext.stdout.trim()).toBe(engineVersion);

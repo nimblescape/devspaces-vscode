@@ -53,7 +53,9 @@ import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
 import { HostPipes } from '../core/relay/hostPipes';
 import { RemoteShells, type RemoteShellStart } from '../core/relay/remoteShells';
-import { dockerPipeBase, dockerPipeId, parseDockerPipeHost } from '../core/relay/pipeAddress';
+import { contextPipeAddress, dockerPipeBase, dockerPipeId, parseDockerPipeHost } from '../core/relay/pipeAddress';
+import { ContextPipe } from '../core/relay/contextPipe';
+import { processDockerDial } from '../core/relay/dockerPipe';
 import { sshPromptSignal, sshPromptsAllowed } from '../core/sshAskpass';
 import { DiscoveryService } from '../core/discovery/discoveryService';
 import { GitHubApi } from '../core/discovery/githubApi';
@@ -396,16 +398,55 @@ async function activateExtension(
   const limaVm = hasLimaVm
     ? new LimaVm({ runner, logger, platform, arch: vmArch, env, resources: () => limaResources(machine.totalMemory, machine.cpus, vmWish()) })
     : undefined;
-  // The Docker context `devspaces` for the Docker socket of the Lima VM (R-ENG-007): created while the setting
-  // createDockerContext is on, removed when it is off; only a context with the description of Devspaces. It reads the
-  // context store first and runs the Docker CLI (of this computer, else of Devspaces) only for a change, without
-  // DOCKER_HOST and DOCKER_CONTEXT, so that it sees the current context of the Docker CLI. At the start of the window
-  // and after the setup of the VM it only logs; a change of the setting also shows what went wrong. One run at a time, so
-  // that two runs never both create the context.
+  // The pipe of the Docker context `devspaces` on Windows (R-ENG-007): one window of the Windows user serves it while
+  // the setting createDockerContext is on and the WSL distribution of Devspaces exists; each connection runs its own
+  // `wsl.exe … docker system dial-stdio` there (dialStdio).
+  const contextPipe =
+    platform === 'win32'
+      ? new ContextPipe({
+          logger,
+          address: contextPipeAddress(`${env.USERDOMAIN ?? ''}\\${currentUserName() ?? env.USERNAME ?? ''}`),
+          connect: processDockerDial(
+            () => {
+              const dial = dialStdio(WSL_HOST);
+              if (dial === undefined) throw new Error('wsl.exe was not found.');
+              return dial;
+            },
+            logger,
+            'the Docker context devspaces',
+          ),
+        })
+      : undefined;
+  context.subscriptions.push({ dispose: () => contextPipe?.stop() });
+  /**
+   * The Docker host of the context `devspaces` as the setting createDockerContext asks: the Docker socket of the Lima VM,
+   * or on Windows the pipe of the context while the WSL distribution of Devspaces exists; undefined: no context.
+   */
+  const vmContextHost = async (): Promise<string | undefined> => {
+    if (settings.createDockerContext !== true) return undefined;
+    if (limaVm !== undefined) return `unix://${limaDockerSocket(limaVm.paths)}`;
+    if (contextPipe === undefined || wslSetupCore === undefined) return undefined;
+    const registration = await wslSetupCore.registration().catch((error: unknown) => {
+      logger.info(`Whether the WSL distribution of Devspaces exists could not be read, so the Docker context devspaces waits: ${errorMessage(error)}`);
+      return undefined;
+    });
+    return registration === 'own' ? contextPipe.address.dockerHost : undefined;
+  };
+  // The Docker context `devspaces` of the VM of Devspaces (R-ENG-007): created while the setting createDockerContext is
+  // on, removed when it is off; only a context with the description of Devspaces. It reads the context store first and
+  // runs the Docker CLI (of this computer, else of Devspaces) only for a change, without DOCKER_HOST and DOCKER_CONTEXT,
+  // so that it sees the current context of the Docker CLI. At the start of the window and after the setup or the removal
+  // of the VM it only logs; a change of the setting also shows what went wrong. One run at a time, so that two runs never
+  // both create the context.
   let dockerContextRun: Promise<void> = Promise.resolve();
   const syncVmDockerContext = (byUser: boolean): Promise<void> => (dockerContextRun = dockerContextRun.catch(() => undefined).then(() => syncVmDockerContextNow(byUser)));
   const syncVmDockerContextNow = async (byUser: boolean): Promise<void> => {
-    if (limaVm === undefined) return;
+    if (limaVm === undefined && contextPipe === undefined) return;
+    const host = await vmContextHost();
+    if (contextPipe !== undefined) {
+      if (host === undefined) contextPipe.stop();
+      else await contextPipe.serve();
+    }
     const cli = installedCli ?? presentOwnCli();
     const cliEnv: NodeJS.ProcessEnv = cli === undefined ? {} : dockerProcessEnv(env, platform, cli);
     delete cliEnv.DOCKER_HOST;
@@ -415,7 +456,7 @@ async function activateExtension(
         file: dockerContextFile(dockerConfigDir(env, platform)),
         docker: cli === undefined ? undefined : (args) => runner.run(cli, args, { env: cliEnv, timeoutMs: DOCKER_CONTEXT_TIMEOUT_MS }),
       },
-      settings.createDockerContext === true ? limaDockerSocket(limaVm.paths) : undefined,
+      host,
     );
     let problem: string | undefined;
     switch (result.kind) {
@@ -1215,12 +1256,19 @@ async function activateExtension(
     installWsl: (link) => setup.installWsl(link),
     restartPending: async () => (await wslAfterInstall?.restartPending()) === true,
     wslInstallDone: async () => wslAfterInstall?.forget(),
-    useHost: (host) => remoteDocker.useHost(host),
+    // After the setup, the Docker context of the setting createDockerContext, which waited for the distribution.
+    useHost: async (host) => {
+      const used = await remoteDocker.useHost(host);
+      background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+      return used;
+    },
     forgetHost: (host) => remoteDocker.forgetHost(host),
-    // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes.
+    // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes. Without
+    // the distribution, the Docker context of the setting createDockerContext goes too.
     forgetDistribution: async () => {
       await engineRecords.forgetMonitorAnswer(WSL_HOST).catch((error: unknown) => logger.warn(`The answer about the Monitor on ${describeDockerHost(WSL_HOST)} could not be forgotten: ${errorMessage(error)}`));
       await keeper.removeStartEntry(WSL_DISTRIBUTION);
+      background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
     },
   });
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of

@@ -2,8 +2,9 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The Docker context `devspaces` of the setting devspaces.createDockerContext (R-ENG-007): the Docker socket of the
-// Lima VM, which Lima carries into the folder of the instance (limaConfig, portForwards). It never becomes the current
+// The Docker context `devspaces` of the setting devspaces.createDockerContext (R-ENG-007): on macOS and Linux the Docker
+// socket of the Lima VM, which Lima carries into the folder of the instance (limaConfig, portForwards); on Windows the
+// named pipe of the context (contextPipe.ts), which a window of Devspaces serves. It never becomes the current
 // context. Devspaces reads the context store of the Docker CLI itself (`<DOCKER_CONFIG, else ~/.docker>/contexts/meta/
 // <SHA-256 of the name>/meta.json`), so that it runs `docker context` only for a change, and it changes and removes
 // only a context with its own description. No `vscode`.
@@ -70,22 +71,27 @@ export interface DockerContextDeps {
   docker: ((args: string[]) => Promise<RunResult>) | undefined;
 }
 
-/** A path that `--docker host=unix://<path>` takes as it is: the Docker CLI reads the value as CSV fields. */
-function usableSocketPath(socket: string): boolean {
-  return path.isAbsolute(socket) && !/[,"'\s]/.test(socket);
+/**
+ * A Docker host that `--docker host=<host>` takes as it is (the Docker CLI reads the value as CSV fields): `unix://`
+ * with an absolute path, or a named pipe `npipe:////./pipe/<name>`, without commas, quotes and spaces.
+ */
+function usableHost(host: string): boolean {
+  if (/[,"'\s]/.test(host)) return false;
+  if (host.startsWith('unix://')) return path.posix.isAbsolute(host.slice('unix://'.length));
+  return /^npipe:\/\/\/\/\.\/pipe\/[A-Za-z0-9._-]+$/.test(host);
 }
 
 /**
- * Makes the context `devspaces` point to the Docker socket `socket` (`unix://<socket>`), or removes it when `socket` is
- * undefined. Only a context with the description of Devspaces is changed or removed. Never throws.
+ * Makes the context `devspaces` point to the Docker host `host` (`unix://<socket>`, or `npipe:////./pipe/<name>`), or
+ * removes it when `host` is undefined. Only a context with the description of Devspaces is changed or removed. Never
+ * throws.
  */
-export async function syncDockerContext(deps: DockerContextDeps, socket: string | undefined): Promise<DockerContextResult> {
+export async function syncDockerContext(deps: DockerContextDeps, host: string | undefined): Promise<DockerContextResult> {
   const state = readDockerContext(deps.file);
-  const host = socket === undefined ? undefined : `unix://${socket}`;
   const done = (now: DockerContextState): boolean => (host === undefined ? now.kind !== 'ours' : now.kind === 'ours' && now.host === host);
   if (done(state)) return { kind: 'unchanged' };
   if (state.kind === 'other') return { kind: 'taken' };
-  if (socket !== undefined && !usableSocketPath(socket)) return { kind: 'failed', detail: `the Docker CLI cannot take the path of the socket: ${socket}` };
+  if (host !== undefined && !usableHost(host)) return { kind: 'failed', detail: `the Docker CLI cannot take the address: ${host}` };
   if (deps.docker === undefined) return { kind: 'noCli' };
   const args =
     host === undefined
