@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The idle check of the VM of Devspaces in Lima (docs/requirements.md
+# R-VM-004): the VM powers off when the script idle ends, that is when
+# nothing runs in it. In WSL, a hidden wsl.exe of Devspaces runs the script
+# instead, and WSL stops the distribution when it ends.
+[Unit]
+Description=Devspaces: power the VM off when nothing runs in it
+ConditionVirtualization=!wsl
+After=docker.service
+# The end of the script with exit status 0 powers the VM off.
+SuccessAction=poweroff
+
+[Service]
+Type=exec
+ExecStart=/usr/lib/devspaces/idle
+Restart=on-failure
+RestartSec=1min
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,122 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The package upgrade of the VM of Devspaces (docs/requirements.md R-VM-007):
+# `apt-get upgrade` as root, about once a day, without a window of Devspaces.
+# The timer devspaces-upgrade starts the service devspaces-upgrade one minute
+# after each start of the VM and then every hour, and this script decides:
+#
+#   - It runs when the last upgrade that ended well is 20 hours old and the
+#     last one that began is 6 hours old; else it prints "skipped".
+#   - While dpkg has packages that a run left unfinished (`dpkg --audit`, for
+#     example after the stop of the VM in the middle of dpkg), it runs when
+#     the last one that began is an hour old, and `dpkg --configure -a` ends
+#     the unfinished one.
+#   - A time after now (a clock that went back) counts as none.
+#   - The image is built with the newest packages, so its build time counts
+#     as an upgrade that ended well.
+#
+# No service starts again during it: a policy-rc.d with the mark of Devspaces
+# refuses every start while the lock below is held, so Docker and the running
+# devspaces go on, and the new versions of Docker and of the kernel run after
+# the next start of the VM. Without its own policy-rc.d (one of another
+# program is there), it fails, because then the packages could start Docker
+# again. The idle check (idle) waits for the service, so that the VM never
+# stops in the middle of dpkg. The lock is the one of the former setup of the
+# WSL distribution by Devspaces, so that no other run of Devspaces comes
+# between. `APT::Update::Error-Mode=any` makes a network failure of
+# `apt-get update` a failure (by default only a warning, and the upgrade would
+# count as done with the old lists). `--with-new-pkgs` also installs a new
+# package that an upgrade needs, for example a new kernel, but removes none;
+# `apt-get autoremove` then removes the packages that nothing needs any more,
+# such as old kernels (APT keeps the running and the newest kernel).
+#
+# Standard output: one line, "devspaces-upgrade busy", "devspaces-upgrade
+# skipped" or "devspaces-upgrade done <the summary of apt-get>"; on a
+# failure, standard error gets the last lines of the log.
+set -eu
+
+log=/var/log/devspaces-upgrade.log
+state=/var/lib/devspaces
+lock=/run/devspaces-setup.lock
+mark='# Written by the setup of Devspaces.'
+interval=$((20 * 60 * 60))
+retry=$((6 * 60 * 60))
+repair=$((60 * 60))
+
+main() {
+  exec 9> "$lock"
+  if ! flock -n 9; then
+    echo "devspaces-upgrade busy"
+    exit 0
+  fi
+  mkdir -p "$state"
+  now=$(date +%s)
+  wait=$retry
+  if [ -n "$(dpkg --audit 2>/dev/null)" ]; then
+    wait=$repair
+  elif [ "$(since "$state/upgraded")" -lt "$interval" ]; then
+    echo "devspaces-upgrade skipped"
+    exit 0
+  fi
+  if [ "$(since "$state/upgrade-tried")" -lt "$wait" ]; then
+    echo "devspaces-upgrade skipped"
+    exit 0
+  fi
+  echo "$now" > "$state/upgrade-tried"
+  export DEBIAN_FRONTEND=noninteractive LC_ALL=C
+  if [ ! -e /usr/sbin/policy-rc.d ] || grep -qxF "$mark" /usr/sbin/policy-rc.d; then
+    printf '#!/bin/sh\n%s\nflock -n %s true || exit 101\n' "$mark" "$lock" > /usr/sbin/policy-rc.d
+    chmod 755 /usr/sbin/policy-rc.d
+    trap 'rm -f /usr/sbin/policy-rc.d' EXIT
+  else
+    echo "The upgrade did not run: /usr/sbin/policy-rc.d of another program is there, so the packages could start Docker again and stop the running devspaces." >&2
+    exit 1
+  fi
+  # A stop of the service (the shutdown of the VM) ends no dpkg: systemd sends
+  # SIGTERM only to this script (KillMode=mixed), which waits for its commands.
+  trap '' HUP TERM
+  : > "$log"
+  again dpkg --configure -a
+  again apt-get -o APT::Update::Error-Mode=any update
+  run apt-get -o DPkg::Lock::Timeout=300 -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade --with-new-pkgs
+  # The summary of the upgrade, before the one of the autoremove.
+  summary=$(grep -E '^[0-9]+ upgraded, |^ *Upgrading: [0-9]+, ' "$log" | tail -n 1 | sed 's/^ *//')
+  run apt-get -o DPkg::Lock::Timeout=300 -y --purge autoremove
+  run apt-get clean
+  echo "$now" > "$state/upgraded"
+  echo "devspaces-upgrade done $summary"
+}
+
+# The seconds since the time in the file $1 (0 when there is none).
+since() {
+  last=$(cat "$1" 2>/dev/null || echo 0)
+  case "$last" in ''|*[!0-9]*) last=0 ;; esac
+  [ "$last" -le "$now" ] || last=0
+  echo $((now - last))
+}
+
+fail() {
+  echo "The upgrade failed. The last lines of $log:" >&2
+  tail -n 40 "$log" >&2
+  exit 1
+}
+
+# The commands get no copy of the descriptor of the lock (9>&-): a process
+# that a maintainer script leaves behind would hold the lock.
+run() { "$@" 9>&- >> "$log" 2>&1 || fail; }
+
+# dpkg --configure -a and apt-get update do not wait for the lock of dpkg, so
+# they run up to 3 times, 30 seconds apart.
+again() {
+  tries=1
+  until "$@" 9>&- >> "$log" 2>&1; do
+    [ "$tries" -lt 3 ] || fail
+    tries=$((tries + 1))
+    sleep 30 9>&-
+  done
+}
+
+main < /dev/null

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# The package upgrade of the VM of Devspaces (docs/requirements.md R-VM-007),
+# started by devspaces-upgrade.timer; the script upgrade decides whether it
+# is due. A stop of the service, at the shutdown of the VM, sends SIGTERM
+# only to the script, which ignores it and waits for dpkg (KillMode=mixed).
+[Unit]
+Description=Devspaces: upgrade the packages of the VM about once a day
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/devspaces/upgrade
+KillMode=mixed
+TimeoutStartSec=1h
+TimeoutStopSec=10min
