@@ -1,34 +1,34 @@
 {
-  "version": "29.9.2",
+  "version": "29.9.3",
   "api": {
     "min": "1.40",
     "max": "1.56"
   },
   "files": {
     "windows-x86_64": {
-      "url": "https://download.docker.com/win/static/stable/x86_64/docker-29.9.2.zip",
-      "size": 49730404,
-      "sha256": "b2be959bfed1281ddaf665c0972cba9a62ce30c542b6bcce82f055bf8886bc7d"
+      "url": "https://download.docker.com/win/static/stable/x86_64/docker-29.9.3.zip",
+      "size": 49715375,
+      "sha256": "7c4ff7bbb31579046cd34dd8b91f7cbd3ab3482a1a85330170be726ef792d751"
     },
     "mac-x86_64": {
-      "url": "https://download.docker.com/mac/static/stable/x86_64/docker-29.9.2.tgz",
-      "size": 20929717,
-      "sha256": "089c3f618df88bdef4f1257d9d604499136a1ec5168b67d194c260acad2b522f"
+      "url": "https://download.docker.com/mac/static/stable/x86_64/docker-29.9.3.tgz",
+      "size": 20917789,
+      "sha256": "f7d8f835391cd0a8c676d9a8d2547f909da6a2d029595943b0ce8d5f169abe47"
     },
     "mac-aarch64": {
-      "url": "https://download.docker.com/mac/static/stable/aarch64/docker-29.9.2.tgz",
-      "size": 19654797,
-      "sha256": "ea8a2ce5ac31f9f5f3fb711a7a485e1e46cc7a69798a629a70306f6e6af25b7a"
+      "url": "https://download.docker.com/mac/static/stable/aarch64/docker-29.9.3.tgz",
+      "size": 19641900,
+      "sha256": "79145e169bca0b9571d02de8e1cd311a36e0e8fdb4599b6661a87b1bb3afbe13"
     },
     "linux-x86_64": {
-      "url": "https://download.docker.com/linux/static/stable/x86_64/docker-29.9.2.tgz",
-      "size": 86374273,
-      "sha256": "9ac225999fd5e863f7694c728ef23d480616b1e5639328fa309befd4243d69eb"
+      "url": "https://download.docker.com/linux/static/stable/x86_64/docker-29.9.3.tgz",
+      "size": 86360685,
+      "sha256": "3fb5d1f13014c18cc54945bc177c58a9056a482dada031e17d12cf2e6922c973"
     },
     "linux-aarch64": {
-      "url": "https://download.docker.com/linux/static/stable/aarch64/docker-29.9.2.tgz",
-      "size": 77953959,
-      "sha256": "873b3e0207857c3b2f28392fb922f3ea6efe37620c16d4d4aaf2fef409c90b73"
+      "url": "https://download.docker.com/linux/static/stable/aarch64/docker-29.9.3.tgz",
+      "size": 77933624,
+      "sha256": "1b27fd739378ef938401e81ce5afb73b7ad7432d4f598814a9ff5f826bb464d2"
     }
   }
 }
