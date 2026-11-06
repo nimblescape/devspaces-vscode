@@ -104,6 +104,11 @@ size=$(vm df --output=size --block-size=1G / | tail -n 1 | tr -d ' ')
 [ "$size" -ge 18 ] || fail "The root file system has $size GiB, not about 20 GiB: cloud-init did not grow it."
 echo "Root file system: $size GiB."
 
+# systemd ignores a line of a unit that it does not know, with only a warning
+# in the journal, such as "devspaces-idle.service:17: Unknown key name ...".
+warnings=$(vm 'sudo journalctl --boot --no-pager --output=cat' | grep -E 'devspaces[^/ ]*\.(service|timer|conf):[0-9]+:' || true)
+[ -z "$warnings" ] || fail "systemd warns about the units of Devspaces: $warnings"
+
 echo "== The kernel check"
 vm sudo /usr/lib/devspaces/kernel-check || fail "The kernel lacks options that Docker Engine requires."
 [ "$(vm sudo wc -l /var/lib/devspaces/kernel-check | awk '{ print $1 }')" = 1 ] ||

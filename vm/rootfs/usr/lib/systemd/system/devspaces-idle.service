@@ -10,11 +10,12 @@
 Description=Devspaces: power the VM off when nothing runs in it
 ConditionVirtualization=!wsl
 After=docker.service
+# The end of the script with exit status 0 powers the VM off.
+SuccessAction=poweroff
 
 [Service]
 Type=exec
 ExecStart=/usr/lib/devspaces/idle
-SuccessAction=poweroff
 Restart=on-failure
 RestartSec=1min
 
