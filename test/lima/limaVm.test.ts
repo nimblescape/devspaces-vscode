@@ -4,8 +4,10 @@
 
 // The Lima VM of Devspaces with the real Lima of the pin (src/core/vm/limaPin.json), on Linux with KVM and QEMU, and the
 // disk of a build of the image (DEVSPACES_LIMA_TEST_DISK, vm/build.sh): the download of Lima, the create and the start of
-// the VM with the configuration of Devspaces, Docker Engine as root over the SSH of Lima, the power-off by the idle check
-// of the image, and other CPUs and memory for the next start. The job "lima test" of .github/workflows/vm-image.yml runs it (npm run test:lima).
+// the VM with the configuration of Devspaces, Docker Engine as root over the SSH of Lima, its Docker socket on this
+// computer with the Docker context of the setting devspaces.createDockerContext, the power-off by the idle check of the
+// image (also after a connection to that socket), and other CPUs and memory for the next start. The job "lima test" of
+// .github/workflows/vm-image.yml runs it (npm run test:lima).
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -14,7 +16,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Logger } from '../../src/core/ports';
 import { NodeProcessRunner } from '../../src/core/process';
 import { installLima, limaVersion } from '../../src/core/vm/lima';
-import { LimaInstance, limaConfig, limaEnv, limaPaths, limaResources, limaSshArgs, type LimaPaths } from '../../src/core/vm/limaInstance';
+import { DOCKER_CONTEXT, dockerContextFile, syncDockerContext } from '../../src/core/vm/dockerContext';
+import { LimaInstance, limaConfig, limaDockerSocket, limaEnv, limaPaths, limaResources, limaSshArgs, type LimaPaths } from '../../src/core/vm/limaInstance';
 
 const logger: Logger = {
   info: (line) => console.log(line),
@@ -89,6 +92,38 @@ describe('the Lima VM of Devspaces', () => {
     expect(await inVm("findmnt --noheadings --output TARGET --types virtiofs,9p,fuse.sshfs || true")).toBe('');
     expect(await inVm('command -v nerdctl || true')).toBe('');
 
+    // The Docker socket of the VM in the folder of the instance, which Lima carries over its SSH, and the Docker context
+    // of the setting devspaces.createDockerContext for it, with the Docker CLI of the runner and a configuration folder
+    // of the test.
+    const socket = limaDockerSocket(paths);
+    const dockerConfig = path.join(home ?? '', 'docker-config');
+    const dockerEnv: NodeJS.ProcessEnv = { ...process.env, DOCKER_CONFIG: dockerConfig };
+    delete dockerEnv.DOCKER_HOST;
+    delete dockerEnv.DOCKER_CONTEXT;
+    const docker = (args: string[]) => runner.run('docker', args, { env: dockerEnv, timeoutMs: 60_000 });
+    // Lima sets up the socket after the start; wait for its first answer.
+    const socketVersion = async (): Promise<string> => {
+      const waited = Date.now();
+      for (;;) {
+        const result = await docker(['-H', `unix://${socket}`, 'info', '--format', '{{.ServerVersion}}']);
+        if (result.exitCode === 0) return result.stdout.trim();
+        if (Date.now() - waited > 60_000) throw new Error(`The Docker socket ${socket} did not answer within a minute: ${result.stderr}`);
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    };
+    const engineVersion = await inVm("docker info --format '{{.ServerVersion}}'");
+    expect(await socketVersion()).toBe(engineVersion);
+    const contextDeps = { file: dockerContextFile(dockerConfig), docker };
+    expect(await syncDockerContext(contextDeps, socket)).toEqual({ kind: 'created' });
+    expect(await syncDockerContext(contextDeps, socket)).toEqual({ kind: 'unchanged' });
+    const viaContext = await docker(['--context', DOCKER_CONTEXT, 'info', '--format', '{{.ServerVersion}}']);
+    expect(viaContext.exitCode, viaContext.stderr).toBe(0);
+    expect(viaContext.stdout.trim()).toBe(engineVersion);
+    // It never becomes the current context; turning the setting off removes it.
+    expect((await docker(['context', 'show'])).stdout.trim()).toBe('default');
+    expect(await syncDockerContext(contextDeps, undefined)).toEqual({ kind: 'removed' });
+    expect(fs.existsSync(contextDeps.file)).toBe(false);
+
     const quiet = Date.now();
     while ((await instance.status()) !== 'stopped') {
       if (Date.now() - quiet > POWER_OFF_MS) throw new Error(`The VM did not power itself off within ${POWER_OFF_MS / 60_000} minutes.`);
@@ -104,6 +139,8 @@ describe('the Lima VM of Devspaces', () => {
     await instance.start(undefined, log);
     expect(await inVm("docker info --format '{{.ServerVersion}}'")).not.toBe('');
     expect(await inVm('nproc')).toBe('1');
+    // The Docker socket on this computer again, after the provision script of the second start.
+    expect(await socketVersion()).toBe(engineVersion);
     // MemTotal in KiB: 2 GiB less what the kernel keeps for itself.
     const memory = Number(await inVm("awk '/^MemTotal:/ { print $2 }' /proc/meminfo"));
     expect(memory).toBeGreaterThan(1.5 * 2 ** 20);

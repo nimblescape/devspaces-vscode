@@ -259,6 +259,20 @@ export const Messages = {
     (given < most
       ? `Give the VM more memory with the setting devspaces.vmMemoryGiB: it is ${given} GiB, and at most ${most} GiB are possible on this computer. The VM gets the new value at its next start, after all devspaces stopped.`
       : `The VM already gets ${given} GiB, half of the memory of this computer, which is the most that the setting devspaces.vmMemoryGiB gives it. Stop the devspaces that you do not need.`),
+  /** The Docker context `devspaces` of the setting createDockerContext now reaches the VM (R-ENG-007). */
+  dockerContextCreated: 'The Docker context devspaces reaches the VM of Devspaces now, while the VM runs, for example with docker --context devspaces ps. It is not the current Docker context.',
+  /** The setting createDockerContext was turned off, and the Docker context `devspaces` of Devspaces was removed. */
+  dockerContextRemoved: 'The Docker context devspaces of the VM of Devspaces was removed.',
+  /** A Docker context `devspaces` that Devspaces did not create exists: it stays as it is. */
+  dockerContextTaken:
+    'A Docker context named devspaces exists already, and Devspaces did not create it, so Devspaces leaves it as it is. Remove it with docker context rm devspaces, so that the setting devspaces.createDockerContext can create its own one, or turn the setting off.',
+  /** The Docker context `devspaces` of Devspaces is the current context of the Docker CLI: it was not removed. */
+  dockerContextCurrent:
+    'The Docker context devspaces is the current Docker context, so Devspaces did not remove it. Run docker context use default. Devspaces removes it at the next start of VS Code, or when you change the setting devspaces.createDockerContext.',
+  /** The setting createDockerContext is on, but this computer has no Docker CLI yet: the log only. */
+  dockerContextNoCli: 'The Docker context devspaces needs a Docker CLI. Devspaces creates it after the setup of its VM installed one.',
+  /** The Docker CLI could not create, change or remove the Docker context `devspaces`. */
+  dockerContextFailed: (detail: string) => `The Docker context devspaces of the VM of Devspaces could not be changed: ${detail}`,
   /** The setting vmCpus asks for more than half of the CPUs of this computer (R-VM-006): the VM gets that half. */
   vmCpusTooLarge: (wish: number, given: number) =>
     `The setting devspaces.vmCpus asks for ${wish} CPUs, but the VM of Devspaces gets at most half of the CPUs of this computer: ${given}.`,

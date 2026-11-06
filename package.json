@@ -927,6 +927,13 @@
           "default": 4,
           "minimum": 1,
           "markdownDescription": "The CPUs of the VM of Devspaces, from its next start. At most half of the CPUs of this computer: a larger value counts as that half, and Devspaces says so.\n\nmacOS and Linux only. On Windows, manage it via WSL.\n\n[The VM of Devspaces in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-vm-of-devspaces-macos-and-linux)"
+        },
+        "devspaces.createDockerContext": {
+          "order": 22,
+          "type": "boolean",
+          "scope": "machine",
+          "default": false,
+          "markdownDescription": "Create the Docker context `devspaces` for the VM of Devspaces, for the `docker` command and other Docker tools. It reaches the VM while the VM runs, and never becomes the current context. Turning this off removes it. It gives full access: manage devspaces only with Devspaces.\n\nmacOS and Linux only.\n\n[Other Docker tools in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#other-docker-tools)"
         }
       }
     }
