@@ -7,7 +7,7 @@
 // Docker CLI that sends it (BootstrapDocker.buildImage, docs/architecture.md "The helper image"). The image is
 // docker/buildx-bin of Docker (the buildx program alone, `/buildx`), pinned by its version and the digest of its image
 // index for all platforms in buildxPin.json (written by scripts/buildx-pin.mjs, which the workflow "Buildx image"
-// runs every week). On the engine it carries the tag devspaces-buildx:<version>, so that the removal of older versions
+// runs every day). On the engine it carries the tag devspaces-buildx:<version>, so that the removal of older versions
 // and "Remove Devspaces from This Docker Engine…" know it by its name. No `vscode`.
 import { isRecord } from '../valueChecks';
 import { LABEL_BUILD_RUN } from '../names';

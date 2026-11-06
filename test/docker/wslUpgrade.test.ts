@@ -2,9 +2,9 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The weekly upgrade of the WSL distribution of Devspaces (src/core/docker/wslUpgrade.ts UPGRADE_SCRIPT), as root in a
+// The daily upgrade of the WSL distribution of Devspaces (src/core/docker/wslUpgrade.ts UPGRADE_SCRIPT), as root in a
 // container of Debian 13, the release of the Debian file of WSL, with the real dpkg and apt: the summary line of apt,
-// the times of the run, the policy-rc.d only for the time of the run, and a skip within the week. Without a
+// the times of the run, the policy-rc.d only for the time of the run, and a skip within 20 hours. Without a
 // network, `apt-get update` with APT::Update::Error-Mode=any fails (by default it only warns). The Debian images of
 // Docker have a /usr/sbin/policy-rc.d; the Debian file of WSL has none, so the tests remove it first.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -15,7 +15,7 @@ import { dockerTestContext } from './harness';
 /** Debian 13 (trixie) that the engine has: the base of the helper image (resources/helper/Dockerfile). */
 const DEBIAN_IMAGE = process.env.DEVSPACE_TEST_GLIBC_IMAGE ?? 'node:24-trixie-slim';
 
-describe('the weekly upgrade of the WSL distribution', () => {
+describe('the daily upgrade of the WSL distribution', () => {
   const { run, cli, log } = dockerTestContext('wslUpgrade');
 
   /** A running container of Debian 13 with the label of the run, without the policy-rc.d of the image. */
@@ -39,7 +39,7 @@ describe('the weekly upgrade of the WSL distribution', () => {
     removeRunObjects(cli, run.runId);
   });
 
-  it('upgrades with the real apt, tells its summary, writes the times, and skips within the week', () => {
+  it('upgrades with the real apt, tells its summary, writes the times, and skips within 20 hours', () => {
     const container = startDebian('wsl-upgrade');
     const result = cli.run(['exec', '-i', container, 'sh', '-s'], UPGRADE_SCRIPT);
     log.info(`The upgrade in ${container} ended with ${result.code}.\n${result.out}\n${result.err}`);

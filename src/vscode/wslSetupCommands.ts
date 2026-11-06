@@ -80,7 +80,7 @@ export const WslSetupTexts = {
   noLocalAppData: 'Devspaces does not find the folder LOCALAPPDATA of your Windows user, where the WSL distribution of Devspaces has its files.',
   busy: 'The WSL distribution of Devspaces is being set up or removed in this window. Try again after that.',
   busyElsewhere:
-    'The WSL distribution of Devspaces is being set up or removed in another VS Code window, or a VS Code window runs the weekly upgrade of its packages ' +
+    'The WSL distribution of Devspaces is being set up or removed in another VS Code window, or a VS Code window runs the daily upgrade of its packages ' +
     `(up to ${duration(UPGRADE_MS)}). Try again after that.`,
   changedElsewhere: 'The WSL distribution of Devspaces was set up or removed in another VS Code window after the check, so nothing was changed. Try again.',
   /** The log of a new setup, which asks nothing: what Devspaces downloads, and the folder. */

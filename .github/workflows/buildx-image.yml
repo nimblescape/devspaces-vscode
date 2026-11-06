@@ -3,7 +3,7 @@
 # Licensed under the MIT License. See LICENSE in the repository root for details.
 
 # Keep the pin of the build image of Devspaces (src/core/docker/buildxPin.json,
-# docs/architecture.md "The helper image") up to date, once per week and on a
+# docs/architecture.md "The helper image") up to date, once per day and on a
 # manual start. The job "pin" first checks that Docker Hub still has the image
 # index of the pinned digest of docker/buildx-bin, with an image for
 # linux/amd64 and linux/arm64, because every engine pulls it by that digest.
@@ -27,8 +27,8 @@ name: Buildx image
 
 on:
   schedule:
-    # Tuesdays at 04:53 UTC.
-    - cron: '53 4 * * 2'
+    # Every day at 04:53 UTC.
+    - cron: '53 4 * * *'
   workflow_dispatch:
   pull_request:
     paths:

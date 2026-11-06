@@ -762,7 +762,7 @@ async function activateExtension(
   });
   context.subscriptions.push({ dispose: () => keeper.dispose() });
   // The setup of the WSL distribution of Devspaces (Windows): the distribution with Docker Engine in a folder of
-  // LOCALAPPDATA. About once a week, a window that uses it upgrades its packages (WslUpgrade), only when Devspaces set
+  // LOCALAPPDATA. About once a day, a window that uses it upgrades its packages (WslUpgrade), only when Devspaces set
   // it up.
   const wslFolder = platform === 'win32' ? wslSetupFolder(env) : undefined;
   const wslSetupCore =

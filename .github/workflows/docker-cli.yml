@@ -4,7 +4,7 @@
 
 # Keep the pin of the Docker CLI of Devspaces
 # (src/core/docker/dockerCliPin.json, docs/architecture.md "The Docker CLI of
-# Devspaces") up to date, once per week and on a manual start. The job "pin"
+# Devspaces") up to date, once per day and on a manual start. The job "pin"
 # first downloads the files of the current pin again and fails when Docker
 # replaced one of them, because then the extension refuses that download. Then
 # it looks for a newer version that download.docker.com has for all platforms
@@ -32,8 +32,8 @@ name: Docker CLI
 
 on:
   schedule:
-    # Tuesdays at 04:41 UTC.
-    - cron: '41 4 * * 2'
+    # Every day at 04:41 UTC.
+    - cron: '41 4 * * *'
   workflow_dispatch:
   pull_request:
     paths:
