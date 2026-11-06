@@ -22,10 +22,11 @@
 #                 to ghcr.io/nimblescape/devspaces-vm, but only when the list
 #                 of their packages or the recipe changed since the newest
 #                 version there, and writes the pin src/core/vm/vmImagePin.json.
-#                 As long as the pin names no version, nothing is pushed: the
-#                 first push waits for a manual start with "first push". Then
-#                 it reads the files of the pin without a login, as Devspaces
-#                 does: the package on ghcr.io must be public.
+#                 As long as the pin names no version and ghcr.io has none,
+#                 nothing is pushed: the first push waits for a manual start
+#                 with "first push". Then it reads the files of the pin
+#                 without a login, as Devspaces does: the package on ghcr.io
+#                 must be public.
 #   pull request  When the pin changed: commits it to the branch
 #                 vm-image-<version>, opens a pull request for it, closes the
 #                 older open pull requests of the image, and starts the
