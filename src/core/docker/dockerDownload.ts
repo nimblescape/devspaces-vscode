@@ -3,9 +3,9 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Downloads over HTTPS from one host: the Docker Desktop installer (desktop.docker.com), the Docker CLI of Devspaces
-// (download.docker.com, with its pinned SHA-256; ownDockerCli.ts), and the Debian file of the WSL distribution of
-// Devspaces (the host in the list of WSL, with the SHA-256 of that list; wslSetup.ts), whose redirects may lead to
-// another HTTPS host.
+// (download.docker.com, with its pinned SHA-256; ownDockerCli.ts), the Debian file of the WSL distribution of
+// Devspaces (the host in the list of WSL, with the SHA-256 of that list; wslSetup.ts), and Lima (github.com, with its
+// pinned SHA-256; src/core/vm/lima.ts), whose redirects may lead to another HTTPS host.
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as https from 'https';
@@ -24,16 +24,19 @@ export interface DownloadResponse {
   body: NodeJS.ReadableStream;
 }
 
-/** GET of one URL, without following redirects. Rejects with an AbortError when the signal aborts. */
-export type HttpGet = (url: string, signal: AbortSignal) => Promise<DownloadResponse>;
+/**
+ * GET of one URL, without following redirects, with the request `headers` (none by default). Rejects with an AbortError
+ * when the signal aborts.
+ */
+export type HttpGet = (url: string, signal: AbortSignal, headers?: Record<string, string>) => Promise<DownloadResponse>;
 
 /**
  * GET with the Node.js `https` module (VS Code applies its proxy settings to it in the extension host), with the
  * User-Agent of Devspaces.
  */
-export const nodeHttpsGet: HttpGet = (url, signal) =>
+export const nodeHttpsGet: HttpGet = (url, signal, headers = {}) =>
   new Promise((resolve, reject) => {
-    const request = https.get(url, { signal, headers: { 'User-Agent': userAgent() } }, (response) => {
+    const request = https.get(url, { signal, headers: { ...headers, 'User-Agent': userAgent() } }, (response) => {
       resolve({ statusCode: response.statusCode ?? 0, headers: response.headers, body: response });
     });
     request.on('error', reject);
@@ -64,11 +67,22 @@ export interface DownloadOptions {
    * fill the disk before the SHA-256 is checked. Default: no limit.
    */
   maxBytes?: number;
+  /**
+   * The download fails when no bytes arrive for this long, also before the server answers, with the message "The
+   * download of <url> received no bytes for <n> seconds." A cancel through `signal` stays an AbortError. Default: no
+   * limit.
+   */
+  stalledAfterMs?: number;
   /** The file to write. A partial download is written next to it (`.download`) and removed on failure. */
   target: string;
   signal?: AbortSignal;
   /** Called while bytes arrive; `total` from Content-Length, when known. */
   onProgress?: (received: number, total: number | undefined) => void;
+  /**
+   * Headers of the requests to `host` (for example the token of a registry), never sent to another host that a redirect
+   * leads to.
+   */
+  headers?: Record<string, string>;
   /** For tests. Default: `nodeHttpsGet`. */
   get?: HttpGet;
 }
@@ -87,9 +101,34 @@ function discard(response: DownloadResponse): void {
 /**
  * Downloads `url` to `target`. Throws when the URL, or the target of a redirect, is not an HTTPS URL of `host` (with
  * `anyHttpsRedirect`, a redirect only needs HTTPS), on an HTTP error, when the file has not the `expected` size and
- * SHA-256, and with an AbortError when the signal aborts. Existing `target` is replaced only after a complete download.
+ * SHA-256, when no bytes arrived for `stalledAfterMs`, and with an AbortError when the signal aborts. Existing `target`
+ * is replaced only after a complete download.
  */
 export async function downloadFile(options: DownloadOptions): Promise<void> {
+  const { stalledAfterMs } = options;
+  if (stalledAfterMs === undefined) return download(options, () => undefined);
+  const stall = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  const watch = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(() => stall.abort(), stalledAfterMs);
+  };
+  const signal = options.signal === undefined ? stall.signal : AbortSignal.any([options.signal, stall.signal]);
+  watch();
+  try {
+    await download({ ...options, signal }, watch);
+  } catch (error) {
+    if (stall.signal.aborted && options.signal?.aborted !== true) {
+      throw new Error(`The download of ${options.url} received no bytes for ${Math.round(stalledAfterMs / 1000)} seconds.`, { cause: error });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** downloadFile without the stall limit; `onBytes` is called for each piece of the body. */
+async function download(options: DownloadOptions, onBytes: () => void): Promise<void> {
   const get = options.get ?? nodeHttpsGet;
   const signal = options.signal ?? new AbortController().signal;
   const host = options.host ?? DOCKER_DOWNLOAD_HOST;
@@ -105,7 +144,7 @@ export async function downloadFile(options: DownloadOptions): Promise<void> {
   let response: DownloadResponse | undefined;
   for (let redirects = 0; ; redirects++) {
     if (signal.aborted) throw abortError();
-    response = await get(url, signal);
+    response = await get(url, signal, isHttpsUrlOf(url, host) ? options.headers : undefined);
     const location = header(response.headers, 'location');
     if (response.statusCode < 300 || response.statusCode >= 400 || !location) break;
     discard(response);
@@ -145,6 +184,7 @@ export async function downloadFile(options: DownloadOptions): Promise<void> {
         return;
       }
       hash.update(chunk);
+      onBytes();
       options.onProgress?.(received, total);
       callback(null, chunk);
     },
