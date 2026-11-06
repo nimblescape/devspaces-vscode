@@ -304,6 +304,7 @@ describe('images', () => {
       call.options.onStderr?.('#1 building\n');
       return ok();
     });
+    // The folder does not exist, so its context cannot be packed for the build container: `docker build`.
     await docker.buildImage({
       tag: 'devspaces-worker:abc',
       dockerfile: '/ext/resources/helper/Dockerfile',
@@ -329,16 +330,17 @@ describe('images', () => {
   });
 
   it('buildImage passes --pull and --no-cache when asked', async () => {
+    // A Dockerfile below its context folder: `docker build`, not the build container (bootstrapDocker.buildContainer.test.ts).
     const { docker, runner } = adapter(() => ok());
-    await docker.buildImage({ tag: 't:1', dockerfile: 'D', context: '.', labels: { l: 'v' }, pull: true, noCache: true });
-    await docker.buildImage({ tag: 't:2', dockerfile: 'D', context: '.', pull: true });
-    await docker.buildImage({ tag: 't:3', dockerfile: 'D', context: '.', pull: false, noCache: false });
+    await docker.buildImage({ tag: 't:1', dockerfile: 'build/D', context: '.', labels: { l: 'v' }, pull: true, noCache: true });
+    await docker.buildImage({ tag: 't:2', dockerfile: 'build/D', context: '.', pull: true });
+    await docker.buildImage({ tag: 't:3', dockerfile: 'build/D', context: '.', pull: false, noCache: false });
     // Each build gets a build label, no `--iidfile` (withoutBuildLabel checks it). Only the build calls: after each
     // build, the image is looked up by its label.
     expect(runner.calls.filter((call) => call.args[0] === 'build').map((call) => withoutBuildLabel(call.args))).toEqual([
-      ['build', '-t', 't:1', '-f', 'D', '--pull', '--no-cache', '--label', 'l=v', '.'],
-      ['build', '-t', 't:2', '-f', 'D', '--pull', '.'],
-      ['build', '-t', 't:3', '-f', 'D', '.'],
+      ['build', '-t', 't:1', '-f', 'build/D', '--pull', '--no-cache', '--label', 'l=v', '.'],
+      ['build', '-t', 't:2', '-f', 'build/D', '--pull', '.'],
+      ['build', '-t', 't:3', '-f', 'build/D', '.'],
     ]);
   });
 
@@ -419,7 +421,7 @@ describe('images', () => {
       const dangling = call.args.includes('dangling=true');
       return ok(dangling ? '' : `${JSON.stringify({ ID: id, Repository: 't', Tag: 'latest', CreatedAt: '' })}\n`);
     });
-    expect(await docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' })).toBe(id);
+    expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBe(id);
     expect(runner.calls.slice(1).map((call) => call.args)).toEqual([
       ['image', 'ls', '--filter', `label=${label}`, '--no-trunc', '--format', '{{json .}}'],
       ['image', 'ls', '--filter', `label=${label}`, '--filter', 'dangling=true', '--no-trunc', '--format', '{{json .}}'],
@@ -427,7 +429,7 @@ describe('images', () => {
     expect(runner.calls.some((call) => call.args[0] === 'image' && call.args[1] === 'inspect')).toBe(false);
     // A new nonce for each build.
     const first = label;
-    await docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' });
+    await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' });
     expect(label).not.toBe(first);
   });
 
@@ -437,7 +439,7 @@ describe('images', () => {
       if (call.args[0] === 'build') return ok();
       return ok(call.args.includes('dangling=true') ? `${JSON.stringify({ ID: id, Repository: '<none>', Tag: '<none>', CreatedAt: '' })}\n` : '');
     });
-    expect(await docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' })).toBe(id);
+    expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBe(id);
   });
 
   it('buildImage succeeds without an ID when the lookup by the build label fails or does not find exactly one image', async () => {
@@ -452,17 +454,18 @@ describe('images', () => {
       return ok(`${line(`sha256:${'1'.repeat(64)}`)}\n${line(`sha256:${'2'.repeat(64)}`)}\n`);
     });
     const docker = new BootstrapDocker(runner, DOCKER, { PATH: '/usr/bin' }, logger, 'linux');
-    expect(await docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' })).toBeUndefined();
+    expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBeUndefined();
     listing = 'none';
-    expect(await docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' })).toBeUndefined();
+    expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBeUndefined();
     listing = 'two';
-    expect(await docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' })).toBeUndefined();
-    expect(warnings).toHaveLength(3);
+    expect(await docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).toBeUndefined();
+    // Besides the warning of each build that its Dockerfile is not at the top of its context (no build in a container).
+    expect(warnings.filter((warning) => !warning.includes('is not at the top of its build context'))).toHaveLength(3);
   });
 
   it('buildImage throws CommandError', async () => {
     const { docker } = adapter(() => fail('failed to solve'));
-    await expect(docker.buildImage({ tag: 't', dockerfile: 'D', context: '.' })).rejects.toBeInstanceOf(CommandError);
+    await expect(docker.buildImage({ tag: 't', dockerfile: 'build/D', context: '.' })).rejects.toBeInstanceOf(CommandError);
   });
 });
 
@@ -909,6 +912,15 @@ describe('BootstrapDocker: every call runs directly', () => {
       'podmanCheckCall',
       'isMissing',
       'commandError',
+      // Logs a call of `run`, no call of its own.
+      'logged',
+      // The parts of buildImage, whose calls go through `run` (bootstrapDocker.buildContainer.test.ts).
+      'buildInContainer',
+      'pullBaseImages',
+      'removePulledName',
+      'buildxImage',
+      'removeOlderBuildxImages',
+      'removeBuildContainer',
       'run',
     ]);
     const { docker, runner } = recordingAdapter((call) => {
@@ -924,7 +936,7 @@ describe('BootstrapDocker: every call runs directly', () => {
       imageId: (d) => d.imageId('i'),
       listImagesByLabel: (d) => d.listImagesByLabel('l'),
       removeImage: (d) => d.removeImage('i'),
-      buildImage: (d) => d.buildImage({ tag: 't', dockerfile: 'D', context: '.', onOutput: () => {} }),
+      buildImage: (d) => d.buildImage({ tag: 't', dockerfile: 'build/D', context: '.', onOutput: () => {} }),
     };
     const unknown = Object.getOwnPropertyNames(BootstrapDocker.prototype).filter((name) => !noOwnCall.has(name) && !(name in exercised));
     expect(unknown, 'a new member of BootstrapDocker: exercise it here and classify its calls').toEqual([]);

@@ -36,6 +36,21 @@ describe('unexpectedChanges', () => {
     expect(unexpectedChanges(baseline, current, ['docker.io/library/alpine:3.22'])).toEqual([]);
   });
 
+  it('lets the tags and the images go for which mayGo is true (the build images of older versions)', () => {
+    const baseline = snapshot([
+      { id: ID_USER, tags: ['devspaces-buildx:0.1.0'] },
+      { id: ID_PULLED, tags: ['devspaces-buildx:0.2.0', 'mine:1'] },
+    ]);
+    const current = snapshot([{ id: ID_PULLED, tags: ['mine:1'] }]);
+    const older = (tag: string): boolean => tag.startsWith('devspaces-buildx:');
+    expect(unexpectedChanges(baseline, current, [], older)).toEqual([]);
+    // Without it, both are reported.
+    expect(unexpectedChanges(baseline, current, [])).toEqual([
+      `image ${ID_USER.slice(7, 19)} devspaces-buildx:0.1.0 of the baseline is gone`,
+      `tag devspaces-buildx:0.2.0 of the baseline image ${ID_PULLED.slice(7, 19)} is gone`,
+    ]);
+  });
+
   it('reports nothing when the images and tags of the baseline are unchanged', () => {
     const baseline = snapshot([{ id: ID_USER, tags: ['alpine:3.22', 'mine:1'] }]);
     expect(unexpectedChanges(baseline, snapshot([{ id: ID_USER, tags: ['mine:1', 'alpine:3.22'] }]), [])).toEqual([]);

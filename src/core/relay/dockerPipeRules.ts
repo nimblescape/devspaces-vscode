@@ -7,7 +7,8 @@
 // window (windowPipe.ts) carries the Docker calls of the Dev Containers extension, which attaches the window to the
 // container of its devspace: it may read the engine, the container and its image, start the container, and run
 // programs in it, but not create, build or remove anything. The pipe of the extension (hostPipes.ts) carries the Docker
-// calls of Devspaces itself (BootstrapDocker): the ones of its code, which also build and start its worker. The lists
+// calls of Devspaces itself (BootstrapDocker): the ones of its code, which also build the helper image in a container of
+// the build image (buildxImage.ts), and remove Devspaces from the engine. The lists
 // come from the Docker calls of both, measured in CI (test/vscode/attach/remote.test.ts fails on a refused request).
 // Only the method and the path are checked, not the query or the body. No `vscode`.
 import type { DockerRequest, DockerRequestRule } from './dockerRequests';
@@ -50,8 +51,10 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
 
 /**
  * Devspaces itself (BootstrapDocker run): the checks of the engine and of the helper image, the build of the helper
- * image (BuildKit or the classic builder), and the removal of its objects ("Remove Devspaces from This Docker
- * Engine…"). Its worker starts behind the relay or with `ssh://`, never through the pipe (BootstrapDocker.start).
+ * image (the pull and the tag of the build image, and `docker run -i` of the build container, which the Docker CLI
+ * stops with `kill` at its own stop; `docker build` as the fallback, with BuildKit or the classic builder), and the
+ * removal of its objects ("Remove Devspaces from This Docker Engine…"). Its worker starts behind the relay or with
+ * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   ...ENGINE_CHECKS,
@@ -59,9 +62,16 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('GET', '/system/df'),
   endpoint('GET', '/containers/json'),
   endpoint('GET', `/containers/${NAME}/json`),
+  endpoint('POST', '/containers/create'),
+  endpoint('POST', `/containers/${NAME}/attach`),
+  endpoint('POST', `/containers/${NAME}/start`),
+  endpoint('POST', `/containers/${NAME}/wait`),
+  endpoint('POST', `/containers/${NAME}/kill`),
   endpoint('DELETE', `/containers/${NAME}`),
   endpoint('GET', '/images/json'),
   endpoint('GET', `/images/${IMAGE}/json`),
+  endpoint('POST', '/images/create'),
+  endpoint('POST', `/images/${IMAGE}/tag`),
   endpoint('DELETE', `/images/${IMAGE}`),
   endpoint('POST', '/build'),
   endpoint('POST', '/session'),

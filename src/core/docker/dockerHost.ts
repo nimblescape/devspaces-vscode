@@ -413,6 +413,18 @@ export function wslText(text: string): string {
   return text.replace(/[\u0000\uFEFF\uFFFD]/g, '');
 }
 
+/**
+ * How often Devspaces starts a WSL distribution when WSL runs out of time to start it (wslStartTimedOut): WSL waits 30
+ * seconds for the start of a distribution (its kernel boot timeout), and up to 10 seconds of them for systemd, which a
+ * slow virtual machine can need longer, for example Windows in a virtual machine at the first start after a restart.
+ */
+export const WSL_START_ATTEMPTS = 3;
+
+/** True when the output `text` of `wsl.exe` says that WSL ran out of time to start the distribution (`Wsl/Service/CreateInstance/ERROR_TIMEOUT`). */
+export function wslStartTimedOut(text: string): boolean {
+  return /CreateInstance\/ERROR_TIMEOUT/.test(wslText(text));
+}
+
 /** The names in the output of `wsl.exe --list --quiet` (WSL_LIST_ARGS): one per line (wslText). */
 export function parseWslList(stdout: string): string[] {
   return wslText(stdout)
@@ -485,17 +497,32 @@ export type DockerHostProblem =
   | 'sshMissing'
   | 'wslMissing'
   | 'wslDistributionMissing'
+  | 'wslDiskCorrupt'
   | 'pipeNotListening'
   | 'unknown';
 
 /** The message of `wsl.exe` for a distribution that is not registered (WSL_E_DISTRO_NOT_FOUND). */
 const WSL_DISTRIBUTION_MISSING = /WSL_E_DISTRO_NOT_FOUND|There is no distribution with the supplied name/i;
 
+/**
+ * The error code of `wsl.exe` for a distribution whose virtual disk (ext4.vhdx) Windows cannot read:
+ * `Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT` ("The file or directory is corrupted and unreadable";
+ * older versions of WSL name the step MountVhd), or ERROR_DISK_CORRUPT, also as their HRESULT (0x80070570, 0x80070571)
+ * where WSL has no name for the code. WSL cannot start the distribution then.
+ */
+const WSL_DISK_CORRUPT = /CreateInstance\/Mount(?:Disk|Vhd)\/(?:\S+\/)?(?:ERROR_(?:FILE|DISK)_CORRUPT|0x8007057[01])\b/i;
+
+/** True when the output `text` of `wsl.exe` says that the virtual disk of the distribution is damaged (WSL_DISK_CORRUPT). */
+export function wslDiskCorrupt(text: string): boolean {
+  return WSL_DISK_CORRUPT.test(wslText(text));
+}
+
 /** Maps the error text of `docker -H ssh://… info` (or of `ssh`, or of `wsl.exe`) to a DockerHostProblem. */
 export function dockerHostProblem(detail: string): DockerHostProblem {
   // The UTF-16 of an older wsl.exe (wslText).
   const text = wslText(detail);
   if (WSL_DISTRIBUTION_MISSING.test(text)) return 'wslDistributionMissing';
+  if (WSL_DISK_CORRUPT.test(text)) return 'wslDiskCorrupt';
   if (/exec: (?:"(?:[^"]*[\\/])?ssh(?:\.exe)?"|(?:[^"\s]*[\\/])?ssh(?:\.exe)?): executable file not found|ssh: (?:command )?not found|No such file or directory.*\bssh\b|\bssh\b.*ENOENT/i.test(text)) {
     return 'sshMissing';
   }

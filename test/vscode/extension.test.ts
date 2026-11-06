@@ -95,7 +95,7 @@ describe('the extension in VS Code', () => {
     const extension = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(extension);
     await extension.activate();
-    const log = await waitForLog(/\] info (Docker CLI: |The Docker CLI was not found\.)/);
+    const log = await waitForLog(/\] info (Docker CLI: |This computer has no Docker CLI of its own)/);
     console.log(`    ${log.split('\n').find((line) => line.includes('Docker CLI')) ?? ''}`);
     const errors = log.split('\n').filter((line) => /^\[\d\d:\d\d:\d\d\] error /.test(line));
     assert.deepStrictEqual(errors, [], `The log of the extension has errors:\n${log}`);

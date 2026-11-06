@@ -2,8 +2,8 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The weekly upgrade of the packages of the WSL distribution of Devspaces (docs/architecture.md "The WSL distribution
-// of Devspaces"): `apt-get upgrade` as root there, about once a week, with its result in the log of Devspaces. No
+// The daily upgrade of the packages of the WSL distribution of Devspaces (docs/architecture.md "The WSL distribution
+// of Devspaces"): `apt-get upgrade` as root there, about once a day, with its result in the log of Devspaces. No
 // service starts again during it (the policy-rc.d of the setup), so Docker and the running devspaces go on, and the
 // new versions of Docker and other services run after the next start of the distribution. A window that uses the
 // distribution checks a few minutes after its first use, and then at most every 6 hours; the time of the last upgrade
@@ -20,15 +20,18 @@ export const UPGRADE_STATE_DIR = '/var/lib/devspaces';
 export const UPGRADE_DONE_FILE = `${UPGRADE_STATE_DIR}/upgraded`;
 /**
  * The time (seconds since 1970) of the last upgrade that began, so that one that did not end well (a failure, the stop
- * of the distribution, the time limit) is tried again only after a day.
+ * of the distribution, the time limit) is tried again only after 6 hours.
  */
 export const UPGRADE_TRIED_FILE = `${UPGRADE_STATE_DIR}/upgrade-tried`;
 /** The log of the last upgrade in the distribution. */
 export const UPGRADE_LOG = '/var/log/devspaces-upgrade.log';
-/** An upgrade runs when the last one that ended well is this old. */
-export const UPGRADE_INTERVAL_SECONDS = 7 * 24 * 60 * 60;
+/**
+ * An upgrade runs when the last one that ended well is this old: about once a day, and less than a full day, so that a
+ * window that opens every morning at about the same time gets it.
+ */
+export const UPGRADE_INTERVAL_SECONDS = 20 * 60 * 60;
 /** An upgrade runs only when the last one that began is this old. */
-export const UPGRADE_RETRY_SECONDS = 24 * 60 * 60;
+export const UPGRADE_RETRY_SECONDS = 6 * 60 * 60;
 /** While dpkg has packages that a run left unfinished (`dpkg --audit`), the last one that began needs only be this old. */
 export const UPGRADE_REPAIR_SECONDS = 60 * 60;
 /** The start of the line of the script that tells its result: `busy`, `skipped`, or `done <the summary of apt-get>`. */
@@ -42,8 +45,8 @@ export const UPGRADE_CHECK_MS = 6 * 60 * 60_000;
 
 /**
  * The script of the upgrade (`sh -s`, as root). It runs only with the lock of the setup in the distribution (another
- * setup or upgrade runs: `busy`), and only when the last upgrade that ended well is a week old and the last one that
- * began is a day old; else `skipped`. While dpkg has packages that a run left unfinished (`dpkg --audit`, for example
+ * setup or upgrade runs: `busy`), and only when the last upgrade that ended well is 20 hours old and the last one that
+ * began is 6 hours old; else `skipped`. While dpkg has packages that a run left unfinished (`dpkg --audit`, for example
  * after the stop of the distribution in the middle of dpkg), it runs when the last one that began is an hour old, and
  * `dpkg --configure -a` ends the unfinished one. A time after now (a clock that went back) counts as none. Without its
  * own policy-rc.d (one of another program is there), it fails and keeps the log of the last run: then the packages
@@ -199,7 +202,7 @@ export class WslUpgrade {
         this.report(result);
       });
     } catch (error) {
-      this.deps.logger.warn(`The weekly upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} could not run: ${errorMessage(error)}`);
+      this.deps.logger.warn(`The daily upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} could not run: ${errorMessage(error)}`);
     } finally {
       if (counts) this.checkedAt = this.now();
     }
@@ -211,14 +214,14 @@ export class WslUpgrade {
       .find((text) => text.startsWith(UPGRADE_PREFIX));
     if (result.timedOut) {
       this.deps.logger.warn(
-        `The weekly upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} did not end within ${duration(UPGRADE_MS)}; ` +
-          `it goes on in the distribution while the distribution runs. When the distribution stops before its end, the next try is a day later, or an hour later when dpkg did not finish. ` +
+        `The daily upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} did not end within ${duration(UPGRADE_MS)}; ` +
+          `it goes on in the distribution while the distribution runs. When the distribution stops before its end, the next try is 6 hours later, or an hour later when dpkg did not finish. ` +
           `Its output is in ${UPGRADE_LOG} there.`,
       );
       return;
     }
     if (result.exitCode !== 0 || line === undefined) {
-      this.deps.logger.warn(`The weekly upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} failed (${endOf(result, UPGRADE_MS)}): ${outputOf(result)}`);
+      this.deps.logger.warn(`The daily upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} failed (${endOf(result, UPGRADE_MS)}): ${outputOf(result)}`);
       return;
     }
     const answer = line.slice(UPGRADE_PREFIX.length).trim();
@@ -227,7 +230,7 @@ export class WslUpgrade {
     const of = `(apt-get upgrade${summary ? `: ${summary}` : ''})`;
     const counts = upgradeCounts(summary);
     if (counts === undefined) {
-      this.deps.logger.info(`The weekly upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} ended ${of}. Its output is in ${UPGRADE_LOG} there.`);
+      this.deps.logger.info(`The daily upgrade of the packages of the WSL distribution ${WSL_DISTRIBUTION} ended ${of}. Its output is in ${UPGRADE_LOG} there.`);
       return;
     }
     const { changed, kept } = counts;
@@ -241,7 +244,7 @@ export class WslUpgrade {
     }
     if (kept > 0) {
       this.deps.logger.info(
-        `The weekly upgrade kept ${kept} package(s) of the WSL distribution ${WSL_DISTRIBUTION} back ${of}: packages on hold (apt-mark hold), ` +
+        `The daily upgrade kept ${kept} package(s) of the WSL distribution ${WSL_DISTRIBUTION} back ${of}: packages on hold (apt-mark hold), ` +
           `or new versions that need the removal of other packages, which it never does. ` +
           `"wsl -d ${WSL_DISTRIBUTION} -u root -- apt-get full-upgrade" in a terminal upgrades the latter; it restarts Docker, so stop your devspaces there first.`,
       );

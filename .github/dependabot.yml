@@ -8,8 +8,10 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
+    # Every day, also on weekends (the interval `daily` runs only Monday to Friday), as the workflows of the other pins.
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: '17 4 * * *'
     groups:
       dev-dependencies:
         dependency-type: development
@@ -35,4 +37,5 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: cron
+      cronjob: '29 4 * * *'

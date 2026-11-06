@@ -8,7 +8,7 @@
 // for systemd without starting it, and can run again. WSL itself (the registration, systemd, the restart) is not here.
 // The Debian images of Docker have a /usr/sbin/policy-rc.d that keeps services from starting; the Debian file of WSL has
 // none, so the tests remove it first, and the script brings its own for the time of the installation. Only one run at a
-// time: a second one fails at once.
+// time: a second one fails at once. Its standard output has a line per step and the progress lines of apt-get.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROVISION_SCRIPT, WSL_CONF, WSL_POLICY, WSL_SETUP_LOG } from '../../src/core/docker/wslSetup';
 import { TEST_RUN_LABEL, removeRunObjects } from './dockerRun';
@@ -49,6 +49,14 @@ describe('the setup script of the WSL distribution', () => {
     shell(container, 'i=0; while flock -n /run/devspaces-setup.lock true; do i=$((i + 1)); [ "$i" -lt 100 ] || exit 1; sleep 0.1; done');
   }
 
+  /** The step lines of the standard output, without the progress lines of apt-get (`dlstatus:`, `pmstatus:`). */
+  function steps(out: string): string {
+    return out
+      .split('\n')
+      .filter((line) => line.startsWith('devspaces-step '))
+      .join('\n');
+  }
+
   function provision(container: string): { code: number | null; out: string; err: string } {
     const result = cli.run(['exec', '-i', container, 'sh', '-s'], PROVISION_SCRIPT);
     log.info(`The script in ${container} ended with ${result.code}.\n${result.out}\n${result.err}`);
@@ -67,7 +75,7 @@ describe('the setup script of the WSL distribution', () => {
     const container = startDebian('wsl-offline', { network: 'none' });
     const result = provision(container);
     expect(result.code).toBe(1);
-    expect(result.out).toBe('devspaces-step packages');
+    expect(steps(result.out)).toBe('devspaces-step packages');
     expect(result.err).toMatch(new RegExp(`^The setup failed\\. The last lines of ${WSL_SETUP_LOG}:\\n== packages\\n`));
     // systemd is not turned on without its installation.
     expect(shell(container, 'test -e /etc/wsl.conf && echo present || echo absent')).toBe('absent');
@@ -104,7 +112,7 @@ describe('the setup script of the WSL distribution', () => {
     const result = provision(container);
     expect(result.code).toBe(1);
     expect(result.out).toBe('');
-    expect(result.err).toBe('Another setup of Docker, or the weekly upgrade of the packages, runs in the distribution. Try again after it.');
+    expect(result.err).toBe('Another setup of Docker, or the daily upgrade of the packages, runs in the distribution. Try again after it.');
     expect(shell(container, `cat ${WSL_SETUP_LOG}`)).toBe('the other run');
   });
 
@@ -113,7 +121,9 @@ describe('the setup script of the WSL distribution', () => {
     const first = provision(container);
     expect(first.err).toBe('');
     expect(first.code).toBe(0);
-    expect(first.out).toBe('devspaces-step packages\ndevspaces-step repository\ndevspaces-step docker');
+    expect(steps(first.out)).toBe('devspaces-step packages\ndevspaces-step repository\ndevspaces-step docker');
+    // apt-get writes its progress between the steps (parseAptStatus).
+    expect(first.out).toMatch(/^pmstatus:/m);
     expect(shell(container, `dpkg-query -W -f '\${Status}\\n' ${PACKAGES.join(' ')}`).split('\n')).toEqual(PACKAGES.map(() => 'install ok installed'));
     expect(shell(container, 'cat /etc/apt/sources.list.d/docker.sources')).toContain('Suites: trixie');
     expect(shell(container, 'readlink /etc/systemd/system/multi-user.target.wants/docker.service')).toMatch(/docker\.service$/);

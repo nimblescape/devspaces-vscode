@@ -82,8 +82,11 @@ export interface RunOptions {
   /** Complete environment of the process. Default: the environment of this process. */
   env?: NodeJS.ProcessEnv;
   cwd?: string;
-  /** Written to standard input, then standard input is closed. Without it, standard input is closed at once. */
-  input?: string;
+  /**
+   * Written to standard input, then standard input is closed: a text, or bytes (the build context of `docker build -`).
+   * Without it, standard input is closed at once.
+   */
+  input?: string | Uint8Array;
   /** The process is killed after this time. */
   timeoutMs?: number;
   /** The process is killed when the signal aborts, and `run` rejects with an `AbortError`. */

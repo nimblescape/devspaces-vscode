@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import { CommandError, UserFacingError } from '../core/errors';
-import { Actions, Messages } from '../core/messages';
+import { Actions, Messages, dockerHostReason } from '../core/messages';
 import { abortError, type Logger } from '../core/ports';
 import { RegistryVersionError } from '../core/storage/registry';
 import { isCancellation, OPERATION_FAILED, showError } from './errors';
@@ -121,6 +121,21 @@ describe('showError', () => {
     await flush();
     expect(retry).toHaveBeenCalledTimes(1);
     expect(fakeVscode.commands.executeCommand).not.toHaveBeenCalled();
+  });
+
+  // Try again cannot help when WSL cannot start the distribution: its button removes it and sets it up again, and then
+  // runs the Try again of the operation.
+  it('offers Remove and Set Up Again for a damaged disk of the WSL distribution, with the Try again of the operation', async () => {
+    const { logger } = recordingLogger();
+    const retry = vi.fn();
+    window.showErrorMessage.mockResolvedValue(Actions.resetWsl);
+    const message = Messages.dockerHostUnreachable('wsl:devspaces', dockerHostReason('wslDiskCorrupt', 'wsl:devspaces'));
+    showError(new UserFacingError('wslDiskCorrupt', message, 'Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT'), { logger, showLog: vi.fn(), retry });
+    expect(shown()).toEqual({ severity: 'error', message, actions: ['Show details', 'Remove and Set Up Again'] });
+    await flush();
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledTimes(1);
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.resetWslDistribution', retry);
+    expect(retry).not.toHaveBeenCalled();
   });
 
   it.each([

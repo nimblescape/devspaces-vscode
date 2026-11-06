@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import { CommandError, UserFacingError } from '../core/errors';
-import { OUTPUT_CHANNEL_NAME, OutputChannelLogger, redactSecrets } from './logger';
+import { OUTPUT_CHANNEL_NAME, OutputChannelLogger, redactSecrets, stripControlSequences } from './logger';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
 
 describe('OutputChannelLogger', () => {
@@ -43,6 +43,65 @@ describe('OutputChannelLogger', () => {
     logger.output('done\n');
     logger.info('after');
     expect(channel.text).toMatch(/^Step 1\/3 : FROM ubuntu\n\[[\d:]+\] info next\ndone\n\[[\d:]+\] info after\n$/);
+  });
+
+  it('writes tool output without the color codes of a terminal, also when a code is cut between two parts', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    // The classic builder of Docker marks the error output of a RUN step red.
+    logger.output('\u001b[91m+ docker compose version\n\u001b[0mDocker Compose version v5.7.0\n\u001b[9');
+    logger.output('1m+ apt-get clean\n\u001b[');
+    logger.output('0m');
+    logger.output('\u001b]0;title\u0007done\n');
+    expect(channel.text).toBe('+ docker compose version\nDocker Compose version v5.7.0\n+ apt-get clean\ndone\n');
+  });
+
+  it('keeps a cut color code for the next output also when a log line comes between, and strips the codes of log lines', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    logger.output('red\n\u001b[9');
+    logger.error('failed', new CommandError('docker build', 1, '', '\u001b[91mE: Unable to locate package\u001b[0m'));
+    logger.output('1mnext\n');
+    expect(channel.text).toMatch(/^red\n\[[\d:]+\] error failed\ndocker build failed with exit code 1:\nE: Unable to locate package\nnext\n$/);
+  });
+
+  it('drops a lone ESC at the end of an output, so that it never takes the first character of the next one', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    logger.output('stopped\n\u001b');
+    logger.output('Building image\n');
+    expect(channel.text).toBe('stopped\nBuilding image\n');
+  });
+
+  it('drops a cut sequence whose rest did not come within a second: the next output is another one', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      logger.output('stopped\n\u001b[');
+      now.mockReturnValue(1_002_000);
+      logger.output('Step 1/5\n');
+    } finally {
+      now.mockRestore();
+    }
+    expect(channel.text).toBe('stopped\nStep 1/5\n');
+  });
+
+  it('holds a cut OSC sequence and a cut sequence of ESC and intermediate characters too', () => {
+    const logger = new OutputChannelLogger();
+    const channel = fakeVscode.outputChannels[0];
+    logger.output('a\u001b]0;building');
+    logger.output(' image\u0007b\u001b(');
+    logger.output('Bc\n');
+    expect(channel.text).toBe('abc\n');
+  });
+
+  it('strips CSI, OSC and two-character sequences, and leaves other text as it is', () => {
+    expect(stripControlSequences('a\u001b[1;31mb\u001b[0mc')).toBe('abc');
+    expect(stripControlSequences('a\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\b')).toBe('alinkb');
+    expect(stripControlSequences('a\u001b(Bb\u001bMc')).toBe('abc');
+    expect(stripControlSequences('a\u001b7b\u001b8c\u001b=d\u001b>e\u001bcf')).toBe('abcdef');
+    expect(stripControlSequences('Step 1/13 : FROM node [ok]')).toBe('Step 1/13 : FROM node [ok]');
   });
 
   it('logs the technical details of an error', () => {

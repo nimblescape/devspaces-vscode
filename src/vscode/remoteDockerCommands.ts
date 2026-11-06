@@ -39,6 +39,7 @@ import { Actions, Messages, dockerHostReason } from '../core/messages';
 import { isAbortError, type Logger, type ProcessRunner } from '../core/ports';
 import type { SshHostEntry } from '../core/sshConfig';
 import type { RemoteDockerState } from '../core/storage/remoteDockerState';
+import { Commands } from './commands';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 import { MonitorIcons } from './treeModel';
@@ -79,7 +80,10 @@ export const RemoteDockerTexts = {
   },
   /** The description of a host of a Docker context of the user in the choice. */
   dockerContext: (name: string) => `Docker context ${name}`,
-  testing: (host: string) => `Testing the connection to ${host}…`,
+  testing: (host: string) =>
+    host === WSL_HOST
+      ? 'Starting and testing the WSL distribution of Devspaces. Its first start after a restart of Windows can take some minutes…'
+      : `Testing the connection to ${host}…`,
   useHost: (host: string) => `Use ${host}`,
   useLocal: 'Use the Local Docker',
   nowRemote: (host: string, rootless: boolean) =>
@@ -321,6 +325,7 @@ export class RemoteDockerCommands {
 
   /** Test, rootless socket, use. True when Devspaces uses `host` afterwards. */
   private async switchToRemote(host: string): Promise<boolean> {
+    this.deps.logger.info(`Devspaces tests the Docker host ${host}.`);
     const check = await withNotificationProgress(
       { title: RemoteDockerTexts.testing(host), cancellable: true },
       async (_progress, token) => {
@@ -361,7 +366,9 @@ export class RemoteDockerCommands {
     );
     if (!check.ok) {
       this.deps.logger.warn(`The Docker host ${host} cannot be reached: ${check.detail}`);
-      this.showError(Messages.dockerHostUnreachable(host, dockerHostReason(check.problem, host)));
+      // A damaged disk of the WSL distribution of Devspaces: its button removes the distribution and sets it up again.
+      const reset = check.problem === 'wslDiskCorrupt' && host === WSL_HOST;
+      this.showError(Messages.dockerHostUnreachable(host, dockerHostReason(check.problem, host)), reset ? 'resetWsl' : undefined);
       return false;
     }
     this.deps.logger.info(`The Docker host ${host} answers: Docker engine ${check.version}${check.rootless ? ' (rootless)' : ''}.`);
@@ -574,10 +581,17 @@ export class RemoteDockerCommands {
     this.showError(RemoteDockerTexts.switchFailed);
   }
 
-  private showError(message: string): void {
-    showErrorMessage(message, Actions.showDetails).then(
+  /** An error with Show details, and Remove and Set Up Again after it (`resetWsl`, its command; as errors.ts shows it). */
+  private showError(message: string, action?: 'resetWsl'): void {
+    const items = action === undefined ? [Actions.showDetails] : [Actions.showDetails, Actions[action]];
+    showErrorMessage(message, ...items).then(
       (choice) => {
         if (choice === Actions.showDetails) this.deps.showLog();
+        else if (action !== undefined && choice === Actions[action]) {
+          vscode.commands
+            .executeCommand(Commands.resetWslDistribution)
+            .then(undefined, (error: unknown) => this.deps.logger.error('The WSL distribution of Devspaces could not be set up again.', error));
+        }
       },
       (error: unknown) => this.deps.logger.error('Could not show the message.', error),
     );

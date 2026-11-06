@@ -81,11 +81,20 @@ describe('the filter of the Docker pipe of the extension', () => {
     'GET /volumes',
     'GET /volumes/devspaces-monitor',
     'DELETE /volumes/devspaces-vscode',
+    // The build of the helper image in a container of the build image (buildxImage.ts): the pull and the tag of the
+    // build image, then `docker run --rm -i`, which the Docker CLI stops with `kill` at its own stop.
+    'POST /images/create',
+    'POST /images/docker/buildx-bin@sha256:0b7d9e66e81dd1155639421b8342f9731f8bb67cb11b58663f938d9c6e9b6eef/tag',
+    'POST /containers/create',
+    `POST /containers/${ID}/attach`,
+    `POST /containers/${ID}/wait`,
+    `POST /containers/${ID}/start`,
+    `POST /containers/${ID}/kill`,
   ])('lets %s through, which Devspaces needs', (line) => {
     expect(allowed(extensionPipeRule, line)).toBe(true);
   });
 
-  it.each(['POST /containers/create', `POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `POST /containers/${ID}/start`, 'POST /images/create', 'POST /volumes/create', 'GET /events'])(
+  it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/stop`, 'POST /images/load', 'POST /volumes/create', 'GET /events'])(
     'refuses %s, which it does not need',
     (line) => {
       const [method, path] = line.split(' ');

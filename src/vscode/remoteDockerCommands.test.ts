@@ -215,6 +215,9 @@ describe('Use a Remote Docker Host…', () => {
     expect(cli.calls.filter((call) => call.args[0] === '-H')).toEqual([]);
     expect(runner.run).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(`Devspaces uses ${WSL_HOST} (wsl://devspaces). No Docker context was changed.`);
+    // Its progress says that the first start can take some minutes (a slow virtual machine).
+    expect(RemoteDockerTexts.testing(WSL_HOST)).toContain('can take some minutes');
+    expect(RemoteDockerTexts.testing('box')).toBe('Testing the connection to box…');
     // Without wsl.exe (no shell), the plain reason, and nothing changes.
     await state.setDockerHost(undefined);
     commands = create({ wslDistributions: async () => ['devspaces'], shells: { login: vi.fn(async () => undefined), run: vi.fn(async () => undefined) } });
@@ -646,6 +649,20 @@ describe('useHost and forgetHost (the WSL distribution of Devspaces after its se
     commands = create({ shells: wslShells(false) });
     await expect(commands.useHost(WSL_HOST)).resolves.toBe(false);
     expect(window.showErrorMessage).toHaveBeenCalledWith(Messages.dockerHostUnreachable(WSL_HOST, dockerHostReason('wslMissing', WSL_HOST)), Actions.showDetails);
+    expect(await state.dockerHost()).toBeUndefined();
+  });
+
+  it('useHost offers Remove and Set Up Again when the disk of the distribution is damaged', async () => {
+    const detail = 'The file or directory is corrupted and unreadable.\r\nError code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT';
+    commands = create({ shells: { login: vi.fn(async () => ({ ok: false as const, detail, timedOut: false })), run: vi.fn(async () => undefined) } });
+    window.showErrorMessage.mockResolvedValue(Actions.resetWsl);
+    await expect(commands.useHost(WSL_HOST)).resolves.toBe(false);
+    expect(window.showErrorMessage).toHaveBeenCalledWith(
+      Messages.dockerHostUnreachable(WSL_HOST, dockerHostReason('wslDiskCorrupt', WSL_HOST)),
+      Actions.showDetails,
+      Actions.resetWsl,
+    );
+    await vi.waitFor(() => expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.resetWslDistribution'));
     expect(await state.dockerHost()).toBeUndefined();
   });
 

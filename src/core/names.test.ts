@@ -183,6 +183,8 @@ describe('EXTENSION_LABEL_KEYS', () => {
       'build-id',
       // The build record on the devspace image (EngineDocker.labelImage).
       'build-record',
+      // The label of the build containers of the helper image (buildxImage.ts buildxRunArgs).
+      'build-run',
       // The label of the containers that a cancel of an operation removes.
       'channel-step',
       'compose-service',
