@@ -21,11 +21,13 @@ takes the section of a version as the notes of its GitHub release.
 
 **Daily package upgrade in WSL:** Devspaces upgrades the packages of its WSL distribution, also Docker Engine, about once a day instead of about once a week, so security fixes arrive sooner. A run that did not end well is tried again after 6 hours instead of a day.
 
+**No update of VS Code before a start:** a Start of a devspace no longer updates VS Code first while VS Code shows its button **Update**, and the setting devspaces.installVsCodeUpdateFirst is gone. VS Code has no stable interface for its updates. VS Code installs a waiting update itself at its next restart, as without Devspaces.
+
 ## 0.4.1
 
 **Windows without Docker:** Devspaces uses Docker Desktop when it is installed, and otherwise always its own Docker in WSL. A link to Devspaces, also a course link, on a Windows computer without Docker no longer asks to install Docker Desktop: after the GitHub sign-in, it checks WSL, asks once with the downloads and the folder, sets up the WSL distribution of Devspaces with Docker Engine, downloads the Docker CLI of Devspaces, and uses that distribution as its Docker host. Then the link opens the repository there. When the distribution exists already, the link uses it without a question. The Docker setup of the view on Windows no longer offers to install Docker Desktop: **Set Up Docker for Devspaces** is the setup there. When WSL is missing, the setup and the link install WSL 2 first, after the question that shows the command; Windows asks for administrator permission, and you restart the computer afterwards. See [Installing Docker](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#installing-docker).
 
-**The update of VS Code first:** while VS Code shows its button **Update**, a Start of a devspace updates VS Code first: VS Code downloads or installs the update where needed and restarts (a window with unsaved files asks first). After the restart, the window where you started goes on with the Start, and the devspace gets the VS Code Server of the new version. The new setting devspaces.installVsCodeUpdateFirst (on by default) turns this off. See [The update of VS Code](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-of-vs-code).
+**The update of VS Code first:** while VS Code shows its button **Update**, a Start of a devspace updates VS Code first: VS Code downloads or installs the update where needed and restarts (a window with unsaved files asks first). After the restart, the window where you started goes on with the Start, and the devspace gets the VS Code Server of the new version. The new setting devspaces.installVsCodeUpdateFirst (on by default) turns this off. See [The update of VS Code](https://github.com/nimblescape/devspaces-vscode/blob/v0.4.1/docs/guide.md#the-update-of-vs-code).
 
 ## 0.4.0
 

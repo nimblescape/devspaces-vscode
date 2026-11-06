@@ -9,7 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Clock } from '../ports';
-import type { PendingOperation, StartAfterUpdate, WindowStatus } from '../types';
+import type { PendingOperation, WindowStatus, WslSetupAfterInstall } from '../types';
 import { StoragePaths } from './paths';
 import {
   DEFAULT_CLAIM_MAX_AGE_MS,
@@ -17,8 +17,8 @@ import {
   isPendingConnection,
   isPendingOperation,
   isReopenRecord,
-  isStartAfterUpdate,
   isWindowStatus,
+  isWslSetupAfterInstall,
 } from './sessionFiles';
 
 const ENV_A = '3f2a9c1e-5b7d-4e8a-9c0f-2d1e6a7b8c9d';
@@ -352,57 +352,38 @@ describe('reopen record', () => {
   });
 });
 
-describe('the record of a Start after the update of VS Code', () => {
-  const record: StartAfterUpdate = {
-    repository: 'acme/api',
-    devspaceId: ENV_A,
-    source: { kind: 'configuration', configPath: '.devcontainer/devcontainer.json' },
-    account: { id: '1001', login: 'alice' },
-    newWindow: true,
-    window: 'empty',
-    from: '1.145.0',
-    createdAt: '2026-09-24T17:40:15.000Z',
-  };
+describe('the record of the setup of Docker in WSL after the restart of Windows', () => {
+  const record: WslSetupAfterInstall = { link: { path: '/open', query: 'repository=acme/api' }, createdAt: '2026-09-24T17:40:15.000Z' };
 
   it('writes, reads, and removes it', async () => {
-    await expect(files.readStartAfterUpdate()).resolves.toBeUndefined();
-    await files.writeStartAfterUpdate(record);
-    await expect(files.readStartAfterUpdate()).resolves.toEqual(record);
-    await files.removeStartAfterUpdate();
-    await files.removeStartAfterUpdate();
-    await expect(files.readStartAfterUpdate()).resolves.toBeUndefined();
+    await expect(files.readWslSetupAfterInstall()).resolves.toBeUndefined();
+    await files.writeWslSetupAfterInstall(record);
+    await expect(files.readWslSetupAfterInstall()).resolves.toEqual(record);
+    await files.removeWslSetupAfterInstall();
+    await files.removeWslSetupAfterInstall();
+    await expect(files.readWslSetupAfterInstall()).resolves.toBeUndefined();
   });
 
   it('gives it to one window only, and removes the file', async () => {
-    await files.writeStartAfterUpdate(record);
-    const [first, second] = await Promise.all([files.claimStartAfterUpdate(WIN_1), files.claimStartAfterUpdate(WIN_2)]);
+    await files.writeWslSetupAfterInstall(record);
+    const [first, second] = await Promise.all([files.claimWslSetupAfterInstall(WIN_1), files.claimWslSetupAfterInstall(WIN_2)]);
     expect([first, second].filter((value) => value !== undefined)).toEqual([record]);
-    expect(fs.readdirSync(paths.root).filter((name) => name.startsWith('start-after-update'))).toEqual([]);
+    expect(fs.readdirSync(paths.root).filter((name) => name.startsWith('wsl-setup-after-install'))).toEqual([]);
   });
 
   it('claims nothing from a record that is not valid, and removes it', async () => {
     fs.mkdirSync(paths.root, { recursive: true });
-    fs.writeFileSync(paths.startAfterUpdate, JSON.stringify({ ...record, newWindow: 'yes' }));
-    await expect(files.readStartAfterUpdate()).resolves.toBeUndefined();
-    await expect(files.claimStartAfterUpdate(WIN_1)).resolves.toBeUndefined();
-    expect(fs.existsSync(paths.startAfterUpdate)).toBe(false);
+    fs.writeFileSync(paths.wslSetupAfterInstall, JSON.stringify({ ...record, createdAt: 'yesterday' }));
+    await expect(files.readWslSetupAfterInstall()).resolves.toBeUndefined();
+    await expect(files.claimWslSetupAfterInstall(WIN_1)).resolves.toBeUndefined();
+    expect(fs.existsSync(paths.wslSetupAfterInstall)).toBe(false);
   });
 
-  it('accepts a record with the needed fields only, and refuses wrong values', () => {
-    const minimal = { repository: 'acme/api', newWindow: false, window: 'folder:file:///home/alice/api', from: '1.145.0', createdAt: '2026-09-24T17:40:15Z' };
-    expect(isStartAfterUpdate(record)).toBe(true);
-    expect(isStartAfterUpdate(minimal)).toBe(true);
-    for (const wrong of [
-      { ...minimal, repository: '' },
-      { ...minimal, devspaceId: '../x' },
-      { ...minimal, source: { kind: 'configuration' } },
-      { ...minimal, account: { login: 'alice' } },
-      { ...minimal, confirmed: 'yes' },
-      { ...minimal, window: '' },
-      { ...minimal, from: '' },
-      { ...minimal, createdAt: 'yesterday' },
-    ]) {
-      expect(isStartAfterUpdate(wrong), JSON.stringify(wrong)).toBe(false);
+  it('accepts a record without a link, and refuses wrong values', () => {
+    expect(isWslSetupAfterInstall(record)).toBe(true);
+    expect(isWslSetupAfterInstall({ createdAt: '2026-09-24T17:40:15Z' })).toBe(true);
+    for (const wrong of [{ createdAt: 'yesterday' }, { ...record, link: { path: '/open' } }, { ...record, link: 'acme/api' }]) {
+      expect(isWslSetupAfterInstall(wrong), JSON.stringify(wrong)).toBe(false);
     }
   });
 });

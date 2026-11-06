@@ -126,10 +126,8 @@ export const fakeVscode = {
     /** `window.state`: resetFakeVscode gives the window the focus. */
     state: { focused: true },
   },
-  /** `vscode.version`: the version of the running VS Code. */
-  version: '1.145.0',
   env: { openExternal: vi.fn(), remoteName: undefined as string | undefined },
-  commands: { executeCommand: vi.fn(), registerCommand: vi.fn(), getCommands: vi.fn() },
+  commands: { executeCommand: vi.fn(), registerCommand: vi.fn() },
   workspace: {
     getConfiguration: vi.fn(),
     /** resetFakeVscode sets it to true. */
@@ -176,7 +174,6 @@ export function resetFakeVscode(): void {
     fakeVscode.env.openExternal,
     fakeVscode.commands.executeCommand,
     fakeVscode.commands.registerCommand,
-    fakeVscode.commands.getCommands,
     fakeVscode.workspace.getConfiguration,
     fakeVscode.authentication.getSession,
     fakeVscode.authentication.getAccounts,
@@ -192,8 +189,6 @@ export function resetFakeVscode(): void {
   fakeVscode.env.openExternal.mockResolvedValue(true);
   fakeVscode.commands.executeCommand.mockResolvedValue(undefined);
   fakeVscode.commands.registerCommand.mockImplementation(() => ({ dispose() {} }));
-  // No command of VS Code itself, unless a test gives them.
-  fakeVscode.commands.getCommands.mockResolvedValue([]);
   fakeVscode.authentication.getSession.mockResolvedValue(undefined);
   fakeVscode.authentication.getAccounts.mockResolvedValue([]);
   window.createOutputChannel.mockImplementation((name: string) => {

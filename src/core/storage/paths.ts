@@ -57,8 +57,6 @@ export class StoragePaths {
   readonly disconnectDir: string;
   /** Reopen record. */
   readonly reopen: string;
-  /** A Start that waits for the restart of VS Code for its update (StartAfterUpdate). */
-  readonly startAfterUpdate: string;
   /** The setup of Docker in WSL that waits for the restart of Windows after the installation of WSL (WslSetupAfterInstall). */
   readonly wslSetupAfterInstall: string;
   /** State of the workspace helper images: base image digests, last check, last use, last cleanup. */
@@ -95,7 +93,6 @@ export class StoragePaths {
     this.operationsDir = path.join(root, 'operations');
     this.disconnectDir = path.join(root, DISCONNECT_DIR_NAME);
     this.reopen = path.join(root, 'reopen.json');
-    this.startAfterUpdate = path.join(root, 'start-after-update.json');
     this.wslSetupAfterInstall = path.join(root, 'wsl-setup-after-install.json');
     this.helperState = path.join(root, 'helper.json');
     this.remoteDocker = path.join(root, 'remote-docker.json');
@@ -134,11 +131,6 @@ export class StoragePaths {
   /** `disconnect/<devspace-id>.json`. Throws for an invalid ID. */
   disconnectFile(devspaceId: string): string {
     return path.join(this.disconnectDir, `${checkedId('devspace ID', devspaceId)}.json`);
-  }
-
-  /** `start-after-update.json.claimed.<window-id>`: the record of a Start after the update, claimed by a window. Throws for an invalid ID. */
-  claimedStartAfterUpdateFile(windowId: string): string {
-    return `${this.startAfterUpdate}${CLAIM_MARKER}${checkedId('window ID', windowId)}`;
   }
 
   /** `wsl-setup-after-install.json.claimed.<window-id>`: the record of the setup after the restart of Windows, claimed by a window. Throws for an invalid ID. */

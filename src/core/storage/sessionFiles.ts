@@ -3,8 +3,8 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Coordination files in the global storage folder: window status files, pending connection files, pending operations,
-// the reopen record, and the record of a Start after the update of VS Code. The window reads the settings itself. Every write is atomic. Reads skip files that are
-// missing, unreadable, or invalid.
+// the reopen record, and the record of the setup of Docker in WSL after the restart of Windows. The window reads the
+// settings itself. Every write is atomic. Reads skip files that are missing, unreadable, or invalid.
 import * as fs from 'fs';
 import * as path from 'path';
 import { isoTime, systemClock, type Clock } from '../ports';
@@ -13,11 +13,9 @@ import type {
   PendingOperation,
   PendingOperationKind,
   ReopenRecord,
-  StartAfterUpdate,
   WindowStatus,
   WslSetupAfterInstall,
 } from '../types';
-import { parseDevspaceSource } from '../helperChannel/protocol';
 import { listJsonFiles, removeFile, removeFileSync, writeJsonAtomic, writeJsonAtomicSync } from './atomicJson';
 import {
   CLAIM_MARKER,
@@ -210,31 +208,6 @@ export class SessionFiles {
     if ((await this.readReopen())?.devspaceId === devspaceId) await this.removeReopen();
   }
 
-  // --- Start after the update of VS Code (start-after-update.json) ----------------------------------------------------
-
-  /** Writes the record of a Start that waits for the restart of VS Code for its update; it replaces an older one. */
-  async writeStartAfterUpdate(record: StartAfterUpdate): Promise<void> {
-    await retryTransient(() => writeJsonAtomic(this.paths.startAfterUpdate, record));
-  }
-
-  /** The record, or `undefined` when it is missing or not valid. */
-  async readStartAfterUpdate(): Promise<StartAfterUpdate | undefined> {
-    const value = await readJsonTolerant(this.paths.startAfterUpdate);
-    return isStartAfterUpdate(value) ? value : undefined;
-  }
-
-  /**
-   * Takes the record for this window: only one window gets it (an atomic rename), and the file is gone afterwards.
-   * `undefined` when another window took it first, or when it is not valid.
-   */
-  async claimStartAfterUpdate(windowId: string): Promise<StartAfterUpdate | undefined> {
-    return claimFile(this.paths.startAfterUpdate, this.paths.claimedStartAfterUpdateFile(windowId), isStartAfterUpdate);
-  }
-
-  async removeStartAfterUpdate(): Promise<void> {
-    await retryTransient(() => removeFile(this.paths.startAfterUpdate));
-  }
-
   // --- Setup of Docker in WSL after the restart of Windows (wsl-setup-after-install.json) ------------------------------
 
   /** Writes the record when Devspaces starts the installation of WSL; it replaces an older one. */
@@ -378,21 +351,6 @@ export function isPendingOperation(value: unknown): value is PendingOperation {
     isKeyOf(OPERATION_REASONS, value.reason) &&
     (value.additionalVolumesToRemove === undefined ||
       (Array.isArray(value.additionalVolumesToRemove) && value.additionalVolumesToRemove.every(isNonEmptyString)))
-  );
-}
-
-export function isStartAfterUpdate(value: unknown): value is StartAfterUpdate {
-  return (
-    isRecord(value) &&
-    isNonEmptyString(value.repository) &&
-    (value.devspaceId === undefined || isStorageId(value.devspaceId)) &&
-    (value.source === undefined || parseDevspaceSource(value.source) !== undefined) &&
-    (value.account === undefined || (isRecord(value.account) && isNonEmptyString(value.account.id) && typeof value.account.login === 'string')) &&
-    typeof value.newWindow === 'boolean' &&
-    (value.confirmed === undefined || typeof value.confirmed === 'boolean') &&
-    isNonEmptyString(value.window) &&
-    isNonEmptyString(value.from) &&
-    isTime(value.createdAt)
   );
 }
 

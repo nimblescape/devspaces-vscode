@@ -126,7 +126,6 @@ import { Sidebar } from './sidebar';
 import { DevspaceStatusBar } from './statusBar';
 import { Throttle } from './tasks';
 import { REPOSITORIES_VIEW_ID, RepositoriesTreeProvider, expandAll, revealRow, type TreeNode } from './treeView';
-import { VscodeUpdate } from './vscodeUpdate';
 
 /** A window that gets the focus refreshes the sidebar at most this often. */
 const FOCUS_REFRESH_INTERVAL_MS = 15_000;
@@ -1171,16 +1170,6 @@ async function activateExtension(
     remoteDocker,
     wslSetup,
     wslAfterInstall,
-    // The update of VS Code before a devspace starts (docs/requirements.md R-DS-006), with the commands of the
-    // workbench of VS Code (vscodeUpdate.ts) and the record of the last restart in the global state.
-    vscodeUpdate: new VscodeUpdate({
-      commands: () => vscode.commands.getCommands(false),
-      execute: (command) => vscode.commands.executeCommand(command),
-      state: context.globalState,
-      runningVersion: vscode.version,
-      platform: process.platform,
-      logger,
-    }),
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.
     sessionMonitor: {
@@ -1498,8 +1487,6 @@ async function activateExtension(
     await listed.catch(() => undefined);
     if (onRemovedEngine) await controller.workWithoutDevspaces(windowDevspace, containerName);
     else await controller.openAttachedWindow(windowDevspace, containerName, pending);
-    // A Start of this window that waited for the update of VS Code goes on after the open of this window.
-    background(controller.startAfterUpdate(), 'go on with the Start after the update of VS Code');
     return;
   }
   if (labeled.kind === 'unreadable' && containerName) {
@@ -1508,10 +1495,8 @@ async function activateExtension(
     return;
   }
   background(started, 'start the window session');
-  // Role B: pending operations, a Start that waited for the update of VS Code, then the reopen rule. Role C (a local
-  // folder or another remote): only a Start of this window that waited for the update of VS Code.
+  // Role B: pending operations, then the reopen rule. Role C (a local folder or another remote): nothing of its own.
   if (connection.isEmptyWindow()) background(controller.runEmptyWindowTasks(activatedAt), 'run the tasks of the empty window');
-  else background(started.then(() => controller.startAfterUpdate()), 'go on with the Start after the update of VS Code');
   // Windows: the setup of Docker for Devspaces, and its link, after the restart that the installation of WSL asked for.
   if (wslAfterInstall !== undefined) background(started.then(() => controller.goOnAfterWslInstall()), 'go on with the setup of Docker after the restart of Windows');
 }

@@ -64,7 +64,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-DS-006
 
-**The current VS Code first.** While VS Code shows its button **Update** in the title bar (an update that VS Code has downloaded, or that it can download or install itself), a **Start** of a devspace (also **Reconnect**, **Switch Devspace…** and a link) updates VS Code first: VS Code downloads and installs the update where needed, restarts, and opens its windows again. Then the devspace starts, so that it gets the VS Code Server of the new version: the window that ran the Start goes on with it after the restart. The setting `devspaces.installVsCodeUpdateFirst` (on by default, user only) turns this off. When VS Code cannot update itself (its button opens the download page), or the update fails, the devspace starts with the running version. When the user cancels the restart (for example in the question about unsaved files), VS Code keeps running, and the devspace starts with the running version if the window of the Start is still open. Devspaces restarts VS Code at most once for each update and running version, so that an update that a restart cannot install, or whose restart the user cancelled, does not restart VS Code again and again. The reopen at startup, and a window that VS Code restores or that the user reloads, start the devspace without the update.
+**Dropped: no update of VS Code before a start.** Devspaces does not update VS Code before a devspace starts, because VS Code has no stable API for its updates (only internal commands of its workbench). VS Code installs a waiting update itself, at its next restart. This ID is not used again.
 
 ## Accounts
 
