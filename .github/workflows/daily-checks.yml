@@ -15,6 +15,8 @@
 #                                   and tests the image every day, and pushes
 #                                   it to ghcr.io only when its packages or
 #                                   its recipe changed
+#   Lima          lima.yml          the Lima of Devspaces on macOS and Linux
+#                                   (src/core/vm/limaPin.json)
 # A day without a new version opens nothing. The jobs run side by side, and a
 # failed job does not stop the others. Each called workflow also runs alone,
 # on a manual start and on a pull request that changes it, its script or its
@@ -74,3 +76,14 @@ jobs:
       actions: write
       # The push to ghcr.io/nimblescape/devspaces-vm and the deletion of old versions.
       packages: write
+
+  lima:
+    name: Lima
+    uses: ./.github/workflows/lima.yml
+    permissions:
+      # The push of the branch lima-<version>.
+      contents: write
+      # The pull request of that branch.
+      pull-requests: write
+      # The start of the workflow "CI" on that branch.
+      actions: write
