@@ -266,8 +266,3 @@ export function needsMissingCliCheck(state: DockerSetupState): boolean {
 export function keepWatchingInstall(state: DockerSetupState, startedAt: number, now: number): boolean {
   return !state.cliFound && now - startedAt < INSTALL_WATCH_TIMEOUT_MS;
 }
-
-/** The architecture of the computer: VS Code for Intel under Rosetta on a Mac with Apple silicon reports `x64`. */
-export function hardwareArch(platform: NodeJS.Platform, processArch: string, translated: boolean): string {
-  return platform === 'darwin' && processArch === 'x64' && translated ? 'arm64' : processArch;
-}

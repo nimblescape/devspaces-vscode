@@ -10,7 +10,6 @@ import {
   changedContextValues,
   dockerContextValues,
   dockerSetupRequired,
-  hardwareArch,
   isHttpsUrlOf,
   keepWatchingInstall,
   needsMissingCliCheck,
@@ -111,18 +110,6 @@ describe('isHttpsUrlOf (the host of a download)', () => {
     ['not a url', false],
   ])('%s is a URL of download.docker.com: %s', (url, expected) => {
     expect(isHttpsUrlOf(url, 'download.docker.com')).toBe(expected);
-  });
-});
-
-describe('hardwareArch', () => {
-  it.each<[NodeJS.Platform, string, boolean, string]>([
-    ['darwin', 'x64', true, 'arm64'],
-    ['darwin', 'x64', false, 'x64'],
-    ['darwin', 'arm64', false, 'arm64'],
-    ['win32', 'x64', true, 'x64'],
-    ['linux', 'x64', true, 'x64'],
-  ])('%s %s translated=%s → %s', (platform, arch, translated, expected) => {
-    expect(hardwareArch(platform, arch, translated)).toBe(expected);
   });
 });
 
