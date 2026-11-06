@@ -91,7 +91,7 @@ export function presentLima(folder: string, platform: NodeJS.Platform, arch: str
 }
 
 export interface InstallLimaOptions {
-  /** The folder of the versions of Lima (limaPaths(...).lima). */
+  /** The folder of the versions of Lima (LimaPaths.lima, limaInstance.ts). */
   folder: string;
   platform: NodeJS.Platform;
   arch: string;
