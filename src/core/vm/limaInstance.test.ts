@@ -14,6 +14,7 @@ import {
   limaPaths,
   limaResources,
   limaSshArgs,
+  parseLimaInfo,
   parseLimaList,
   VM_DISK_GIB,
 } from './limaInstance';
@@ -127,6 +128,15 @@ describe('parseLimaList', () => {
   });
 });
 
+describe('parseLimaInfo', () => {
+  it('reads the CPUs and the memory of the instance, where limactl list names them', () => {
+    const line = JSON.stringify({ name: 'devspaces', status: 'Stopped', cpus: 4, memory: 6 * 2 ** 30 });
+    expect(parseLimaInfo(line)).toEqual({ status: 'stopped', resources: { cpus: 4, memoryGiB: 6 } });
+    expect(parseLimaInfo(JSON.stringify({ name: 'devspaces', status: 'Running', cpus: 2 }))).toEqual({ status: 'running' });
+    expect(parseLimaInfo('')).toEqual({ status: 'missing' });
+  });
+});
+
 describe('LimaInstance', () => {
   const env = { PATH: '/usr/bin' };
 
@@ -159,6 +169,14 @@ describe('LimaInstance', () => {
     await instance.create('/tmp/lima.yaml', undefined, (line) => lines.push(line));
     expect(fake.calls[0].args).toEqual(['create', '--name=devspaces', '--tty=false', '/tmp/lima.yaml']);
     expect(lines).toEqual(['level=info msg="Attempting to download the image"', 'level=info msg="Run `limactl start devspaces`"', 'warning', 'last line']);
+  });
+
+  it('gives the stopped instance other CPUs and memory with limactl edit, without a question', async () => {
+    const fake = runner([{}, { exitCode: 1, stderr: 'cannot edit a running instance' }]);
+    const instance = new LimaInstance({ limactl: 'limactl', paths: PATHS, runner: fake.runner, logger: silentLogger, env });
+    await instance.setResources({ memoryGiB: 6, cpus: 2 });
+    expect(fake.calls[0].args).toEqual(['edit', '--tty=false', '--cpus=2', '--memory=6', 'devspaces']);
+    await expect(instance.setResources({ memoryGiB: 6, cpus: 2 })).rejects.toThrow(new LimaError('edit', 'cannot edit a running instance'));
   });
 
   it('names the step and the end of the output of a failed limactl, or the time limit', async () => {

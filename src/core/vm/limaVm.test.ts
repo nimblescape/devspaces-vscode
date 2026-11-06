@@ -102,6 +102,31 @@ describe('LimaVm', () => {
     expect(fake.calls).toEqual(['list', 'start']);
   });
 
+  it('gives a stopped VM the memory and CPUs of the settings before its start, and never a running one', async () => {
+    const calls: string[][] = [];
+    let status = 'Stopped';
+    const runner: ProcessRunner = {
+      run: async (_file, args): Promise<RunResult> => {
+        calls.push([...args]);
+        if (args[0] === 'start') status = 'Running';
+        const stdout = args[0] === 'list' ? JSON.stringify({ name: 'devspaces', status, cpus: 4, memory: 4 * 2 ** 30 }) : '';
+        return { exitCode: 0, stdout, stderr: '', timedOut: false };
+      },
+    };
+    const lima = new LimaVm({ runner, logger: silentLogger, platform: 'linux', arch: 'x64', paths: limaPaths('/home/ada'), install: async () => 'limactl', resources: () => ({ memoryGiB: 6, cpus: 2 }) });
+    await lima.ready();
+    expect(calls.map((call) => call.join(' '))).toEqual(['list --json', 'edit --tty=false --cpus=2 --memory=6 devspaces', 'start --tty=false --timeout=10m devspaces']);
+    // A running VM keeps what it has until its next start.
+    lima.forgetRunning();
+    await lima.ready();
+    expect(calls).toHaveLength(4);
+    // The same resources: no edit.
+    status = 'Stopped';
+    const same = new LimaVm({ runner, logger: silentLogger, platform: 'linux', arch: 'x64', paths: limaPaths('/home/ada'), install: async () => 'limactl', resources: () => ({ memoryGiB: 4, cpus: 4 }) });
+    await same.ready();
+    expect(calls.slice(4).map((call) => call[0])).toEqual(['list', 'start']);
+  });
+
   it('knows a created VM by the configuration of its instance, without Lima', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-lima-vm-'));
     try {

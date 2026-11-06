@@ -11,6 +11,7 @@ import type { Logger } from '../core/ports';
 import type { ExtensionSettings } from '../core/types';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, normalizeCacheSchedule, parseCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { parseImageReference } from '../core/remoteMonitor/protocol';
+import { DEFAULT_VM_CPUS, DEFAULT_VM_MEMORY_GIB, limaResources } from '../core/vm/limaInstance';
 import { Commands } from './commands';
 import { showWarningMessage } from './notifications';
 import { normalizeListOpenMode, type ListOpenMode } from './rowActivation';
@@ -38,6 +39,8 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   defaultImage: '',
   startWithDefaultImage: true,
   confirmOpenFromLink: true,
+  vmMemoryGiB: DEFAULT_VM_MEMORY_GIB,
+  vmCpus: DEFAULT_VM_CPUS,
 });
 
 /** The key of the setting that the button "Always Open" of the question of a link turns off. */
@@ -321,5 +324,41 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     defaultImage: normalizeDefaultImage(get('defaultImage')) ?? '',
     startWithDefaultImage: bool('startWithDefaultImage', DEFAULT_SETTINGS.startWithDefaultImage ?? true),
     confirmOpenFromLink: bool('confirmOpenFromLink', DEFAULT_SETTINGS.confirmOpenFromLink ?? true),
+    // Whole numbers of at least 1; the limit of half of this computer is applied where the VM gets them (limaResources),
+    // and warnVmResources names a larger value.
+    vmMemoryGiB: wholeNumber(get('vmMemoryGiB'), DEFAULT_VM_MEMORY_GIB),
+    vmCpus: wholeNumber(get('vmCpus'), DEFAULT_VM_CPUS),
   };
+}
+
+/** `value` as a whole number of at least 1 (rounded down), or `fallback` for a value that is no number. */
+function wholeNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : fallback;
+}
+
+/**
+ * The check of devspaces.vmMemoryGiB and devspaces.vmCpus on macOS and Linux at the start, and when `change` changes
+ * them (R-VM-006): a value that the user set above half of this computer counts as that half, and a warning names it
+ * (warnOnce), so the setting never differs from what the VM gets without a word. The defaults (4 GiB and 4 CPUs) are
+ * limited without a warning on a smaller computer. `machine`: os.totalmem() and os.availableParallelism().
+ */
+export function warnVmResources(
+  logger: Logger,
+  warned: { memory: Set<string>; cpus: Set<string> },
+  settings: Pick<ExtensionSettings, 'vmMemoryGiB' | 'vmCpus'>,
+  machine: { totalMemory: number; cpus: number },
+  change?: vscode.ConfigurationChangeEvent,
+): void {
+  const configuration = vscode.workspace.getConfiguration(SETTINGS_SECTION);
+  const set = (key: string): boolean => configuration.inspect<unknown>(key)?.globalValue !== undefined;
+  const wish = { memoryGiB: settings.vmMemoryGiB ?? DEFAULT_VM_MEMORY_GIB, cpus: settings.vmCpus ?? DEFAULT_VM_CPUS };
+  const given = limaResources(machine.totalMemory, machine.cpus, wish);
+  if (checksSetting('vmMemoryGiB', change)) {
+    const tooLarge = set('vmMemoryGiB') && wish.memoryGiB > given.memoryGiB;
+    warnOnce(logger, warned.memory, 'vmMemoryGiB', tooLarge ? Messages.vmMemoryTooLarge(wish.memoryGiB, given.memoryGiB) : undefined);
+  }
+  if (checksSetting('vmCpus', change)) {
+    const tooLarge = set('vmCpus') && wish.cpus > given.cpus;
+    warnOnce(logger, warned.cpus, 'vmCpus', tooLarge ? Messages.vmCpusTooLarge(wish.cpus, given.cpus) : undefined);
+  }
 }

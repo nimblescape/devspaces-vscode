@@ -44,6 +44,7 @@ import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransp
 import { deferredByteProcess } from '../core/relay/deferredProcess';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
+import { limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
 import { HostPipes } from '../core/relay/hostPipes';
@@ -125,6 +126,7 @@ import {
   SETTINGS_SECTION,
   warnInvalidCacheUpdateSchedule,
   warnInvalidDefaultImage,
+  warnVmResources,
   warnInvalidHostAccessChecksOff,
 } from './settings';
 import { Sidebar } from './sidebar';
@@ -208,6 +210,13 @@ async function activateExtension(
   warnInvalidHostAccessChecksOff(logger, hostAccessWarnings);
   warnInvalidDefaultImage(logger, defaultImageWarnings);
   warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings);
+  // The memory and the CPUs of the Lima VM of Devspaces (macOS and Linux, R-VM-006): the settings, each at most half of
+  // this computer; a larger value is named in a warning.
+  const machine = { totalMemory: os.totalmem(), cpus: os.availableParallelism() };
+  const vmResourceWarnings = { memory: new Set<string>(), cpus: new Set<string>() };
+  const hasLimaVm = platform === 'darwin' || platform === 'linux';
+  if (hasLimaVm) warnVmResources(logger, vmResourceWarnings, settings, machine);
+  const vmWish = (): Partial<LimaResources> => ({ memoryGiB: settings.vmMemoryGiB, cpus: settings.vmCpus });
 
   const runner = new NodeProcessRunner();
   // The window of an attached container, also in the names of its workers (ConnectionAdapter.windowName).
@@ -367,7 +376,9 @@ async function activateExtension(
   };
   // The Lima VM of Devspaces (docs/architecture.md "The Lima VM of Devspaces"); only on macOS and Linux. Each transport to
   // it starts it first when it is stopped (LimaVm.ready).
-  const limaVm = platform === 'darwin' || platform === 'linux' ? new LimaVm({ runner, logger, platform, arch: process.arch, env }) : undefined;
+  const limaVm = hasLimaVm
+    ? new LimaVm({ runner, logger, platform, arch: process.arch, env, resources: () => limaResources(machine.totalMemory, machine.cpus, vmWish()) })
+    : undefined;
   /**
    * The transport `command` to the Lima VM of Devspaces with the program `ssh` (limaHostTransport): its `ssh` starts when
    * the VM runs. Undefined without `ssh` or where Devspaces has no Lima VM.
@@ -1154,7 +1165,7 @@ async function activateExtension(
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
   // Devspaces.
   const limaSetup = new LimaSetupCommands({
-    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: process.arch, env }),
+    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: process.arch, env, resources: vmWish, machine }),
     folder: limaVm?.paths.root,
     logger,
     showLog: () => logger.show(),
@@ -1426,6 +1437,7 @@ async function activateExtension(
       warnInvalidHostAccessChecksOff(logger, hostAccessWarnings, event);
       warnInvalidDefaultImage(logger, defaultImageWarnings, event);
       warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings, event);
+      if (hasLimaVm) warnVmResources(logger, vmResourceWarnings, settings, machine, event);
       updateOwnersContextKey(settings.owners, logger);
       updateDevspacesOnlyContextKey(settings.showOnlyDevspaces === true, logger);
       // Another scan scope loads the list again at once.

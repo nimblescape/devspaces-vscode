@@ -146,10 +146,19 @@ export type LimaStatus = 'running' | 'stopped' | 'broken' | 'missing' | 'other';
 interface LimaListEntry {
   name?: unknown;
   status?: unknown;
+  cpus?: unknown;
+  /** In bytes. */
+  memory?: unknown;
 }
 
-/** The state of the instance `name` in the output of `limactl list --json` (one JSON object per line). */
-export function parseLimaList(stdout: string, name: string = LIMA_INSTANCE): LimaStatus {
+/** The state of the instance, and its CPUs and memory where `limactl list` names them. */
+export interface LimaInfo {
+  status: LimaStatus;
+  resources?: LimaResources;
+}
+
+/** The instance `name` in the output of `limactl list --json` (one JSON object per line). */
+export function parseLimaInfo(stdout: string, name: string = LIMA_INSTANCE): LimaInfo {
   for (const line of stdout.split('\n')) {
     if (!line.trim().startsWith('{')) continue;
     let entry: LimaListEntry;
@@ -159,18 +168,23 @@ export function parseLimaList(stdout: string, name: string = LIMA_INSTANCE): Lim
       continue;
     }
     if (entry.name !== name) continue;
-    if (entry.status === 'Running') return 'running';
-    if (entry.status === 'Stopped') return 'stopped';
-    if (entry.status === 'Broken') return 'broken';
-    return 'other';
+    const status: LimaStatus = entry.status === 'Running' ? 'running' : entry.status === 'Stopped' ? 'stopped' : entry.status === 'Broken' ? 'broken' : 'other';
+    const { cpus, memory } = entry;
+    if (typeof cpus !== 'number' || typeof memory !== 'number' || cpus <= 0 || memory <= 0) return { status };
+    return { status, resources: { cpus, memoryGiB: Math.round((memory / 2 ** 30) * 100) / 100 } };
   }
-  return 'missing';
+  return { status: 'missing' };
+}
+
+/** The state of the instance `name` in the output of `limactl list --json` (one JSON object per line). */
+export function parseLimaList(stdout: string, name: string = LIMA_INSTANCE): LimaStatus {
+  return parseLimaInfo(stdout, name).status;
 }
 
 /** A `limactl` that failed: its command and the end of its output. */
 export class LimaError extends Error {
   constructor(
-    readonly step: 'list' | 'create' | 'start' | 'stop' | 'delete',
+    readonly step: 'list' | 'create' | 'edit' | 'start' | 'stop' | 'delete',
     readonly detail: string,
   ) {
     super(`limactl ${step} failed: ${detail}`);
@@ -214,9 +228,20 @@ export class LimaInstance {
 
   /** The state of the instance. */
   async status(signal?: AbortSignal): Promise<LimaStatus> {
+    return (await this.info(signal)).status;
+  }
+
+  /** The state of the instance, with its CPUs and memory. */
+  async info(signal?: AbortSignal): Promise<LimaInfo> {
     const result = await this.run(['list', '--json'], { timeoutMs: LIST_TIMEOUT_MS, signal });
     if (result.exitCode !== 0) this.fail('list', result);
-    return parseLimaList(result.stdout);
+    return parseLimaInfo(result.stdout);
+  }
+
+  /** Gives the stopped instance other CPUs and memory (`limactl edit`), for its next start. */
+  async setResources(resources: LimaResources, signal?: AbortSignal): Promise<void> {
+    const result = await this.run(['edit', '--tty=false', `--cpus=${resources.cpus}`, `--memory=${resources.memoryGiB}`, LIMA_INSTANCE], { timeoutMs: LIST_TIMEOUT_MS, signal });
+    if (result.exitCode !== 0) this.fail('edit', result);
   }
 
   /** Creates the instance from the configuration file `config` (limaConfig); it does not start it. */
