@@ -26,7 +26,7 @@ import { OP_TOKEN_REMOVE } from '../core/helperChannel/protocol';
 import type { OpenOptions, OpenResult, OperationOptions, RepositoryTarget } from '../core/pipeline/operationBase';
 import { PipelineTexts } from '../core/pipeline/operationBase';
 import { removeTokenThroughWorker } from '../core/pipeline/devspaceOperations';
-import { DockerEngineRecords, type EngineRemoval } from '../core/storage/dockerEngineRecords';
+import { DockerEngineRecords } from '../core/storage/dockerEngineRecords';
 import { StoragePaths } from '../core/storage/paths';
 import { DevspaceRegistry } from '../core/storage/registry';
 import { SessionFiles } from '../core/storage/sessionFiles';
@@ -271,8 +271,6 @@ interface Harness {
   listOpenMode: { value: ListOpenMode };
   /** Shows a row of the view (treeView.ts revealRow). */
   revealRow: Mock<(rowId: string) => Promise<void>>;
-  /** The question about the Monitor of an engine (MonitorQuestion); by default the engine has its answer. */
-  monitorQuestion: { askIfNeeded: Mock<(host: string, removalRuns?: () => Promise<(removal: EngineRemoval) => boolean>) => Promise<string>> };
   /** docker-engines.json of the storage folder of the test (the removal mark). */
   engineRecords: DockerEngineRecords;
 }
@@ -302,7 +300,6 @@ function createHarness(
     /** "Remove Devspaces from This Docker Engine…". Default: none (the command does nothing). */
     engineRemoval?: ControllerDeps['engineRemoval'];
     /** The end of "Remove Devspaces from This Docker Engine…". Default: none. */
-    engineRemovalEnded?: ControllerDeps['engineRemovalEnded'];
     /** "Update All Images Now". Default: none (the command does nothing). */
     updateImagesNow?: ControllerDeps['updateImagesNow'];
     /** The step "Docker start" that "Update All Images Now" runs in its progress. Default: none. */
@@ -311,7 +308,6 @@ function createHarness(
     helperBuildsStopWaitMs?: number;
   } = {},
 ): Harness {
-  const monitorQuestion = { askIfNeeded: vi.fn(async (_host: string, _removalRuns?: () => Promise<(removal: EngineRemoval) => boolean>): Promise<string> => 'notNeeded') };
   const listOpenMode: Harness['listOpenMode'] = { value: 'singleClick' };
   const revealRow = vi.fn(async (_rowId: string): Promise<void> => {});
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-test-'));
@@ -500,10 +496,8 @@ function createHarness(
     windowDockerHost: options.windowDockerHost,
     hostConnection: options.hostConnection,
     sessionMonitor: options.sessionMonitor,
-    monitorQuestion,
     engineRecords,
     engineRemoval: options.engineRemoval,
-    engineRemovalEnded: options.engineRemovalEnded,
     updateImagesNow: options.updateImagesNow,
     startDocker: options.startDocker,
     listOpenMode: () => listOpenMode.value,
@@ -565,7 +559,6 @@ function createHarness(
     clock,
     listOpenMode,
     revealRow,
-    monitorQuestion,
     engineRecords,
   };
 }
@@ -2781,52 +2774,33 @@ describe('Window roles', () => {
   });
 });
 
-// The question about the Monitor of an engine (monitorQuestion.ts): a Start, a Rebuild and "Update All Images Now" that
-// the user started ask it before they run on the engine (the fake here records the hosts); the flows that run by
-// themselves never ask, so the Monitor that they make sure of stops when idle until the engine has an answer.
-describe('the question about the Monitor of the engine', () => {
-  const asked = (): string[] => h.monitorQuestion.askIfNeeded.mock.calls.map((call) => call[0]);
-  /** The question came before the first call of `open`. */
-  const askedBefore = (open: Mock): boolean => h.monitorQuestion.askIfNeeded.mock.invocationCallOrder[0] < open.mock.invocationCallOrder[0];
-
-  it('a Start of the user asks about the engine of the operation before its open; a closed question goes on', async () => {
-    const info = repositoryInfo('acme/api');
-    h.sidebar.infos.set('acme/api', info);
-    h.monitorQuestion.askIfNeeded.mockResolvedValue('closed');
-    h.service.openInWorker.mockImplementation(async () => {
-      const env = devspace();
-      await h.registry.add(env);
-      return openResult(env);
-    });
-    await run('start', row('acme/api', undefined, info));
-    expect(asked()).toEqual(['']);
-    expect(askedBefore(h.service.openInWorker)).toBe(true);
-    expect(h.connection.open).toHaveBeenCalledWith(CONTAINER, '/workspaces/api');
-    // A Start of an existing devspace too.
-    await run('startInNewWindow', row('acme/api', devspace()));
-    expect(asked()).toEqual(['', '']);
-    expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
-  });
-
-  it('a Start asks about the engine of its devspace', async () => {
+// A Start and a Rebuild of the user run on the Docker engine of their devspace (the operation target), also their Try
+// again; the reopen at startup does not overtake a Start of the user in this window.
+describe('the Docker engine of a flow of the user', () => {
+  it('a Start runs on the engine of its devspace', async () => {
     const target = remoteDockerTarget('build-box');
     recreateHarness({
       dockerTargets: {
         resolve: async () => target,
         current: async () => operationDockerTarget() ?? target,
-        withOperation: <T,>(fn: () => Promise<T>) => runWithDockerTarget(target, fn),
+        withOperation: <T,>(fn: () => Promise<T>) => (operationDockerTarget() ? fn() : runWithDockerTarget(target, fn)),
         ofHost: async (host: string) => (host === '' ? dockerTargetOf('unix:///var/run/docker.sock', 'default') : remoteDockerTarget(host)),
       } as unknown as ControllerDeps['dockerTargets'],
+    });
+    const hosts: Array<string | undefined> = [];
+    h.service.openDevspaceInWorker.mockImplementation(async (id: string) => {
+      hosts.push(operationDockerTarget()?.host);
+      return openResult((await h.registry.get(id))!);
     });
     const remote = devspace({ dockerHost: 'build-box' });
     await h.registry.add(remote);
     await run('start', row('acme/api', remote));
-    expect(asked()).toEqual(['build-box']);
-    // A local devspace, while Devspaces uses build-box: its Start runs on the local Docker and asks about that engine.
+    expect(hosts).toEqual(['build-box']);
+    // A local devspace, while Devspaces uses build-box: its Start runs on the local Docker.
     const local = devspace({ id: OTHER_ENV_ID, repository: 'acme/web', containerName: 'devspaces-acme-web-7c1d2e3f' });
     await h.registry.add(local);
     await run('start', row('acme/web', local));
-    expect(asked()).toEqual(['build-box', '']);
+    expect(hosts).toEqual(['build-box', '']);
   });
 
   // Mutation: a Try again that runs in the ended scope of the failed Start takes the host that Devspaces uses (build-box).
@@ -2854,103 +2828,24 @@ describe('the question about the Monitor of the engine', () => {
     expect(hosts).toEqual(['', '']);
   });
 
-  // The newest request wins (connect): a Start of the user takes its connect request before its question, so the
-  // automatic reopen, whose pipeline ends while the question is open, does not take the window. Mutation: a Start that
-  // takes its request only after the question fails it.
-  it('the automatic reopen does not connect while the question of a newer Start of the user is open', async () => {
+  // The reopen rule runs a few seconds after the start of the window: a Start of the user in that time is not overtaken
+  // by the reopen. Mutation: a reopen that does not look at the requests fails it.
+  it('the automatic reopen does not start while a Start of the user in this window runs', async () => {
     const web = devspace({ id: OTHER_ENV_ID, repository: 'acme/web', containerName: 'web', volumeName: 'web', remoteWorkspaceFolder: '/workspaces/web' });
     await h.registry.add(devspace());
     await h.registry.add(web);
     h.sessionFiles.writeReopenSync({ devspaceId: ENV_ID, closedAt: iso(NOW - 60_000) });
     h.connection.isEmptyWindow.mockReturnValue(true);
-    const reopenPipeline = deferred<OpenResult>();
-    h.service.openDevspaceInWorker.mockImplementation(async (id: string) => (id === ENV_ID ? reopenPipeline.promise : openResult(web)));
-    const answer = deferred<string>();
-    h.monitorQuestion.askIfNeeded.mockReturnValueOnce(answer.promise);
-    const reopen = h.controller.runEmptyWindowTasks();
-    await settle(() => h.service.openDevspaceInWorker.mock.calls.length === 1, 'the pipeline of the reopen');
+    const pipeline = deferred<OpenResult>();
+    h.service.openDevspaceInWorker.mockImplementation(async () => pipeline.promise);
     const start = run('start', row('acme/web', web));
-    await settle(() => asked().length === 1, 'the question');
-    reopenPipeline.resolve(openResult(devspace()));
-    await reopen;
-    expect(h.connection.open).not.toHaveBeenCalled();
-    expect(h.logger.info).toHaveBeenCalledWith('acme/api is not connected: another devspace is opening in this window.');
-    answer.resolve('keepRunning');
-    await start;
-    expect(h.connection.open.mock.calls).toEqual([['web', '/workspaces/web']]);
-  });
-
-  // The reopen rule runs a few seconds after the start of the window: a Start of the user in that time, also while its
-  // question is open, is not overtaken by the reopen. Mutation: a reopen that does not look at the requests fails it.
-  it('the automatic reopen does not start while a Start of the user in this window asks or runs', async () => {
-    const web = devspace({ id: OTHER_ENV_ID, repository: 'acme/web', containerName: 'web', volumeName: 'web', remoteWorkspaceFolder: '/workspaces/web' });
-    await h.registry.add(devspace());
-    await h.registry.add(web);
-    h.sessionFiles.writeReopenSync({ devspaceId: ENV_ID, closedAt: iso(NOW - 60_000) });
-    h.connection.isEmptyWindow.mockReturnValue(true);
-    h.service.openDevspaceInWorker.mockImplementation(async () => openResult(web));
-    const answer = deferred<string>();
-    h.monitorQuestion.askIfNeeded.mockReturnValueOnce(answer.promise);
-    const start = run('start', row('acme/web', web));
-    await settle(() => asked().length === 1, 'the question');
+    await settle(() => h.service.openDevspaceInWorker.mock.calls.length === 1, 'the pipeline of the Start');
     await h.controller.runEmptyWindowTasks();
     expect(h.logger.info).toHaveBeenCalledWith('The last devspace is not opened: another devspace is opening in this window.');
-    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
-    answer.resolve('keepRunning');
+    pipeline.resolve(openResult(web));
     await start;
     expect(h.service.openDevspaceInWorker.mock.calls.map(([id]) => id)).toEqual([OTHER_ENV_ID]);
     expect(h.connection.open.mock.calls).toEqual([['web', '/workspaces/web']]);
-  });
-
-  it('the reopen at startup asks nothing; its Try again is a Start of the user', async () => {
-    await h.registry.add(devspace());
-    h.sessionFiles.writeReopenSync({ devspaceId: ENV_ID, closedAt: iso(NOW - 60_000) });
-    h.connection.isEmptyWindow.mockReturnValue(true);
-    h.service.openDevspaceInWorker.mockRejectedValueOnce(new UserFacingError('buildFailed', Messages.buildFailed, 'log'));
-    fakeVscode.window.showErrorMessage.mockResolvedValueOnce(Actions.tryAgain);
-    await h.controller.runEmptyWindowTasks();
-    // The reopen runs in the background.
-    await settle(() => h.service.openDevspaceInWorker.mock.calls.length >= 1, 'the reopen');
-    expect(h.service.openDevspaceInWorker).toHaveBeenCalledWith(ENV_ID, expect.anything());
-    await settle(() => h.service.openDevspaceInWorker.mock.calls.length === 2, 'the Try again');
-    expect(asked()).toEqual(['']);
-    expect(h.monitorQuestion.askIfNeeded.mock.invocationCallOrder[0]).toBeGreaterThan(h.service.openDevspaceInWorker.mock.invocationCallOrder[0]);
-  });
-
-  it('a restored window and a pending Rebuild ask nothing', async () => {
-    const env = devspace();
-    await h.registry.add(env);
-    await h.controller.openAttachedWindow(env, CONTAINER, undefined);
-    expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
-    h.connection.isEmptyWindow.mockReturnValue(true);
-    await h.sessionFiles.writeOperation({ devspaceId: OTHER_ENV_ID, operation: 'rebuild', requestedAt: iso(NOW - 5000), requestedBy: 'old-window', reason: 'manual' });
-    await h.registry.add(devspace({ id: OTHER_ENV_ID, repository: 'acme/web', containerName: 'devspaces-acme-web-7c1d2e3f' }));
-    await h.controller.runEmptyWindowTasks();
-    expect(h.service.openDevspaceInWorker).toHaveBeenLastCalledWith(OTHER_ENV_ID, expect.objectContaining({ forceRebuild: true }));
-    expect(asked()).toEqual([]);
-  });
-
-  it('a Rebuild of the user asks first, also before the hand-off of the connected window', async () => {
-    await h.registry.add(devspace());
-    await run('rebuild', row('acme/api', devspace()));
-    expect(asked()).toEqual(['']);
-    expect(askedBefore(h.service.openDevspaceInWorker)).toBe(true);
-    const env = devspace();
-    await connectHere(env);
-    await run('rebuild', row('acme/api', env));
-    expect(asked()).toEqual(['', '']);
-    expect(h.connection.closeRemoteConnection).toHaveBeenCalled();
-    expect(h.monitorQuestion.askIfNeeded.mock.invocationCallOrder[1]).toBeLessThan(h.connection.closeRemoteConnection.mock.invocationCallOrder[0]);
-  });
-
-  it('Stop and Delete ask nothing', async () => {
-    await h.registry.add(devspace());
-    await run('stop', row('acme/api', devspace()));
-    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(Actions.delete);
-    await run('delete', row('acme/api', devspace()));
-    expect(h.service.stop).toHaveBeenCalled();
-    expect(h.service.deleteInWorker).toHaveBeenCalledWith(ENV_ID, expect.anything());
-    expect(asked()).toEqual([]);
   });
 });
 
@@ -3116,20 +3011,6 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     );
     expect(h.progressTitles.some((title) => title.startsWith('Removing Devspaces from build-box…'))).toBe(true);
     expect(h.progressTitles.some((title) => title.includes('Removing the container devspaces-monitor.'))).toBe(true);
-  });
-
-  // Mutation: a removal that does not tell its end fails it: the start entry of the WSL distribution of Devspaces would
-  // stay until the next window starts, also after the mark was set.
-  it('tells its end with the mark written, also after a Cancel', async () => {
-    const fake = removalFake({ engine: { inUse: ['devspaces-vscode'] } });
-    const ended: Array<Promise<string>> = [];
-    onBuildBox(fake, BUILD_BOX, { engineRemovalEnded: (host) => void ended.push(h.engineRecords.removed(host).then((marked) => `${host} ${marked}`)) });
-    await h.registry.add(ownRemote());
-    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.remove).mockResolvedValueOnce(ControllerTexts.keepDevspaces);
-    await run('removeFromDockerEngine');
-    expect(await Promise.all(ended)).toEqual(['build-box true']);
-    await run('removeFromDockerEngine');
-    expect(ended).toHaveLength(2);
   });
 
   it('with several accounts, deletes the devspaces of all accounts of Devspaces and names the accounts', async () => {
@@ -3415,9 +3296,8 @@ describe('Remove Devspaces from This Docker Engine…', () => {
   });
 
   // Update All Images Now keeps the order of Start: the refusal while this window removes Devspaces comes first, before
-  // the question about the Monitor and before the step "Docker start". Mutation: a Docker start or a question before
-  // the check fails it.
-  it('refuses Update All Images Now while it looks for Devspaces on the engine, before the question and the Docker start', async () => {
+  // the step "Docker start". Mutation: a Docker start before the check fails it.
+  it('refuses Update All Images Now while it looks for Devspaces on the engine, before the Docker start', async () => {
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => {});
     const startDocker = vi.fn(async () => {});
     const fake = removalFake();
@@ -3429,17 +3309,14 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     await run('updateImagesNow');
     expect(infoMessages()).toEqual([ControllerTexts.removalRunning('build-box')]);
     expect(h.logger.info).toHaveBeenCalledWith('Update All Images Now did not run: Devspaces is being removed from build-box.');
-    expect(h.monitorQuestion.askIfNeeded).not.toHaveBeenCalled();
     expect(startDocker).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
-    // After the removal (here: cancelled at its question), it runs: the question, the Docker start, then the request.
+    // After the removal (here: cancelled at its question), it runs: the Docker start, then the request.
     answers.resolve(true);
     await removing;
     await run('updateImagesNow');
-    expect(h.monitorQuestion.askIfNeeded).toHaveBeenCalledTimes(1);
     expect(startDocker).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledTimes(1);
-    expect(h.monitorQuestion.askIfNeeded.mock.invocationCallOrder[0]).toBeLessThan(startDocker.mock.invocationCallOrder[0]);
     expect(startDocker.mock.invocationCallOrder[0]).toBeLessThan(update.mock.invocationCallOrder[0]);
   });
 
@@ -3481,22 +3358,26 @@ describe('Remove Devspaces from This Docker Engine…', () => {
   });
 
   // A removal of this window that began after the first check of the request, before the request took its key in the
-  // gate (here: during the question about the Monitor, which stands for the time that beforeUserFlow takes). Mutation:
+  // gate (here: during the read of the removal mark, which stands for the time that beforeUserFlow takes). Mutation:
   // without the check of the removal of this window after the Docker start, the request is sent.
-  it('Update All Images Now sends no request when this window began to remove Devspaces from the engine during its question', async () => {
+  it('Update All Images Now sends no request when this window began to remove Devspaces from the engine during its first checks', async () => {
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => {});
     const startDocker = vi.fn(async () => {});
     const fake = removalFake();
     onBuildBox(fake, BUILD_BOX, { updateImagesNow: update, startDocker });
-    const question = deferred<string>();
-    h.monitorQuestion.askIfNeeded.mockReturnValueOnce(question.promise);
+    const read = deferred<void>();
+    const record = h.engineRecords.record.bind(h.engineRecords);
+    const reads = vi.spyOn(h.engineRecords, 'record').mockImplementationOnce(async (host: string) => {
+      await read.promise;
+      return record(host);
+    });
     const updating = run('updateImagesNow');
-    await settle(() => h.monitorQuestion.askIfNeeded.mock.calls.length === 1, 'the question');
+    await settle(() => reads.mock.calls.length === 1, 'the read of the removal mark');
     const answers = deferred<boolean>();
     fake.deps.engineAnswers.mockReturnValueOnce(answers.promise);
     const removing = run('removeFromDockerEngine');
     await settle(() => fake.deps.engineAnswers.mock.calls.length === 1, 'the look at the engine');
-    question.resolve('keepRunning');
+    read.resolve();
     await updating;
     expect(startDocker).toHaveBeenCalledTimes(1);
     expect(update).not.toHaveBeenCalled();
@@ -3615,7 +3496,6 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
     expect(h.service.stop).not.toHaveBeenCalled();
     expect(await h.engineRecords.removed('build-box')).toBe(true);
-    expect(h.monitorQuestion.askIfNeeded).toHaveBeenCalledTimes(1);
     expect(h.logger.info).toHaveBeenCalledWith('Start did not run: Devspaces is being removed from build-box.');
     // After the removal, a Start runs again.
     await run('start', row('acme/api', env));
@@ -3648,7 +3528,6 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     onBuildBox(connecting);
     const env = ownRemote();
     await h.registry.add(env);
-    await h.engineRecords.recordMonitorAnswer('build-box', NOW - 5000);
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.remove).mockImplementationOnce(async () => {
       otherWindowConnected(ENV_ID);
       return ControllerTexts.deleteDevspacesToo;
@@ -3657,8 +3536,8 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(warningMessages().at(-1)).toBe('Close the windows of your devspaces on build-box first: acme/api. Nothing was removed.');
     expect(changing(connecting)).toEqual([]);
     expect(h.service.deleteInWorker).not.toHaveBeenCalled();
-    // No mark, and the answer about its Monitor, as before.
-    expect(await h.engineRecords.read()).toEqual([{ host: 'build-box', monitorAnsweredAt: NOW - 5000 }]);
+    // No mark, as before.
+    expect(await h.engineRecords.read()).toEqual([]);
 
     // An operation of another window began while the question was open; the engine had the mark already, which stays.
     const busy = removalFake();
@@ -3815,7 +3694,6 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(update).not.toHaveBeenCalled();
     expect(startDocker).not.toHaveBeenCalled();
     expect(fake.deps.engineAnswers).not.toHaveBeenCalled();
-    expect(h.monitorQuestion.askIfNeeded).not.toHaveBeenCalled();
     expect(await h.engineRecords.record('build-box')).toEqual({ host: 'build-box', removedAt: NOW - 30_000, removing: OTHER_REMOVAL });
 
     // The window of that removal crashed: the Start clears the mark and the entry, and runs.
@@ -3909,49 +3787,6 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(infoMessages()).toContain(ControllerTexts.removalRunning('build-box'));
     expect(h.logger.info).toHaveBeenCalledWith('The devspaces are not restored from the volumes on build-box: Devspaces is being removed from there.');
     expect(h.sidebar.refreshStates).toHaveBeenCalled();
-  });
-
-  // The question about the Monitor can stay open for long. Mutation: without the check after it, the Start runs.
-  it('a removal that another window begins while the question about the Monitor is open refuses the Start', async () => {
-    const fake = removalFake();
-    onBuildBox(fake);
-    const env = ownRemote();
-    await h.registry.add(env);
-    let removalRuns: ((removal: EngineRemoval) => boolean) | undefined;
-    h.monitorQuestion.askIfNeeded.mockImplementationOnce(async (_host, rule) => {
-      await otherWindowRemoves();
-      removalRuns = await rule?.();
-      return 'answered';
-    });
-    await run('start', row('acme/api', env));
-    expect(h.monitorQuestion.askIfNeeded).toHaveBeenCalledTimes(1);
-    expect(infoMessages()).toEqual([ControllerTexts.removalRunningElsewhere('build-box')]);
-    expect(h.service.openDevspaceInWorker).not.toHaveBeenCalled();
-    expect(await h.engineRecords.removing('build-box')).toEqual(OTHER_REMOVAL);
-    // The question records no answer while that removal runs: it gets the liveness rule of the busy marks, which
-    // reads the window status files. Mutations: no rule (every entry runs), or the rule without the status files.
-    expect(removalRuns?.(OTHER_REMOVAL)).toBe(true);
-    expect(removalRuns?.({ ...OTHER_REMOVAL, pid: 5151 })).toBe(false);
-    expect(removalRuns?.({ ...OTHER_REMOVAL, windowId: 'window-that-closed' })).toBe(false);
-  });
-
-  // The end of a removal keeps its mark. Mutation: without a second clear after the question, the Start runs and the
-  // mark stays, so this computer does no Docker work there by itself after a Start of the user.
-  it('a removal that another window began and ended while the question about the Monitor was open: the Start clears its mark and runs', async () => {
-    const fake = removalFake();
-    onBuildBox(fake);
-    const env = ownRemote();
-    await h.registry.add(env);
-    h.monitorQuestion.askIfNeeded.mockImplementationOnce(async () => {
-      await otherWindowRemoves();
-      await h.engineRecords.endRemoval('build-box', OTHER_REMOVAL);
-      return 'answered';
-    });
-    await run('start', row('acme/api', env));
-    expect(infoMessages()).not.toContain(ControllerTexts.removalRunningElsewhere('build-box'));
-    expect(h.service.openDevspaceInWorker).toHaveBeenCalledTimes(1);
-    expect(await h.engineRecords.record('build-box')).toBeUndefined();
-    expect(h.logger.info).toHaveBeenCalledWith('Devspaces is set up on build-box again: the removal mark is cleared.');
   });
 
   // Mutation: a removal that does not check the entry under the lock removes Devspaces at the same time as window 2.
@@ -7423,8 +7258,6 @@ describe('A link to Devspaces', () => {
     expect(linkQuestions()).toEqual([ControllerTexts.linkStartConfirm('acme/api'), Messages.untrustedRepository('acme/api')]);
     expect(h.logger.info).toHaveBeenCalledWith('The start of acme/api from the link was not confirmed.');
     expect(h.service.openInWorker).not.toHaveBeenCalled();
-    // Not even the question about the Monitor of the engine (beforeUserFlow), which comes before the pipeline.
-    expect(h.monitorQuestion.askIfNeeded).not.toHaveBeenCalled();
     expect(h.connection.openInNewWindow).not.toHaveBeenCalled();
   });
 
@@ -7888,7 +7721,6 @@ describe('A course link to Devspaces', () => {
     expect(hosts).toEqual([]);
     expect(h.service.openInWorker).not.toHaveBeenCalled();
     expect(warningMessages()).toEqual([]);
-    expect(h.monitorQuestion.askIfNeeded).not.toHaveBeenCalled();
     expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalled();
     expect(h.logger.info).toHaveBeenCalledWith('The link opened nothing now: Devspaces does not use the WSL distribution of Devspaces, and this computer has no Docker.');
   });

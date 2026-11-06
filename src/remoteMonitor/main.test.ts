@@ -1475,7 +1475,7 @@ describe('monitor.js run: the exit when idle', () => {
     expect(await pending(monitor.result)).toBe('pending');
   }, 20_000);
 
-  // Image updates do not keep the monitor: a permanent monitor (DEVSPACE_MONITOR_PERMANENT, a remote engine or
+  // Image updates do not keep the monitor: a permanent monitor (DEVSPACE_MONITOR_PERMANENT, a remote host with
   // stopMonitorWhenIdle off) never exits when idle, one that ends when idle exits with image updates on too.
   it('does not exit when it runs permanently; one that ends when idle exits', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });

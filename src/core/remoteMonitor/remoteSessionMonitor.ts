@@ -240,10 +240,9 @@ export class RemoteSessionMonitor {
     // Several computers can use one engine, so an ensure that wants a monitor that ends when idle takes a running
     // permanent monitor of the same version that another computer owns (LABEL_MONITOR_OWNER) as current (`accepted`),
     // and replaces only this computer's own; one that wants a permanent monitor takes any running permanent one. So
-    // turning stopMonitorWhenIdle on replaces this computer's own permanent monitor at its next ensure (so does an ensure
-    // of this computer before the user answered the question about the Monitor of the engine), a computer with the
-    // setting on never replaces one that another computer created, and one with the setting off (and the answer) makes
-    // it permanent again at its next ensure.
+    // turning stopMonitorWhenIdle on replaces this computer's own permanent monitor at its next ensure, a computer with
+    // the setting on never replaces one that another computer created, and one with the setting off makes it permanent
+    // again at its next ensure.
     const accepted: AcceptedLabels =
       mode === PERMANENT_LABEL_PART ? { label, mode } : { label, mode, running: monitorLabel(script, helperTag, PERMANENT_LABEL_PART, store), notOwnedBy: images?.computer };
     // The nonce of this create, so that a failure removes only its own container.
@@ -584,8 +583,7 @@ export class RemoteSessionMonitor {
       // when idle has `on-failure`: it exits with 0 when it is idle (no running devspace container for 5 minutes,
       // REMOTE_IDLE_EXIT_MS of src/remoteMonitor/main.ts) and stays exited until an open ensures it or the heartbeats
       // of a window repair it; a failure (an uncaught error, the loader's exit 3) is restarted, and the loader resumes
-      // from the stored script. A permanent monitor (on any engine, once the user answered the question about it there,
-      // with stopMonitorWhenIdle off) never exits when idle and has `unless-stopped`, so Docker starts it again after a
+      // from the stored script. A permanent monitor (on a remote host, with stopMonitorWhenIdle off) never exits when idle and has `unless-stopped`, so Docker starts it again after a
       // crash and after a restart of the engine; after 30 days in which no window used the engine, it sets its own
       // policy to `no` and exits (UnusedEnd of main.ts), and the next ensure replaces it (decide). No published port, no
       // capability: it needs the socket and its volumes.

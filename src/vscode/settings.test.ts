@@ -356,7 +356,7 @@ describe('settings', () => {
       }
       if (property.enum) expect(property.enumDescriptions, key).toHaveLength(property.enum.length);
     }
-    // stopMonitorWhenIdle: the question about the Monitor of each engine is in the section of the background run.
+    // stopMonitorWhenIdle: the mode of the Monitor on each engine is in the section of the background run.
     const sections = {
       defaultImage: 'default-image',
       cacheUpdateSchedule: 'the-background-run',

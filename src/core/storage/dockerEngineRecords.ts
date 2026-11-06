@@ -3,15 +3,14 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // What Devspaces remembers about each Docker engine, in `docker-engines.json` of the global storage folder: that the
-// user answered the question about the Monitor of the engine (src/vscode/monitorQuestion.ts), and that the user removed
-// Devspaces from the engine ("Remove Devspaces from This Docker Engine…"). Before that answer, the Monitor of the engine
-// stops when no devspace runs (src/vscode/monitorSettings.ts). While the removal mark is set, this computer does no
-// Docker work on the engine by itself (extension.ts); a Start, a Rebuild or "Update All Images Now" of the user there
-// clears it. While a window removes Devspaces from the engine, the record also names that removal (`removing`), so that
-// no other window clears the mark meanwhile. An engine is named by its Docker host (DockerTarget.host): empty for the
-// local Docker, the SSH host otherwise. A file that is missing or not valid knows no engine. A file that cannot be read is an error, after the
-// retries of a transient error of Windows (a virus scanner holds the file for a moment), so that a change never writes
-// over the records of other engines that it could not read. Several windows change the file: every change runs under
+// user removed Devspaces from the engine ("Remove Devspaces from This Docker Engine…"). While the removal mark is set,
+// this computer does no Docker work on the engine by itself (extension.ts); a Start, a Rebuild or "Update All Images
+// Now" of the user there clears it. While a window removes Devspaces from the engine, the record also names that removal
+// (`removing`), so that no other window clears the mark meanwhile. An engine is named by its Docker host
+// (DockerTarget.host): empty for the local Docker, the SSH host otherwise. A file that is missing or not valid knows no
+// engine; an entry of an older version that names nothing else (the answer about the Monitor) is left out. A file that
+// cannot be read is an error, after the retries of a transient error of Windows (a virus scanner holds the file for a
+// moment), so that a change never writes over the records of other engines that it could not read. Several windows change the file: every change runs under
 // the lock folder next to it (`docker-engines.lock`, as registry.json does), so no change of another window is lost,
 // such as the removal mark, also not when a window stalls while it holds the lock (the token of withLockFolder). No
 // `vscode`.
@@ -34,8 +33,6 @@ export type EngineRemoval = WindowMark;
 export interface DockerEngineRecord {
   /** The Docker host of the engine: '' for the local Docker. */
   host: string;
-  /** When the user answered the question about the Monitor of the engine (milliseconds since the epoch). */
-  monitorAnsweredAt?: number;
   /** When the user removed Devspaces from the engine (milliseconds since the epoch); the removal mark. */
   removedAt?: number;
   /**
@@ -90,43 +87,6 @@ export class DockerEngineRecords {
     return (await this.read()).find((record) => record.host === host);
   }
 
-  /** True when the user answered the question about the Monitor of the engine `host`. */
-  async monitorAnswered(host: string): Promise<boolean> {
-    return (await this.read()).some((record) => record.host === host && record.monitorAnsweredAt !== undefined);
-  }
-
-  /**
-   * Records that the user answered the question about the Monitor of the engine `host` at `now`. Nothing is written
-   * while the record names a removal for which `runs` is true (another window removes Devspaces from the engine now: its
-   * mark forgot the answer, and the next flow of the user there asks again); `other` is that removal then. Without
-   * `runs`, every removal that the record names counts as running.
-   */
-  async recordMonitorAnswer(host: string, now: number, runs: (removal: EngineRemoval) => boolean = () => true): Promise<{ recorded: boolean; other?: EngineRemoval }> {
-    let outcome: { recorded: boolean; other?: EngineRemoval } = { recorded: false };
-    await this.change(host, (record) => {
-      if (record.removing !== undefined && runs(record.removing)) {
-        outcome = { recorded: false, other: record.removing };
-        return undefined;
-      }
-      outcome = { recorded: true };
-      return { ...record, monitorAnsweredAt: now };
-    });
-    return outcome;
-  }
-
-  /**
-   * Forgets the answer about the Monitor of the engine `host`, because that engine is gone (the removal of the WSL
-   * distribution of Devspaces): a new engine there is asked again. The rest of its record stays.
-   */
-  async forgetMonitorAnswer(host: string): Promise<void> {
-    await this.change(host, (record) => {
-      if (record.monitorAnsweredAt === undefined) return undefined;
-      const rest = { ...record };
-      delete rest.monitorAnsweredAt;
-      return rest;
-    });
-  }
-
   /** True while the engine `host` has the removal mark. */
   async removed(host: string): Promise<boolean> {
     return (await this.read()).some((record) => record.host === host && record.removedAt !== undefined);
@@ -140,10 +100,7 @@ export class DockerEngineRecords {
     return (await this.record(host))?.removing;
   }
 
-  /**
-   * Sets the removal mark of the engine `host` (`removedAt`), or clears it (undefined). Setting it also forgets the
-   * answer about the Monitor of the engine: the next user-started flow there asks again.
-   */
+  /** Sets the removal mark of the engine `host` (`removedAt`), or clears it (undefined). */
   async setRemoved(host: string, removedAt: number | undefined): Promise<void> {
     await this.change(host, (record) => {
       if (removedAt !== undefined) return { ...(record.removing !== undefined ? { removing: record.removing } : {}), host, removedAt };
@@ -154,10 +111,9 @@ export class DockerEngineRecords {
   }
 
   /**
-   * Starts the removal `removal` on the engine `host` in one change: the removal mark (`removedAt`, which also forgets
-   * the answer about the Monitor, as setRemoved does) and the entry `removing`. Nothing is written while the record
-   * names another removal for which `runs` is true (another window removes Devspaces from the engine now); that removal
-   * is returned then. Otherwise the record from before, which endRemoval brings back when the removal stops early.
+   * Starts the removal `removal` on the engine `host` in one change: the removal mark (`removedAt`) and the entry
+   * `removing`. Nothing is written while the record names another removal for which `runs` is true (another window
+   * removes Devspaces from the engine now); that removal is returned then. Otherwise the record from before, which endRemoval brings back when the removal stops early.
    */
   async startRemoval(host: string, removal: EngineRemoval, removedAt: number, runs: (other: EngineRemoval) => boolean): Promise<RemovalStart> {
     let start: RemovalStart | undefined;
@@ -176,8 +132,7 @@ export class DockerEngineRecords {
   /**
    * Ends the removal `removal` on the engine `host`: its entry `removing` goes, and the removal mark stays. With `before`
    * (startRemoval: the removal stopped before it removed anything), the removal mark is the one from before again (none
-   * when there was none), and an answer about the Monitor from before comes back unless a newer one was given. Nothing
-   * changes when the record names another removal, or none.
+   * when there was none). Nothing changes when the record names another removal, or none.
    */
   async endRemoval(host: string, removal: EngineRemoval, before?: DockerEngineRecord): Promise<void> {
     await this.change(host, (record) => {
@@ -186,12 +141,7 @@ export class DockerEngineRecords {
       delete rest.removing;
       if (before === undefined) return rest;
       delete rest.removedAt;
-      const answeredAt = rest.monitorAnsweredAt ?? before.monitorAnsweredAt;
-      return {
-        ...rest,
-        ...(before.removedAt !== undefined ? { removedAt: before.removedAt } : {}),
-        ...(answeredAt !== undefined ? { monitorAnsweredAt: answeredAt } : {}),
-      };
+      return { ...rest, ...(before.removedAt !== undefined ? { removedAt: before.removedAt } : {}) };
     });
   }
 
@@ -306,15 +256,13 @@ function normalize(value: unknown): DockerEngineRecord[] {
   const records: DockerEngineRecord[] = [];
   for (const entry of (value as DockerEnginesFile).engines as unknown[]) {
     if (typeof entry !== 'object' || entry === null) continue;
-    const { host, monitorAnsweredAt, removedAt, removing } = entry as Record<string, unknown>;
+    const { host, removedAt, removing } = entry as Record<string, unknown>;
     if (typeof host !== 'string' || records.some((record) => record.host === host)) continue;
-    const answeredAt = timeOf(monitorAnsweredAt);
     const removed = timeOf(removedAt);
     const removal = removalOf(removing);
-    if (answeredAt === undefined && removed === undefined && removal === undefined) continue;
+    if (removed === undefined && removal === undefined) continue;
     records.push({
       host,
-      ...(answeredAt !== undefined ? { monitorAnsweredAt: answeredAt } : {}),
       ...(removed !== undefined ? { removedAt: removed } : {}),
       ...(removal !== undefined ? { removing: removal } : {}),
     });

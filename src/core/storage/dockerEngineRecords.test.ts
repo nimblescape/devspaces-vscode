@@ -35,70 +35,57 @@ function failReads(code: string, times = Number.POSITIVE_INFINITY): void {
   }) as typeof fs.promises.readFile);
 }
 
-/** Two engines with records: the local Docker with its answer, build-box with the removal mark. */
-const TWO_ENGINES = { engines: [{ host: '', monitorAnsweredAt: NOW }, { host: 'build-box', removedAt: NOW }] };
+/** Two engines with records: the local Docker and build-box, each with the removal mark. */
+const TWO_ENGINES = { engines: [{ host: '', removedAt: NOW - 1 }, { host: 'build-box', removedAt: NOW }] };
 
-describe('DockerEngineRecords: the answer to the question about the Monitor', () => {
-  it('knows no answer without a file, and records one per engine (the local Docker is the host "")', async () => {
-    expect(await records.monitorAnswered('')).toBe(false);
-    await records.recordMonitorAnswer('', NOW);
-    expect(await records.monitorAnswered('')).toBe(true);
-    expect(await records.monitorAnswered('build-box')).toBe(false);
-    await records.recordMonitorAnswer('build-box', NOW + 1);
-    // A second answer keeps one entry per host.
-    await records.recordMonitorAnswer('', NOW + 2);
+describe('DockerEngineRecords: the entries of the file', () => {
+  it('knows no engine without a file, and records one entry per engine (the local Docker is the host "")', async () => {
+    expect(await records.read()).toEqual([]);
+    expect(await records.removed('')).toBe(false);
+    await records.setRemoved('', NOW);
+    await records.setRemoved('build-box', NOW + 1);
+    // A second mark keeps one entry per host.
+    await records.setRemoved('', NOW + 2);
     expect(await records.read()).toEqual([
-      { host: 'build-box', monitorAnsweredAt: NOW + 1 },
-      { host: '', monitorAnsweredAt: NOW + 2 },
+      { host: 'build-box', removedAt: NOW + 1 },
+      { host: '', removedAt: NOW + 2 },
     ]);
     expect(JSON.parse(fs.readFileSync(records.file, 'utf8'))).toEqual({ engines: await records.read() });
   });
 
-  // Mutation: a forget that removes the record of another engine, or the removal mark of the engine, fails it.
-  it('forgets the answer of one engine (its engine is gone), and keeps the rest of the records', async () => {
-    fs.writeFileSync(records.file, JSON.stringify({ engines: [{ host: 'wsl:devspaces', monitorAnsweredAt: NOW, removedAt: NOW }, { host: '', monitorAnsweredAt: NOW }] }));
-    await records.forgetMonitorAnswer('wsl:devspaces');
-    expect(await records.read()).toEqual([
-      { host: '', monitorAnsweredAt: NOW },
-      { host: 'wsl:devspaces', removedAt: NOW },
-    ]);
-    await records.forgetMonitorAnswer('');
-    await records.forgetMonitorAnswer('build-box');
-    expect(await records.read()).toEqual([{ host: 'wsl:devspaces', removedAt: NOW }]);
-  });
-
-  it('a file that is not valid, or entries that are not, count as no answer', async () => {
+  // An older version recorded the answer to a question about the Monitor; it counts for nothing now.
+  it('a file that is not valid, entries that are not, and entries with only the answer of an older version count as none', async () => {
     fs.writeFileSync(records.file, '{ not json');
-    expect(await records.monitorAnswered('')).toBe(false);
+    expect(await records.read()).toEqual([]);
     fs.writeFileSync(
       records.file,
       JSON.stringify({
         engines: [
-          { host: 'a', monitorAnsweredAt: -1 },
-          { host: 'b', monitorAnsweredAt: '2026' },
-          { host: 3, monitorAnsweredAt: NOW },
+          { host: 'a', removedAt: -1 },
+          { host: 'b', removedAt: '2026' },
+          { host: 3, removedAt: NOW },
           { host: 'c' },
           'd',
-          { host: 'e', monitorAnsweredAt: NOW },
-          { host: 'e', monitorAnsweredAt: NOW + 5 },
+          { host: 'old', monitorAnsweredAt: NOW },
+          { host: 'e', removedAt: NOW, monitorAnsweredAt: NOW },
+          { host: 'e', removedAt: NOW + 5 },
         ],
       }),
     );
-    expect(await records.read()).toEqual([{ host: 'e', monitorAnsweredAt: NOW }]);
-    for (const host of ['a', 'b', 'c', 'd', '3']) expect(await records.monitorAnswered(host), host).toBe(false);
+    expect(await records.read()).toEqual([{ host: 'e', removedAt: NOW }]);
+    for (const host of ['a', 'b', 'c', 'd', '3', 'old']) expect(await records.removed(host), host).toBe(false);
     // A write keeps the valid entries only.
-    await records.recordMonitorAnswer('a', NOW);
+    await records.setRemoved('a', NOW);
     expect(await records.read()).toEqual([
-      { host: 'e', monitorAnsweredAt: NOW },
-      { host: 'a', monitorAnsweredAt: NOW },
+      { host: 'e', removedAt: NOW },
+      { host: 'a', removedAt: NOW },
     ]);
   });
 
   it('a folder in place of the file cannot be read: the reads and the writes fail', async () => {
     fs.mkdirSync(records.file);
-    await expect(records.monitorAnswered('')).rejects.toThrow();
+    await expect(records.read()).rejects.toThrow();
     await expect(records.removed('')).rejects.toThrow();
-    await expect(records.recordMonitorAnswer('', NOW)).rejects.toThrow();
     await expect(records.setRemoved('', NOW)).rejects.toThrow();
   });
 });
@@ -107,13 +94,13 @@ describe('DockerEngineRecords: a file that cannot be read, or is not valid', () 
   it('a read error of a moment (EBUSY, a virus scanner on Windows) is tried again: a change loses no record of another engine', async () => {
     fs.writeFileSync(records.file, JSON.stringify(TWO_ENGINES));
     failReads('EBUSY', 1);
-    await records.recordMonitorAnswer('other', NOW + 1);
-    expect(await records.read()).toEqual([...TWO_ENGINES.engines, { host: 'other', monitorAnsweredAt: NOW + 1 }]);
-    // The plain reads are tried again too: the mark and the answer stay visible.
+    await records.setRemoved('other', NOW + 1);
+    expect(await records.read()).toEqual([...TWO_ENGINES.engines, { host: 'other', removedAt: NOW + 1 }]);
+    // The plain reads are tried again too: the marks stay visible.
     failReads('EPERM', 1);
     expect(await records.removed('build-box')).toBe(true);
     failReads('EBUSY', 1);
-    expect(await records.monitorAnswered('')).toBe(true);
+    expect(await records.removed('')).toBe(true);
   });
 
   // On Windows, a virus scanner can hold the file for a moment when the rename writes over it. Mutation: a write without
@@ -140,7 +127,7 @@ describe('DockerEngineRecords: a file that cannot be read, or is not valid', () 
     const before = JSON.stringify(TWO_ENGINES);
     fs.writeFileSync(records.file, before);
     failReads('EIO');
-    await expect(records.recordMonitorAnswer('other', NOW + 1)).rejects.toThrow('EIO');
+    await expect(records.setRemoved('other', NOW + 1)).rejects.toThrow('EIO');
     await expect(records.setRemoved('', NOW + 1)).rejects.toThrow('EIO');
     // A transient error that does not end in time fails as well.
     vi.restoreAllMocks();
@@ -164,53 +151,34 @@ describe('DockerEngineRecords: a file that cannot be read, or is not valid', () 
     expect(fs.readFileSync(path.join(dir, copies[0]), 'utf8')).toBe('{ "engines": [{ "host": "build-box", "removedAt": 17');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`A copy was saved as ${path.join(dir, copies[0])}.`));
     // A valid file needs no copy: also not one with entries that are not valid (they record nothing that counts).
-    await logged.recordMonitorAnswer('', NOW + 1);
+    await logged.setRemoved('other', NOW + 1);
     expect(fs.readdirSync(dir).filter((name) => name.startsWith('docker-engines.json.backup-'))).toHaveLength(1);
   });
 });
 
 describe('DockerEngineRecords: the removal mark ("Remove Devspaces from This Docker Engine…")', () => {
-  it('sets the mark per engine, forgets the answer of that engine with it, and clears it again', async () => {
-    await records.recordMonitorAnswer('', NOW);
-    await records.recordMonitorAnswer('build-box', NOW);
+  it('sets the mark per engine, and clears it again', async () => {
+    await records.setRemoved('', NOW);
     expect(await records.removed('build-box')).toBe(false);
     await records.setRemoved('build-box', NOW + 10);
     expect(await records.removed('build-box')).toBe(true);
-    // The next user-started flow on that engine asks about its Monitor again.
-    expect(await records.monitorAnswered('build-box')).toBe(false);
-    // The other engine keeps its answer and has no mark.
-    expect(await records.removed('')).toBe(false);
-    expect(await records.monitorAnswered('')).toBe(true);
+    expect(await records.removed('')).toBe(true);
     expect(await records.read()).toEqual([
-      { host: '', monitorAnsweredAt: NOW },
+      { host: '', removedAt: NOW },
       { host: 'build-box', removedAt: NOW + 10 },
     ]);
     // Cleared, the engine has nothing left to record.
     await records.setRemoved('build-box', undefined);
     expect(await records.removed('build-box')).toBe(false);
-    expect(await records.read()).toEqual([{ host: '', monitorAnsweredAt: NOW }]);
-  });
-
-  it('clearing keeps an answer given after the mark; a mark of an engine without a record is written', async () => {
-    await records.setRemoved('', NOW);
-    await records.recordMonitorAnswer('', NOW + 1);
-    expect(await records.read()).toEqual([{ host: '', removedAt: NOW, monitorAnsweredAt: NOW + 1 }]);
-    await records.setRemoved('', undefined);
-    expect(await records.read()).toEqual([{ host: '', monitorAnsweredAt: NOW + 1 }]);
+    expect(await records.read()).toEqual([{ host: '', removedAt: NOW }]);
     // Clearing an engine without a mark changes nothing.
     await records.setRemoved('other', undefined);
-    expect(await records.read()).toEqual([{ host: '', monitorAnsweredAt: NOW + 1 }]);
+    expect(await records.read()).toEqual([{ host: '', removedAt: NOW }]);
   });
 
-  it('an invalid mark counts as none, next to a valid answer', async () => {
-    fs.writeFileSync(
-      records.file,
-      JSON.stringify({ engines: [{ host: 'a', removedAt: -5, monitorAnsweredAt: NOW }, { host: 'b', removedAt: 1.5 }, { host: 'c', removedAt: NOW }] }),
-    );
-    expect(await records.read()).toEqual([
-      { host: 'a', monitorAnsweredAt: NOW },
-      { host: 'c', removedAt: NOW },
-    ]);
+  it('an invalid mark counts as none', async () => {
+    fs.writeFileSync(records.file, JSON.stringify({ engines: [{ host: 'a', removedAt: -5 }, { host: 'b', removedAt: 1.5 }, { host: 'c', removedAt: NOW }] }));
+    expect(await records.read()).toEqual([{ host: 'c', removedAt: NOW }]);
     expect(await records.removed('a')).toBe(false);
     expect(await records.removed('b')).toBe(false);
     expect(await records.removed('c')).toBe(true);
@@ -226,14 +194,14 @@ describe('DockerEngineRecords: the removal that runs (the entry removing)', () =
   const inode = (): number => fs.statSync(records.file).ino;
 
   it('starts with the mark and the entry in one change, and ends with the mark kept', async () => {
-    await records.recordMonitorAnswer('build-box', NOW - 5);
-    await records.recordMonitorAnswer('', NOW - 5);
+    await records.setRemoved('build-box', NOW - 5);
+    await records.setRemoved('', NOW - 5);
     const start = await records.startRemoval('build-box', REMOVAL, NOW, runs);
-    expect(start).toEqual({ started: true, before: { host: 'build-box', monitorAnsweredAt: NOW - 5 } });
-    // The mark forgets the answer, as setRemoved does; the other engine keeps its record.
+    expect(start).toEqual({ started: true, before: { host: 'build-box', removedAt: NOW - 5 } });
+    // The other engine keeps its record.
     expect(await records.record('build-box')).toEqual({ host: 'build-box', removedAt: NOW, removing: REMOVAL });
     expect(await records.removing('build-box')).toEqual(REMOVAL);
-    expect(await records.record('')).toEqual({ host: '', monitorAnsweredAt: NOW - 5 });
+    expect(await records.record('')).toEqual({ host: '', removedAt: NOW - 5 });
     await records.endRemoval('build-box', REMOVAL);
     expect(await records.record('build-box')).toEqual({ host: 'build-box', removedAt: NOW });
     expect(await records.removing('build-box')).toBeUndefined();
@@ -241,21 +209,13 @@ describe('DockerEngineRecords: the removal that runs (the entry removing)', () =
   });
 
   it('a removal that stopped before it removed anything brings back the record from before', async () => {
-    await records.recordMonitorAnswer('build-box', NOW - 5);
+    // An engine that had the mark keeps the mark from before. Mutation: an end that keeps the new mark fails it.
+    await records.setRemoved('build-box', NOW - 9);
     const start = await records.startRemoval('build-box', REMOVAL, NOW, runs);
     if (!start.started) throw new Error('not started');
+    expect(start.before).toEqual({ host: 'build-box', removedAt: NOW - 9 });
     await records.endRemoval('build-box', REMOVAL, start.before);
-    expect(await records.read()).toEqual([{ host: 'build-box', monitorAnsweredAt: NOW - 5 }]);
-    // An engine that had the mark keeps the mark from before; an answer given meanwhile (by a window for which the
-    // removal does not run, such as its own) stays over the one from before. Mutation: the answer from before wins.
-    await records.setRemoved('', NOW - 9);
-    await records.recordMonitorAnswer('', NOW - 8);
-    const again = await records.startRemoval('', REMOVAL, NOW, runs);
-    if (!again.started) throw new Error('not started');
-    expect(again.before).toEqual({ host: '', removedAt: NOW - 9, monitorAnsweredAt: NOW - 8 });
-    expect(await records.recordMonitorAnswer('', NOW + 1, ended)).toEqual({ recorded: true });
-    await records.endRemoval('', REMOVAL, again.before);
-    expect(await records.record('')).toEqual({ host: '', removedAt: NOW - 9, monitorAnsweredAt: NOW + 1 });
+    expect(await records.read()).toEqual([{ host: 'build-box', removedAt: NOW - 9 }]);
     // Without an earlier record nothing is left.
     const fresh = await records.startRemoval('fresh', REMOVAL, NOW, runs);
     if (!fresh.started) throw new Error('not started');
@@ -289,32 +249,13 @@ describe('DockerEngineRecords: the removal that runs (the entry removing)', () =
     // The window of that removal crashed: the mark and its entry go.
     expect(await records.clearRemoved('build-box', ended)).toEqual({ cleared: true });
     expect(await records.record('build-box')).toBeUndefined();
-    // Without a mark nothing is written; an answer stays.
-    await records.recordMonitorAnswer('', NOW);
+    // Without a mark nothing is written.
+    await records.setRemoved('', NOW);
+    await records.setRemoved('', undefined);
     const written = inode();
     expect(await records.clearRemoved('', runs)).toEqual({ cleared: false });
     expect(inode()).toBe(written);
-    expect(await records.record('')).toEqual({ host: '', monitorAnsweredAt: NOW });
-  });
-
-  // The mark of a removal forgets the answer of the engine, so the next flow of the user there asks again. Mutation: an
-  // answer written while the removal runs outlives it.
-  it('writes no answer while a removal runs; the answer of a window whose removal ended is written', async () => {
-    await records.startRemoval('build-box', OTHER, NOW, runs);
-    const before = inode();
-    expect(await records.recordMonitorAnswer('build-box', NOW + 1, runs)).toEqual({ recorded: false, other: OTHER });
-    // Without the rule, every removal that the record names counts as running.
-    expect(await records.recordMonitorAnswer('build-box', NOW + 1)).toEqual({ recorded: false, other: OTHER });
-    expect(inode()).toBe(before);
-    // The end of that removal keeps the mark, and no answer.
-    await records.endRemoval('build-box', OTHER);
-    expect(await records.monitorAnswered('build-box')).toBe(false);
-    expect(await records.recordMonitorAnswer('build-box', NOW + 2, runs)).toEqual({ recorded: true });
-    expect(await records.record('build-box')).toEqual({ host: 'build-box', removedAt: NOW, monitorAnsweredAt: NOW + 2 });
-    // The entry of a removal whose window ended keeps no answer away.
-    await records.startRemoval('', OTHER, NOW, runs);
-    expect(await records.recordMonitorAnswer('', NOW + 3, ended)).toEqual({ recorded: true });
-    expect(await records.record('')).toEqual({ host: '', removedAt: NOW, removing: OTHER, monitorAnsweredAt: NOW + 3 });
+    expect(await records.record('')).toBeUndefined();
   });
 
   it('an entry that is not valid counts as none; a valid one alone is kept', async () => {
@@ -347,13 +288,14 @@ describe('DockerEngineRecords: the lock folder docker-engines.lock (several wind
     const hosts = Array.from({ length: 12 }, (_, index) => `host-${index}`);
     await Promise.all(
       hosts.map((host, index) =>
-        index % 2 === 0 ? records.setRemoved(host, NOW + index) : otherWindow.recordMonitorAnswer(host, NOW + index),
+        index % 2 === 0 ? records.setRemoved(host, NOW + index) : otherWindow.startRemoval(host, { windowId: 'other', pid: 7, since: 'x' }, NOW + index, () => true),
       ),
     );
     const read = await records.read();
     expect(read.map((record) => record.host).sort()).toEqual([...hosts].sort());
-    // The removal marks are all there.
-    for (const [index, host] of hosts.entries()) expect(await otherWindow.removed(host), host).toBe(index % 2 === 0);
+    // The marks and the removals are all there.
+    for (const [index, host] of hosts.entries()) expect(await otherWindow.removing(host), host).toEqual(index % 2 === 0 ? undefined : { windowId: 'other', pid: 7, since: 'x' });
+    for (const host of hosts) expect(await otherWindow.removed(host), host).toBe(true);
     expect(records.lockDir).toBe(path.join(dir, 'docker-engines.lock'));
     expect(fs.existsSync(records.lockDir)).toBe(false);
   });
@@ -394,7 +336,7 @@ describe('DockerEngineRecords: the lock folder docker-engines.lock (several wind
   // seconds only, so its lock folder gets old as that of a window that stalls (for example while the computer sleeps);
   // the second window takes a folder older than 100 ms for stale.
   describe('a window that stalls while it holds the lock', () => {
-    const OLD_BOX = { host: 'old-box', monitorAnsweredAt: NOW - 1 };
+    const OLD_BOX = { host: 'old-box', removedAt: NOW - 1 };
     const until = async (condition: () => boolean): Promise<void> => {
       while (!condition()) await new Promise((resolve) => setTimeout(resolve, 10));
     };
@@ -428,10 +370,10 @@ describe('DockerEngineRecords: the lock folder docker-engines.lock (several wind
       }) as typeof fs.promises.readFile);
       const removal = first.setRemoved('build-box', NOW);
       await until(() => stalled);
-      await second.recordMonitorAnswer('', NOW);
+      await second.setRemoved('', NOW);
       release();
       await removal;
-      expect(await records.read()).toEqual([OLD_BOX, { host: '', monitorAnsweredAt: NOW }, { host: 'build-box', removedAt: NOW }]);
+      expect(await records.read()).toEqual([OLD_BOX, { host: '', removedAt: NOW }, { host: 'build-box', removedAt: NOW }]);
       expect(warnings).toEqual([expect.stringContaining('Another process took over the lock')]);
       expect(fs.existsSync(records.lockDir)).toBe(false);
     });
@@ -453,10 +395,10 @@ describe('DockerEngineRecords: the lock folder docker-engines.lock (several wind
       const removal = first.setRemoved('build-box', NOW);
       await until(() => stalled);
       expect(temporaryFiles()).toHaveLength(1);
-      await second.recordMonitorAnswer('', NOW);
+      await second.setRemoved('', NOW);
       release();
       await removal;
-      expect(await records.read()).toEqual([OLD_BOX, { host: '', monitorAnsweredAt: NOW }, { host: 'build-box', removedAt: NOW }]);
+      expect(await records.read()).toEqual([OLD_BOX, { host: '', removedAt: NOW }, { host: 'build-box', removedAt: NOW }]);
       expect(warnings).toEqual([expect.stringContaining('Another process took over the lock')]);
       expect(temporaryFiles()).toEqual([]);
       expect(fs.existsSync(records.lockDir)).toBe(false);
@@ -482,11 +424,11 @@ describe('DockerEngineRecords: the lock folder docker-engines.lock (several wind
       const copies = () => fs.readdirSync(dir).filter((name) => name.startsWith('docker-engines.json.backup-'));
       const removal = first.setRemoved('build-box', NOW);
       await until(() => stalled);
-      await second.recordMonitorAnswer('', NOW);
+      await second.setRemoved('', NOW);
       expect(copies()).toHaveLength(1);
       release();
       await removal;
-      expect(await records.read()).toEqual([{ host: '', monitorAnsweredAt: NOW }, { host: 'build-box', removedAt: NOW }]);
+      expect(await records.read()).toEqual([{ host: '', removedAt: NOW }, { host: 'build-box', removedAt: NOW }]);
       expect(copies()).toHaveLength(1);
       expect(fs.readFileSync(path.join(dir, copies()[0]), 'utf8')).toBe(invalid);
       expect(warnings).toEqual([expect.stringContaining('Another process took over the lock')]);

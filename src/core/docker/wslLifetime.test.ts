@@ -58,7 +58,7 @@ function fakeProcess(file: string, args: readonly string[], options?: StartOptio
   return process;
 }
 
-function lifetime(overrides: Partial<WslLifetimeDeps> & { list?: () => RunResult; permanent?: boolean; now?: () => number } = {}) {
+function lifetime(overrides: Partial<WslLifetimeDeps> & { list?: () => RunResult; now?: () => number } = {}) {
   const runs: { file: string; args: readonly string[]; options?: RunOptions }[] = [];
   const started: FakeProcess[] = [];
   const log = logger();
@@ -76,7 +76,6 @@ function lifetime(overrides: Partial<WslLifetimeDeps> & { list?: () => RunResult
     },
     wslPath: () => WSL,
     env: { PATH: 'C:\\Windows\\System32' },
-    monitorPermanent: async () => overrides.permanent ?? false,
     logger: log,
     ...overrides,
   };
@@ -143,7 +142,7 @@ describe('WslLifetime.running', () => {
 });
 
 describe('WslLifetime.leavesStopped', () => {
-  it('is true in the background for a WSL host whose distribution does not run while its Monitor does not run permanently; logged once', async () => {
+  it('is true in the background for a WSL host whose distribution does not run; logged once', async () => {
     const { subject, log } = lifetime({ list: () => ok('Ubuntu\n') });
     expect(await subject.leavesStopped(WSL_HOST)).toBe(true);
     expect(await subject.leavesStopped(WSL_HOST)).toBe(true);
@@ -158,14 +157,6 @@ describe('WslLifetime.leavesStopped', () => {
     list = ok('devspaces\n');
     expect(await subject.leavesStopped(WSL_HOST)).toBe(false);
     expect(log.info).toHaveBeenLastCalledWith(expect.stringContaining('runs, or may be started'));
-  });
-
-  it('is false, without wsl.exe, while the Monitor of the host runs permanently', async () => {
-    const monitorPermanent = vi.fn(async () => true);
-    const { subject, runs } = lifetime({ monitorPermanent });
-    expect(await subject.leavesStopped(WSL_HOST)).toBe(false);
-    expect(monitorPermanent).toHaveBeenCalledWith(WSL_HOST);
-    expect(runs).toEqual([]);
   });
 
   it('logs the stop again after a flow of the user or an idle session of this window', async () => {
@@ -193,13 +184,11 @@ describe('WslLifetime.leavesStopped', () => {
   });
 
   it('is false for the local Docker and for SSH hosts, without a question to WSL', async () => {
-    const monitorPermanent = vi.fn(async () => false);
-    const { subject, runs } = lifetime({ monitorPermanent, list: () => ok('') });
+    const { subject, runs } = lifetime({ list: () => ok('') });
     expect(await subject.leavesStopped('')).toBe(false);
     expect(await subject.leavesStopped('build-server')).toBe(false);
     expect(await subject.leavesStopped('wsl:2222')).toBe(false);
     expect(runs).toEqual([]);
-    expect(monitorPermanent).not.toHaveBeenCalled();
   });
 });
 
@@ -378,7 +367,7 @@ describe('WslLifetime.use', () => {
     missing.subject.use(WSL_HOST);
     expect(missing.started).toHaveLength(0);
     const noStart = lifetime();
-    const runOnly = new WslLifetime({ runner: { run: async () => ok('') }, wslPath: () => WSL, env: {}, monitorPermanent: async () => false, logger: logger() });
+    const runOnly = new WslLifetime({ runner: { run: async () => ok('') }, wslPath: () => WSL, env: {}, logger: logger() });
     runOnly.use(WSL_HOST);
     expect(runOnly.holds(WSL_HOST)).toBe(false);
     noStart.subject.dispose();

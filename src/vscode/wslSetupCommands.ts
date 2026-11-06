@@ -207,9 +207,8 @@ export interface WslSetupCommandsDeps {
    */
   forgetHost: (host: string) => Promise<'notDockerHost' | 'local' | 'unsupported'>;
   /**
-   * The distribution is gone, or a new one takes its place: the answer about its Monitor goes (a new distribution is a
-   * new engine, which is asked again, also after a removal with `wsl --unregister` by hand), and its start entry
-   * (WslKeeper.removeStartEntry). Never rejects.
+   * The distribution is gone, or a new one takes its place (also after a removal with `wsl --unregister` by hand): the
+   * Docker context of the distribution follows. Never rejects.
    */
   forgetDistribution?: () => Promise<void>;
   /**

@@ -347,8 +347,8 @@ describe('parseAptStatus', () => {
   });
 });
 
-// Mutation: a list that fails for another reason and counts as one without the distribution fails it (the start entry
-// of the distribution would go after a moment of a broken WSL).
+// Mutation: a list that fails for another reason and counts as one without the distribution fails it (the setup would
+// take a moment of a broken WSL for a distribution that is gone).
 describe('listsDistribution', () => {
   const run = (exitCode: number, stdout: string, stderr = ''): RunResult => ({ exitCode, stdout, stderr, timedOut: false });
   it('names the distribution without case; false without it, and when WSL has no distribution; undefined for another failure', () => {

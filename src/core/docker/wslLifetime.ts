@@ -8,8 +8,8 @@
 // whose script ends itself when no devspace, no Monitor and no helper container of Devspaces (a worker, a relay) ran
 // there at two checks in a row, and at the end of its input, so with the window. With it, the window starts the keeper
 // of the distribution (wslKeeper.ts), which holds it while a container runs there, also after VS Code closed. A Docker
-// call in the background leaves a distribution that does not run stopped, unless its Monitor runs permanently
-// (`leavesStopped`); a flow of the user starts it. No `vscode`.
+// call in the background leaves a distribution that does not run stopped (`leavesStopped`); a flow of the user starts
+// it. No `vscode`.
 import { errorMessage } from '../errors';
 import { LABEL_BUILD_RUN, LABEL_DEVSPACE_ID, LABEL_HELPER } from '../names';
 import type { Logger, ProcessRunner, RunResult, StartedProcess } from '../ports';
@@ -86,11 +86,6 @@ export interface WslLifetimeDeps {
   /** The path of `wsl.exe` (findExecutable), or undefined (not on Windows, or without WSL). */
   wslPath: () => string | undefined;
   env: NodeJS.ProcessEnv;
-  /**
-   * Whether the Monitor of the engine `host` runs permanently (the answer Keep Running there, and
-   * devspaces.stopMonitorWhenIdle off; monitorSettingsOf). Never rejects.
-   */
-  monitorPermanent: (host: string) => Promise<boolean>;
   logger: Logger;
   /**
    * The keeper of the distribution (WslKeeper), which holds it while a container runs there, also after VS Code closed;
@@ -156,10 +151,9 @@ export class WslLifetime {
 
   /**
    * Whether a Docker call on the engine `host` must not run now, because it would start a WSL distribution that does
-   * not run: true only for a WSL host, outside of a flow of the user (withSshPrompts), while its Monitor does not run
-   * permanently, and when `running` says that the distribution does not run. Any other host, a flow of the user, an
-   * idle session of this window there (the distribution runs), a permanent Monitor, and a state that cannot be told
-   * give false: the call runs, and `wsl.exe` starts the distribution when it does not run. Each change of the answer
+   * not run: true only for a WSL host, outside of a flow of the user (withSshPrompts), and when `running` says that the
+   * distribution does not run. Any other host, a flow of the user, an idle session of this window there (the
+   * distribution runs), and a state that cannot be told give false: the call runs, and `wsl.exe` starts the distribution when it does not run. Each change of the answer
    * for a host is logged once. Never rejects.
    */
   async leavesStopped(host: string): Promise<boolean> {
@@ -171,7 +165,7 @@ export class WslLifetime {
       this.saidStopped.delete(host);
       return false;
     }
-    const stopped = !(await this.deps.monitorPermanent(host)) && (await this.running(access.distribution)) === false;
+    const stopped = (await this.running(access.distribution)) === false;
     if (stopped !== (this.saidStopped.get(host) ?? false)) {
       this.saidStopped.set(host, stopped);
       this.deps.logger.info(

@@ -32,10 +32,10 @@ const FIRST_USE_AND_LOGINS = [
   'On macOS and Linux, it never reads the Docker context of this computer',
   'first without a login',
 ];
-// The background container: the question before it keeps running, its end after 30 days, and the command that removes
-// it (the title in package.json).
+// The background container: where it keeps running (R-DS-003, no question), its end after 30 days, and the command that
+// removes it (the title in package.json).
 const REMOVE_COMMAND = 'Remove Devspaces from This Docker Engine…';
-const BACKGROUND_CONTAINER = ['Devspaces asks whether this container keeps running', '30 days', `**Devspaces: ${REMOVE_COMMAND}**`];
+const BACKGROUND_CONTAINER = ['On a remote host, this container keeps running', 'Devspaces asks no question about it.', '30 days', `**Devspaces: ${REMOVE_COMMAND}**`];
 
 /** The text of the section `## <heading>` up to the next `## ` heading. */
 function section(markdown: string, heading: string): string {
@@ -162,19 +162,17 @@ describe('the behaviors of Devspaces at the top of the Marketplace page', () => 
   it('names the scopes, Docker, the Dev Containers CLI and the background container in the description', () => {
     const { description } = JSON.parse(read('package.json')) as { description: string };
     for (const scope of GITHUB_SCOPES) expect(description).toContain(scope);
-    for (const words of ['Docker', 'Dev Containers CLI', 'install Docker', 'background container', 'Before your first devspace', 'asks before the background container keeps running', 'a command removes it']) {
+    for (const words of ['Docker', 'Dev Containers CLI', 'install Docker', 'background container', 'Before your first devspace', 'keeps running only on a remote Docker host', 'a command removes it']) {
       expect(description).toContain(words);
     }
   });
 });
 
-describe('the texts of the Monitor question and of the removal in the docs', () => {
+describe('the texts of the Monitor and of the removal in the docs', () => {
   // A placeholder such as <engine> outside code is a raw tag for Markdown, which hides it. markdownPages.test.ts refuses
   // a raw tag in the README, the change log and every page of docs/.
   it('show placeholders such as <engine> as code, and quote the texts of the code', () => {
     const guide = read('docs/guide.md');
-    const question = guide.slice(guide.indexOf('The first time that you start a devspace on a Docker engine'), guide.indexOf('A monitor that keeps running ends itself'));
-    expect(question).toContain('running on `<engine>`?');
     const uninstall = section(guide, 'Uninstall');
     expect(uninstall).toContain('"Remove Devspaces from `<engine>`?"');
     // The second question, with one devspace and with several, and the state of a devspace that you kept there.
@@ -185,25 +183,31 @@ describe('the texts of the Monitor question and of the removal in the docs', () 
   });
 
   // The mode of a running Monitor changes only at the next ensure on its engine (a start of a devspace, or Update All
-  // Images Now); the answer Keep Running writes the value that the setting has while the question comes. The setting
-  // has a short description (settings.test.ts): it names the question and links to the section of the guide that says
-  // the rest, also what happens on an engine that several computers use.
-  it('the guide says when a changed answer reaches a running Monitor, and the setting links to that section', () => {
+  // Images Now). The setting has a short description (settings.test.ts): it says where it applies and links to the
+  // section of the guide that says the rest, also what happens on an engine that several computers use.
+  it('the guide says when a changed setting reaches a running Monitor, and the setting links to that section', () => {
     const { contributes } = JSON.parse(read('package.json')) as { contributes: { configuration: { properties: Record<string, { markdownDescription?: string }> } } };
     const setting = contributes.configuration.properties['devspaces.stopMonitorWhenIdle'];
     const guide = read('docs/guide.md');
     const changed = 'A change applies on each engine at the next start of a devspace or **Update All Images Now** there.';
     const shared =
       'On an engine that several computers use, a monitor that keeps running and that another computer created stays; the computer that created it replaces it when it turns the setting on (see [Shared Docker engines](#shared-docker-engines)).';
-    expect(setting?.markdownDescription).toContain('the first Start or Rebuild on an engine, or **Update All Images Now** there, asks');
+    expect(setting?.markdownDescription).toContain('On the WSL distribution or VM of Devspaces and on the Docker of this computer, the Monitor always ends when idle');
+    expect(setting?.markdownDescription).not.toContain('asks');
     expect(setting?.markdownDescription).toContain('(https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run)');
     const start = guide.indexOf('\n### The background run\n');
     expect(start, 'the section "The background run"').toBeGreaterThan(0);
     const backgroundRun = guide.slice(start, guide.indexOf('\n### ', start + 1));
-    for (const words of [changed, 'removes it at once', 'It does not ask while `devspaces.stopMonitorWhenIdle` is on.', shared]) expect(backgroundRun).toContain(words);
+    for (const words of [changed, 'removes it at once', 'Devspaces asks no question about the monitor.', shared]) expect(backgroundRun).toContain(words);
+    // R-DS-003: the Monitor on the computer ends when idle, also while the setting is off; it waits for the retries.
+    expect(backgroundRun).toContain('the monitor ends 5 minutes after the last devspace there stopped');
+    expect(backgroundRun).toContain('up to the retry after 30 minutes');
+    expect(backgroundRun).not.toContain('**Keep Running**');
     expect(guide).toContain('\n## Shared Docker engines\n');
-    // The row of the setting in the guide: the answer Keep Running keeps the setting off.
-    expect(guide).toContain('the answer **Keep Running** keeps it off');
+    // The row of the setting in the guide: no answer, and no effect on the engines of this computer.
+    expect(guide).toContain('the Monitor always ends when idle, whatever this setting says');
+    expect(guide).not.toContain('Stop When Idle');
+    expect(guide).not.toContain('start entry');
     // A Stop sends a heartbeat: it is a use of the engine.
     expect(guide).toContain('no devspace was started, stopped or deleted there');
     // Both places in the guide, and the change log.

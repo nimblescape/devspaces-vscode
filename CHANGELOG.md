@@ -33,6 +33,8 @@ takes the section of a version as the notes of its GitHub release.
 
 **Retries of the background run:** a Monitor that ends when idle no longer exits while a background run that did not reach the network waits for its retry after 2, 5, 10, 20 or 30 minutes. So a computer that wakes up before its Wi-Fi or VPN is back still gets its run; a retry an hour later does not keep the Monitor.
 
+**No question about the Monitor:** Devspaces no longer asks "Keep the Devspaces background container running on `<engine>`?". On a remote host, the Monitor keeps running, unless the setting devspaces.stopMonitorWhenIdle is on, which now applies to remote hosts only. On the WSL distribution of Devspaces, on the VM of Devspaces and on the Docker of your computer, the Monitor always ends 5 minutes after the last devspace there stopped, so that the distribution, the VM or Docker can stop too; a missed time of the schedule runs at the next start of a devspace there. On Windows, the work in the background no longer starts the WSL distribution of Devspaces for its Monitor, and Devspaces no longer adds the start entry `nimblescape Devspaces WSL devspaces`; an entry that an older version added stays until you turn it off in Task Manager (**Startup apps**). See [The background run](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run).
+
 **No update of VS Code before a start:** a Start of a devspace no longer updates VS Code first while VS Code shows its button **Update**, and the setting devspaces.installVsCodeUpdateFirst is gone. VS Code has no stable interface for its updates. VS Code installs a waiting update itself at its next restart, as without Devspaces.
 
 ## 0.4.1

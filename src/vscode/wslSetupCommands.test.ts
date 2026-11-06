@@ -349,8 +349,8 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(useHost).not.toHaveBeenCalled();
   });
 
-  // Mutation: a new distribution that keeps the answer about the Monitor of one that was removed by hand fails it: it
-  // would get a permanent Monitor and a start entry without the question; so does a repair that forgets the answer.
+  // Mutation: a setup of a new distribution that does not first forget one that was removed by hand (its Docker
+  // context) fails it; so does a repair that forgets it.
   it('forgets the old distribution before a new one is set up, and not for a repair', async () => {
     const order: string[] = [];
     const forgetDistribution = vi.fn(async () => void order.push('forget'));
@@ -476,9 +476,8 @@ describe('Remove the WSL Distribution of Devspaces…', () => {
     expect(setup.registration.mock.calls.every((call) => call[1] === true)).toBe(true);
   });
 
-  // Mutation: a start entry that stays after the removal fails it: Windows would run wslg.exe for a distribution that is
-  // gone at each logon; so does an answer about its Monitor that stays (the next window would add the entry again).
-  it('forgets the distribution (its Monitor answer and its start entry) with its removal, and with the files of one that is gone', async () => {
+  // Mutation: a removal that does not forget the distribution fails it: its Docker context would stay.
+  it('forgets the distribution (its Docker context) with its removal, and with the files of one that is gone', async () => {
     const forgetDistribution = vi.fn(async () => undefined);
     registered('own');
     window.showWarningMessage.mockResolvedValue(WslSetupTexts.remove);

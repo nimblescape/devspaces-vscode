@@ -526,7 +526,6 @@ flowchart LR
     P["wsl.exe processes of the window:<br/>shell before the relay, connection of the relay,<br/>dial-stdio of the Docker pipes"]
     I["Idle session of the window:<br/>docker ps every minute"]
     K["Keeper: wslg.exe, not a child of VS Code,<br/>docker ps every minute"]
-    RUN["Start entry in HKCU Run:<br/>only while the Monitor there runs permanently"]
   end
   subgraph VM["WSL 2 virtual machine"]
     D["Distribution devspaces:<br/>systemd, dockerd, containers"]
@@ -534,7 +533,6 @@ flowchart LR
   VS --> P
   VS --> I
   VS -- "starts at most once a minute" --> K
-  RUN -- "starts at logon" --> K
   P -- "keep it running while they run" --> D
   I -- "keeps it running while a container of Devspaces runs" --> D
   K -- "keeps it running while any container runs" --> D
@@ -542,13 +540,12 @@ flowchart LR
 
 - **The idle session**: from the first `wsl.exe` of a window for the distribution, the window also runs one idle session there. Every minute, it looks for a running container of Devspaces (a devspace, the Monitor, or a helper container). It ends after two checks in a row without one, or when the window closes.
 - **The keeper**: a window also starts `wslg.exe -d devspaces -u root --cd / --shell-type none sh -c <script>`. It is not a child of VS Code, so it runs on after VS Code closed. Every minute it looks for any running container, and it ends after two checks in a row without one. A lock in the distribution (`/run/devspaces-keeper`) lets only one keeper run at a time.
-- **The start entry**: only while the Monitor of the distribution runs permanently (the answer **Keep Running**, and `devspaces.stopMonitorWhenIdle` off), the Windows user has the start entry `nimblescape Devspaces WSL devspaces`. It starts the keeper at logon, so that Docker starts the Monitor again.
-- **Work in the background** (the refresh of the sidebar, the background builds) does not start the distribution: it first asks `wsl.exe --list --running --quiet`, and when the distribution does not run, the sidebar shows its devspaces as stopped. Only while the Monitor there runs permanently, such work starts it. A flow of the user always starts it.
+- **Work in the background** (the refresh of the sidebar, the background builds) does not start the distribution: it first asks `wsl.exe --list --running --quiet`, and when the distribution does not run, the sidebar shows its devspaces as stopped. The Monitor there ends when idle, so no such work starts the distribution for it. A flow of the user always starts it.
 
 ### Upkeep and removal
 
 - **Daily upgrade** ([`src/core/docker/wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslUpgrade.ts)): only in the distribution that Devspaces set up, and only while it runs. About once a day, Devspaces runs `apt-get update` and `apt-get upgrade --with-new-pkgs` as root there. A `policy-rc.d` of Devspaces keeps the packages from restarting services during the run, so Docker and the running devspaces go on; the new versions run after the next start of the distribution.
-- **Removal**: **Remove the WSL Distribution of Devspaces…** runs `wsl.exe --unregister devspaces` after a warning, only for the distribution that Devspaces set up. It also removes the folder, the host of the list, and the start entry.
+- **Removal**: **Remove the WSL Distribution of Devspaces…** runs `wsl.exe --unregister devspaces` after a warning, only for the distribution that Devspaces set up. It also removes the folder and the host of the list.
 
 More rules: [architecture.md, The WSL distribution of Devspaces](architecture.md#the-wsl-distribution-of-devspaces), and the user view in [guide.md](guide.md#the-wsl-distribution-of-devspaces-windows).
 
@@ -678,5 +675,5 @@ The design [design/remote-devspaces-one-ssh-login.md](design/remote-devspaces-on
 | [`src/core/sshAskpass.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshAskpass.ts), [`src/vscode/sshLoginPrompts.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshLoginPrompts.ts) | The questions of SSH logins in VS Code |
 | [`src/core/sshKey.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshKey.ts), [`src/vscode/sshKeyOffer.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshKeyOffer.ts) | The key of Devspaces |
 | [`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/wslSetupCommands.ts) | The setup and the removal of the WSL distribution |
-| [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) | The idle session, the keeper, and the start entry |
+| [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) | The idle session and the keeper |
 | [`src/core/docker/wslUpgrade.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslUpgrade.ts) | The daily upgrade of the distribution |

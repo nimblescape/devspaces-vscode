@@ -66,13 +66,13 @@ export function normalizeCacheSchedule(value: unknown): string {
 }
 
 /**
- * Whether the Monitor of an engine runs permanently: on every engine, local or remote, once the user answered the
- * question about it on that engine (`answered`, src/vscode/monitorQuestion.ts), unless the setting
- * devspaces.stopMonitorWhenIdle is true (its default is false; true: the monitor ends after 5 minutes without a running
- * devspace). Before the answer, it ends when idle too.
+ * Whether the Monitor of an engine runs permanently (R-DS-003): on a remote host (`remote`), unless the setting
+ * devspaces.stopMonitorWhenIdle is true (remote hosts only; its default is false). On the WSL distribution or VM of
+ * Devspaces and on the Docker of the computer, never: it ends after 5 minutes without a running devspace, and the next
+ * start of a devspace there starts it again.
  */
-export function monitorRunsPermanently(stopMonitorWhenIdle: boolean | undefined, answered: boolean): boolean {
-  return answered && stopMonitorWhenIdle !== true;
+export function monitorRunsPermanently(stopMonitorWhenIdle: boolean | undefined, remote: boolean): boolean {
+  return remote && stopMonitorWhenIdle !== true;
 }
 
 /**

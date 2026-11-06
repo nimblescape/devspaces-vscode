@@ -7,71 +7,29 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RunOptions, RunResult } from '../ports';
-import { WSL_DISTRIBUTION, WSL_HOST, wslCommandArgs } from './dockerHost';
-import {
-  KEEPER_EARLY_END_MS,
-  KEEPER_LAUNCH_MS,
-  KEEPER_LOCK,
-  KEEPER_LOCK_WAIT_SECONDS,
-  KEEPER_SCRIPT,
-  MAX_START_ENTRY,
-  START_ENTRY_KEY,
-  WslKeeper,
-  keeperWslgArgs,
-  regAddArgs,
-  regDeleteArgs,
-  regQueryArgs,
-  startEntryCommand,
-  startEntryName,
-  startEntryValueOf,
-  wslgPathOf,
-  type WslKeeperDeps,
-} from './wslKeeper';
+import { WSL_DISTRIBUTION, wslCommandArgs } from './dockerHost';
+import { KEEPER_EARLY_END_MS, KEEPER_LAUNCH_MS, KEEPER_LOCK, KEEPER_LOCK_WAIT_SECONDS, KEEPER_SCRIPT, WslKeeper, keeperWslgArgs, wslgPathOf, type WslKeeperDeps } from './wslKeeper';
 
 const WSL = 'C:\\Windows\\System32\\wsl.exe';
 const WSLG = 'C:\\Program Files\\WSL\\wslg.exe';
-const REG = 'C:\\Windows\\System32\\reg.exe';
 const ENV = { ProgramFiles: 'C:\\Program Files', SystemRoot: 'C:\\Windows' };
-const NAME = startEntryName(WSL_DISTRIBUTION);
-const result = (exitCode: number): RunResult => ({ exitCode, stdout: '', stderr: '', timedOut: false });
 const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() });
 
-/**
- * A keeper with fakes: `entry` is whether the start entry exists in the fake registry, `value` its command (default:
- * the command of this version); `permanent` the answer of monitorPermanent (undefined: it cannot be read). Each launch
- * keeps `exit`, the end of that keeper (default exit code 0).
- */
-function keeper(over: Partial<WslKeeperDeps> & { permanent?: boolean | 'unknown'; entry?: boolean; value?: string; wslg?: boolean; now?: () => number } = {}) {
-  const runs: { file: string; args: readonly string[]; options?: RunOptions }[] = [];
+/** A keeper with fakes. Each launch keeps `exit`, the end of that keeper (default exit code 0). */
+function keeper(over: Partial<WslKeeperDeps> & { wslg?: boolean; now?: () => number } = {}) {
   const launches: { file: string; args: readonly string[]; exit: (code?: number | null) => void }[] = [];
-  const state = { entry: over.entry ?? false, value: over.value ?? startEntryCommand(WSLG, WSL_DISTRIBUTION) };
   const log = logger();
   const deps: WslKeeperDeps = {
-    runner: {
-      run: async (file, args, options) => {
-        runs.push({ file, args, options });
-        if (args[0] === 'query') {
-          return state.entry ? { ...result(0), stdout: `\r\n${START_ENTRY_KEY.replace('HKCU', 'HKEY_CURRENT_USER')}\r\n    ${NAME}    REG_SZ    ${state.value}\r\n\r\n` } : result(1);
-        }
-        if (args[0] === 'add') Object.assign(state, { entry: true, value: args[args.indexOf('/d') + 1] });
-        if (args[0] === 'delete') state.entry = false;
-        return result(0);
-      },
-    },
     wslPath: () => WSL,
     env: ENV,
     launch: async (file, args, onExit) => {
       launches.push({ file, args, exit: (code = 0) => onExit(code) });
     },
-    monitorPermanent: async () => (over.permanent === 'unknown' ? undefined : (over.permanent ?? false)),
-    registered: async () => true,
-    knows: async () => true,
     logger: log,
     exists: (file) => file === WSLG && (over.wslg ?? true),
     ...over,
   };
-  return { subject: new WslKeeper(deps), runs, launches, state, log };
+  return { subject: new WslKeeper(deps), launches, log };
 }
 
 describe('the keeper of the WSL distribution', () => {
@@ -80,6 +38,10 @@ describe('the keeper of the WSL distribution', () => {
     subject.keep(WSL_DISTRIBUTION);
     await vi.waitFor(() => expect(launches).toHaveLength(1));
     expect(launches[0]).toMatchObject({ file: WSLG, args: ['-d', 'devspaces', '-u', 'root', '--cd', '/', '--shell-type', 'none', 'sh', '-c', KEEPER_SCRIPT] });
+    // `wslg.exe` in the 64-bit folder of the programs, also for a 32-bit process.
+    expect(wslgPathOf(ENV)).toBe(WSLG);
+    expect(wslgPathOf({ PROGRAMFILES: 'D:\\Apps' })).toBe('D:\\Apps\\WSL\\wslg.exe');
+    expect(wslgPathOf({ ProgramFiles: 'C:\\Program Files (x86)', ProgramW6432: 'C:\\Program Files' })).toBe(WSLG);
     expect(launches[0]?.args).toEqual(keeperWslgArgs(WSL_DISTRIBUTION));
     await vi.waitFor(() => expect(log.info).toHaveBeenCalledWith(expect.stringContaining('Devspaces starts the keeper of the WSL distribution devspaces (wslg.exe)')));
   });
@@ -197,315 +159,6 @@ describe('the keeper of the WSL distribution', () => {
     subject.keep(WSL_DISTRIBUTION);
     await vi.waitFor(() => expect(launches).toHaveLength(2));
     expect(starts()).toHaveLength(1);
-  });
-});
-
-describe('the start entry of the WSL distribution', () => {
-  it('is wslg.exe in quotes with the script in quotes, within the 260 characters of Windows', () => {
-    const command = startEntryCommand(WSLG, WSL_DISTRIBUTION);
-    expect(command).toBe(`"${WSLG}" -d devspaces -u root --cd / --shell-type none sh -c "${KEEPER_SCRIPT}"`);
-    expect(command.length).toBeLessThanOrEqual(MAX_START_ENTRY);
-    expect(wslgPathOf(ENV)).toBe(WSLG);
-    expect(wslgPathOf({ PROGRAMFILES: 'D:\\Apps' })).toBe('D:\\Apps\\WSL\\wslg.exe');
-    expect(wslgPathOf({ ProgramFiles: 'C:\\Program Files (x86)', ProgramW6432: 'C:\\Program Files' })).toBe(WSLG);
-    expect(START_ENTRY_KEY).toBe('HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run');
-    expect(NAME).toBe('nimblescape Devspaces WSL devspaces');
-  });
-
-  it('is added while the Monitor runs permanently, with reg.exe of System32', async () => {
-    const { subject, runs, state, log } = keeper({ permanent: true });
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(runs.map((run) => [run.file, run.args])).toEqual([
-      [REG, regQueryArgs(NAME)],
-      [REG, regAddArgs(NAME, startEntryCommand(WSLG, WSL_DISTRIBUTION))],
-    ]);
-    expect(regAddArgs(NAME, 'x')).toEqual(['add', START_ENTRY_KEY, '/v', NAME, '/t', 'REG_SZ', '/d', 'x', '/f']);
-    expect(state.entry).toBe(true);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('added the start entry "nimblescape Devspaces WSL devspaces"'));
-  });
-
-  // Mutation: a state of the Monitor read before the registry fails it: an answer that another window records between
-  // the two reads, after this window read the state, would be undone here.
-  it('reads the registry first and the state of the Monitor after it', async () => {
-    const order: string[] = [];
-    const { subject } = keeper({
-      runner: {
-        run: async (_file, args) => {
-          order.push(String(args[0]));
-          return result(1);
-        },
-      },
-      monitorPermanent: async () => {
-        order.push('monitor');
-        return false;
-      },
-    });
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(order).toEqual(['query', 'monitor']);
-  });
-
-  it('is kept as it is when it exists (one read)', async () => {
-    const { subject, runs } = keeper({ permanent: true, entry: true });
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(runs.map((run) => run.args[0])).toEqual(['query']);
-  });
-
-  // Mutation: an entry that is kept with another command (an older script, wslg.exe in another folder, or the command
-  // with more after it) fails it.
-  it('is replaced when it has another command', async () => {
-    const command = startEntryCommand(WSLG, WSL_DISTRIBUTION);
-    for (const value of ['"D:\\Old\\wslg.exe" -d devspaces sh -c exit', `${command} --more`]) {
-      const { subject, runs, state } = keeper({ permanent: true, entry: true, value });
-      await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-      expect(runs.map((run) => run.args[0])).toEqual(['query', 'add']);
-      expect(state.value).toBe(command);
-    }
-    expect(startEntryValueOf(`\r\nHKEY_CURRENT_USER\\X\r\n    ${NAME}    REG_SZ    ${command}\r\n`, NAME)).toBe(command);
-    expect(startEntryValueOf(`    other    REG_SZ    ${command}`, NAME)).toBeUndefined();
-  });
-
-  // Mutation: a failed read of the answer that counts as no answer fails it: a moment of a locked file at the start of
-  // a window would remove the start entry of the user. So does a failed list of WSL that counts as a removed one.
-  it('stays as it is while the answer about the Monitor cannot be read, or WSL does not tell whether it lists the distribution', async () => {
-    for (const entry of [true, false]) {
-      for (const over of [{ permanent: 'unknown' as const }, { permanent: true, registered: async () => undefined }]) {
-        const { subject, runs, state } = keeper({ ...over, entry });
-        await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-        expect(runs.map((run) => run.args[0])).toEqual(['query']);
-        expect(state.entry).toBe(entry);
-      }
-    }
-  });
-
-  // Mutation: an entry for a distribution that was removed by hand (`wsl --unregister devspaces`) fails it: WSL would
-  // fail at each logon. Asked only when an entry is wanted.
-  it('is removed, or not added, when WSL does not list the distribution', async () => {
-    for (const entry of [true, false]) {
-      const asked: string[] = [];
-      const { subject, state } = keeper({ permanent: true, entry, registered: async (distribution) => (asked.push(distribution), false) });
-      await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-      expect(state.entry).toBe(false);
-      expect(asked).toEqual([WSL_DISTRIBUTION]);
-    }
-    const asked: string[] = [];
-    const notWanted = keeper({ permanent: false, entry: true, registered: async (distribution) => (asked.push(distribution), true) });
-    await notWanted.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(asked).toEqual([]);
-  });
-
-  // Mutation: a warning when another window removed the entry between the read and the removal fails it.
-  it('a removal that another window did first counts as done, without a warning; another failure names the output of reg.exe', async () => {
-    // The first read finds the entry; the removal fails, and the read after it finds none.
-    const calls: string[] = [];
-    const raced = keeper({
-      permanent: false,
-      runner: {
-        run: async (_file, args) => {
-          calls.push(String(args[0]));
-          return result(calls.length === 1 ? 0 : 1);
-        },
-      },
-    });
-    await raced.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(calls).toEqual(['query', 'delete', 'query']);
-    expect(raced.log.warn).not.toHaveBeenCalled();
-    const denied = keeper({
-      permanent: false,
-      runner: { run: async (_file, args) => (args[0] === 'query' ? result(0) : { ...result(1), stderr: 'ERROR: Access is denied.\r\n' }) },
-    });
-    await denied.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(denied.log.warn).toHaveBeenCalledWith('The start entry "nimblescape Devspaces WSL devspaces" could not be removed: reg.exe delete ended with exit code 1: ERROR: Access is denied.');
-  });
-
-  // Mutation: an entry that stays after the answer Stop When Idle, or after the removal of Devspaces from the engine
-  // (its mark forgets the answer, so the Monitor does not run permanently), fails it: WSL would start the distribution
-  // at each logon for nothing.
-  it('is removed while the Monitor does not run permanently', async () => {
-    const { subject, runs, state, log } = keeper({ permanent: false, entry: true });
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(runs.map((run) => run.args)).toEqual([regQueryArgs(NAME), regDeleteArgs(NAME)]);
-    expect(state.entry).toBe(false);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('removed the start entry'));
-    // Nothing to remove: one read.
-    const absent = keeper({ permanent: false });
-    await absent.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(absent.runs.map((run) => run.args[0])).toEqual(['query']);
-  });
-
-  // Mutation: a window that remembers the state that it wrote fails it: another window may have changed the entry.
-  it('follows a change of the Monitor mode in the same window, and reads the registry each time', async () => {
-    let permanent = true;
-    const { subject, state } = keeper({ monitorPermanent: async () => permanent });
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(state.entry).toBe(true);
-    permanent = false;
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(state.entry).toBe(false);
-    // Another window (or the user) removed the entry while the Monitor runs permanently again: it is added again.
-    permanent = true;
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    state.entry = false;
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(state.entry).toBe(true);
-  });
-
-  // Mutation: an update per call fails it (an answer runs it twice: the change of the setting and the answer); so does
-  // one that is skipped while another one already began (it may have read the state before the change).
-  it('one update that waits and has not begun yet covers a second call', async () => {
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    const reads: string[] = [];
-    const { subject } = keeper({
-      runner: {
-        run: async (_file, args) => {
-          reads.push(String(args[0]));
-          if (reads.length === 1) await gate;
-          return result(1);
-        },
-      },
-    });
-    const first = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    await vi.waitFor(() => expect(reads).toEqual(['query']));
-    // The first began: a second one waits, and a third joins it.
-    const second = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    const third = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    release();
-    await Promise.all([first, second, third]);
-    expect(reads).toEqual(['query', 'query']);
-  });
-
-  // Mutation: an update that clears the mark of the update after a removal when it begins fails it: a later call would
-  // then add a third update.
-  it('the update that waits after a removal covers a later call, also after the update before the removal began', async () => {
-    let release: () => void = () => undefined;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    const reads: string[] = [];
-    const { subject } = keeper({
-      runner: {
-        run: async (_file, args) => {
-          reads.push(String(args[0]));
-          if (reads.length === 1) await gate;
-          return result(1);
-        },
-      },
-    });
-    const before = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    const removal = subject.removeStartEntry(WSL_DISTRIBUTION);
-    const after = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    await vi.waitFor(() => expect(reads).toEqual(['query']));
-    const later = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    release();
-    await Promise.all([before, removal, after, later]);
-    expect(reads).toEqual(['query', 'query', 'query']);
-  });
-
-  // Mutation: an update that joins one that waits before a removal fails it: the removal would run last.
-  it('an update after a removal runs after it, also while an update waits before the removal', async () => {
-    const { subject, state, runs } = keeper({ permanent: true, entry: true });
-    // The first two wait together (one update); then the removal; then a new update.
-    const updates = [subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION), subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION)];
-    const removal = subject.removeStartEntry(WSL_DISTRIBUTION);
-    const after = subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    await Promise.all([...updates, removal, after]);
-    expect(runs.map((run) => run.args[0])).toEqual(['query', 'query', 'delete', 'query', 'add']);
-    expect(state.entry).toBe(true);
-  });
-
-  // Mutation: a state of the Monitor that is not read again after the list of WSL fails it: an answer that another
-  // window forgot during that list would be undone.
-  it('reads the state of the Monitor again after the list of WSL', async () => {
-    let permanent = true;
-    const { subject, state } = keeper({
-      monitorPermanent: async () => permanent,
-      registered: async () => {
-        permanent = false;
-        return true;
-      },
-    });
-    await subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(state.entry).toBe(false);
-  });
-
-  // Mutation: a keeper whose start writes the registry fails it (one read per minute and window for nothing).
-  it('is not read or written by the start of the keeper', async () => {
-    const { subject, runs, launches } = keeper({ permanent: true });
-    subject.keep(WSL_DISTRIBUTION);
-    await vi.waitFor(() => expect(launches).toHaveLength(1));
-    expect(runs).toEqual([]);
-  });
-
-  // Mutation: an entry that stays when it cannot be written as it should fails it: Windows would run a program that is
-  // gone, or an older script, at each logon.
-  // Mutation: an entry that is removed without wslg.exe fails it (a WSL update that replaces wslg.exe at that moment
-  // would remove the entry of the user); so does a too long entry that stays.
-  it('is not added without wslg.exe (logged) and one that is there stays then; one that would be too long is removed', async () => {
-    const noWslg = keeper({ permanent: true, wslg: false });
-    await noWslg.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    await noWslg.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(noWslg.state.entry).toBe(false);
-    // Once while it stays.
-    expect(noWslg.log.warn.mock.calls).toEqual([[expect.stringContaining(`There is no ${WSLG}, so Devspaces does not add or change the start entry "${NAME}"`)]]);
-    const stays = keeper({ permanent: true, wslg: false, entry: true });
-    await stays.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(stays.runs.map((run) => run.args[0])).toEqual(['query']);
-    expect(stays.state.entry).toBe(true);
-    // An entry that is not wanted goes also without wslg.exe.
-    const unwanted = keeper({ permanent: false, wslg: false, entry: true });
-    await unwanted.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(unwanted.state.entry).toBe(false);
-    const long = 'C:\\' + 'x'.repeat(100);
-    const tooLong = keeper({ permanent: true, env: { ProgramFiles: long }, exists: () => true, entry: true });
-    await tooLong.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(tooLong.runs.map((run) => run.args[0])).toEqual(['query', 'delete']);
-    expect(tooLong.state.entry).toBe(false);
-    expect(tooLong.log.warn).toHaveBeenCalledWith(expect.stringContaining(`longer than ${MAX_START_ENTRY} characters`));
-  });
-
-  it('logs a failure of reg.exe, and the next update tries again', async () => {
-    let fail = true;
-    const failing = keeper({
-      permanent: true,
-      runner: { run: async (_file, args) => (args[0] === 'query' ? result(1) : result(fail ? 5 : 0)) },
-    });
-    await failing.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(failing.log.warn).toHaveBeenCalledWith('The start entry "nimblescape Devspaces WSL devspaces" could not be added: reg.exe add ended with exit code 5: (no output)');
-    fail = false;
-    await failing.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(failing.log.info).toHaveBeenCalledWith(expect.stringContaining('added the start entry'));
-  });
-
-  // Mutation: a VS Code without records that follows its (missing) answer fails it (VS Code Insiders next to VS Code
-  // would remove the entry of VS Code); so does one that never removes an entry of a removed distribution (a removal of
-  // the entry that failed, or an entry that another window added at the same moment, would stay at each logon).
-  it('without records of this VS Code, only an entry of a distribution that WSL does not list is removed', async () => {
-    const registered = vi.fn(async () => true as boolean | undefined);
-    const monitorPermanent = vi.fn(async () => true as boolean | undefined);
-    const none = keeper({ knows: async () => false, registered, monitorPermanent });
-    await none.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(none.runs.map((run) => run.args[0])).toEqual(['query']);
-    expect(none.state.entry).toBe(false);
-    expect(registered).not.toHaveBeenCalled();
-    const listed = keeper({ knows: async () => false, registered, monitorPermanent, entry: true, value: 'another command' });
-    await listed.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(listed.runs.map((run) => run.args[0])).toEqual(['query']);
-    expect(listed.state).toMatchObject({ entry: true, value: 'another command' });
-    registered.mockResolvedValue(undefined);
-    await listed.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(listed.state.entry).toBe(true);
-    registered.mockResolvedValue(false);
-    await listed.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(listed.state.entry).toBe(false);
-    expect(monitorPermanent).not.toHaveBeenCalled();
-    const failing = keeper({ knows: async () => Promise.reject(new Error('EBUSY')), entry: true });
-    await failing.subject.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION);
-    expect(failing.state.entry).toBe(true);
-    expect(failing.log.warn).toHaveBeenCalledWith(`The start entry "${NAME}" could not be read: EBUSY`);
-  });
-
-  it('removeStartEntry removes it whatever the Monitor mode', async () => {
-    const { subject, state } = keeper({ permanent: true, entry: true });
-    await subject.removeStartEntry(WSL_DISTRIBUTION);
-    expect(state.entry).toBe(false);
   });
 });
 
