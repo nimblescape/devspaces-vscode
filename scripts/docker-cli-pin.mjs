@@ -11,9 +11,10 @@
 // its oldest and its newest one), which the extension checks against the engine of a remote host before a window of a
 // devspace there opens (src/core/docker/dockerApiVersion.ts); they are measured with the Linux build of this computer,
 // in a container of its Docker engine (measureApi), so a new pin is written only on Linux x86_64 or aarch64 with
-// Docker. The workflow "Docker CLI" runs this every week and opens a pull request when the file changed. --check writes
-// nothing: it downloads the files of the current pin again and fails when a size or a hash differs (Docker replaced a
-// file), or, on Linux, when the CLI speaks other API versions than the pin names.
+// Docker. The workflow "Docker CLI" runs this every day (called by the workflow "Daily checks") and opens a pull
+// request when the file changed. --check writes nothing: it downloads the files of the current pin again and fails when
+// a size or a hash differs (Docker replaced a file), or, on Linux, when the CLI speaks other API versions than the pin
+// names.
 import { execFile, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

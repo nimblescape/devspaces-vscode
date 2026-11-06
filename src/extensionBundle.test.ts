@@ -67,7 +67,7 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'wslSetup.ts',
     // The record of the installation of WSL, so that the setup goes on after the restart of Windows.
     'wslAfterInstall.ts',
-    // The weekly upgrade of the packages of the WSL distribution of Devspaces.
+    // The daily upgrade of the packages of the WSL distribution of Devspaces.
     'wslUpgrade.ts',
   ],
   // missingHelperBuild.ts: the background build of a helper image that the refresh found missing.

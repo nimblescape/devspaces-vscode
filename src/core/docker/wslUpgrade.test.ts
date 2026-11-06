@@ -167,20 +167,20 @@ describe('WslUpgrade', () => {
     const failed = upgrade(result(1, '', 'The upgrade failed. The last lines of /var/log/devspaces-upgrade.log:\nE: Could not resolve deb.debian.org'));
     await failed.subject.check();
     expect(failed.log.warn).toHaveBeenCalledWith(
-      'The weekly upgrade of the packages of the WSL distribution devspaces failed (exit code 1): The upgrade failed. The last lines of /var/log/devspaces-upgrade.log:\nE: Could not resolve deb.debian.org',
+      'The daily upgrade of the packages of the WSL distribution devspaces failed (exit code 1): The upgrade failed. The last lines of /var/log/devspaces-upgrade.log:\nE: Could not resolve deb.debian.org',
     );
     const timedOut = upgrade(result(null, '', '', true));
     await timedOut.subject.check();
     expect(timedOut.log.warn).toHaveBeenCalledWith(
-      'The weekly upgrade of the packages of the WSL distribution devspaces did not end within 30 minutes; it goes on in the distribution while the ' +
-        'distribution runs. When the distribution stops before its end, the next try is a day later, or an hour later when dpkg did not finish. Its output is in /var/log/devspaces-upgrade.log there.',
+      'The daily upgrade of the packages of the WSL distribution devspaces did not end within 30 minutes; it goes on in the distribution while the ' +
+        'distribution runs. When the distribution stops before its end, the next try is 6 hours later, or an hour later when dpkg did not finish. Its output is in /var/log/devspaces-upgrade.log there.',
     );
     const thrown = upgrade(new Error('spawn EACCES'));
     await expect(thrown.subject.check()).resolves.toBeUndefined();
-    expect(thrown.log.warn).toHaveBeenCalledWith('The weekly upgrade of the packages of the WSL distribution devspaces could not run: spawn EACCES');
+    expect(thrown.log.warn).toHaveBeenCalledWith('The daily upgrade of the packages of the WSL distribution devspaces could not run: spawn EACCES');
   });
 
-  // Mutation: a summary of apt 3.0 that is not read says "were upgraded" each week, also when nothing changed.
+  // Mutation: a summary of apt 3.0 that is not read says "were upgraded" each day, also when nothing changed.
   it('reads the summary of apt before 3.0 and of apt 3.0', async () => {
     expect(upgradeCounts('3 upgraded, 1 newly installed, 0 to remove and 2 not upgraded.')).toEqual({ changed: 4, kept: 2 });
     expect(upgradeCounts('0 upgraded, 0 newly installed, 1 downgraded, 0 to remove and 0 not upgraded.')).toEqual({ changed: 0, kept: 0 });
@@ -195,7 +195,7 @@ describe('WslUpgrade', () => {
     const unknown = upgrade(result(0, 'devspaces-upgrade done \n'));
     await unknown.subject.check();
     expect(unknown.log.info).toHaveBeenCalledWith(
-      'The weekly upgrade of the packages of the WSL distribution devspaces ended (apt-get upgrade). Its output is in /var/log/devspaces-upgrade.log there.',
+      'The daily upgrade of the packages of the WSL distribution devspaces ended (apt-get upgrade). Its output is in /var/log/devspaces-upgrade.log there.',
     );
   });
 
@@ -204,7 +204,7 @@ describe('WslUpgrade', () => {
     await kept.subject.check();
     expect(kept.log.info.mock.calls).toEqual([
       [
-        'The weekly upgrade kept 2 package(s) of the WSL distribution devspaces back (apt-get upgrade: 0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.): ' +
+        'The daily upgrade kept 2 package(s) of the WSL distribution devspaces back (apt-get upgrade: 0 upgraded, 0 newly installed, 0 to remove and 2 not upgraded.): ' +
           'packages on hold (apt-mark hold), or new versions that need the removal of other packages, which it never does. ' +
           '"wsl -d devspaces -u root -- apt-get full-upgrade" in a terminal upgrades the latter; it restarts Docker, so stop your devspaces there first.',
       ],
@@ -213,7 +213,7 @@ describe('WslUpgrade', () => {
     const both = upgrade(result(0, 'devspaces-upgrade done 3 upgraded, 0 newly installed, 0 to remove and 1 not upgraded.\n'));
     await both.subject.check();
     expect(both.log.info).toHaveBeenCalledWith(expect.stringMatching(/^The packages of the WSL distribution devspaces were upgraded/));
-    expect(both.log.info).toHaveBeenCalledWith(expect.stringMatching(/^The weekly upgrade kept 1 package\(s\)/));
+    expect(both.log.info).toHaveBeenCalledWith(expect.stringMatching(/^The daily upgrade kept 1 package\(s\)/));
   });
 
   // Mutation: a check that does not look at `disposed` after its waits starts an upgrade of 30 minutes from a window
@@ -337,7 +337,7 @@ describe('the script of the upgrade', () => {
     expect(UPGRADE_SCRIPT).toContain('export DEBIAN_FRONTEND=noninteractive LC_ALL=C\n');
   });
 
-  // Mutation: a script that does not try `apt-get update` again fails for a day while `apt-get check` of the timer
+  // Mutation: a script that does not try `apt-get update` again fails for 6 hours while `apt-get check` of the timer
   // apt-daily holds the lock for a moment.
   it('runs apt-get update up to 3 times, 30 seconds apart', () => {
     expect(runScript({ failUpdate: 2 }).stdout.trim()).toMatch(/^devspaces-upgrade done /);
@@ -352,7 +352,7 @@ describe('the script of the upgrade', () => {
 
   // Mutation: a script without the check of the times upgrades at each window start; one that tries a run that did not
   // end well again at once runs `apt-get update` at each check while the network is down, or a hung upgrade again.
-  it('skips the upgrade within a week after the last one, and within a day after the last try', () => {
+  it('skips the upgrade within 20 hours after the last one, and within 6 hours after the last try', () => {
     fs.mkdirSync(state(), { recursive: true });
     const write = (name: string, ago: number) => fs.writeFileSync(stamp(name), `${seconds() - ago}\n`);
     write(UPGRADE_DONE_FILE, UPGRADE_INTERVAL_SECONDS - 60);
@@ -365,7 +365,7 @@ describe('the script of the upgrade', () => {
     write(UPGRADE_TRIED_FILE, UPGRADE_RETRY_SECONDS + 60);
     expect(runScript().stdout.trim()).toMatch(/^devspaces-upgrade done /);
     expect(calls()[0]).toBe('dpkg --configure -a policy=yes');
-    // Packages that a run left unfinished: a run an hour after the last try, also within the week.
+    // Packages that a run left unfinished: a run an hour after the last try, also within the 20 hours.
     fs.rmSync(file('calls'));
     const audit = 'The following packages are only half configured';
     write(UPGRADE_DONE_FILE, 60);
@@ -385,7 +385,7 @@ describe('the script of the upgrade', () => {
     expect(runScript().stdout.trim()).toMatch(/^devspaces-upgrade done /);
   });
 
-  it('fails with the last lines of its log, and tries again only after a day', () => {
+  it('fails with the last lines of its log, and tries again only after 6 hours', () => {
     const run = runScript({ failUpdate: true });
     expect(run.status).toBe(1);
     expect(run.stderr).toContain(`The upgrade failed. The last lines of ${file('upgrade.log')}:\nE: Could not resolve deb.debian.org`);

@@ -253,7 +253,7 @@ describe('WslLifetime.use', () => {
 
   // Mutation: an upgrade that is told only at the start of the session fails it (a window open for weeks would never
   // upgrade again); so does one for a host that is no WSL distribution.
-  it('lets the weekly upgrade check at each use of a WSL distribution', () => {
+  it('lets the daily upgrade check at each use of a WSL distribution', () => {
     const schedule = vi.fn();
     const { subject } = lifetime({ upgrade: { schedule } });
     subject.use(WSL_HOST);
