@@ -30,9 +30,10 @@
 // after such a login to the same host: a build of the helper image, the calls that change something, and the calls
 // after the connection ended.
 //
-// The WSL distribution of Devspaces (hostAccessOf) has no SSH: its check is the start of the shell before the relay
-// (`wsl.exe … sh -s`), which needs no login and asks nothing, and its Docker calls go through the Docker pipe of the
-// extension (never `ssh://`).
+// The VM of Devspaces (isVmHost: its WSL distribution, or its Lima VM) has no SSH login of the user: its check is the
+// start of the shell before the relay (`wsl.exe … sh -s`, or `ssh … lima-devspaces sudo -n sh -s` after the start of
+// the Lima VM), which needs no login and asks nothing, and its Docker calls go through the Docker pipe of the extension
+// (never `ssh://`).
 import { errorMessage, UserFacingError } from '../errors';
 import { Messages, dockerHostReason } from '../messages';
 import { isAbortError, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
@@ -52,7 +53,9 @@ import {
   sshCommandArgs,
   sshEndpoint,
   sshTargetOf,
+  isVmHost,
   transportProgramOf,
+  transportWords,
   unsupportedTargetReason,
   type DockerHostProblem,
   type DockerTarget,
@@ -65,15 +68,16 @@ import { runWithDockerTarget } from './dockerTargets';
 /** Time limit of `docker info` on a remote host: an SSH connection plus the question (the CLI gives ssh 30 s to connect). */
 export const REMOTE_INFO_TIMEOUT_MS = 45_000;
 /**
- * Time limit of `docker info` on the WSL distribution of Devspaces: when the distribution did not run, its start starts
- * Docker (systemd), which can take more than 45 seconds in a slow virtual machine (Windows in a virtual machine: about 45
- * seconds from the start of the service to the answer of Docker). The call waits for Docker (socket activation).
+ * Time limit of `docker info` on the VM of Devspaces: when the WSL distribution did not run, its start starts Docker
+ * (systemd), which can take more than 45 seconds in a slow virtual machine (Windows in a virtual machine: about 45
+ * seconds from the start of the service to the answer of Docker); the same for Docker Engine after a start of the Lima
+ * VM. The call waits for Docker (socket activation).
  */
 export const WSL_INFO_TIMEOUT_MS = 3 * 60_000;
 
-/** The time limit of `docker info` on `host`: WSL_INFO_TIMEOUT_MS for a WSL distribution, else REMOTE_INFO_TIMEOUT_MS. */
+/** The time limit of `docker info` on `host`: WSL_INFO_TIMEOUT_MS for the VM of Devspaces, else REMOTE_INFO_TIMEOUT_MS. */
 export function engineInfoTimeoutOf(host: string): number {
-  return hostAccessOf(host)?.kind === 'wsl' ? WSL_INFO_TIMEOUT_MS : REMOTE_INFO_TIMEOUT_MS;
+  return isVmHost(host) ? WSL_INFO_TIMEOUT_MS : REMOTE_INFO_TIMEOUT_MS;
 }
 /** Time limit of our own `ssh` call. */
 export const SSH_TIMEOUT_MS = 30_000;
@@ -147,8 +151,8 @@ async function runEngineInfo(
  * The test before a host becomes the Docker host of Devspaces. With the shells before the relay (`ssh.shells`): one
  * login, the shell of the host (in a flow of the user, it may ask for a password or an unknown host key in VS Code),
  * and `docker info` of the Docker CLI of the host on it, which the start script of the relay uses too. Without them: the
- * SSH check (checkSshLogin), then `docker -H ssh://<host> info`, without questions (see the module comment). The WSL
- * distribution of Devspaces only on its shell (testWslHost). The current context is not used and not changed.
+ * SSH check (checkSshLogin), then `docker -H ssh://<host> info`, without questions (see the module comment). The VM
+ * of Devspaces only on its shell (testVmHost). The current context is not used and not changed.
  */
 export async function testRemoteDockerHost(
   docker: RemoteDockerCli,
@@ -157,7 +161,7 @@ export async function testRemoteDockerHost(
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<EngineCheck> {
   const timeoutMs = options.timeoutMs ?? engineInfoTimeoutOf(host);
-  if (hostAccessOf(host)?.kind === 'wsl') return testWslHost(host, ssh, options.signal, timeoutMs);
+  if (isVmHost(host)) return testVmHost(host, ssh, options.signal, timeoutMs);
   if (ssh.shells !== undefined && ssh.sshPath !== undefined && sshTargetOf(host) !== undefined) {
     // Always a new login, as checkSshLogin without its cache: the test sees the SSH configuration and the host of now.
     const shell = await shellLoginCheck(host, ssh, options.signal, { fresh: true });
@@ -182,19 +186,20 @@ export async function testRemoteDockerHost(
 }
 
 /**
- * testRemoteDockerHost for the WSL distribution `host`: a new shell before the relay (`wsl.exe … sh -s`, which starts the
- * distribution when it does not run), and `docker info` of the Docker CLI of the distribution on it.
+ * testRemoteDockerHost for the VM of Devspaces `host`: a new shell before the relay (`wsl.exe … sh -s`, which starts the
+ * distribution when it does not run, or the SSH of Lima after the start of the Lima VM), and `docker info` of the
+ * Docker CLI of the VM on it.
  */
-async function testWslHost(host: string, ssh: SshCheckDeps, signal: AbortSignal | undefined, timeoutMs: number): Promise<EngineCheck> {
-  const shell = await wslShellLogin(host, ssh, signal, { fresh: true });
+async function testVmHost(host: string, ssh: SshCheckDeps, signal: AbortSignal | undefined, timeoutMs: number): Promise<EngineCheck> {
+  const shell = await vmShellLogin(host, ssh, signal, { fresh: true });
   if (!shell.ok) return shell;
-  return (ssh.shells === undefined ? undefined : await engineInfoOnShell(ssh.shells, host, timeoutMs, signal)) ?? WSL_NOT_FOUND;
+  return (ssh.shells === undefined ? undefined : await engineInfoOnShell(ssh.shells, host, timeoutMs, signal)) ?? transportMissing(host);
 }
 
 /**
  * `docker info` (ENGINE_INFO_COMMAND) on the shell before the relay of `host`, as an EngineCheck; undefined when the
  * host has no shell. A shell that was closed or taken over twice before the command (ShellGoneError of RemoteShells.run):
- * undefined for an SSH host, which then logs in with its own `ssh`, and shellGone for the WSL distribution, which has
+ * undefined for an SSH host, which then logs in with its own `ssh`, and shellGone for the VM of Devspaces, which has
  * no other way. Rejects with any other error of `run`.
  */
 async function engineInfoOnShell(shells: RemoteShellAccess, host: string, timeoutMs: number, signal: AbortSignal | undefined): Promise<EngineCheck | undefined> {
@@ -203,11 +208,11 @@ async function engineInfoOnShell(shells: RemoteShellAccess, host: string, timeou
     return result === undefined ? undefined : engineCheckOf(result, timeoutMs);
   } catch (error) {
     if (!(error instanceof ShellGoneError)) throw error;
-    return hostAccessOf(host)?.kind === 'wsl' ? shellGone(error) : undefined;
+    return isVmHost(host) ? shellGone(error) : undefined;
   }
 }
 
-/** The check of the WSL distribution after its shell was closed or taken over twice before its command (ShellGoneError). */
+/** The check of the VM of Devspaces after its shell was closed or taken over twice before its command (ShellGoneError). */
 function shellGone(error: ShellGoneError): Extract<EngineCheck, { ok: false }> {
   return { ok: false, problem: 'unreachable', detail: error.message };
 }
@@ -234,22 +239,27 @@ async function shellLoginCheck(
 }
 
 /**
- * The check of a WSL distribution without its shell (RemoteShells.run): there is no `wsl.exe` on this computer. After a
- * shell started, the shells have none only when the window closes meanwhile, and then nobody reads this.
+ * The check of the VM of Devspaces `host` without its shell (RemoteShells.run): there is no `wsl.exe` on this computer,
+ * or for the Lima VM no `ssh` (or no Lima VM of Devspaces on this computer). After a shell started, the shells have none
+ * only when the window closes meanwhile, and then nobody reads this.
  */
-const WSL_NOT_FOUND = { ok: false, problem: 'wslMissing', detail: 'wsl.exe was not found.' } as const;
+function transportMissing(host: string): { ok: false; problem: DockerHostProblem; detail: string } {
+  return hostAccessOf(host)?.kind === 'lima'
+    ? { ok: false, problem: 'sshMissing', detail: 'The SSH client (ssh) was not found.' }
+    : { ok: false, problem: 'wslMissing', detail: 'wsl.exe was not found.' };
+}
 
 /**
- * The start of the shell before the relay of the WSL distribution `host` as the check of the host (shellLoginCheck):
- * WSL_NOT_FOUND without a shell. Rejects only with an AbortError.
+ * The start of the shell before the relay of the VM of Devspaces `host` as the check of the host (shellLoginCheck):
+ * transportMissing without a shell. Rejects only with an AbortError.
  */
-async function wslShellLogin(
+async function vmShellLogin(
   host: string,
   deps: Pick<SshCheckDeps, 'shells' | 'sshLogins'>,
   signal: AbortSignal | undefined,
   options?: { fresh?: boolean },
 ): Promise<{ ok: true } | { ok: false; problem: DockerHostProblem; detail: string }> {
-  return (await shellLoginCheck(host, deps, signal, options)) ?? WSL_NOT_FOUND;
+  return (await shellLoginCheck(host, deps, signal, options)) ?? transportMissing(host);
 }
 
 /** `docker info` of the Docker host of the operation. */
@@ -301,7 +311,7 @@ export async function readRootlessSocket(
     const detail = errorMessage(error);
     return { ok: false, problem: dockerHostProblem(detail), detail };
   }
-  if (result === undefined) return WSL_NOT_FOUND;
+  if (result === undefined) return transportMissing(host);
   const program = transportProgramOf(host);
   if (result.timedOut) return { ok: false, problem: 'unreachable', detail: `${program} did not answer within ${SSH_TIMEOUT_MS / 1000} seconds.` };
   if (result.exitCode !== 0) {
@@ -391,18 +401,18 @@ export type SshLoginCheck =
   | { ok: false; problem: DockerHostProblem; detail: string };
 
 /**
- * checkSshLogin of the WSL distribution `host`: a success of the last SSH_CHECK_CACHE_MS counts (with `useCache`), else
- * the start of its shell before the relay (wslShellLogin). Its Docker pipe proves nothing: each of its connections
- * starts `wsl.exe` anew.
+ * checkSshLogin of the VM of Devspaces `host`: a success of the last SSH_CHECK_CACHE_MS counts (with `useCache`), else
+ * the start of its shell before the relay (vmShellLogin). Its Docker pipe proves nothing: each of its connections
+ * starts its transport anew.
  */
-async function checkWslLogin(host: string, deps: SshCheckDeps, options: { signal?: AbortSignal; useCache?: boolean }): Promise<SshLoginCheck> {
+async function checkVmLogin(host: string, deps: SshCheckDeps, options: { signal?: AbortSignal; useCache?: boolean }): Promise<SshLoginCheck> {
   if (options.useCache !== false && deps.sshLogins?.isFresh(host)) return { ok: true, skipped: 'cached' };
-  return wslShellLogin(host, deps, options.signal);
+  return vmShellLogin(host, deps, options.signal);
 }
 
 /**
- * The SSH check before a Docker call to `host` (see the module comment; for the WSL distribution of Devspaces the start
- * of its shell, checkWslLogin): `ssh -o BatchMode=yes -o ConnectTimeout=15 -T
+ * The SSH check before a Docker call to `host` (see the module comment; for the VM of Devspaces the start of its shell,
+ * checkVmLogin): `ssh -o BatchMode=yes -o ConnectTimeout=15 -T
  * [-p port] [-l user] -- <host> true`, without questions, or the login of the shell before the relay with the same
  * options (`deps.shells`, not for `useCache` false). `useCache`: a success of the last SSH_CHECK_CACHE_MS counts,
  * and so do Docker calls that go through the Docker pipe of the extension (the test before a switch always connects). A
@@ -413,7 +423,7 @@ export async function checkSshLogin(
   deps: SshCheckDeps,
   options: { signal?: AbortSignal; useCache?: boolean } = {},
 ): Promise<SshLoginCheck> {
-  if (hostAccessOf(host)?.kind === 'wsl') return checkWslLogin(host, deps, options);
+  if (isVmHost(host)) return checkVmLogin(host, deps, options);
   if (options.useCache !== false && deps.sshLogins?.isFresh(host)) return { ok: true, skipped: 'cached' };
   if (options.useCache !== false && deps.viaDockerPipe?.(host) === true) return { ok: true, skipped: 'dockerPipe' };
   const target = sshTargetOf(host);
@@ -505,10 +515,11 @@ export async function ensureDockerHostReachable(
   deps: RemoteReachabilityDeps,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
-  // Our own ssh without questions first (a success of the last minute counts); for WSL the start of its shell.
+  // Our own ssh without questions first (a success of the last minute counts); for the VM of Devspaces the start of its
+  // shell.
   const login = await checkSshLogin(target.host, deps, { signal: options.signal });
   if (!login.ok) {
-    deps.logger.warn(`The Docker host ${target.host} cannot be reached ${hostAccessOf(target.host)?.kind === 'wsl' ? 'through wsl.exe' : 'over SSH'}: ${login.detail}`);
+    deps.logger.warn(`The Docker host ${target.host} cannot be reached ${transportWords(target.host)}: ${login.detail}`);
     throw dockerHostUnreachable(target.host, login.problem, login.detail);
   }
   const check = await checkCurrentEngine(deps.docker, { ...options, timeoutMs: options.timeoutMs ?? engineInfoTimeoutOf(target.host) });

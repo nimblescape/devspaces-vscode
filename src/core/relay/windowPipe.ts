@@ -58,8 +58,8 @@ export interface WindowPipeDeps {
 
 /**
  * The address of the Docker pipe of the window of `devspace` (its container `containerName`), for `settings.host` in
- * the authority: for a devspace on a remote host with a transport (hostAccessOf: an SSH host, or the WSL distribution of
- * Devspaces) when the program of its transport is found (`ssh` or `wsl.exe`: the connection of the relay needs it);
+ * the authority: for a devspace on a remote host with a transport (hostAccessOf: an SSH host, or the VM of Devspaces)
+ * when the program of its transport is found (`ssh` or `wsl.exe`: the connection of the relay needs it);
  * undefined otherwise, and the window names a Docker context as before. `current`, the Docker host in the authority of
  * this window, when it is the pipe of this devspace and the folder of its socket folder exists: an extension host with
  * another runtime or temporary folder made it, and the same URI reloads this window instead of opening it again.

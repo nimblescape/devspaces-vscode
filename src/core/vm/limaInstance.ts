@@ -10,11 +10,12 @@
 // the SSH configuration that Lima writes for it (limaSshArgs). No `vscode`.
 import * as os from 'os';
 import * as path from 'path';
+import { LIMA_INSTANCE_NAME } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import type { Logger, ProcessRunner, RunResult } from '../ports';
 
-/** The name of the Lima instance of Devspaces. */
-export const LIMA_INSTANCE = 'devspaces';
+/** The name of the Lima instance of Devspaces (its Docker host is LIMA_HOST). */
+export const LIMA_INSTANCE = LIMA_INSTANCE_NAME;
 /** The host of the SSH configuration that Lima writes for an instance: `lima-<instance>`. */
 export const LIMA_SSH_HOST = `lima-${LIMA_INSTANCE}`;
 /** The memory of the VM by default, in GiB (R-VM-006), at most half of the memory of this computer. */

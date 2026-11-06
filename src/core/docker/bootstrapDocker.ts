@@ -32,7 +32,7 @@ import { abortError, isAbortError, sleep, systemClock, type Clock, type Logger, 
 import { BUILD_CONTAINER_PREFIX, BUILDX_IMAGE_LS_ARGS, BUILDX_PIN, DOCKER_RUN_FAILED_EXIT_CODE, buildxImageTag, buildxImageTags, buildxPulledReference, buildxRunArgs, isOlderBuildxTag } from './buildxImage';
 import { contextTar } from './contextTar';
 import { deleteEnv, dockerCommandWords, dockerProcessEnv, isReadOnlyDockerCall } from './dockerCli';
-import { hostAccessOf, hostEndpoint, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
+import { hostEndpoint, isVmHost, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 import { extractBaseImages } from '../imageCheck/dockerfile';
@@ -492,14 +492,14 @@ export class BootstrapDocker {
   /**
    * The helper channel: starts `docker <args>` with standard input open, with the environment of `run` (within an
    * operation: its local Docker context, or `ssh://<host>`). Undefined without a Docker CLI, when the runner cannot
-   * start such a program, and within an operation on the WSL distribution of Devspaces, whose worker starts only behind
-   * the relay (`wsl.exe`).
+   * start such a program, and within an operation on the VM of Devspaces (its WSL distribution or its Lima VM), whose
+   * worker starts only behind the relay (`wsl.exe`, or the SSH of Lima).
    */
   start(args: readonly string[]): StartedProcess | undefined {
     const dockerPath = this.cliPath();
     if (dockerPath === undefined || this.runner.start === undefined) return undefined;
     const target = operationDockerTarget();
-    if (target?.kind === 'remote' && hostAccessOf(target.host)?.kind === 'wsl') return undefined;
+    if (target?.kind === 'remote' && isVmHost(target.host)) return undefined;
     return this.runner.start(dockerPath, args, { env: this.operationEnv(false) });
   }
 
@@ -526,17 +526,17 @@ export class BootstrapDocker {
     const target = operationDockerTarget();
     if (target === undefined) return { env: this.env };
     if (target.kind === 'remote') {
-      // The pipe for the WSL distribution never depends on a connection of the relay, so `viaPipe` does not matter.
-      const wsl = hostAccessOf(target.host)?.kind === 'wsl';
-      const pipe = viaPipe || wsl ? this.pipeOf(target) : undefined;
+      // The pipe for the VM of Devspaces never depends on a connection of the relay, so `viaPipe` does not matter.
+      const vm = isVmHost(target.host);
+      const pipe = viaPipe || vm ? this.pipeOf(target) : undefined;
       const env: NodeJS.ProcessEnv = { ...this.env };
       for (const name of REMOTE_CLEARED_VARIABLES) deleteEnv(env, name);
-      // For the WSL distribution without its pipe: `wsl://<distribution>` (hostEndpoint). No call runs with it (`noEndpoint`
-      // below, and `start` starts nothing there); should one run anyway, the Docker CLI refuses it.
+      // For the VM of Devspaces without its pipe: `wsl://<distribution>` or `lima://devspaces` (hostEndpoint). No call runs
+      // with it (`noEndpoint` below, and `start` starts nothing there); should one run anyway, the Docker CLI refuses it.
       env.DOCKER_HOST = pipe ?? hostEndpoint(target.host);
       if (pipe !== undefined) return { env };
       // No `ssh://` for it: a call that only reads runs on the shell before the relay, any other one fails.
-      if (wsl) return { env, shellTarget: target, noEndpoint: target.host };
+      if (vm) return { env, shellTarget: target, noEndpoint: target.host };
       this.sshEnv?.(target.host, env);
       return { env, login: target.host, shellTarget: target };
     }
@@ -559,7 +559,7 @@ export class BootstrapDocker {
       return await this.remoteShell(target, args, { timeoutMs: options.timeoutMs, signal: options.signal });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      const next = hostAccessOf(target.host)?.kind === 'wsl' ? 'so it needs the Docker pipe of the extension' : 'so it logs in over SSH itself';
+      const next = isVmHost(target.host) ? 'so it needs the Docker pipe of the extension' : 'so it logs in over SSH itself';
       this.logger.warn(`docker ${dockerCommandWords(args).join(' ')} could not run on the shell before the relay on ${target.host}, ${next}: ${errorMessage(error)}`);
       return undefined;
     }

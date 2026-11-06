@@ -13,7 +13,7 @@
 // the cleanup alone never makes it run. On an SSH host it waits for the connection of the relay of this window to the host,
 // and runs only through it, without a login of its own (docs/requirements.md R-ENG-002).
 import * as fs from 'fs';
-import { LOCAL_DOCKER_TARGET, describeDockerHost, hostAccessOf, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
+import { LOCAL_DOCKER_TARGET, describeDockerHost, hostAccessOf, transportWords, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
 import { runWithDockerTarget } from '../docker/dockerTargets';
 import { checkSshLogin, engineInfoTimeoutOf, type SshCheckDeps } from '../docker/remoteDocker';
 import { errorMessage } from '../errors';
@@ -128,7 +128,7 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
       if (await deps.leavesStopped?.(target.host)) return false;
       const login = await checkSshLogin(target.host, deps.ssh, { signal });
       if (!login.ok) {
-        deps.logger.info(`The Docker host ${target.host} cannot be reached ${hostAccessOf(target.host)?.kind === 'wsl' ? 'through wsl.exe' : 'over SSH'}: ${login.detail}`);
+        deps.logger.info(`The Docker host ${target.host} cannot be reached ${transportWords(target.host)}: ${login.detail}`);
         return false;
       }
       // A host that our ssh cannot check would be asked by the ssh of the Docker CLI, which may ask a question; nothing

@@ -33,7 +33,7 @@ import { SessionFiles } from '../core/storage/sessionFiles';
 import { isHandedOffStop } from '../core/session/windowRelease';
 import { PENDING_MAX_AGE_MS } from '../core/busy';
 import { availableDevspaces } from '../core/ownership';
-import { WSL_HOST, dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
+import { LIMA_HOST, WSL_HOST, dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
 import { DockerTargets, operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { silentLogger } from '../core/ports';
 import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, RepositoryInfo, WindowStatus } from '../core/types';
@@ -288,6 +288,7 @@ function createHarness(
     remoteDocker?: ControllerDeps['remoteDocker'];
     /** The WSL distribution of Devspaces (Windows). Default: none. */
     wslSetup?: ControllerDeps['wslSetup'];
+    limaSetup?: ControllerDeps['limaSetup'];
     /** The record of the installation of WSL (Windows). Default: none. */
     wslAfterInstall?: ControllerDeps['wslAfterInstall'];
     /** The Docker pipe of the window of a devspace. Default: none. */
@@ -496,6 +497,7 @@ function createHarness(
     dockerTargets: options.dockerTargets,
     remoteDocker: options.remoteDocker,
     wslSetup: options.wslSetup,
+    limaSetup: options.limaSetup,
     wslAfterInstall: options.wslAfterInstall,
     windowDockerHost: options.windowDockerHost,
     hostConnection: options.hostConnection,
@@ -707,11 +709,12 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 41 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
+    // 42 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), and the button "Remove and
-    // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, the last one that was added.
-    expect(declared).toHaveLength(41);
+    // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces. The last one that was added
+    // is the setup of the Lima VM of Devspaces (macOS and Linux).
+    expect(declared).toHaveLength(42);
     expect(declared).toEqual(
       expect.arrayContaining([
         Commands.removeFromDockerEngine,
@@ -721,6 +724,7 @@ describe('Controller commands', () => {
         Commands.setUpWslDistribution,
         Commands.removeWslDistribution,
         Commands.resetWslDistribution,
+        Commands.setUpLimaVm,
       ]),
     );
   });
@@ -785,9 +789,6 @@ describe('Controller commands', () => {
     const setup = { [DockerContextKeys.missing]: true, [DockerContextKeys.setupRequired]: true };
     const intro = 'Devspaces needs Docker, which is not installed on this computer.';
     const after = 'Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.';
-    // Docker Engine on Linux is not started by the extension: it needs administrator rights.
-    const afterLinux =
-      'Your repositories appear here once Docker is installed. Devspaces asks to start Docker Engine when needed.';
     const signIn =
       'Sign in with GitHub to see your repositories that have a Dev Container configuration.\n' +
       'Devspaces asks for the scopes repo (read and change the repositories that you can access, also the private ones) and read:org (read your organization memberships). It works only with accounts on github.com.\n' +
@@ -797,20 +798,21 @@ describe('Controller commands', () => {
     const installWsl =
       '1. Install WSL 2, which Docker needs on Windows. Windows asks for administrator permission; restart Windows afterwards, and Devspaces goes on with step 2 by itself.\n[Install WSL 2](command:devspaces.dockerSetup.installWsl)';
     const wslInstalled = '1. ✓ WSL 2 is installed.';
-    const installMac =
-      'Install Docker Desktop with Homebrew or Docker\'s installer. You see the commands before anything runs. Docker Desktop is free for personal use, education, non-commercial open source, and small businesses; larger companies need a [paid subscription](https://www.docker.com/legal/docker-subscription-service-agreement/).\n[Install Docker](command:devspaces.dockerSetup.install)';
+    // On macOS and Linux, the Lima VM of Devspaces (R-VM-001): no installation of Docker Desktop or Docker Engine.
+    const setUpMac =
+      'Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without Docker Desktop and without administrator permission. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)';
     // The WSL distribution of Devspaces, without Docker Desktop.
     // On Windows, the only setup of Docker (R-ENG-005): no installation of Docker Desktop.
     const setUpWsl =
       '2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first, and goes on after the restart of Windows. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)';
-    const installLinux =
-      'Install Docker Engine from Docker\'s package repository. You see the commands before anything runs.\n[Install Docker](command:devspaces.dockerSetup.install)';
+    const setUpLinux =
+      'Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. The VM needs QEMU and access to /dev/kvm. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)';
     // The last step on every platform: Docker on another computer, without Docker on this one.
     const remote =
       'Or use Docker on another computer that you reach over SSH, without Docker on this computer. Devspaces downloads the Docker CLI that it needs into its own folder; this needs no administrator permission.\n[Use a Remote Docker Host…](command:devspaces.useRemoteDockerHost)';
 
     it('shows the steps of macOS, then the sign-in', () => {
-      expect(shownWelcome({ ...setup, isMac: true })).toEqual([intro, installMac, after, remote, signIn]);
+      expect(shownWelcome({ ...setup, isMac: true })).toEqual([intro, setUpMac, after, remote, signIn]);
     });
 
     it('shows the steps of Windows with WSL 2 first, and a check mark instead of its button once WSL 2 is ready', () => {
@@ -818,24 +820,26 @@ describe('Controller commands', () => {
       expect(shownWelcome({ ...setup, isWindows: true, [DockerContextKeys.wslReady]: true })).toEqual([intro, wslInstalled, setUpWsl, after, remote, signIn]);
     });
 
-    it('offers no installation of Docker Desktop on Windows', () => {
-      const windows = shownWelcome({ ...setup, isWindows: true }).join('\n');
-      expect(windows).not.toContain('command:devspaces.dockerSetup.install)');
-      expect(windows).not.toContain('Install Docker Desktop');
+    it('offers no installation of Docker Desktop or Docker Engine on any platform', () => {
+      for (const os of ['isWindows', 'isMac', 'isLinux']) {
+        const shown = shownWelcome({ ...setup, [os]: true }).join('\n');
+        expect(shown, os).not.toContain('command:devspaces.dockerSetup.install)');
+        expect(shown, os).not.toContain('Install Docker Desktop');
+      }
     });
 
     it('shows the steps of Linux', () => {
-      expect(shownWelcome({ ...setup, isLinux: true })).toEqual([intro, installLinux, afterLinux, remote, signIn]);
+      expect(shownWelcome({ ...setup, isLinux: true })).toEqual([intro, setUpLinux, after, remote, signIn]);
     });
 
     // The settings of VS Code name a GitHub Enterprise instance (devspaces.githubEnterprise): a note after the sign-in.
     it('shows the note on GitHub Enterprise after the sign-in, only while not signed in, also under the setup', () => {
       const enterprise = { [GITHUB_ENTERPRISE_CONTEXT_KEY]: true };
       expect(shownWelcome({ ...enterprise })).toEqual([signIn, githubEnterprise]);
-      expect(shownWelcome({ ...setup, isMac: true, ...enterprise })).toEqual([intro, installMac, after, remote, signIn, githubEnterprise]);
+      expect(shownWelcome({ ...setup, isMac: true, ...enterprise })).toEqual([intro, setUpMac, after, remote, signIn, githubEnterprise]);
       expect(shownWelcome({})).toEqual([signIn]);
       expect(shownWelcome({ ...enterprise, [SIGNED_IN_CONTEXT_KEY]: true })).toEqual(['Loading your repositories…']);
-      expect(shownWelcome({ ...enterprise, ...setup, isMac: true, [SIGNED_IN_CONTEXT_KEY]: true })).toEqual([intro, installMac, after, remote]);
+      expect(shownWelcome({ ...enterprise, ...setup, isMac: true, [SIGNED_IN_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
     });
 
     // Numbers only where there is more than one step (Windows: WSL 2, then Docker for Devspaces in WSL).
@@ -858,10 +862,10 @@ describe('Controller commands', () => {
 
     it('shows no list entry under the setup, also when signed in, loaded, or after a failed load', () => {
       const signedIn = { ...setup, isMac: true, [SIGNED_IN_CONTEXT_KEY]: true };
-      expect(shownWelcome(signedIn)).toEqual([intro, installMac, after, remote]);
-      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true })).toEqual([intro, installMac, after, remote]);
-      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([intro, installMac, after, remote]);
-      expect(shownWelcome({ ...signedIn, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([intro, installMac, after, remote]);
+      expect(shownWelcome(signedIn)).toEqual([intro, setUpMac, after, remote]);
+      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
+      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
+      expect(shownWelcome({ ...signedIn, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
       // Every entry but the sign-in and its note on GitHub Enterprise either belongs to the setup or is hidden under it.
       for (const view of welcomeManifest().contributes.viewsWelcome) {
         if (view.when === `!${SIGNED_IN_CONTEXT_KEY}` || view.when === `!${SIGNED_IN_CONTEXT_KEY} && ${GITHUB_ENTERPRISE_CONTEXT_KEY}`) continue;
@@ -876,8 +880,9 @@ describe('Controller commands', () => {
       const used = manifest.contributes.viewsWelcome.flatMap((view) => [...view.contents.matchAll(/\(command:([\w.]+)\)/g)].map((match) => match[1]));
       expect(used).toEqual(
         expect.arrayContaining([
-          'devspaces.dockerSetup.install',
           'devspaces.dockerSetup.installWsl',
+          'devspaces.setUpWslDistribution',
+          'devspaces.setUpLimaVm',
           'devspaces.signIn',
         ]),
       );
@@ -7781,11 +7786,16 @@ describe('A course link to Devspaces', () => {
    * distribution of Devspaces becomes the Docker host (`ensureDockerHost`, here the fake of WslSetupCommands, which
    * also records the host of each open in the worker in `hosts`).
    */
-  function withoutDocker(result: 'used' | 'notUsed' | 'unavailable', wslAfterInstall?: ControllerDeps['wslAfterInstall']) {
+  function withoutDocker(result: 'used' | 'notUsed' | 'unavailable', wslAfterInstall?: ControllerDeps['wslAfterInstall'], limaResult?: 'used' | 'notUsed' | 'unavailable') {
     let target: DockerTarget = dockerTargetOf('npipe:////./pipe/docker_engine', 'default');
     const ensureDockerHost = vi.fn(async (_link?: { path: string; query: string }) => {
       if (result === 'used') target = remoteDockerTarget(WSL_HOST);
       return result;
+    });
+    // The Lima VM of Devspaces (macOS and Linux), where the WSL setup is unavailable.
+    const ensureLimaHost = vi.fn(async (_link?: { path: string; query: string }) => {
+      if (limaResult === 'used') target = remoteDockerTarget(LIMA_HOST);
+      return limaResult ?? 'unavailable';
     });
     const wslInstalled = vi.fn(async () => true);
     recreateHarness({
@@ -7796,6 +7806,7 @@ describe('A course link to Devspaces', () => {
         ofHost: async (host: string) => (host === '' ? dockerTargetOf('npipe:////./pipe/docker_engine', 'default') : remoteDockerTarget(host)),
       } as unknown as ControllerDeps['dockerTargets'],
       wslSetup: { setUp: vi.fn(async () => {}), remove: vi.fn(async () => {}), removeAndSetUpAgain: vi.fn(async () => {}), ensureDockerHost, wslInstalled },
+      limaSetup: limaResult === undefined ? undefined : { setUp: vi.fn(async () => {}), ensureDockerHost: ensureLimaHost },
       wslAfterInstall,
     });
     fakeVscode.window.showWarningMessage.mockImplementation(async (message: string) => (isLinkQuestion(message) ? Actions.open : undefined));
@@ -7811,7 +7822,7 @@ describe('A course link to Devspaces', () => {
       await h.registry.add(env);
       return openResult(env);
     });
-    return { ensureDockerHost, wslInstalled, hosts };
+    return { ensureDockerHost, ensureLimaHost, wslInstalled, hosts };
   }
 
   // A test on Windows without Docker Desktop: the link asked to install Docker Desktop. Windows needs no Docker Desktop
@@ -7829,6 +7840,31 @@ describe('A course link to Devspaces', () => {
     expect(h.logger.info).toHaveBeenCalledWith('The link goes on with Docker in the WSL distribution of Devspaces.');
     // Never the message of a missing Docker. (The connection of the window afterwards needs wsl.exe, which this test has not.)
     expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalledWith(Messages.dockerNotInstalled, expect.anything());
+  });
+
+  // macOS and Linux without Docker (R-VM-001): the link sets up the Lima VM of Devspaces without a question, and opens
+  // there; the WSL setup has nothing to do there.
+  it('sets up the Lima VM of Devspaces on macOS and Linux without Docker, and opens the repository there', async () => {
+    const { ensureDockerHost, ensureLimaHost, hosts } = withoutDocker('unavailable', undefined, 'used');
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(ensureDockerHost).toHaveBeenCalledTimes(1);
+    expect(ensureLimaHost.mock.calls).toEqual([[courseLink('MySchool/module-ts-2-<username>')]]);
+    expect(warningMessages()).toEqual([ControllerTexts.linkStartConfirm('myschool/module-ts-2-octo')]);
+    expect(hosts).toEqual([LIMA_HOST]);
+    expect(h.logger.info).toHaveBeenCalledWith('The link goes on with Docker in the VM of Devspaces.');
+    expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalledWith(Messages.dockerNotInstalled, expect.anything());
+  });
+
+  it('opens nothing when the Lima VM of Devspaces is not used, and never asks for it while the WSL distribution is used', async () => {
+    const lima = withoutDocker('unavailable', undefined, 'notUsed');
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(lima.hosts).toEqual([]);
+    expect(h.service.openInWorker).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The link opened nothing now: Devspaces does not use the VM of Devspaces, and this computer has no Docker.');
+    const wsl = withoutDocker('used', undefined, 'used');
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(wsl.ensureLimaHost).not.toHaveBeenCalled();
+    expect(wsl.hosts).toEqual([WSL_HOST]);
   });
 
   it('opens nothing when the WSL distribution of Devspaces is not used (a closed question, or a problem with its message)', async () => {

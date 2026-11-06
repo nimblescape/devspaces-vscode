@@ -26,6 +26,12 @@ export const SHELL_LOGIN_TIMEOUT_MS = 30_000;
  * virtual machine). WSL itself gives up after its own time limit (WSL_START_ATTEMPTS), which comes first.
  */
 export const WSL_SHELL_LOGIN_TIMEOUT_MS = 2 * 60_000;
+/**
+ * SHELL_LOGIN_TIMEOUT_MS of the Lima VM of Devspaces: its login first installs the pinned Lima when it is missing, and
+ * starts the VM when it is stopped (LimaVm.ready), which `limactl start` gives at most 10 minutes (its first start runs
+ * cloud-init). `limactl` itself gives up first.
+ */
+export const LIMA_SHELL_LOGIN_TIMEOUT_MS = 12 * 60_000;
 /** A shell that no call used for this long is closed (the next call logs in again). */
 export const SHELL_IDLE_CLOSE_MS = 2 * 60_000;
 /** The most output of one command on each stream; more ends the shell, and the call fails. */

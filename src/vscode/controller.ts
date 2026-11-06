@@ -69,6 +69,7 @@ import { FROM_PROGRESS_NOTIFICATION, HIDE_NOTIFICATIONS_COMMAND, runWithProgress
 import type { RemoteDockerCommands } from './remoteDockerCommands';
 import type { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import type { WslSetupCommands } from './wslSetupCommands';
+import type { LimaSetupCommands } from './limaSetupCommands';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import type { SessionCoordinator } from './sessionCoordinator';
 import { RowActivationTracker, activatedRow, type ListOpenMode } from './rowActivation';
@@ -186,6 +187,8 @@ export interface ControllerDeps {
   remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'useLocalDocker' | 'chooseDockerHost'>;
   /** "Set Up Docker for Devspaces…", "Remove the WSL Distribution of Devspaces…", and "Remove and Set Up Again" (Windows). */
   wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'removeAndSetUpAgain' | 'ensureDockerHost' | 'wslInstalled'>;
+  /** "Set Up Docker for Devspaces in Its VM…" (macOS and Linux), also for a link on a computer without Docker. */
+  limaSetup?: Pick<LimaSetupCommands, 'setUp' | 'ensureDockerHost'>;
   /**
    * The record of the installation of WSL (Windows): the first window after the restart of Windows goes on with the
    * setup of Docker for Devspaces (goOnAfterWslInstall).
@@ -545,6 +548,7 @@ export class Controller implements vscode.Disposable {
       removeWslDistribution: async () => this.deps.wslSetup?.remove(),
       // The button of the error wslDiskCorrupt passes the Try again of its operation, which runs after the setup.
       resetWslDistribution: async (argument) => this.deps.wslSetup?.removeAndSetUpAgain(typeof argument === 'function' ? (argument as () => unknown) : undefined),
+      setUpLimaVm: async () => this.deps.limaSetup?.setUp(),
       rowActivated: (argument) => this.rowActivated(argument),
       rowEnter: () => this.rowEnter(),
     };
@@ -560,6 +564,7 @@ export class Controller implements vscode.Disposable {
       'setUpWslDistribution',
       'removeWslDistribution',
       'resetWslDistribution',
+      'setUpLimaVm',
       'rowActivated',
       'rowEnter',
       'showLog',
@@ -4055,22 +4060,29 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * Docker for a link (R-GEN-002, R-ENG-005), `uri`: when the current engine is the local Docker and no Docker CLI runs
-   * its calls (BootstrapDocker.canRunOn), Windows needs no Docker Desktop: the WSL distribution of Devspaces becomes the
-   * Docker host of Devspaces (WslSetupCommands.ensureDockerHost: the check of WSL, the setup without a question, and the
-   * Docker CLI of Devspaces), and the link goes on there. Without WSL, Devspaces installs it, and the link opens again
-   * after the restart of Windows (goOnAfterWslInstall). False when Devspaces does not use the distribution (a closed
-   * question, the installation of WSL, or a problem with its message): the link opens nothing now. True otherwise, also
-   * where this computer has no WSL setup (not Windows): there the link goes on as before and says that Docker is
-   * missing at its first Docker call. Without `uri`, the setup after the restart of Windows that has no link.
+   * Docker for a link (R-GEN-002, R-ENG-005, R-VM-001), `uri`: when the current engine is the local Docker and no Docker
+   * CLI runs its calls (BootstrapDocker.canRunOn), the VM of Devspaces becomes the Docker host of Devspaces, and the link
+   * goes on there. On Windows its WSL distribution (WslSetupCommands.ensureDockerHost: the check of WSL, the setup without
+   * a question, and the Docker CLI of Devspaces); without WSL, Devspaces installs it, and the link opens again after the
+   * restart of Windows (goOnAfterWslInstall). On macOS and Linux its Lima VM (LimaSetupCommands.ensureDockerHost, also
+   * without a question). False when Devspaces does not use the VM (a closed question, the installation of WSL, or a
+   * problem with its message): the link opens nothing now. True otherwise, also where this computer has no VM setup:
+   * there the link goes on as before and says that Docker is missing at its first Docker call. Without `uri`, the setup
+   * after the restart of Windows that has no link.
    */
   private async dockerForLink(uri?: LinkUri): Promise<boolean> {
     const target = await this.operationTarget();
     if (target.kind !== 'local' || this.deps.docker.canRunOn(target)) return true;
-    const result = (await this.deps.wslSetup?.ensureDockerHost(uri)) ?? 'unavailable';
+    const { wslSetup, limaSetup } = this.deps;
+    let vm = 'the WSL distribution of Devspaces';
+    let result = (await wslSetup?.ensureDockerHost(uri)) ?? 'unavailable';
+    if (result === 'unavailable' && limaSetup !== undefined) {
+      vm = 'the VM of Devspaces';
+      result = await limaSetup.ensureDockerHost(uri);
+    }
     const what = uri === undefined ? 'The setup after the restart of Windows' : 'The link';
-    if (result === 'notUsed') this.logger.info(`${what} opened nothing now: Devspaces does not use the WSL distribution of Devspaces, and this computer has no Docker.`);
-    else if (result === 'used') this.logger.info(`${what} goes on with Docker in the WSL distribution of Devspaces.`);
+    if (result === 'notUsed') this.logger.info(`${what} opened nothing now: Devspaces does not use ${vm}, and this computer has no Docker.`);
+    else if (result === 'used') this.logger.info(`${what} goes on with Docker in ${vm}.`);
     return result !== 'notUsed';
   }
 
@@ -4339,8 +4351,8 @@ const usesDevspace = statusNamesDevspace;
 
 /**
  * The window of a devspace on the remote host `host` can get no Docker pipe (windowDockerHost): the program of its
- * transport is missing on this computer (`ssh`, or `wsl.exe` for the WSL distribution of Devspaces), or `host` has no
- * transport that Devspaces can use.
+ * transport is missing on this computer (`ssh`, also for the Lima VM of Devspaces, or `wsl.exe` for its WSL
+ * distribution), or `host` has no transport that Devspaces can use.
  */
 function noWindowPipe(host: string): UserFacingError {
   const access = hostAccessOf(host);

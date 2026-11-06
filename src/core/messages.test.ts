@@ -107,6 +107,18 @@ describe('the messages of a remote Docker host', () => {
     expect(reason).not.toMatch(/SSH|ssh|network|group docker/);
   });
 
+  it.each([
+    ['unreachable', 'The VM of Devspaces did not answer. Try again.'],
+    ['login', 'Devspaces could not start its VM or a shell in it. The details show why.'],
+    ['unknown', 'Devspaces could not start its VM or a shell in it. The details show why.'],
+    ['dockerNotRunning', 'Docker is not running in the VM of Devspaces.'],
+    ['sshMissing', 'The SSH client (ssh) was not found on this computer.'],
+  ] as const)('%s for the Lima VM of Devspaces', (problem, text) => {
+    const reason = dockerHostReason(problem, 'lima:devspaces');
+    expect(reason).toBe(text);
+    expect(reason).not.toMatch(/network|group docker|SSH key|host key/);
+  });
+
   // The button "Remove and Set Up Again" removes only the distribution of Devspaces.
   it('offers Remove and Set Up Again only for the damaged disk of the distribution of Devspaces', () => {
     expect(dockerHostReason('wslDiskCorrupt', 'wsl:devspaces')).toContain('"Remove and Set Up Again"');

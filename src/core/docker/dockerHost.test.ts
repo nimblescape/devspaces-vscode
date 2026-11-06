@@ -27,7 +27,11 @@ import {
   unsupportedTargetReason,
   RUNTIME_DIR_COMMAND,
   WSL_HOST,
+  LIMA_HOST,
   hostAccessOf,
+  isVmHost,
+  transportProgramOf,
+  transportWords,
   hostEndpoint,
   parseWslList,
   wslText,
@@ -260,6 +264,24 @@ describe('rootless Docker on the remote computer', () => {
     expect(rootlessSocketPath('relative/dir')).toBeUndefined();
     expect(rootlessSocketPath('/run/user/../etc')).toBeUndefined();
     expect(rootlessSocketPath('/run/user/1000;rm')).toBeUndefined();
+  });
+});
+
+describe('the Lima VM of Devspaces as a host', () => {
+  it('is the one host lima:devspaces, never an SSH alias or address, reached over the SSH of Lima', () => {
+    expect(LIMA_HOST).toBe('lima:devspaces');
+    expect(hostAccessOf(LIMA_HOST)).toEqual({ kind: 'lima' });
+    expect(sshTargetOf(LIMA_HOST)).toBeUndefined();
+    // Another instance is no host of Devspaces, and an SSH address stays an SSH host: the host `lima` with the port 2222.
+    expect(hostAccessOf('lima:default')).toBeUndefined();
+    expect(hostAccessOf('lima:2222')).toEqual({ kind: 'ssh', address: { host: 'lima', port: 2222 } });
+    expect(transportProgramOf(LIMA_HOST)).toBe('ssh');
+    expect(remoteDockerTarget(LIMA_HOST)).toEqual({ kind: 'remote', host: LIMA_HOST, endpoint: 'lima://devspaces' });
+  });
+
+  it('counts the Lima VM and the WSL distribution as the VM of Devspaces, and names the transport of each host', () => {
+    expect([LIMA_HOST, WSL_HOST, 'wsl:Ubuntu', 'build-box', 'lima:default', ''].map(isVmHost)).toEqual([true, true, true, false, false, false]);
+    expect([LIMA_HOST, WSL_HOST, 'build-box'].map(transportWords)).toEqual(['over the SSH of Lima', 'through wsl.exe', 'over SSH']);
   });
 });
 

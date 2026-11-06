@@ -27,6 +27,7 @@ import {
   devspacesOfHost,
   dockerHostOf,
   hostAccessOf,
+  isVmHost,
   parseWslList,
   sshCommandArgs,
   transportProgramOf,
@@ -39,7 +40,10 @@ import { ensureDockerRunning, launchDetachedProcess } from '../core/docker/docke
 import { DockerTargets, operationDockerTarget, outsideOperation, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
 import { RelayConnectionError } from '../core/relay/connection';
-import { openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
+import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
+import { deferredByteProcess } from '../core/relay/deferredProcess';
+import { LimaVm } from '../core/vm/limaVm';
+import { LimaSetup } from '../core/vm/limaSetup';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
 import { HostPipes } from '../core/relay/hostPipes';
@@ -111,6 +115,7 @@ import { GroupMatchWorkerRunner } from './groupMatcher';
 import { PreviewWorkerRunner } from './groupsPreviewRunner';
 import { RemoteDockerCommands } from './remoteDockerCommands';
 import { WslSetupCommands } from './wslSetupCommands';
+import { LimaSetupCommands } from './limaSetupCommands';
 import { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import { SessionCoordinator } from './sessionCoordinator';
 import {
@@ -307,14 +312,14 @@ async function activateExtension(
   const leavesStopped = (host: string): Promise<boolean> => wslLifetime?.leavesStopped(host) ?? Promise.resolve(false);
   // Docker Desktop installed, updated, uninstalled or moved while VS Code runs is found or lost without a reload. The
   // Docker CLI of the extension is only the bootstrap's (BootstrapDocker). Its calls of an operation on an SSH host go
-  // through the Docker pipe of the extension for the host while a connection of the relay to it is open; on the WSL
-  // distribution of Devspaces always through its pipe.
+  // through the Docker pipe of the extension for the host while a connection of the relay to it is open; on the VM of
+  // Devspaces (its WSL distribution, or its Lima VM) always through its pipe.
   const docker = new BootstrapDocker(runner, dockerPath, env, logger, platform, {
     ...adapterOptions,
     dockerPipe: (target) => hostPipes?.dockerHost(target.host),
-    // The pipe of the WSL distribution listens from the first Docker call of an operation there.
+    // The pipe of the VM of Devspaces listens from the first Docker call of an operation there.
     servePipe: async (target) => {
-      if (hostAccessOf(target.host)?.kind === 'wsl') await hostPipes?.serve(target.host);
+      if (isVmHost(target.host)) await hostPipes?.serve(target.host);
     },
     // A call of an operation that only reads, while the host has no pipe: on the shell before the relay of the host.
     remoteShell: (target, args, options) => remoteShells?.docker(target.host, args, options) ?? Promise.resolve(undefined),
@@ -360,10 +365,32 @@ async function activateExtension(
     const wsl = wslPath();
     return wsl === undefined ? undefined : runner.run(wsl, WSL_LIST_ARGS, { env: wslEnv(env), timeoutMs: WSL_LIST_TIMEOUT_MS });
   };
+  // The Lima VM of Devspaces (docs/architecture.md "The Lima VM of Devspaces"); only on macOS and Linux. Each transport to
+  // it starts it first when it is stopped (LimaVm.ready).
+  const limaVm = platform === 'darwin' || platform === 'linux' ? new LimaVm({ runner, logger, platform, arch: process.arch, env }) : undefined;
+  /**
+   * The transport `command` to the Lima VM of Devspaces with the program `ssh` (limaHostTransport): its `ssh` starts when
+   * the VM runs. Undefined without `ssh` or where Devspaces has no Lima VM.
+   */
+  const limaProcess = (ssh: string | undefined, command?: string): StartedByteProcess | undefined => {
+    if (ssh === undefined || limaVm === undefined) return undefined;
+    return deferredByteProcess(async (signal) => {
+      await limaVm.ready(signal);
+      if (signal.aborted) throw abortError();
+      const transport = limaHostTransport(limaVm.paths, ssh, env, command);
+      const started = runner.startBytes(transport.file, transport.args, { env: transport.env });
+      // A failed transport may mean a VM that stopped meanwhile: the next transport checks it again.
+      void started.exited.then(({ exitCode }) => {
+        if (exitCode === 255) limaVm.forgetRunning();
+      });
+      return started;
+    });
+  };
   /** Whether the program of the transport of the remote host `host` is found (`ssh`, or `wsl.exe` for WSL). */
   const transportFound = (host: string): boolean => {
     const access = hostAccessOf(host);
     if (access === undefined) return false;
+    if (access.kind === 'lima') return limaVm !== undefined && sshPath() !== undefined;
     return (access.kind === 'wsl' ? wslPath() : sshPath()) !== undefined;
   };
   // After a login with a password in a flow of the user, Devspaces offers once per host to log in with its own key
@@ -383,8 +410,8 @@ async function activateExtension(
   });
   keyOffer = sshKeys;
   void sshKeys.prepare();
-  // `ssh … docker system dial-stdio` on an SSH host, or `wsl.exe … docker system dial-stdio` in the WSL distribution,
-  // for a connection of a Docker pipe without the relay. The program is found once: a window that works without the
+  // `ssh … docker system dial-stdio` on an SSH host or in the Lima VM of Devspaces, or `wsl.exe … docker system
+  // dial-stdio` in the WSL distribution, for a connection of a Docker pipe without the relay. The program is found once: a window that works without the
   // relay makes many short Docker connections.
   let dialSsh: string | undefined;
   let dialWsl: string | undefined;
@@ -395,6 +422,10 @@ async function activateExtension(
       if (dialWsl === undefined) return undefined;
       wslLifetime?.use(host);
       return wslProcess(runner.startBytes(dialWsl, wslCommandArgs(access.distribution, ['docker', 'system', 'dial-stdio']), { env: wslEnv(env) }));
+    }
+    if (access?.kind === 'lima') {
+      dialSsh ??= sshPath();
+      return limaProcess(dialSsh, 'docker system dial-stdio');
     }
     dialSsh ??= sshPath();
     if (dialSsh === undefined || access === undefined) return undefined;
@@ -430,11 +461,16 @@ async function activateExtension(
    * Within a flow of the user (withSshPrompts), it may ask in VS Code until the Cancel of the flow; its questions end
    * with its process. With the key of Devspaces when the host has it; after a login that asked for the password, the key
    * offer runs on the shell (SshKeyOffer.afterLogin). For the WSL distribution of Devspaces `wsl.exe … sh -s`
-   * (wslHostTransport), which asks nothing. Undefined without the program of the transport and for a host that has
-   * none (hostAccessOf).
+   * (wslHostTransport), and for the Lima VM of Devspaces `ssh … lima-devspaces sudo -n sh -s` after its start
+   * (limaHostTransport), which ask nothing. Undefined without the program of the transport and for a host that has none
+   * (hostAccessOf).
    */
   const startLogin = (host: string): RemoteShellStart | undefined => {
     const access = hostAccessOf(host);
+    if (access?.kind === 'lima') {
+      const process = limaProcess(sshPath());
+      return process === undefined ? undefined : { process };
+    }
     if (access?.kind === 'wsl') {
       const wsl = wslPath();
       if (wsl === undefined) return undefined;
@@ -1083,6 +1119,8 @@ async function activateExtension(
       }
       return parseWslList(result.stdout);
     },
+    // The Lima VM of Devspaces in the choice of the host when it exists (macOS and Linux).
+    limaVmExists: limaVm === undefined ? undefined : () => limaVm.exists(),
     devspaceCount: async (host) => devspacesOfHost(await registry.list(), host).length,
     onDidSwitch: async () => {
       await sidebar.render();
@@ -1112,6 +1150,16 @@ async function activateExtension(
       await engineRecords.forgetMonitorAnswer(WSL_HOST).catch((error: unknown) => logger.warn(`The answer about the Monitor on ${describeDockerHost(WSL_HOST)} could not be forgotten: ${errorMessage(error)}`));
       await keeper.removeStartEntry(WSL_DISTRIBUTION);
     },
+  });
+  // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
+  // Devspaces.
+  const limaSetup = new LimaSetupCommands({
+    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: process.arch, env }),
+    folder: limaVm?.paths.root,
+    logger,
+    showLog: () => logger.show(),
+    useRemoteHost: () => remoteDocker.useRemoteHost(),
+    useHost: (host) => remoteDocker.useHost(host),
   });
   // A Docker context or DOCKER_HOST of the user that reaches a host over SSH while Devspaces uses the local Docker: its
   // host is offered once for the list (in the background; the read that found it goes on).
@@ -1169,6 +1217,7 @@ async function activateExtension(
     },
     remoteDocker,
     wslSetup,
+    limaSetup,
     wslAfterInstall,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.

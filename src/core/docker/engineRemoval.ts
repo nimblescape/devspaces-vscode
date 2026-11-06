@@ -19,7 +19,8 @@ import { LABEL_MONITOR, LABEL_MONITOR_OWNER, REMOTE_MONITOR_VOLUME } from '../re
 import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, type BootstrapDocker } from './bootstrapDocker';
 import { BUILDX_IMAGE_LS_ARGS, BUILDX_REFERENCE_FILTER, buildxImageTags } from './buildxImage';
-import { describeDockerHost, sshEndpoint, wslDistributionOf } from './dockerHost';
+import { LIMA_HOST, describeDockerHost, sshEndpoint, wslDistributionOf } from './dockerHost';
+import { LIMA_SSH_HOST, limaPaths, limaSshConfigFile } from '../vm/limaInstance';
 import { DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 
 /**
@@ -180,11 +181,13 @@ export async function engineInventory(
 }
 
 /**
- * `docker` with `-H ssh://<host>` for a remote engine, or behind `wsl -d <distribution> -u root --` for the WSL
- * distribution of Devspaces, so that a command of the log reaches the same engine.
+ * `docker` with `-H ssh://<host>` for a remote engine, behind `wsl -d <distribution> -u root --` for the WSL
+ * distribution of Devspaces, or behind `ssh -F <instance>/ssh.config lima-devspaces sudo` for its Lima VM, so that a
+ * command of the log reaches the same engine.
  */
 function dockerWord(remoteHost: string | undefined): string {
   if (remoteHost === undefined) return 'docker';
+  if (remoteHost === LIMA_HOST) return `ssh -F ${JSON.stringify(limaSshConfigFile(limaPaths()))} ${LIMA_SSH_HOST} sudo docker`;
   const distribution = wslDistributionOf(remoteHost);
   return distribution === undefined ? `docker -H ${sshEndpoint(remoteHost)}` : `wsl -d ${distribution} -u root -- docker`;
 }

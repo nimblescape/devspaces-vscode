@@ -3,8 +3,9 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Docker on another computer: Devspaces keeps its own list of SSH hosts (RemoteDockerState) and reaches each with its
-// own `ssh`; it creates and changes no Docker context. On Windows, the WSL distribution of Devspaces is such a host too,
-// reached with `wsl.exe` instead of `ssh` (hostAccessOf). Its local Docker is the current Docker context of the Docker
+// own `ssh`; it creates and changes no Docker context. The VM of Devspaces is such a host too (isVmHost): on Windows its
+// WSL distribution, reached with `wsl.exe` instead of `ssh`, and on macOS and Linux its Lima VM, reached over the SSH
+// of Lima (hostAccessOf). Its local Docker is the current Docker context of the Docker
 // CLI (or DOCKER_HOST), as for Docker, Docker Compose, and the Dev Containers extension. This module holds the pure
 // rules: which endpoint counts as local, remote (ssh://), or not supported; the Docker host of a devspace; the check of
 // an SSH address; how a host of the list is reached; the plain reasons of a failed connection. No `vscode`.
@@ -31,7 +32,8 @@ export interface DockerTarget {
   kind: DockerTargetKind;
   /**
    * The Docker host that devspaces record (`Devspace.dockerHost`): empty for `local`; for `remote` the part after
-   * `ssh://` (an alias of the SSH config or `user@host[:port]`), or `wsl:<distribution>` (WSL_HOST); for `unsupported` the endpoint, or a text for a
+   * `ssh://` (an alias of the SSH config or `user@host[:port]`), `wsl:<distribution>` (WSL_HOST), or `lima:devspaces`
+   * (LIMA_HOST); for `unsupported` the endpoint, or a text for a
    * context that could not be read or for Podman (never recorded, and no devspace has it).
    */
   host: string;
@@ -300,10 +302,11 @@ export function sshEndpoint(host: string): string {
 
 /**
  * The endpoint of the target of a host of the list (DockerTarget.endpoint): `wsl://<distribution>` for a WSL
- * distribution, which names it in the log only (the Docker CLI reaches it through a Docker pipe of Devspaces), else
- * sshEndpoint.
+ * distribution and `lima://devspaces` for the Lima VM of Devspaces, which name the VM in the log only (the Docker CLI
+ * reaches it through a Docker pipe of Devspaces), else sshEndpoint.
  */
 export function hostEndpoint(host: string): string {
+  if (host === LIMA_HOST) return `lima://${LIMA_INSTANCE_NAME}`;
   const distribution = wslDistributionOf(host);
   return distribution === undefined ? sshEndpoint(host) : `wsl://${distribution}`;
 }
@@ -364,21 +367,55 @@ export function wslDistributionOf(host: string): string | undefined {
   return WSL_DISTRIBUTION_NAME.test(distribution) ? distribution : undefined;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The Lima VM of Devspaces
+
+/** The name of the Lima instance of Devspaces in its own Lima home (src/core/vm/limaInstance.ts, LIMA_INSTANCE). */
+export const LIMA_INSTANCE_NAME = 'devspaces';
+
+/**
+ * The Docker host of the Lima VM of Devspaces on macOS and Linux (docs/architecture.md "The Lima VM of Devspaces"), as the
+ * devspaces and the list of Devspaces record it. A host that is an SSH address is no Lima host (`lima:2222` is the SSH
+ * host `lima` with the port 2222), and `lima:` with another name is no host of Devspaces.
+ */
+export const LIMA_HOST = `lima:${LIMA_INSTANCE_NAME}`;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The access to a host of the list
+
 /**
  * How Devspaces reaches the Docker engine of a host of its list: `ssh` for an SSH alias or address (sshTargetOf), `wsl`
- * for a WSL distribution (wslDistributionOf); undefined for any other host, which has no transport.
+ * for a WSL distribution (wslDistributionOf), `lima` for the Lima VM of Devspaces (LIMA_HOST); undefined for any other
+ * host, which has no transport.
  */
-export type HostAccess = { kind: 'ssh'; address: SshAddress } | { kind: 'wsl'; distribution: string };
+export type HostAccess = { kind: 'ssh'; address: SshAddress } | { kind: 'wsl'; distribution: string } | { kind: 'lima' };
 
 /** HostAccess of `host`. */
 export function hostAccessOf(host: string): HostAccess | undefined {
+  if (host === LIMA_HOST) return { kind: 'lima' };
   const distribution = wslDistributionOf(host);
   if (distribution !== undefined) return { kind: 'wsl', distribution };
   const address = sshTargetOf(host);
   return address === undefined ? undefined : { kind: 'ssh', address };
 }
 
-/** The program of the transport to `host` (hostAccessOf): `wsl.exe` for a WSL distribution, else `ssh`. */
+/**
+ * True for the VM of Devspaces (a WSL distribution, or the Lima VM): Devspaces reaches it only through its transport,
+ * which needs no login and asks nothing, never with an `ssh` of the Docker CLI, and each Docker connection of the
+ * extension runs its own `docker system dial-stdio` there.
+ */
+export function isVmHost(host: string): boolean {
+  const kind = hostAccessOf(host)?.kind;
+  return kind === 'wsl' || kind === 'lima';
+}
+
+/** How Devspaces reaches `host`, for the log: `through wsl.exe`, `over the SSH of Lima`, or `over SSH`. */
+export function transportWords(host: string): string {
+  const kind = hostAccessOf(host)?.kind;
+  return kind === 'wsl' ? 'through wsl.exe' : kind === 'lima' ? 'over the SSH of Lima' : 'over SSH';
+}
+
+/** The program of the transport to `host` (hostAccessOf): `wsl.exe` for a WSL distribution, else `ssh` (also Lima). */
 export function transportProgramOf(host: string): 'ssh' | 'wsl.exe' {
   return hostAccessOf(host)?.kind === 'wsl' ? 'wsl.exe' : 'ssh';
 }

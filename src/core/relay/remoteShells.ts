@@ -8,9 +8,9 @@
 // (takeOver). No `vscode`.
 import { WSL_START_ATTEMPTS, hostAccessOf, transportProgramOf, wslStartTimedOut } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
-import { abortError, isAbortError, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
+import { isAbortError, untilAborted, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
 import { currentSshPromptFlow, type SshLoginPrompts } from '../sshAskpass';
-import { RemoteShell, RemoteShellError, ShellGoneError, WSL_SHELL_LOGIN_TIMEOUT_MS, dockerShellCommand } from './remoteShell';
+import { RemoteShell, RemoteShellError, ShellGoneError, LIMA_SHELL_LOGIN_TIMEOUT_MS, WSL_SHELL_LOGIN_TIMEOUT_MS, dockerShellCommand } from './remoteShell';
 
 /** A login that started: its process, and the questions it may ask in VS Code (a login of a flow of the user). */
 export interface RemoteShellStart {
@@ -31,7 +31,7 @@ export interface RemoteShellsOptions {
    * (wslHostTransport); undefined when the host has no transport.
    */
   start(host: string): RemoteShellStart | undefined;
-  /** Only for the tests (all hosts). Default: SHELL_LOGIN_TIMEOUT_MS, and WSL_SHELL_LOGIN_TIMEOUT_MS for a WSL distribution. */
+  /** Only for the tests (all hosts). Default: SHELL_LOGIN_TIMEOUT_MS, WSL_SHELL_LOGIN_TIMEOUT_MS for a WSL distribution, and LIMA_SHELL_LOGIN_TIMEOUT_MS for the Lima VM. */
   loginTimeoutMs?: number;
   idleCloseMs?: number;
 }
@@ -45,17 +45,6 @@ interface Entry {
   opening?: Promise<RemoteShell>;
   /** The step after the login (RemoteShellStart.afterLogin) while it runs; takeOver waits for it. */
   afterLogin?: Promise<void>;
-}
-
-/** `promise`, or an AbortError as soon as `signal` aborts; the work of `promise` goes on for its other callers. */
-function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
-  if (signal === undefined) return promise;
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => reject(abortError());
-    if (signal.aborted) return onAbort();
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
-  });
 }
 
 /** The shells before the relay of this window, by the Docker host (DockerTarget.host). */
@@ -76,7 +65,7 @@ export class RemoteShells {
    * test of a host): the open shell to the host ends at once (a command on it ends with it), and a new login starts; a
    * login in progress counts as new. A login to a WSL distribution has a longer time limit (WSL_SHELL_LOGIN_TIMEOUT_MS),
    * and starts again when WSL ran out of time to start the distribution (wslStartTimedOut), at most WSL_START_ATTEMPTS
-   * times in all.
+   * times in all. A login to the Lima VM has a longer time limit too (LIMA_SHELL_LOGIN_TIMEOUT_MS): it starts the VM.
    */
   open(host: string, signal?: AbortSignal, options: { fresh?: boolean } = {}): Promise<RemoteShell | undefined> {
     if (this.disposed) return Promise.resolve(undefined);
@@ -110,7 +99,8 @@ export class RemoteShells {
     const { logger, idleCloseMs } = this.options;
     const access = hostAccessOf(host);
     const distribution = access?.kind === 'wsl' ? access.distribution : undefined;
-    const loginTimeoutMs = this.options.loginTimeoutMs ?? (distribution !== undefined ? WSL_SHELL_LOGIN_TIMEOUT_MS : undefined);
+    const loginTimeoutMs =
+      this.options.loginTimeoutMs ?? (distribution !== undefined ? WSL_SHELL_LOGIN_TIMEOUT_MS : access?.kind === 'lima' ? LIMA_SHELL_LOGIN_TIMEOUT_MS : undefined);
     const login = async (): Promise<RemoteShell> => {
       for (let attempt = 1; ; attempt++) {
         try {

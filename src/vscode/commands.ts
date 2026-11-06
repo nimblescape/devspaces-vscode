@@ -66,6 +66,9 @@ export const Commands = {
   // The button "Remove and Set Up Again" of the error about a damaged disk of the distribution (hidden in the Command
   // Palette, because it removes the distribution without a question: the message says what it deletes).
   resetWslDistribution: 'devspaces.resetWslDistribution',
+  // The Lima VM of Devspaces on macOS and Linux (limaSetupCommands.ts): set up with Docker Engine inside (also a button
+  // of the Docker setup in the sidebar).
+  setUpLimaVm: 'devspaces.setUpLimaVm',
   // The command of a repository row (TreeItem.command, hidden in the Command Palette): a double-click runs Start
   // (rowActivation.ts).
   rowActivated: 'devspaces.rowActivated',
