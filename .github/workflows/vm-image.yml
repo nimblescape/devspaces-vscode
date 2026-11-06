@@ -22,7 +22,11 @@
 #                 amd64 with the configuration of Devspaces
 #                 (src/core/vm/limaInstance.ts), runs Docker Engine as root
 #                 over the SSH of Lima, and waits for the power-off by the idle
-#                 check. macOS (Apple Virtualization) gets a manual test.
+#                 check. Then the scheduled task of the user (R-VM-009) with
+#                 the systemd of the user of the runner: a time of the schedule
+#                 in the past starts the stopped VM and a stand-in of the
+#                 Monitor, and the VM powers itself off again. macOS (Apple
+#                 Virtualization) gets a manual test.
 #   push          Only on the main branch, and only when build, kernel check,
 #                 start test and lima test passed: scripts/vm-image.mjs pushes
 #                 the files to ghcr.io/nimblescape/devspaces-vm, but only when
@@ -213,7 +217,9 @@ jobs:
     name: lima test
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Two waits for the power-off by the idle check (up to 8 minutes each),
+    # and the wait of 5 minutes of the scheduled task.
+    timeout-minutes: 45
     steps:
       - name: Check out the source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -238,6 +244,20 @@ jobs:
       - name: Let the user of the runner use KVM, and install QEMU
         timeout-minutes: 15
         run: vm/test/install-qemu.sh qemu-system-x86 qemu-utils ovmf
+
+      # The runner starts no systemd of its user; lingering starts it, as a
+      # login of the user would. systemctl --user reaches it through its
+      # socket in XDG_RUNTIME_DIR.
+      - name: Start the systemd of the user of the runner, for the scheduled task
+        run: |
+          sudo loginctl enable-linger "$USER"
+          runtime="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            [ -S "$runtime/systemd/private" ] && break
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=$runtime" >> "$GITHUB_ENV"
+          echo "The systemd of the user: $(XDG_RUNTIME_DIR="$runtime" systemctl --user is-system-running --wait || true)"
 
       - name: Start the disk with the Lima of the pin and the configuration of Devspaces
         env:
