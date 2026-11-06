@@ -235,14 +235,16 @@ function newVersion(now = new Date()) {
 
 async function push(folder, firstPush) {
   const pin = readPin();
-  if (pin.version === null && !firstPush) {
+  const key = contentKey(folder);
+  const registry = await client('pull,push', true);
+  const known = await versions(registry);
+  // A pin without a version and a version on ghcr.io: the first push happened, but its pull request was not opened
+  // (for example while the package was not public yet), so this run goes on as any other.
+  if (pin.version === null && known.length === 0 && !firstPush) {
     summary('No version of the image is on ghcr.io yet: the first push waits for a manual start of the workflow with "first push".');
     output('version', '');
     return;
   }
-  const key = contentKey(folder);
-  const registry = await client('pull,push', true);
-  const known = await versions(registry);
   const newest = known.at(-1);
   let version;
   let manifest;
