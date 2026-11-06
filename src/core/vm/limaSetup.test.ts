@@ -93,6 +93,20 @@ describe('LimaSetup', () => {
     await expect(setup(fakeRunner({ status: 'Broken' }).runner).setUp(() => undefined)).rejects.toMatchObject({ problem: 'broken' });
   });
 
+  it('creates nothing while another window holds the lock of the setup', async () => {
+    const { runner, calls } = fakeRunner({ status: '' });
+    const lock = path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock');
+    fs.mkdirSync(lock, { recursive: true });
+    await expect(setup(runner).setUp(() => undefined)).rejects.toMatchObject({ problem: 'busy' });
+    expect(calls.map((call) => call[1])).toEqual([]);
+    // The lock of a window that ended (older than a minute) is taken.
+    const old = new Date(Date.now() - 120_000);
+    fs.utimesSync(lock, old, old);
+    await setup(runner).setUp(() => undefined);
+    expect(calls.map((call) => call[1])).toEqual(['list', 'create', 'list', 'start', '-F']);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
   it('stops before a download without a published image, and names a Docker Engine that does not answer', async () => {
     await expect(setup(fakeRunner({ status: '' }).runner, { imageDigest: () => undefined }).setUp(() => undefined)).rejects.toMatchObject({ problem: 'imageMissing' });
     const silent = fakeRunner({ status: 'Running' }, { exitCode: 1, stderr: 'Cannot connect to the Docker daemon' });

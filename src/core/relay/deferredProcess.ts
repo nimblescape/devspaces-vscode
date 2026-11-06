@@ -57,7 +57,7 @@ export function deferredByteProcess(start: (signal: AbortSignal) => Promise<Star
   return {
     write: (chunk) => {
       if (inner !== undefined) return inner.write(chunk);
-      if (!ended && killed === undefined) writes.push(chunk);
+      if (!ended && !failed && killed === undefined) writes.push(chunk);
       return true;
     },
     onDrain: (listener) => {

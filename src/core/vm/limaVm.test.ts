@@ -2,6 +2,9 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { silentLogger, type ProcessRunner, type RunResult } from '../ports';
 import { limaPaths } from './limaInstance';
@@ -97,5 +100,21 @@ describe('LimaVm', () => {
     release();
     await expect(other).resolves.toBeUndefined();
     expect(fake.calls).toEqual(['list', 'start']);
+  });
+
+  it('knows a created VM by the configuration of its instance, without Lima', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-lima-vm-'));
+    try {
+      let installs = 0;
+      const paths = limaPaths(home);
+      const lima = new LimaVm({ runner: fakeLima(() => 'missing').runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths, install: async () => `${installs++}` });
+      await expect(lima.exists()).resolves.toBe(false);
+      fs.mkdirSync(path.join(paths.home, 'devspaces'), { recursive: true });
+      fs.writeFileSync(path.join(paths.home, 'devspaces', 'lima.yaml'), '{}');
+      await expect(lima.exists()).resolves.toBe(true);
+      expect(installs).toBe(0);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });

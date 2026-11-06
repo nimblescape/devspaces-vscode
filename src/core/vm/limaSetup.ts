@@ -13,6 +13,7 @@ import * as path from 'path';
 import { findExecutable } from '../docker/dockerCli';
 import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type ProcessRunner } from '../ports';
+import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
 import { downloadVmImage, vmImageFile, type DownloadVmImageOptions } from './vmImage';
 import { LimaInstance, limaConfig, limaEnv, limaResources, limaSshArgs, type LimaResources } from './limaInstance';
 import type { LimaVm } from './limaVm';
@@ -31,6 +32,8 @@ export type LimaSetupProblem =
   | 'imageMissing'
   /** The VM exists, but Lima reports it as broken. */
   | 'broken'
+  /** Another window sets up the VM now. */
+  | 'busy'
   /** A download, `limactl`, or Docker Engine in the VM failed. */
   | 'failed';
 
@@ -54,6 +57,12 @@ export type LimaSetupStep =
 
 /** The time limit of `docker info` in the VM after its first start. */
 const DOCKER_TIMEOUT_MS = 3 * 60_000;
+/**
+ * The lock of the creation of the VM for all windows (withLockFolder, as the setup of the WSL distribution): its holder
+ * refreshes it every 15 seconds, so a lock older than a minute is of a window that ended; another window waits for it
+ * one second.
+ */
+const LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
 
 export interface LimaSetupDeps {
   vm: LimaVm;
@@ -119,10 +128,13 @@ export class LimaSetup {
     const { vm, logger } = this.deps;
     onStep({ kind: 'lima' });
     const instance = await this.step(() => vm.lima(signal));
-    const status = await this.step(() => instance.status(signal));
-    if (status === 'broken') throw new LimaSetupError('broken', 'The VM of Devspaces is broken: Lima cannot start it.');
-    if (status === 'missing') await this.create(instance, onStep, signal);
-    else logger.info('The Lima VM of Devspaces exists; it is not created again.');
+    // Two windows never create the VM at the same time; a window that comes after the creation finds the VM.
+    await this.locked(async () => {
+      const status = await this.step(() => instance.status(signal));
+      if (status === 'broken') throw new LimaSetupError('broken', 'The VM of Devspaces is broken: Lima cannot start it.');
+      if (status === 'missing') await this.create(instance, onStep, signal);
+      else logger.info('The Lima VM of Devspaces exists; it is not created again.');
+    });
     onStep({ kind: 'start' });
     await this.step(() => vm.ready(signal));
     onStep({ kind: 'docker' });
@@ -170,6 +182,29 @@ export class LimaSetup {
       throw new LimaSetupError('failed', `Docker Engine in the VM of Devspaces did not answer: ${detail}`);
     }
     this.deps.logger.info(`Docker Engine ${result.stdout.trim()} runs in the Lima VM of Devspaces.`);
+  }
+
+  /**
+   * Runs `task` while this window holds the lock of the creation for all windows (`<root>/vm-setup.lock`). Throws
+   * LimaSetupError `busy`, without `task`, while another window holds it.
+   */
+  private async locked(task: () => Promise<void>): Promise<void> {
+    let started = false;
+    await this.step(async () => {
+      try {
+        await withLockFolder(
+          path.join(this.deps.vm.paths.root, 'vm-setup.lock'),
+          () => {
+            started = true;
+            return task();
+          },
+          LOCK_TIMINGS,
+        );
+      } catch (error) {
+        if (!started && error instanceof LockTimeoutError) throw new LimaSetupError('busy', 'Another window sets up the VM of Devspaces now.');
+        throw error;
+      }
+    });
   }
 
   /** Runs `task`; an error that is no LimaSetupError and no AbortError becomes a LimaSetupError `failed`. */

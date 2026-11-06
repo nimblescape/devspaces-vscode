@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
-import { dockerTargetOf, remoteDockerTarget, LOCAL_DOCKER_TARGET, WSL_HOST } from '../core/docker/dockerHost';
+import { dockerTargetOf, remoteDockerTarget, LOCAL_DOCKER_TARGET, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
 import { DockerTargets, runWithDockerTarget, operationDockerTarget } from '../core/docker/dockerTargets';
 import { ENGINE_INFO_FORMAT } from '../core/docker/remoteDocker';
 import { Actions, Messages, dockerHostReason } from '../core/messages';
@@ -200,6 +200,39 @@ describe('Use a Remote Docker Host…', () => {
     await commands.useRemoteHost();
     expect([shown(2), shown(3)].flat().some(([label]) => label === WSL_HOST)).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith('The WSL distributions could not be listed: wsl.exe --list --quiet failed: exit code 1');
+  });
+
+  it('offers the Lima VM of Devspaces when it exists, and tests it on its shell without ssh:// and without docker -H', async () => {
+    const limaVmExists = vi.fn(async () => true);
+    const shells = {
+      login: vi.fn(async () => ({ ok: true as const })),
+      run: vi.fn(async () => engineInfo()),
+    };
+    commands = create({ limaVmExists, shells });
+    await commands.useRemoteHost();
+    expect(shown().slice(-4)).toEqual([
+      [RemoteDockerTexts.limaGroup, undefined],
+      [LIMA_HOST, RemoteDockerTexts.limaVm],
+      ['', undefined],
+      [RemoteDockerTexts.enterAddress, RemoteDockerTexts.enterAddressDetail],
+    ]);
+    pick(LIMA_HOST);
+    await commands.useRemoteHost();
+    expect(shells.login).toHaveBeenCalledWith(LIMA_HOST, expect.any(AbortSignal), { fresh: true });
+    expect(await state.dockerHost()).toBe(LIMA_HOST);
+    expect(cli.calls.filter((call) => call.args[0] === '-H')).toEqual([]);
+    expect(runner.run).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(`Devspaces uses ${LIMA_HOST} (lima://devspaces). No Docker context was changed.`);
+    expect(RemoteDockerTexts.testing(LIMA_HOST)).toBe('Starting and testing the VM of Devspaces…');
+    // A VM that does not exist, or that cannot be checked, is not offered (logged).
+    await state.setDockerHost(undefined);
+    await state.removeHost(LIMA_HOST);
+    limaVmExists.mockResolvedValueOnce(false);
+    await commands.useRemoteHost();
+    limaVmExists.mockRejectedValueOnce(new Error('EACCES'));
+    await commands.useRemoteHost();
+    expect([shown(2), shown(3)].flat().some(([label]) => label === LIMA_HOST || label === RemoteDockerTexts.limaGroup)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith('The Lima VM of Devspaces could not be checked: EACCES');
   });
 
   it('tests the WSL distribution on its shell (wsl.exe) and uses it, without ssh and without docker -H', async () => {

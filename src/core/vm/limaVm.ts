@@ -7,13 +7,18 @@
 // Devspaces makes sure that the pinned Lima is installed (lima.ts) and that the VM runs, and starts it when it is
 // stopped. Nothing keeps the VM running: the idle check in the VM powers it off when nothing runs there. The calls of
 // this extension host at the same time share one check and one start. No `vscode`.
+import * as fs from 'fs';
+import * as path from 'path';
 import { untilAborted, type Logger, type ProcessRunner } from '../ports';
 import { installLima, type InstallLimaOptions } from './lima';
-import { LimaInstance, limaPaths, type LimaPaths } from './limaInstance';
+import { LIMA_INSTANCE, LimaInstance, limaPaths, type LimaPaths } from './limaInstance';
 
 /**
- * How long a VM that was found running counts as running without a new check: the idle check powers the VM off only
- * after two checks in a row a minute apart with nothing running, so it cannot be off sooner after a use.
+ * How long a VM that was found running counts as running without a new check (each Docker connection is a transport,
+ * so this saves a `limactl list` for most of them). The idle check in the VM powers it off after two checks a minute
+ * apart that found no container and no connection to Docker Engine, so a VM that ran a moment ago can still be off when
+ * the next transport starts; then its `ssh` fails (exit code 255), forgetRunning() clears this, and the transport after
+ * it starts the VM again.
  */
 const RUNNING_FOR_MS = 60_000;
 
@@ -81,6 +86,19 @@ export class LimaVm {
       this.starting = undefined;
     });
     return untilAborted(this.starting, signal);
+  }
+
+  /**
+   * Whether the VM was created, without Lima and without a download: `limactl create` writes the configuration of the
+   * instance (`lima.yaml`) into the folder of the instance.
+   */
+  async exists(): Promise<boolean> {
+    try {
+      await fs.promises.access(path.join(this.paths.home, LIMA_INSTANCE, 'lima.yaml'));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Forgets that the VM ran (after a transport to it failed), so that the next ready() checks it again. */

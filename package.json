@@ -146,23 +146,18 @@
       },
       {
         "view": "devspaces.repositories",
-        "contents": "Install Docker Desktop with Homebrew or Docker's installer. You see the commands before anything runs. Docker Desktop is free for personal use, education, non-commercial open source, and small businesses; larger companies need a [paid subscription](https://www.docker.com/legal/docker-subscription-service-agreement/).\n[Install Docker](command:devspaces.dockerSetup.install)",
+        "contents": "Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without Docker Desktop and without administrator permission. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)",
         "when": "devspaces.dockerSetupRequired && isMac"
       },
       {
         "view": "devspaces.repositories",
-        "contents": "Install Docker Engine from Docker's package repository. You see the commands before anything runs.\n[Install Docker](command:devspaces.dockerSetup.install)",
+        "contents": "Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. The VM needs QEMU and access to /dev/kvm. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)",
         "when": "devspaces.dockerSetupRequired && isLinux"
       },
       {
         "view": "devspaces.repositories",
         "contents": "Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.",
-        "when": "devspaces.dockerSetupRequired && !isLinux"
-      },
-      {
-        "view": "devspaces.repositories",
-        "contents": "Your repositories appear here once Docker is installed. Devspaces asks to start Docker Engine when needed.",
-        "when": "devspaces.dockerSetupRequired && isLinux"
+        "when": "devspaces.dockerSetupRequired"
       },
       {
         "view": "devspaces.repositories",
@@ -394,6 +389,11 @@
         "category": "Devspaces"
       },
       {
+        "command": "devspaces.setUpLimaVm",
+        "title": "Set Up Docker for Devspaces in Its VM…",
+        "category": "Devspaces"
+      },
+      {
         "command": "devspaces.resetWslDistribution",
         "title": "Remove and Set Up the WSL Distribution of Devspaces Again",
         "category": "Devspaces"
@@ -507,6 +507,10 @@
         {
           "command": "devspaces.removeWslDistribution",
           "when": "isWindows"
+        },
+        {
+          "command": "devspaces.setUpLimaVm",
+          "when": "isMac || isLinux"
         },
         {
           "command": "devspaces.resetWslDistribution",

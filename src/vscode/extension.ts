@@ -43,6 +43,7 @@ import { RelayConnectionError } from '../core/relay/connection';
 import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
 import { deferredByteProcess } from '../core/relay/deferredProcess';
 import { LimaVm } from '../core/vm/limaVm';
+import { LimaSetup } from '../core/vm/limaSetup';
 import { RelayConnections, relayAccess } from '../core/relay/connections';
 import { serveWindowPipe, windowDockerHost } from '../core/relay/windowPipe';
 import { HostPipes } from '../core/relay/hostPipes';
@@ -114,6 +115,7 @@ import { GroupMatchWorkerRunner } from './groupMatcher';
 import { PreviewWorkerRunner } from './groupsPreviewRunner';
 import { RemoteDockerCommands } from './remoteDockerCommands';
 import { WslSetupCommands } from './wslSetupCommands';
+import { LimaSetupCommands } from './limaSetupCommands';
 import { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import { SessionCoordinator } from './sessionCoordinator';
 import {
@@ -1117,6 +1119,8 @@ async function activateExtension(
       }
       return parseWslList(result.stdout);
     },
+    // The Lima VM of Devspaces in the choice of the host when it exists (macOS and Linux).
+    limaVmExists: limaVm === undefined ? undefined : () => limaVm.exists(),
     devspaceCount: async (host) => devspacesOfHost(await registry.list(), host).length,
     onDidSwitch: async () => {
       await sidebar.render();
@@ -1146,6 +1150,16 @@ async function activateExtension(
       await engineRecords.forgetMonitorAnswer(WSL_HOST).catch((error: unknown) => logger.warn(`The answer about the Monitor on ${describeDockerHost(WSL_HOST)} could not be forgotten: ${errorMessage(error)}`));
       await keeper.removeStartEntry(WSL_DISTRIBUTION);
     },
+  });
+  // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
+  // Devspaces.
+  const limaSetup = new LimaSetupCommands({
+    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: process.arch, env }),
+    folder: limaVm?.paths.root,
+    logger,
+    showLog: () => logger.show(),
+    useRemoteHost: () => remoteDocker.useRemoteHost(),
+    useHost: (host) => remoteDocker.useHost(host),
   });
   // A Docker context or DOCKER_HOST of the user that reaches a host over SSH while Devspaces uses the local Docker: its
   // host is offered once for the list (in the background; the read that found it goes on).
@@ -1203,6 +1217,7 @@ async function activateExtension(
     },
     remoteDocker,
     wslSetup,
+    limaSetup,
     wslAfterInstall,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.

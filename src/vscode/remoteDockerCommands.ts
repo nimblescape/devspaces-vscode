@@ -11,9 +11,12 @@
 // Devspaces on this computer. A Docker context or DOCKER_HOST of the user that reaches a host over SSH is offered once
 // for the list (offerDockerContextHost). A computer without a Docker CLI gets the Docker CLI of Devspaces for the remote
 // host first (ensureRemoteCli), so no Docker needs to be installed on it. On Windows, the WSL distribution of Devspaces
-// is offered as a host when it is registered (wslHosts): Devspaces reaches it with `wsl.exe`, without SSH.
+// is offered as a host when it is registered (wslHosts): Devspaces reaches it with `wsl.exe`, without SSH. On macOS and
+// Linux, the Lima VM of Devspaces (LIMA_HOST) is offered when it exists (limaHosts): Devspaces reaches it over the SSH of
+// Lima, without a login of the user.
 import * as vscode from 'vscode';
 import {
+  LIMA_HOST,
   WSL_DISTRIBUTION,
   WSL_HOST,
   describeDockerHost,
@@ -55,6 +58,9 @@ export const RemoteDockerTexts = {
   wslGroup: 'WSL',
   /** The description of the WSL distribution of Devspaces in the choice. */
   wslDistribution: (name: string) => `WSL distribution ${name} of Devspaces`,
+  /** The group and the description of the Lima VM of Devspaces in the choice (macOS and Linux). */
+  limaGroup: 'Lima',
+  limaVm: 'the VM of Devspaces (Lima)',
   enterAddress: 'Enter an SSH address…',
   enterAddressDetail: 'user@host or user@host:port',
   addressPrompt: 'The SSH address of the computer with Docker, for example me@build-box or me@192.0.2.10:2222',
@@ -83,7 +89,9 @@ export const RemoteDockerTexts = {
   testing: (host: string) =>
     host === WSL_HOST
       ? 'Starting and testing the WSL distribution of Devspaces. Its first start after a restart of Windows can take some minutes…'
-      : `Testing the connection to ${host}…`,
+      : host === LIMA_HOST
+        ? 'Starting and testing the VM of Devspaces…'
+        : `Testing the connection to ${host}…`,
   useHost: (host: string) => `Use ${host}`,
   useLocal: 'Use the Local Docker',
   nowRemote: (host: string, rootless: boolean) =>
@@ -143,6 +151,8 @@ export interface RemoteDockerDeps {
    * when they cannot be listed. Without it, the WSL distribution of Devspaces is not offered.
    */
   wslDistributions?: () => Promise<string[]>;
+  /** Whether the Lima VM of Devspaces exists (macOS and Linux). Without it, the Lima VM is not offered. */
+  limaVmExists?: () => Promise<boolean>;
   /** The number of devspaces of this computer on `host` (its registry), for the message of a removed host. */
   devspaceCount?: (host: string) => Promise<number>;
   /** After a change of the Docker host of Devspaces: the sidebar shows the devspaces of the new host. */
@@ -472,7 +482,7 @@ export class RemoteDockerCommands {
     } catch (error) {
       this.deps.logger.warn(`The SSH config could not be read: ${errorMessage(error)}`);
     }
-    const [listed, contextHosts, wslHosts] = await Promise.all([this.deps.state.remoteHosts(), this.contextHosts(), this.wslHosts()]);
+    const [listed, contextHosts, wslHosts, limaHosts] = await Promise.all([this.deps.state.remoteHosts(), this.contextHosts(), this.wslHosts(), this.limaHosts()]);
     const shown = new Set<string>();
     const item = (host: string, description: string | undefined): HostItem => {
       shown.add(host);
@@ -481,6 +491,7 @@ export class RemoteDockerCommands {
     };
     const describe = (host: string): string | undefined => {
       if (host === WSL_HOST) return RemoteDockerTexts.wslDistribution(WSL_DISTRIBUTION);
+      if (host === LIMA_HOST) return RemoteDockerTexts.limaVm;
       const entry = entries.find((candidate) => candidate.alias === host);
       return entry === undefined ? undefined : describeEntry(entry);
     };
@@ -492,6 +503,7 @@ export class RemoteDockerCommands {
         items: contextHosts.filter((entry) => !shown.has(entry.host)).map((entry) => item(entry.host, RemoteDockerTexts.dockerContext(entry.context))),
       },
       { label: RemoteDockerTexts.wslGroup, items: wslHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))) },
+      { label: RemoteDockerTexts.limaGroup, items: limaHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))) },
     ];
     const items: HostItem[] = [];
     for (const group of groups) {
@@ -559,6 +571,17 @@ export class RemoteDockerCommands {
       return (await this.deps.wslDistributions()).some((name) => name.toLowerCase() === WSL_DISTRIBUTION) ? [WSL_HOST] : [];
     } catch (error) {
       this.deps.logger.warn(`The WSL distributions could not be listed: ${errorMessage(error)}`);
+      return [];
+    }
+  }
+
+  /** The Lima VM of Devspaces as a host (LIMA_HOST) when it exists; none when it cannot be checked (logged). */
+  private async limaHosts(): Promise<string[]> {
+    if (this.deps.limaVmExists === undefined) return [];
+    try {
+      return (await this.deps.limaVmExists()) ? [LIMA_HOST] : [];
+    } catch (error) {
+      this.deps.logger.warn(`The Lima VM of Devspaces could not be checked: ${errorMessage(error)}`);
       return [];
     }
   }
