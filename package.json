@@ -918,6 +918,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:docker": "vitest run --config vitest.docker.config.mts",
+    "test:lima": "vitest run --config vitest.lima.config.mts",
     "test:vscode": "node esbuild.mjs && node scripts/build-vscode-tests.mjs && vscode-test --label vscode",
     "test:vscode:vsix": "node scripts/build-vscode-tests.mjs && vscode-test --label vsix untrusted",
     "test:vscode:attach:prepare": "node esbuild.mjs && node scripts/build-vscode-tests.mjs && node out/test/vscode/attach/prepare.js",

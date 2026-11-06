@@ -17,16 +17,22 @@
 #                 Docker Engine, the package upgrade and the idle check. The
 #                 runners of GitHub have no WSL 2 and no KVM for arm64, so
 #                 these files get the manual tests of the steps that use them.
-#   push          Only on the main branch, and only when build, kernel check
-#                 and start test passed: scripts/vm-image.mjs pushes the files
-#                 to ghcr.io/nimblescape/devspaces-vm, but only when the list
-#                 of their packages or the recipe changed since the newest
-#                 version there, and writes the pin src/core/vm/vmImagePin.json.
-#                 As long as the pin names no version and ghcr.io has none,
-#                 nothing is pushed: the first push waits for a manual start
-#                 with "first push". Then it reads the files of the pin
-#                 without a login, as Devspaces does: the package on ghcr.io
-#                 must be public.
+#   lima test     test/lima (npm run test:lima) downloads the Lima of the pin
+#                 (src/core/vm/limaPin.json), creates and starts the disk of
+#                 amd64 with the configuration of Devspaces
+#                 (src/core/vm/limaInstance.ts), runs Docker Engine as root
+#                 over the SSH of Lima, and waits for the power-off by the idle
+#                 check. macOS (Apple Virtualization) gets a manual test.
+#   push          Only on the main branch, and only when build, kernel check,
+#                 start test and lima test passed: scripts/vm-image.mjs pushes
+#                 the files to ghcr.io/nimblescape/devspaces-vm, but only when
+#                 the list of their packages or the recipe changed since the
+#                 newest version there, and writes the pin
+#                 src/core/vm/vmImagePin.json. As long as the pin names no
+#                 version and ghcr.io has none, nothing is pushed: the first
+#                 push waits for a manual start with "first push". Then it
+#                 reads the files of the pin without a login, as Devspaces
+#                 does: the package on ghcr.io must be public.
 #   pull request  When the pin changed: commits it to the branch
 #                 vm-image-<version>, opens a pull request for it, closes the
 #                 older open pull requests of the image, and starts the
@@ -38,8 +44,9 @@
 #                 version of each published release of Devspaces, of the pin
 #                 on the main branch, and the newest 5 stay.
 #
-# A pull request that changes this workflow, the recipe, the script or the pin
-# runs build, kernel check and start test, which write nothing.
+# A pull request that changes this workflow, the recipe, the script, the code
+# of the VM in src/core/vm or the test of Lima runs build, kernel check, start
+# test and lima test, which write nothing.
 
 name: VM image
 
@@ -62,7 +69,9 @@ on:
       - .github/workflows/vm-image.yml
       - vm/**
       - scripts/vm-image.mjs
-      - src/core/vm/vmImagePin.json
+      - src/core/vm/**
+      - test/lima/**
+      - vitest.lima.config.mts
 
 permissions:
   # Checkout needs repository reads; only the jobs push, pull request and prune get more.
@@ -206,9 +215,50 @@ jobs:
           path: logs/
           if-no-files-found: ignore
 
+  lima-test:
+    name: lima test
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install the locked development tools without install scripts
+        run: npm ci --ignore-scripts
+
+      - name: Take the files of the image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vm-image-amd64
+          path: image
+
+      - name: Let the user of the runner use KVM, and install QEMU
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules > /dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          # The runner image rebuilds the index of its manual pages after each installation, which can take minutes.
+          sudo rm -f /var/lib/man-db/auto-update
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils ovmf
+
+      - name: Start the disk with the Lima of the pin and the configuration of Devspaces
+        env:
+          DEVSPACES_LIMA_TEST_DISK: image/devspaces-vm-amd64.qcow2
+        run: npm run test:lima
+
   push:
     name: push
-    needs: [build, kernel-check, start-test]
+    needs: [build, kernel-check, start-test, lima-test]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30

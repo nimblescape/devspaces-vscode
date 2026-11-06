@@ -2,7 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The Lima VM of Devspaces on macOS and Linux (docs/architecture.md "The Lima VM of Devspaces", R-VM-001, R-VM-005):
+// The Lima VM of Devspaces on macOS and Linux (docs/architecture.md "The Lima VM of Devspaces", R-VM-001, R-VM-006):
 // one instance `devspaces` in a Lima home of its own (LIMA_HOME), so that the instances of a Lima of the user stay apart.
 // Its configuration comes from Devspaces only: the disk of the image of the VM (vmImage.ts), Apple Virtualization on
 // macOS and QEMU with KVM on Linux, the memory and the CPUs (limaResources), no folder of this computer in the VM, no
@@ -17,9 +17,9 @@ import type { Logger, ProcessRunner, RunResult } from '../ports';
 export const LIMA_INSTANCE = 'devspaces';
 /** The host of the SSH configuration that Lima writes for an instance: `lima-<instance>`. */
 export const LIMA_SSH_HOST = `lima-${LIMA_INSTANCE}`;
-/** The memory of the VM by default, in GiB (R-VM-005), at most half of the memory of this computer. */
+/** The memory of the VM by default, in GiB (R-VM-006), at most half of the memory of this computer. */
 export const DEFAULT_VM_MEMORY_GIB = 4;
-/** The CPUs of the VM by default (R-VM-005), at most half of the CPUs of this computer. */
+/** The CPUs of the VM by default (R-VM-006), at most half of the CPUs of this computer. */
 export const DEFAULT_VM_CPUS = 4;
 /**
  * The size of the disk of the VM in GiB: the largest size, not the space that it takes. The disk file grows with the
@@ -85,7 +85,7 @@ export interface LimaResources {
 }
 
 /**
- * The memory and the CPUs of the VM (R-VM-005): the wish (the settings, else 4 GiB and 4 CPUs), each at most half of this
+ * The memory and the CPUs of the VM (R-VM-006): the wish (the settings, else 4 GiB and 4 CPUs), each at most half of this
  * computer, and at least 1 GiB and 1 CPU. `totalMemory` in bytes (os.totalmem()), `cpuCount` (os.availableParallelism()).
  */
 export function limaResources(totalMemory: number, cpuCount: number, wish: Partial<LimaResources> = {}): LimaResources {
