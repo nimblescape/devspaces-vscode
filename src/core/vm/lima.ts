@@ -30,8 +30,6 @@ const STALE_PART_MS = 60 * 60_000;
 /** The folder of a version, and a part of an install: `<version>.part-<8 hex>`. */
 const VERSION_NAME = /^\d+\.\d+\.\d+$/;
 const PART_NAME = /^\d+\.\d+\.\d+\.part-[0-9a-f]{8}$/;
-/** A guest agent of the pin: the one of Linux for the architecture of this computer, compressed or not. */
-const GUEST_AGENT = /^share\/lima\/lima-guestagent\.Linux-(aarch64|x86_64)(\.gz)?$/;
 
 /** One archive of the pin: its URL on github.com, its size in bytes, its SHA-256 (hex), and its guest agent. */
 export interface LimaFile {
@@ -60,19 +58,28 @@ export function limaVersion(pin: LimaPin = PIN): string | undefined {
  * Docker CLI of Devspaces; undefined where Devspaces runs no Lima (Windows, and other processors).
  */
 export function limaPlatformKey(platform: NodeJS.Platform, arch: string): string | undefined {
-  const cpu = arch === 'x64' ? 'x86_64' : arch === 'arm64' ? 'aarch64' : undefined;
+  const cpu = limaCpu(arch);
   if (cpu === undefined) return undefined;
   if (platform === 'darwin') return `mac-${cpu}`;
   if (platform === 'linux') return `linux-${cpu}`;
   return undefined;
 }
 
-/** The archive of Lima for the platform from the pin, with its version; undefined without a pin or a file for it. */
+/** The name of the processor `arch` (`process.arch`) in the files of Lima, or undefined for another one. */
+function limaCpu(arch: string): 'aarch64' | 'x86_64' | undefined {
+  return arch === 'x64' ? 'x86_64' : arch === 'arm64' ? 'aarch64' : undefined;
+}
+
+/**
+ * The archive of Lima for the platform from the pin, with its version; undefined without a pin or a file for it, and
+ * when the pin names another file than the guest agent of Linux for this processor (compressed or not).
+ */
 export function limaDownload(platform: NodeJS.Platform, arch: string, pin: LimaPin = PIN): (LimaFile & { version: string }) | undefined {
   const key = limaPlatformKey(platform, arch);
   const file = key === undefined ? undefined : pin.files[key];
   if (pin.version === null || file === undefined) return undefined;
-  if (!GUEST_AGENT.test(file.guestAgent)) return undefined;
+  const agents = [`share/lima/lima-guestagent.Linux-${limaCpu(arch)}`, `share/lima/lima-guestagent.Linux-${limaCpu(arch)}.gz`];
+  if (!agents.includes(file.guestAgent)) return undefined;
   return { ...file, version: pin.version };
 }
 

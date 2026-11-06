@@ -191,13 +191,18 @@ export interface LimaInstanceDeps {
 export class LimaInstance {
   constructor(private readonly deps: LimaInstanceDeps) {}
 
-  private run(args: readonly string[], options: { timeoutMs: number; signal?: AbortSignal; onLine?: (line: string) => void }): Promise<RunResult> {
+  private async run(args: readonly string[], options: { timeoutMs: number; signal?: AbortSignal; onLine?: (line: string) => void }): Promise<RunResult> {
     const env = limaEnv(this.deps.env ?? process.env, this.deps.paths);
     const { onLine } = options;
     // One splitter per stream, so that the parts of the lines of both streams do not mix.
-    const onStdout = onLine === undefined ? undefined : lineSplitter(onLine);
-    const onStderr = onLine === undefined ? undefined : lineSplitter(onLine);
-    return this.deps.runner.run(this.deps.limactl, args, { env, timeoutMs: options.timeoutMs, signal: options.signal, onStdout, onStderr });
+    const stdout = onLine === undefined ? undefined : lineSplitter(onLine);
+    const stderr = onLine === undefined ? undefined : lineSplitter(onLine);
+    try {
+      return await this.deps.runner.run(this.deps.limactl, args, { env, timeoutMs: options.timeoutMs, signal: options.signal, onStdout: stdout?.push, onStderr: stderr?.push });
+    } finally {
+      stdout?.flush();
+      stderr?.flush();
+    }
   }
 
   private fail(step: LimaError['step'], result: RunResult): never {
@@ -259,12 +264,21 @@ export class LimaInstance {
   }
 }
 
-/** Calls `onLine` with each complete line of a text stream (the last part of a line waits for its end). */
-function lineSplitter(onLine: (line: string) => void): (text: string) => void {
+/**
+ * Calls `onLine` with each line of a text stream that is not empty: `push` gives the text as it arrives (the last part of
+ * a line waits for its end), and `flush` gives the last line without a line end.
+ */
+function lineSplitter(onLine: (line: string) => void): { push: (text: string) => void; flush: () => void } {
   let rest = '';
-  return (text) => {
-    const parts = (rest + text).split(/\r?\n/);
-    rest = parts.pop() ?? '';
-    for (const part of parts) if (part.trim() !== '') onLine(part);
+  return {
+    push: (text) => {
+      const parts = (rest + text).split(/\r?\n/);
+      rest = parts.pop() ?? '';
+      for (const part of parts) if (part.trim() !== '') onLine(part);
+    },
+    flush: () => {
+      if (rest.trim() !== '') onLine(rest);
+      rest = '';
+    },
   };
 }

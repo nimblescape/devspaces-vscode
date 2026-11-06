@@ -152,13 +152,13 @@ describe('LimaInstance', () => {
     expect(lines).toEqual(['The Lima VM of Devspaces could not be started: limactl start failed: level=fatal msg="exiting, status={Running:false Degraded:false}"']);
   });
 
-  it('creates the instance from its configuration and gives the output line by line', async () => {
-    const fake = runner([{}], { stdout: ['level=info msg="Attempting to download', ' the image"\nlevel=info msg="Run `limactl start devspaces`"\n'], stderr: ['warning\n'] });
+  it('creates the instance from its configuration and gives the output line by line, also a last line without its end', async () => {
+    const fake = runner([{}], { stdout: ['level=info msg="Attempting to download', ' the image"\nlevel=info msg="Run `limactl start devspaces`"\n'], stderr: ['warning\n', 'last line'] });
     const instance = new LimaInstance({ limactl: 'limactl', paths: PATHS, runner: fake.runner, logger: silentLogger, env });
     const lines: string[] = [];
     await instance.create('/tmp/lima.yaml', undefined, (line) => lines.push(line));
     expect(fake.calls[0].args).toEqual(['create', '--name=devspaces', '--tty=false', '/tmp/lima.yaml']);
-    expect(lines).toEqual(['level=info msg="Attempting to download the image"', 'level=info msg="Run `limactl start devspaces`"', 'warning']);
+    expect(lines).toEqual(['level=info msg="Attempting to download the image"', 'level=info msg="Run `limactl start devspaces`"', 'warning', 'last line']);
   });
 
   it('names the step and the end of the output of a failed limactl, or the time limit', async () => {

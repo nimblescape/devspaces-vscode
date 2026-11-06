@@ -17,8 +17,9 @@
 # lima-<version>, opens a pull request for it, and starts the workflows "CI"
 # and "VM image" on that branch, because a pull request of a workflow starts no
 # workflow: the checks of these runs appear on the pull request, also the job
-# "lima test", which starts the VM of Devspaces with the new version. A branch lima-<version> that
-# has a pull request already, open, closed or merged, gets nothing new.
+# "lima test", which starts the VM of Devspaces with the new version. A branch
+# lima-<version> that has a pull request already, open, closed or merged, gets
+# nothing new.
 # Opening the pull request needs the repository setting "Allow GitHub Actions
 # to create and approve pull requests" (Settings > Actions > General);
 # without it, the job fails after the push, and the next run tries again. A

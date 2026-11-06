@@ -117,13 +117,14 @@ describe('limaPlatformKey and limaDownload', () => {
     expect(limaPlatformKey('linux', 'arm')).toBeUndefined();
   });
 
-  it('gives nothing before the first pin, for a platform without a file, or for a guest agent of another form', () => {
+  it('gives nothing before the first pin, for a platform without a file, or for another file than the guest agent of the processor', () => {
     const archive = limaArchive();
     const pin = pinOf('2.2.1', 'linux-x86_64', archive);
     expect(limaDownload('linux', 'x64', pin)).toEqual({ ...pin.files['linux-x86_64'], version: '2.2.1' });
     expect(limaDownload('linux', 'x64', { version: null, files: {} })).toBeUndefined();
     expect(limaDownload('darwin', 'x64', pin)).toBeUndefined();
     expect(limaDownload('linux', 'x64', pinOf('2.2.1', 'linux-x86_64', archive, '../bin/sh'))).toBeUndefined();
+    expect(limaDownload('linux', 'x64', pinOf('2.2.1', 'linux-x86_64', archive, 'share/lima/lima-guestagent.Linux-aarch64.gz'))).toBeUndefined();
   });
 });
 
