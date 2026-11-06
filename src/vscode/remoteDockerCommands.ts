@@ -22,6 +22,7 @@ import {
   describeDockerHost,
   hostEndpoint,
   isDockerContextHostTarget,
+  isNoDockerHostTarget,
   parseSshAddress,
   sshTargetOf,
   type DockerTarget,
@@ -98,6 +99,12 @@ export const RemoteDockerTexts = {
     `Devspaces now uses Docker on ${host}.${rootless ? ' Its Docker engine runs rootless: ports below 1024 cannot be published there.' : ''} The docker command in your terminals keeps its Docker context.`,
   nowLocal: 'Devspaces now uses the local Docker.',
   alreadyLocal: 'Devspaces already uses the local Docker.',
+  /** "Use the Local Docker" on macOS and Linux, where Devspaces never uses the Docker of this computer (R-ENG-001). */
+  noLocalDocker: 'On macOS and Linux, Devspaces runs the devspaces only in its own VM or on a remote host, never in the Docker of this computer. Choose "Set Up Docker for Devspaces" in the Devspaces view, or "Devspaces: Use a Remote Docker Host…".',
+  /** The title of the choice of the Docker host while Devspaces has none (macOS and Linux). */
+  noHost: 'none',
+  /** The placeholder of that choice on macOS and Linux, without the local Docker. */
+  choosePlaceholderNoLocal: 'Choose a host, or enter an SSH address',
   alreadyHost: (host: string) => `Devspaces already uses ${host}.`,
   switchFailed: 'The Docker host of Devspaces could not be changed.',
   /** The title of the choice of the Docker host (the first row of the view). */
@@ -117,6 +124,11 @@ export const RemoteDockerTexts = {
     `${host} is no longer in the list of Devspaces.${
       devspaces > 0 ? ` ${devspaces === 1 ? 'Its devspace stays' : `Its ${devspaces} devspaces stay`} on that computer: add ${host} again to show ${devspaces === 1 ? 'it' : 'them'} in the sidebar.` : ''
     }${wasCurrent ? ' Devspaces now uses the local Docker.' : ''}`,
+  /** The same on macOS and Linux, where no local Docker takes the place of the removed host. */
+  removedNoLocal: (host: string, devspaces: number, wasCurrent: boolean) =>
+    `${host} is no longer in the list of Devspaces.${
+      devspaces > 0 ? ` ${devspaces === 1 ? 'Its devspace stays' : `Its ${devspaces} devspaces stay`} on that computer: add ${host} again to show ${devspaces === 1 ? 'it' : 'them'} in the sidebar.` : ''
+    }${wasCurrent ? ' Devspaces has no Docker host now: set up Docker for Devspaces in the Devspaces view, or choose another host.' : ''}`,
   /** The offer of a host of a Docker context or of DOCKER_HOST of the user (offerDockerContextHost). */
   offer: (host: string, context: string | undefined) =>
     `Docker on this computer is set to ${host} over SSH (${context === undefined ? 'DOCKER_HOST' : `Docker context ${context}`}). Devspaces keeps its own list of remote hosts and does not follow the Docker context. Use ${host} for Devspaces?`,
@@ -157,6 +169,11 @@ export interface RemoteDockerDeps {
   devspaceCount?: (host: string) => Promise<number>;
   /** After a change of the Docker host of Devspaces: the sidebar shows the devspaces of the new host. */
   onDidSwitch: () => Promise<void>;
+  /**
+   * Whether Devspaces uses the Docker of this computer (usesComputerDocker; default true). False on macOS and Linux: the
+   * choice of the Docker host has no local Docker, and "Use the Local Docker" only says why.
+   */
+  computerDocker?: boolean;
   /**
    * Downloads the Docker CLI of Devspaces with a progress notification (installOwnDockerCliWithProgress) for a computer
    * without a Docker CLI: its path, or undefined when the download failed (the message says so) or was cancelled.
@@ -215,14 +232,16 @@ export class RemoteDockerCommands {
   async chooseDockerHost(): Promise<void> {
     try {
       const current = await this.deps.state.dockerHost();
+      const computerDocker = this.deps.computerDocker !== false;
       // The local Docker as the first row shows it (the last read): one that Devspaces cannot use is not marked current.
       const localSupported = current !== undefined || this.deps.targets.last?.kind !== 'unsupported';
-      // One choice: the hosts, the current one marked, and the local Docker last.
+      const title = !computerDocker && current === undefined ? RemoteDockerTexts.noHost : localSupported ? describeDockerHost(current ?? '') : RemoteDockerTexts.localNotSupported;
+      // One choice: the hosts, the current one marked, and the local Docker last (not on macOS and Linux).
       const picked = await this.pickHost({
-        title: RemoteDockerTexts.chooseTitle(localSupported ? describeDockerHost(current ?? '') : RemoteDockerTexts.localNotSupported),
-        placeHolder: RemoteDockerTexts.choosePlaceholder,
+        title: RemoteDockerTexts.chooseTitle(title),
+        placeHolder: computerDocker ? RemoteDockerTexts.choosePlaceholder : RemoteDockerTexts.choosePlaceholderNoLocal,
         currentHost: current,
-        offerLocal: true,
+        offerLocal: computerDocker,
         localSupported,
       });
       if (picked === undefined) return;
@@ -247,10 +266,16 @@ export class RemoteDockerCommands {
 
   /**
    * "Use the Local Docker": Devspaces uses the Docker of this computer again. While it uses it already, it says so, or
-   * why that Docker is not supported now. Never throws.
+   * why that Docker is not supported now. On macOS and Linux (`computerDocker` false), it only says that Devspaces never
+   * uses the Docker of this computer there (the command palette does not show it). Never throws.
    */
   async useLocalDocker(): Promise<void> {
     try {
+      if (this.deps.computerDocker === false) {
+        this.deps.logger.info('"Use the Local Docker" does nothing on macOS and Linux: Devspaces never uses the Docker of this computer there.');
+        this.inform(RemoteDockerTexts.noLocalDocker);
+        return;
+      }
       if ((await this.deps.state.dockerHost()) === undefined) {
         await this.reportLocal(await this.deps.targets.resolve(), RemoteDockerTexts.alreadyLocal);
         return;
@@ -408,6 +433,11 @@ export class RemoteDockerCommands {
       if (local !== undefined) this.inform(local);
       return;
     }
+    // No Docker host on macOS and Linux: the sidebar shows the Docker setup.
+    if (isNoDockerHostTarget(now)) {
+      this.deps.logger.info('Devspaces has no Docker host now; the sidebar shows the Docker setup.');
+      return;
+    }
     this.deps.logger.warn(`The local Docker of Devspaces is not supported now: ${now.endpoint || now.host}`);
     const offering = this.offering;
     const offered = isDockerContextHostTarget(now) && offering?.host === now.sshHost && (await offering.claimed);
@@ -437,7 +467,7 @@ export class RemoteDockerCommands {
       return 0;
     });
     this.deps.logger.info(`${picked.host} was removed from the list of Devspaces (${count} devspaces on it).`);
-    this.inform(RemoteDockerTexts.removed(picked.host, count, wasDockerHost));
+    this.inform((this.deps.computerDocker === false ? RemoteDockerTexts.removedNoLocal : RemoteDockerTexts.removed)(picked.host, count, wasDockerHost));
     if (!wasDockerHost) return;
     await this.deps.targets.resolve();
     await this.afterSwitch();

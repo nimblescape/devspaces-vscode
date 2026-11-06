@@ -13,6 +13,12 @@ vi.mock('vscode', async () => {
   const { fakeVscode } = await import('./testing/fakeVscode');
   return { ...fakeVscode, ExtensionMode: { Production: 1, Development: 2, Test: 3 } };
 });
+// The activation tests use the Docker of this computer, which Devspaces uses only on Windows (docs/requirements.md
+// R-ENG-001): they run on every platform as there.
+vi.mock('../core/docker/dockerHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../core/docker/dockerHost')>();
+  return { ...actual, usesComputerDocker: () => true };
+});
 // No Docker CLI on this computer (activation test).
 const foundDockerCli = vi.hoisted(() => vi.fn((): string | undefined => undefined));
 vi.mock('../core/docker/dockerCli', async (importOriginal) => {
@@ -598,13 +604,18 @@ describe('the Docker setup in the sidebar welcome view', () => {
       expect(view.contents).not.toContain(REMOVED_COMMAND);
       expect(view.contents).not.toContain('Setup Guide');
     }
-    const after = welcome.filter((view) => view.contents.startsWith('Your repositories appear here once Docker is installed'));
-    // Devspaces starts its VM on every platform when needed.
+    const after = welcome.filter((view) => view.contents.startsWith('Your repositories appear here once'));
+    // Devspaces starts its VM on every platform when needed; on macOS and Linux it never uses the Docker of the computer.
     expect(after).toEqual([
       {
         view: 'devspaces.repositories',
         contents: 'Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.',
-        when: DockerContextKeys.setupRequired,
+        when: `${DockerContextKeys.setupRequired} && isWindows`,
+      },
+      {
+        view: 'devspaces.repositories',
+        contents: 'Your repositories appear here once the VM is set up. Devspaces starts the VM when needed, and the VM powers itself off when nothing runs there.',
+        when: `${DockerContextKeys.setupRequired} && !isWindows`,
       },
     ]);
   });

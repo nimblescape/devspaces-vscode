@@ -18,6 +18,13 @@ import { envValue } from './dockerCli';
 import { LOCAL_DOCKER_TARGET, dockerTargetOf, parseContextInspect, remoteDockerTarget, type DockerTarget } from './dockerHost';
 
 /**
+ * The target while Devspaces has no Docker host on macOS or Linux (isNoDockerHostTarget): there it never uses the
+ * Docker of this computer (docs/requirements.md R-ENG-001), so it counts as not supported: every operation refuses it
+ * with Messages.noDockerHost, its host matches no devspace, and the sidebar shows the Docker setup.
+ */
+export const NO_DOCKER_HOST_TARGET: DockerTarget = { kind: 'unsupported', host: Messages.noDockerHostName, endpoint: '', noHost: true };
+
+/**
  * The target when the current Docker context cannot be read and DOCKER_HOST is not set (isUnreadableDockerTarget).
  * Without the name of a context, the Docker calls would go to the context that the Docker CLI finds, perhaps on
  * another computer, while the operation would record the local Docker. So it counts as not supported: every
@@ -132,6 +139,12 @@ export class DockerTargets {
     private readonly platform: NodeJS.Platform = process.platform,
     /** Without it, Devspaces uses the local Docker. */
     private readonly choice?: DockerHostChoice,
+    /**
+     * Whether Devspaces uses the Docker of this computer (usesComputerDocker of the platform; true for the tests of the
+     * engine). False on macOS and Linux: without a host of the list, the target is NO_DOCKER_HOST_TARGET, never the
+     * local Docker, and no Docker context of this computer is read.
+     */
+    private readonly computerDocker = true,
   ) {}
 
   /** The target of the last read, for synchronous callers (the Docker setup). Undefined before the first read. */
@@ -140,9 +153,9 @@ export class DockerTargets {
   }
 
   /**
-   * Reads the current target now: the host of the list of Devspaces that it uses, else its local Docker (readLocal).
-   * Without a Docker CLI for a remote engine (the Docker CLI of Devspaces or of this computer, canRunRemote), the local
-   * Docker, so that the Docker setup shows. Never throws.
+   * Reads the current target now: the host of the list of Devspaces that it uses, else its local Docker (readLocal; on
+   * macOS and Linux NO_DOCKER_HOST_TARGET). Without a Docker CLI for a remote engine (the Docker CLI of Devspaces or of
+   * this computer, canRunRemote), the local Docker, so that the Docker setup shows. Never throws.
    */
   async resolve(): Promise<DockerTarget> {
     const read = ++this.readsStarted;
@@ -199,15 +212,16 @@ export class DockerTargets {
     return host === '' ? outsideOperation(() => this.readLocal()) : remoteDockerTarget(host);
   }
 
-  /**The target of the Docker context `name` (for example `default`), whatever context is current. With DOCKER_HOST set
-   *in VS Code's environment, DOCKER_HOST decides, as for the local Docker. Undefined without a Docker CLI, for a name that
-   *is not a context name, or when the
+  /**
+   * The target of the Docker context `name` (for example `default`), whatever context is current. With DOCKER_HOST set
+   * in VS Code's environment, DOCKER_HOST decides, as for the local Docker. Undefined where Devspaces does not use the
+   * Docker of this computer (`computerDocker`), without a Docker CLI, for a name that is not a context name, or when the
    * context cannot be read (logged). Does not change `last` and tells no listener. Never throws.
    */
   async ofContext(name: string): Promise<DockerTarget | undefined> {
     // Never throws, also not from the check of the CLI or of DOCKER_HOST.
     try {
-      if (!CONTEXT_NAME.test(name) || !this.docker.isInstalled()) return undefined;
+      if (!this.computerDocker || !CONTEXT_NAME.test(name) || !this.docker.isInstalled()) return undefined;
       const dockerHost = envValue(this.env, 'DOCKER_HOST', this.platform)?.trim();
       if (dockerHost) return dockerTargetOf(dockerHost, undefined);
       const result = await this.docker.run(['context', 'inspect', '--format', '{{json .}}', name], { timeoutMs: CONTEXT_INSPECT_TIMEOUT_MS });
@@ -231,13 +245,15 @@ export class DockerTargets {
   }
 
   /**
-   * The local Docker of Devspaces: DOCKER_HOST of VS Code's environment if set, else the current Docker context (which
+   * The local Docker of Devspaces: NO_DOCKER_HOST_TARGET where Devspaces does not use the Docker of this computer
+   * (`computerDocker`), else DOCKER_HOST of VS Code's environment if set, else the current Docker context (which
    * DOCKER_CONTEXT may name); one that reaches a host over SSH is not supported (isDockerContextHostTarget). Without a
    * Docker CLI, the local Docker. When the context cannot be read: DOCKER_HOST when it is set, else podmanDockerTarget
    * for a docker command that is Podman, else UNREADABLE_DOCKER_TARGET (logged). Never throws. Its callers run it
    * outside of any operation: inside one on a remote host, its Docker calls would get DOCKER_HOST of that host.
    */
   private async readLocal(): Promise<DockerTarget> {
+    if (!this.computerDocker) return NO_DOCKER_HOST_TARGET;
     if (!this.docker.isInstalled()) return LOCAL_DOCKER_TARGET;
     const dockerHost = envValue(this.env, 'DOCKER_HOST', this.platform)?.trim();
     let detail: string;

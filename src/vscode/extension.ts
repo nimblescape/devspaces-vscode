@@ -31,6 +31,7 @@ import {
   parseWslList,
   sshCommandArgs,
   transportProgramOf,
+  usesComputerDocker,
   wslCommandArgs,
   wslEnv,
   type DockerTarget,
@@ -362,7 +363,7 @@ async function activateExtension(
   // The Docker host of Devspaces (a host of its own list, or the local Docker, which the current Docker context names),
   // read at the start of each operation.
   const remoteState = new RemoteDockerState(paths.remoteDocker, logger);
-  const targets = new DockerTargets(docker, env, logger, platform, remoteState);
+  const targets = new DockerTargets(docker, env, logger, platform, remoteState, usesComputerDocker(platform));
   // What this computer remembers about each Docker engine (docker-engines.json): the answer to the question about its
   // Monitor (MonitorQuestion), and the removal mark of "Remove Devspaces from This Docker Engine…".
   const engineRecords = new DockerEngineRecords(paths.dockerEngines, { logger });
@@ -1173,6 +1174,7 @@ async function activateExtension(
     docker,
     runner,
     targets,
+    computerDocker: usesComputerDocker(platform),
     state: remoteState,
     logger,
     showLog: () => logger.show(),

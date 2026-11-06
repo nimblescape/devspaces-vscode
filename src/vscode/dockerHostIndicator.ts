@@ -10,7 +10,7 @@
 // <title>" (the description of a merged view is not shown; it is set too, for a layout with more views). The merged
 // header does not show it in every window, so the first row of the list names the host too (treeView.ts,
 // DockerHostRow); a click on it chooses the Docker host (the title bar has no icon for it).
-import { isDockerContextHostTarget, isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
+import { isDockerContextHostTarget, isNoDockerHostTarget, isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
 import { Messages } from '../core/messages';
 import type { Logger } from '../core/ports';
 import type { ShownDockerHost } from './treeView';
@@ -50,10 +50,11 @@ export class DockerHostIndicator {
 
   /**
    * Shows `target`: the local Docker, a remote host, or an endpoint that is not supported. `installed` false (no Docker
-   * CLI found; the target then reads as the local Docker): no Docker host at all (the header would otherwise say "Local
-   * Docker" above the Docker setup).
+   * CLI found; the target then reads as the local Docker), and no Docker host on macOS and Linux (isNoDockerHostTarget):
+   * no Docker host at all (the header would otherwise name a Docker host above the Docker setup).
    */
   update(target: DockerTarget, installed = true): void {
+    if (isNoDockerHostTarget(target)) installed = false;
     // A context that could not be read shows without a host, Podman and an SSH host of a Docker context of the user as
     // their own kinds (ShownDockerHost).
     const shown: ShownDockerHost = isPodmanDockerTarget(target)

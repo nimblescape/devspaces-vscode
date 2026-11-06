@@ -8,8 +8,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
-import { dockerTargetOf, LOCAL_DOCKER_TARGET, remoteDockerTarget } from '../core/docker/dockerHost';
-import { UNREADABLE_DOCKER_TARGET, podmanDockerTarget } from '../core/docker/dockerTargets';
+import { dockerTargetOf, LIMA_HOST, LOCAL_DOCKER_TARGET, remoteDockerTarget } from '../core/docker/dockerHost';
+import { NO_DOCKER_HOST_TARGET, UNREADABLE_DOCKER_TARGET, podmanDockerTarget } from '../core/docker/dockerTargets';
 import { Messages } from '../core/messages';
 import { silentLogger } from '../core/ports';
 import { DockerHostIndicator, DockerHostTexts } from './dockerHostIndicator';
@@ -100,6 +100,18 @@ describe('DockerHostIndicator', () => {
     indicator.update(LOCAL_DOCKER_TARGET, true);
     expect(view.title).toBe('Local Docker');
     expect(rows).toEqual([undefined, { kind: 'local', host: '' }]);
+  });
+
+  // docs/requirements.md R-ENG-001: on macOS and Linux, no Docker host until the VM of Devspaces or a host of its list.
+  it('names no Docker host while Devspaces has none on macOS and Linux, and the VM once it is set up', () => {
+    const view: { description?: string; title?: string } = {};
+    const rows: Array<ShownDockerHost | undefined> = [];
+    const indicator = new DockerHostIndicator(view, silentLogger, (host) => rows.push(host));
+    indicator.update(NO_DOCKER_HOST_TARGET);
+    expect(view.title).toBe('Devspaces');
+    expect(view.description).toBeUndefined();
+    indicator.update(remoteDockerTarget(LIMA_HOST));
+    expect(rows).toEqual([undefined, { kind: 'remote', host: LIMA_HOST }]);
   });
 
   // The title bar has no icon for the Docker host, so no context key is set for one.

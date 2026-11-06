@@ -563,22 +563,24 @@ export function nextDockerSetupState(state: DockerSetupState, event: DockerSetup
 }
 
 /**
- * True while the sidebar shows the Docker setup instead of the repositories: no remote Docker host is configured and
- * local Docker is not available. Local Docker is not available when no Docker CLI is found (`dockerMissing`). Docker
- * that is installed but does not run is available: the extension starts it when it is needed.
+ * True while the sidebar shows the Docker setup instead of the repositories: no remote Docker host is configured (a
+ * host of the list of Devspaces, also its VM) and local Docker is not available. Local Docker is not available when no
+ * Docker CLI is found (`dockerMissing`), and never where Devspaces does not use the Docker of this computer
+ * (`computerDocker` false: macOS and Linux, usesComputerDocker). Docker that is installed but does not run is
+ * available: the extension starts it when it is needed.
  */
-export function dockerSetupRequired(dockerMissing: boolean, remoteDockerHostConfigured: boolean): boolean {
-  return dockerMissing && !remoteDockerHostConfigured;
+export function dockerSetupRequired(dockerMissing: boolean, remoteDockerHostConfigured: boolean, computerDocker = true): boolean {
+  return (dockerMissing || !computerDocker) && !remoteDockerHostConfigured;
 }
 
-/** Values of the context keys of a state. */
-export function dockerContextValues(state: DockerSetupState, remoteDockerHostConfigured: boolean): Record<DockerContextKey, boolean> {
+/** Values of the context keys of a state (`computerDocker`: see dockerSetupRequired). */
+export function dockerContextValues(state: DockerSetupState, remoteDockerHostConfigured: boolean, computerDocker = true): Record<DockerContextKey, boolean> {
   return {
     [DockerContextKeys.missing]: !state.cliFound,
     [DockerContextKeys.installed]: state.cliFound,
     [DockerContextKeys.ready]: state.cliFound && state.engineRunning,
     [DockerContextKeys.wslReady]: state.wslReady,
-    [DockerContextKeys.setupRequired]: dockerSetupRequired(!state.cliFound, remoteDockerHostConfigured),
+    [DockerContextKeys.setupRequired]: dockerSetupRequired(!state.cliFound, remoteDockerHostConfigured, computerDocker),
   };
 }
 

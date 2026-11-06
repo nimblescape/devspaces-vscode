@@ -431,6 +431,14 @@ export const Messages = {
     'Devspaces cannot read the current Docker context, so it does not know which Docker to use. It does nothing with Docker until it can read the context. Run "docker context inspect" in a terminal to see the problem, or choose "Devspaces: Use a Remote Docker Host…".',
   /** The Docker host of a context that could not be read, in other texts ("Docker is set to …"). */
   unreadableDockerContextHost: 'a Docker context that cannot be read',
+  /**
+   * macOS and Linux without a Docker host of Devspaces (NO_DOCKER_HOST_TARGET): Devspaces never uses the Docker of the
+   * computer there (docs/requirements.md R-ENG-001), so the VM of Devspaces or a remote host must be set up first.
+   */
+  noDockerHost:
+    'Devspaces has no Docker host yet. On macOS and Linux, it runs the devspaces in its own VM, never in the Docker of this computer: choose "Set Up Docker for Devspaces" in the Devspaces view, or "Devspaces: Use a Remote Docker Host…".',
+  /** The Docker host of NO_DOCKER_HOST_TARGET, in other texts ("Docker is set to …") and in the log. */
+  noDockerHostName: 'no Docker host of Devspaces',
   /** The view's title and the first row of the sidebar while the current Docker context cannot be read. */
   dockerContextUnreadableLabel: 'Docker context cannot be read',
   /** The tooltip of that row. */

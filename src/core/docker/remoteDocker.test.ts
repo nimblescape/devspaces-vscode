@@ -12,7 +12,7 @@ import type { RunOptions, RunResult } from '../ports';
 import { ShellGoneError } from '../relay/remoteShell';
 import { RemoteDockerState } from '../storage/remoteDockerState';
 import { WSL_HOST, remoteDockerTarget } from './dockerHost';
-import { UNREADABLE_DOCKER_TARGET, operationDockerTarget } from './dockerTargets';
+import { NO_DOCKER_HOST_TARGET, UNREADABLE_DOCKER_TARGET, operationDockerTarget } from './dockerTargets';
 import {
   CONTEXT_COMMAND_TIMEOUT_MS,
   ENGINE_INFO_FORMAT,
@@ -613,6 +613,17 @@ describe('startDockerFor (remote mode skips the Docker Desktop start)', () => {
     await expect(
       startDockerFor(UNREADABLE_DOCKER_TARGET, startLocal, { docker, runner: { run: vi.fn() }, state, logger, sshPath: undefined, env: {} }),
     ).rejects.toMatchObject({ code: 'dockerEndpointUnsupported', message: Messages.dockerContextUnreadable });
+    expect(startLocal).not.toHaveBeenCalled();
+    expect(docker.calls).toEqual([]);
+  });
+
+  // docs/requirements.md R-ENG-001: on macOS and Linux, neither Docker Desktop nor Docker Engine of this computer is started.
+  it('refuses the target without a Docker host of macOS and Linux, and names the setup', async () => {
+    const startLocal = vi.fn(async () => {});
+    const docker = fakeDocker(() => info());
+    const refused = startDockerFor(NO_DOCKER_HOST_TARGET, startLocal, { docker, runner: { run: vi.fn() }, state, logger, sshPath: undefined, env: {} });
+    await expect(refused).rejects.toMatchObject({ code: 'dockerEndpointUnsupported', message: Messages.noDockerHost });
+    await expect(refused).rejects.toMatchObject({ detail: 'Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer.' });
     expect(startLocal).not.toHaveBeenCalled();
     expect(docker.calls).toEqual([]);
   });

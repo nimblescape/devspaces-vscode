@@ -47,6 +47,7 @@ import {
   isDockerContextHostTarget,
   isRootlessEngine,
   isPodmanDockerTarget,
+  isNoDockerHostTarget,
   isUnreadableDockerTarget,
   remoteDockerTarget,
   rootlessSocketPath,
@@ -466,19 +467,21 @@ export function dockerHostUnreachable(host: string, problem: DockerHostProblem, 
 /**
  * The message of a target that is not supported: an endpoint that is neither local nor SSH, a context or DOCKER_HOST of
  * the user that reaches a host over SSH (isDockerContextHostTarget), a current Docker context that could not be read
- * (isUnreadableDockerTarget), or a docker command that is Podman (isPodmanDockerTarget).
+ * (isUnreadableDockerTarget), a docker command that is Podman (isPodmanDockerTarget), or no Docker host on macOS and
+ * Linux (isNoDockerHostTarget).
  */
-export function unsupportedTargetMessage(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context'>): string {
+export function unsupportedTargetMessage(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context' | 'noHost'>): string {
+  if (isNoDockerHostTarget(target)) return Messages.noDockerHost;
   if (isPodmanDockerTarget(target)) return Messages.podmanNotSupported;
   if (isDockerContextHostTarget(target)) return Messages.dockerContextHost(target.sshHost, target.context);
   return isUnreadableDockerTarget(target) ? Messages.dockerContextUnreadable : Messages.dockerEndpointUnsupported(target.endpoint);
 }
 
 /** UserFacingError('dockerEndpointUnsupported') for a target that is not supported (unsupportedTargetMessage). */
-export function dockerEndpointUnsupported(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context'>): UserFacingError {
+export function dockerEndpointUnsupported(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context' | 'noHost'>): UserFacingError {
   const detail = isPodmanDockerTarget(target)
     ? target.podman
-    : isUnreadableDockerTarget(target) || isDockerContextHostTarget(target)
+    : isUnreadableDockerTarget(target) || isDockerContextHostTarget(target) || isNoDockerHostTarget(target)
       ? unsupportedTargetReason(target)
       : `Docker endpoint: ${target.endpoint}`;
   return new UserFacingError('dockerEndpointUnsupported', unsupportedTargetMessage(target), detail);

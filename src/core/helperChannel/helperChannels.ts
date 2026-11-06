@@ -11,7 +11,7 @@
 // `vscode`.
 import { dockerApiErrorText, dockerApiMismatch, dockerApiMismatchText, type DockerCliApi, type EngineApiVersions } from '../docker/dockerApiVersion';
 import { runWithDockerTarget } from '../docker/dockerTargets';
-import { isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../docker/dockerHost';
+import { isNoDockerHostTarget, isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import type { HelperMaintenance } from '../helper/helperImages';
 import { bundleHash, loaderCommand } from '../loader/pipeLoader';
 import type { RelayConnection } from '../relay/connection';
@@ -726,10 +726,11 @@ export class HelperChannels {
 
   /**
    * No worker for the window that closes, or for an endpoint that is neither local nor SSH, a current context that
-   * could not be read, or Podman.
+   * could not be read, Podman, or no Docker host on macOS and Linux.
    */
   private refuseUnsupported(target: DockerTarget): void {
     if (this.disposed) throw new HelperChannelError('unavailable', 'the window is closing');
+    if (isNoDockerHostTarget(target)) throw new HelperChannelError('unavailable', 'Devspaces has no Docker host yet');
     if (isUnreadableDockerTarget(target)) throw new HelperChannelError('unavailable', 'the current Docker context could not be read');
     if (isPodmanDockerTarget(target)) throw new HelperChannelError('unavailable', 'the docker command uses Podman, which Devspaces does not support');
     if (target.kind !== 'remote' && target.kind !== 'local') throw new HelperChannelError('unavailable', 'the Docker endpoint is neither local nor SSH');

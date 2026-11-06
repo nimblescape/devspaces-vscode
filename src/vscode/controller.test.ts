@@ -34,7 +34,7 @@ import { isHandedOffStop } from '../core/session/windowRelease';
 import { PENDING_MAX_AGE_MS } from '../core/busy';
 import { availableDevspaces } from '../core/ownership';
 import { LIMA_HOST, WSL_HOST, dockerTargetOf, remoteDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
-import { DockerTargets, operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
+import { DockerTargets, NO_DOCKER_HOST_TARGET, operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { silentLogger } from '../core/ports';
 import type { AccountListing, Devspace, DevspaceSource, DiscoveryData, ExtensionSettings, GitHubAccount, GitSummary, RepositoryInfo, WindowStatus } from '../core/types';
 import { GITHUB_ENTERPRISE_CONTEXT_KEY, SIGNED_IN_CONTEXT_KEY } from './auth';
@@ -789,6 +789,9 @@ describe('Controller commands', () => {
     const setup = { [DockerContextKeys.missing]: true, [DockerContextKeys.setupRequired]: true };
     const intro = 'Devspaces needs Docker, which is not installed on this computer.';
     const after = 'Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.';
+    // macOS and Linux: Devspaces never uses the Docker of the computer (R-ENG-001), so the setup is the VM of Devspaces.
+    const introVm = 'Devspaces runs your devspaces in its own VM with Docker Engine, which is not set up yet. It does not use Docker Desktop or Docker Engine of this computer.';
+    const afterVm = 'Your repositories appear here once the VM is set up. Devspaces starts the VM when needed, and the VM powers itself off when nothing runs there.';
     const signIn =
       'Sign in with GitHub to see your repositories that have a Dev Container configuration.\n' +
       'Devspaces asks for the scopes repo (read and change the repositories that you can access, also the private ones) and read:org (read your organization memberships). It works only with accounts on github.com.\n' +
@@ -812,7 +815,7 @@ describe('Controller commands', () => {
       'Or use Docker on another computer that you reach over SSH, without Docker on this computer. Devspaces downloads the Docker CLI that it needs into its own folder; this needs no administrator permission.\n[Use a Remote Docker Host…](command:devspaces.useRemoteDockerHost)';
 
     it('shows the steps of macOS, then the sign-in', () => {
-      expect(shownWelcome({ ...setup, isMac: true })).toEqual([intro, setUpMac, after, remote, signIn]);
+      expect(shownWelcome({ ...setup, isMac: true })).toEqual([introVm, setUpMac, afterVm, remote, signIn]);
     });
 
     it('shows the steps of Windows with WSL 2 first, and a check mark instead of its button once WSL 2 is ready', () => {
@@ -829,17 +832,17 @@ describe('Controller commands', () => {
     });
 
     it('shows the steps of Linux', () => {
-      expect(shownWelcome({ ...setup, isLinux: true })).toEqual([intro, setUpLinux, after, remote, signIn]);
+      expect(shownWelcome({ ...setup, isLinux: true })).toEqual([introVm, setUpLinux, afterVm, remote, signIn]);
     });
 
     // The settings of VS Code name a GitHub Enterprise instance (devspaces.githubEnterprise): a note after the sign-in.
     it('shows the note on GitHub Enterprise after the sign-in, only while not signed in, also under the setup', () => {
       const enterprise = { [GITHUB_ENTERPRISE_CONTEXT_KEY]: true };
       expect(shownWelcome({ ...enterprise })).toEqual([signIn, githubEnterprise]);
-      expect(shownWelcome({ ...setup, isMac: true, ...enterprise })).toEqual([intro, setUpMac, after, remote, signIn, githubEnterprise]);
+      expect(shownWelcome({ ...setup, isMac: true, ...enterprise })).toEqual([introVm, setUpMac, afterVm, remote, signIn, githubEnterprise]);
       expect(shownWelcome({})).toEqual([signIn]);
       expect(shownWelcome({ ...enterprise, [SIGNED_IN_CONTEXT_KEY]: true })).toEqual(['Loading your repositories…']);
-      expect(shownWelcome({ ...enterprise, ...setup, isMac: true, [SIGNED_IN_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
+      expect(shownWelcome({ ...enterprise, ...setup, isMac: true, [SIGNED_IN_CONTEXT_KEY]: true })).toEqual([introVm, setUpMac, afterVm, remote]);
     });
 
     // Numbers only where there is more than one step (Windows: WSL 2, then Docker for Devspaces in WSL).
@@ -862,10 +865,10 @@ describe('Controller commands', () => {
 
     it('shows no list entry under the setup, also when signed in, loaded, or after a failed load', () => {
       const signedIn = { ...setup, isMac: true, [SIGNED_IN_CONTEXT_KEY]: true };
-      expect(shownWelcome(signedIn)).toEqual([intro, setUpMac, after, remote]);
-      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
-      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
-      expect(shownWelcome({ ...signedIn, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([intro, setUpMac, after, remote]);
+      expect(shownWelcome(signedIn)).toEqual([introVm, setUpMac, afterVm, remote]);
+      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true })).toEqual([introVm, setUpMac, afterVm, remote]);
+      expect(shownWelcome({ ...signedIn, [LOADED_CONTEXT_KEY]: true, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([introVm, setUpMac, afterVm, remote]);
+      expect(shownWelcome({ ...signedIn, [LOAD_FAILED_CONTEXT_KEY]: true })).toEqual([introVm, setUpMac, afterVm, remote]);
       // Every entry but the sign-in and its note on GitHub Enterprise either belongs to the setup or is hidden under it.
       for (const view of welcomeManifest().contributes.viewsWelcome) {
         if (view.when === `!${SIGNED_IN_CONTEXT_KEY}` || view.when === `!${SIGNED_IN_CONTEXT_KEY} && ${GITHUB_ENTERPRISE_CONTEXT_KEY}`) continue;
@@ -7786,8 +7789,13 @@ describe('A course link to Devspaces', () => {
    * distribution of Devspaces becomes the Docker host (`ensureDockerHost`, here the fake of WslSetupCommands, which
    * also records the host of each open in the worker in `hosts`).
    */
-  function withoutDocker(result: 'used' | 'notUsed' | 'unavailable', wslAfterInstall?: ControllerDeps['wslAfterInstall'], limaResult?: 'used' | 'notUsed' | 'unavailable') {
-    let target: DockerTarget = dockerTargetOf('npipe:////./pipe/docker_engine', 'default');
+  function withoutDocker(
+    result: 'used' | 'notUsed' | 'unavailable',
+    wslAfterInstall?: ControllerDeps['wslAfterInstall'],
+    limaResult?: 'used' | 'notUsed' | 'unavailable',
+    initial: DockerTarget = dockerTargetOf('npipe:////./pipe/docker_engine', 'default'),
+  ) {
+    let target: DockerTarget = initial;
     const ensureDockerHost = vi.fn(async (_link?: { path: string; query: string }) => {
       if (result === 'used') target = remoteDockerTarget(WSL_HOST);
       return result;
@@ -7853,6 +7861,17 @@ describe('A course link to Devspaces', () => {
     expect(hosts).toEqual([LIMA_HOST]);
     expect(h.logger.info).toHaveBeenCalledWith('The link goes on with Docker in the VM of Devspaces.');
     expect(fakeVscode.window.showErrorMessage).not.toHaveBeenCalledWith(Messages.dockerNotInstalled, expect.anything());
+  });
+
+  // R-ENG-001: on macOS and Linux, a Docker of this computer (here its Docker CLI) is never used: the link sets up the VM.
+  it('sets up the Lima VM of Devspaces on macOS and Linux also with Docker on this computer, while Devspaces has no Docker host', async () => {
+    const { ensureLimaHost, hosts } = withoutDocker('unavailable', undefined, 'used', NO_DOCKER_HOST_TARGET);
+    h.docker.isInstalled.mockReturnValue(true);
+    h.docker.canRunOn.mockReturnValue(true);
+    await h.controller.openLink(courseLink('MySchool/module-ts-2-<username>'));
+    expect(ensureLimaHost.mock.calls).toEqual([[courseLink('MySchool/module-ts-2-<username>')]]);
+    expect(hosts).toEqual([LIMA_HOST]);
+    expect(h.logger.info).toHaveBeenCalledWith('The link goes on with Docker in the VM of Devspaces.');
   });
 
   it('opens nothing when the Lima VM of Devspaces is not used, and never asks for it while the WSL distribution is used', async () => {

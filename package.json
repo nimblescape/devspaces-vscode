@@ -127,7 +127,12 @@
       {
         "view": "devspaces.repositories",
         "contents": "Devspaces needs Docker, which is not installed on this computer.",
-        "when": "devspaces.dockerSetupRequired"
+        "when": "devspaces.dockerSetupRequired && isWindows"
+      },
+      {
+        "view": "devspaces.repositories",
+        "contents": "Devspaces runs your devspaces in its own VM with Docker Engine, which is not set up yet. It does not use Docker Desktop or Docker Engine of this computer.",
+        "when": "devspaces.dockerSetupRequired && !isWindows"
       },
       {
         "view": "devspaces.repositories",
@@ -157,7 +162,12 @@
       {
         "view": "devspaces.repositories",
         "contents": "Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.",
-        "when": "devspaces.dockerSetupRequired"
+        "when": "devspaces.dockerSetupRequired && isWindows"
+      },
+      {
+        "view": "devspaces.repositories",
+        "contents": "Your repositories appear here once the VM is set up. Devspaces starts the VM when needed, and the VM powers itself off when nothing runs there.",
+        "when": "devspaces.dockerSetupRequired && !isWindows"
       },
       {
         "view": "devspaces.repositories",
@@ -511,6 +521,10 @@
         {
           "command": "devspaces.setUpLimaVm",
           "when": "isMac || isLinux"
+        },
+        {
+          "command": "devspaces.useLocalDocker",
+          "when": "isWindows"
         },
         {
           "command": "devspaces.resetWslDistribution",
