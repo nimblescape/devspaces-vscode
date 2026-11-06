@@ -245,6 +245,12 @@ export const Messages = {
   /** The warning in the tooltip of a repository row whose host access checks are off. */
   hostAccessUnrestrictedTooltip:
     'Warning: the host access checks are off for this repository. Its configuration can use the files, devices, and Docker of your computer.',
+  /** The setting vmMemoryGiB asks for more than half of the memory of this computer (R-VM-006): the VM gets that half. */
+  vmMemoryTooLarge: (wish: number, given: number) =>
+    `The setting devspaces.vmMemoryGiB asks for ${wish} GiB, but the VM of Devspaces gets at most half of the memory of this computer: ${given} GiB.`,
+  /** The setting vmCpus asks for more than half of the CPUs of this computer (R-VM-006): the VM gets that half. */
+  vmCpusTooLarge: (wish: number, given: number) =>
+    `The setting devspaces.vmCpus asks for ${wish} CPUs, but the VM of Devspaces gets at most half of the CPUs of this computer: ${given}.`,
   /** The setting defaultImage is no image reference: it is ignored (no default image). */
   defaultImageInvalid: (value: string) =>
     `The setting devspaces.defaultImage is not an image reference like ghcr.io/owner/image:tag. It is ignored: ${value}`,

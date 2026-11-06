@@ -4,8 +4,8 @@
 
 // The Lima VM of Devspaces with the real Lima of the pin (src/core/vm/limaPin.json), on Linux with KVM and QEMU, and the
 // disk of a build of the image (DEVSPACES_LIMA_TEST_DISK, vm/build.sh): the download of Lima, the create and the start of
-// the VM with the configuration of Devspaces, Docker Engine as root over the SSH of Lima, and the power-off by the idle
-// check of the image. The job "lima test" of .github/workflows/vm-image.yml runs it (npm run test:lima).
+// the VM with the configuration of Devspaces, Docker Engine as root over the SSH of Lima, the power-off by the idle check
+// of the image, and other CPUs and memory for the next start. The job "lima test" of .github/workflows/vm-image.yml runs it (npm run test:lima).
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -96,8 +96,17 @@ describe('the Lima VM of Devspaces', () => {
     }
     console.log(`The VM powered itself off ${Math.round((Date.now() - quiet) / 1000)} seconds after its last container.`);
 
+    // Other CPUs and memory for the next start (the settings vmCpus and vmMemoryGiB, LimaVm.ready).
+    await instance.setResources({ memoryGiB: 2, cpus: 1 });
+    expect((await instance.info()).resources).toEqual({ memoryGiB: 2, cpus: 1 });
+
     // The second start: the disk of the first one, without cloud-init of a new VM.
     await instance.start(undefined, log);
     expect(await inVm("docker info --format '{{.ServerVersion}}'")).not.toBe('');
+    expect(await inVm('nproc')).toBe('1');
+    // MemTotal in KiB: 2 GiB less what the kernel keeps for itself.
+    const memory = Number(await inVm("awk '/^MemTotal:/ { print $2 }' /proc/meminfo"));
+    expect(memory).toBeGreaterThan(1.5 * 2 ** 20);
+    expect(memory).toBeLessThanOrEqual(2 * 2 ** 20);
   });
 });

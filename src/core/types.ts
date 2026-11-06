@@ -482,6 +482,13 @@ export interface ExtensionSettings {
    * the user setting counts (scope `application`).
    */
   confirmOpenFromLink?: boolean;
+  /**
+   * `vmMemoryGiB` and `vmCpus`: the memory in GiB and the CPUs of the Lima VM of Devspaces on macOS and Linux (R-VM-006),
+   * for its next start; each at most half of this computer (limaResources). Whole numbers of at least 1. Ignored on
+   * Windows. Scope `machine`: only the user setting of this computer counts.
+   */
+  vmMemoryGiB?: number;
+  vmCpus?: number;
 }
 
 /** The values of the setting updateContainer. */

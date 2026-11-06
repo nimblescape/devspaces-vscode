@@ -11,7 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { untilAborted, type Logger, type ProcessRunner } from '../ports';
 import { installLima, type InstallLimaOptions } from './lima';
-import { LIMA_INSTANCE, LimaInstance, limaPaths, type LimaPaths } from './limaInstance';
+import { LIMA_INSTANCE, LimaInstance, limaPaths, type LimaPaths, type LimaResources } from './limaInstance';
 
 /**
  * How long a VM that was found running counts as running without a new check (each Docker connection is a transport,
@@ -39,6 +39,11 @@ export interface LimaVmDeps {
   paths?: LimaPaths;
   /** The environment of this process. Default: process.env. */
   env?: NodeJS.ProcessEnv;
+  /**
+   * The memory and the CPUs that the VM should have (R-VM-006: the settings, each at most half of this computer); a
+   * stopped VM with others gets them before its start. Without it, the VM keeps what it has.
+   */
+  resources?: () => LimaResources;
   /** For tests. Default: installLima. */
   install?: (options: InstallLimaOptions) => Promise<string>;
   /** For tests. Default: Date.now. */
@@ -112,9 +117,16 @@ export class LimaVm {
 
   private async startIfStopped(): Promise<void> {
     const instance = await this.lima();
-    const status = await instance.status();
-    if (status === 'missing') throw new LimaVmMissingError();
-    if (status !== 'running') {
+    const info = await instance.info();
+    if (info.status === 'missing') throw new LimaVmMissingError();
+    if (info.status !== 'running') {
+      const wanted = this.deps.resources?.();
+      if (info.status === 'stopped' && wanted !== undefined && info.resources !== undefined && (wanted.cpus !== info.resources.cpus || wanted.memoryGiB !== info.resources.memoryGiB)) {
+        await instance.setResources(wanted);
+        this.deps.logger.info(
+          `The Lima VM of Devspaces gets ${wanted.memoryGiB} GiB of memory and ${wanted.cpus} CPUs from now on (before: ${info.resources.memoryGiB} GiB and ${info.resources.cpus} CPUs).`,
+        );
+      }
       const started = this.now();
       await instance.start(undefined, (line) => this.deps.logger.info(`limactl: ${line}`));
       this.deps.logger.info(`The Lima VM of Devspaces started in ${Math.round((this.now() - started) / 1000)} seconds.`);

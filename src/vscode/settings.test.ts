@@ -27,6 +27,7 @@ import {
   warnInvalidCacheUpdateSchedule,
   warnInvalidDefaultImage,
   warnInvalidHostAccessChecksOff,
+  warnVmResources,
 } from './settings';
 import { Commands } from './commands';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
@@ -64,6 +65,9 @@ describe('settings', () => {
       startWithDefaultImage: true,
       // A link asks before it creates a devspace.
       confirmOpenFromLink: true,
+      // The Lima VM of Devspaces: 4 GiB and 4 CPUs, each at most half of the computer where the VM gets them.
+      vmMemoryGiB: 4,
+      vmCpus: 4,
     });
   });
 
@@ -110,6 +114,32 @@ describe('settings', () => {
 
   // A check runs at the start and when its setting changes. Each invalid value that it finds is a line in the log; the
   // warning shows once per window session for each invalid value, until the setting has a valid value again.
+  // R-VM-006: each at most half of the computer, and the setting never differs from what the VM gets without a word.
+  it('warns about a VM setting above half of this computer that the user set, never about the defaults', () => {
+    const user: Record<string, unknown> = {};
+    fakeVscode.workspace.getConfiguration.mockReturnValue({ get: () => undefined, inspect: (key: string) => ({ globalValue: user[key] }) });
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
+    const warned = { memory: new Set<string>(), cpus: new Set<string>() };
+    const small = { totalMemory: 8 * 2 ** 30, cpus: 4 };
+    const shown = () => fakeVscode.window.showWarningMessage.mock.calls.map((call: unknown[]) => call[0]);
+    // The defaults (4 GiB, 4 CPUs) on a computer with 4 CPUs: 2 CPUs without a warning.
+    warnVmResources(logger, warned, { vmMemoryGiB: 4, vmCpus: 4 }, small);
+    expect(shown()).toEqual([]);
+    user.vmMemoryGiB = 6;
+    user.vmCpus = 3;
+    warnVmResources(logger, warned, { vmMemoryGiB: 6, vmCpus: 3 }, small);
+    expect(shown()).toEqual([Messages.vmMemoryTooLarge(6, 4), Messages.vmCpusTooLarge(3, 2)]);
+    expect(Messages.vmMemoryTooLarge(6, 4)).toBe(
+      'The setting devspaces.vmMemoryGiB asks for 6 GiB, but the VM of Devspaces gets at most half of the memory of this computer: 4 GiB.',
+    );
+    // Within half: no warning.
+    user.vmCpus = 2;
+    warnVmResources(logger, warned, { vmMemoryGiB: 4, vmCpus: 2 }, { totalMemory: 16 * 2 ** 30, cpus: 4 });
+    expect(shown()).toHaveLength(2);
+    expect(normalizeSettings((key) => ({ vmMemoryGiB: 2.7, vmCpus: 0 })[key as string]).vmMemoryGiB).toBe(2);
+    expect(normalizeSettings((key) => ({ vmCpus: 0 })[key as string]).vmCpus).toBe(1);
+  });
+
   it('warns once per window session about each invalid defaultImage, with Open Settings, until the value is valid', async () => {
     let value: unknown = ' not an image ';
     fakeVscode.workspace.getConfiguration.mockReturnValue({ get: (key: string) => (key === 'defaultImage' ? value : undefined), inspect: () => undefined });

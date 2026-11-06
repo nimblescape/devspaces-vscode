@@ -911,6 +911,22 @@
           "scope": "application",
           "default": true,
           "markdownDescription": "Ask before a link, for example on a website or a course page, creates a devspace of a repository of your account or of one of your organizations. **Always Open** in that question turns this off. A repository of another owner is always confirmed.\n\n[Open from a link in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#open-from-a-link)"
+        },
+        "devspaces.vmMemoryGiB": {
+          "order": 20,
+          "type": "integer",
+          "scope": "machine",
+          "default": 4,
+          "minimum": 1,
+          "markdownDescription": "The memory of the VM of Devspaces in GiB, from its next start. At most half of the memory of this computer: a larger value counts as that half, and Devspaces says so.\n\nmacOS and Linux only. On Windows, manage it via WSL.\n\n[The VM of Devspaces in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-vm-of-devspaces-macos-and-linux)"
+        },
+        "devspaces.vmCpus": {
+          "order": 21,
+          "type": "integer",
+          "scope": "machine",
+          "default": 4,
+          "minimum": 1,
+          "markdownDescription": "The CPUs of the VM of Devspaces, from its next start. At most half of the CPUs of this computer: a larger value counts as that half, and Devspaces says so.\n\nmacOS and Linux only. On Windows, manage it via WSL.\n\n[The VM of Devspaces in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-vm-of-devspaces-macos-and-linux)"
         }
       }
     }
