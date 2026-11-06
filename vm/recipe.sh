@@ -138,11 +138,17 @@ step "The .wsl file: the system without the packages of the disk for Lima"
 cp -a "$tree" "$wsl"
 mount -t proc proc "$wsl/proc"
 trap 'umount "$wsl/proc" 2>/dev/null || true' EXIT
+# The kernel itself too: apt keeps the newest kernel from an autoremove.
+kernels=$(chroot "$wsl" dpkg-query -W -f '${Package}\n' 'linux-image-[0-9]*' 2>/dev/null || true)
 # shellcheck disable=SC2086 # one word for each package
-chroot "$wsl" apt-get -y purge --autoremove $lima_only
+chroot "$wsl" apt-get -y purge --autoremove $lima_only $kernels
 umount "$wsl/proc"
 trap - EXIT
 packages_of "$wsl" > "$out/packages-wsl-$arch.txt"
+if grep -E '^(linux-image|initramfs-tools|grub-)' "$out/packages-wsl-$arch.txt"; then
+  echo "The .wsl file still has these packages of the disk for Lima." >&2
+  exit 1
+fi
 # WSL writes /etc/resolv.conf itself; systemd-resolved runs only in Lima.
 rm -f "$wsl/etc/resolv.conf"
 rm -rf "${wsl:?}/boot" "${wsl:?}/usr/lib/modules"

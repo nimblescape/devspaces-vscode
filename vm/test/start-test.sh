@@ -70,6 +70,8 @@ qemu-system-x86_64 -machine q35,accel=kvm -cpu host -m 2048 -smp 2 \
   -display none -serial "file:$logs/serial.log" &
 qemu_pid=$!
 
+# ssh joins its arguments with spaces into one command line for the shell of
+# the VM: an argument with a space needs its own quotes inside the string.
 vm() {
   ssh -n -q -i "$work/key" -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -o ConnectTimeout=5 -o BatchMode=yes ci@127.0.0.1 "$@"
@@ -86,7 +88,7 @@ echo "SSH login after $((SECONDS - start)) seconds."
 echo "== A container that runs during the test"
 vm docker run --detach --name keep mirror.gcr.io/library/busybox:latest sleep 3600 > /dev/null || fail "docker run"
 vm docker run --rm mirror.gcr.io/library/busybox:latest echo "A container ran." || fail "docker run --rm"
-vm docker version --format 'Docker Engine {{.Server.Version}}'
+vm "docker version --format 'Docker Engine {{.Server.Version}}'" || fail "docker version"
 
 echo "== cloud-init and the services"
 # Exit status 2: cloud-init ended with a warning, which the output shows.
