@@ -155,41 +155,20 @@ async function installNow(options: InstallOwnDockerCliOptions, current: DockerCl
   const id = crypto.randomBytes(4).toString('hex');
   const archive = path.join(versionFolder, `archive-${id}.${download.kind}`);
   const part = path.join(versionFolder, `docker-${id}.part`);
-  const stalledAfterMs = options.stalledAfterMs ?? STALLED_AFTER_MS;
-  const stall = new AbortController();
-  let stallTimer: NodeJS.Timeout | undefined;
-  const watch = (): void => {
-    clearTimeout(stallTimer);
-    stallTimer = setTimeout(() => stall.abort(), stalledAfterMs);
-  };
   try {
     logger.info(`The Docker CLI ${download.version} of Devspaces is downloaded from ${download.url}.`);
-    watch();
-    try {
-      await downloadFile({
-        url: download.url,
-        target: archive,
-        host: DOCKER_CLI_DOWNLOAD_HOST,
-        expected: { size: download.size, sha256: download.sha256 },
-        // The pinned URL is the file itself.
-        maxRedirects: 0,
-        signal: options.signal === undefined ? stall.signal : AbortSignal.any([options.signal, stall.signal]),
-        onProgress: (received, total) => {
-          watch();
-          options.onProgress?.(received, total);
-        },
-        get: options.get,
-      });
-    } catch (error) {
-      if (stall.signal.aborted && options.signal?.aborted !== true) {
-        throw new Error(`The download of ${download.url} received no bytes for ${Math.round(stalledAfterMs / 1000)} seconds.`, {
-          cause: error,
-        });
-      }
-      throw error;
-    } finally {
-      clearTimeout(stallTimer);
-    }
+    await downloadFile({
+      url: download.url,
+      target: archive,
+      host: DOCKER_CLI_DOWNLOAD_HOST,
+      expected: { size: download.size, sha256: download.sha256 },
+      // The pinned URL is the file itself.
+      maxRedirects: 0,
+      stalledAfterMs: options.stalledAfterMs ?? STALLED_AFTER_MS,
+      signal: options.signal,
+      onProgress: options.onProgress,
+      get: options.get,
+    });
     if (download.kind === 'zip') await extractZipEntry(archive, download.entry, part, MAX_CLI_SIZE);
     else await extractTarGzEntry(archive, download.entry, part, MAX_CLI_SIZE);
     await fs.promises.chmod(part, 0o755);

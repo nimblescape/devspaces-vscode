@@ -14,10 +14,12 @@
 # release and checks that each archive has limactl and the guest agent of its
 # architecture. Only this job downloads, and it gets no write scope. When the
 # pin changed, the job "pull request" commits the new pin to the branch
-# lima-<version>, opens a pull request for it, and starts the workflow "CI" on
-# that branch, because a pull request of a workflow starts no workflow: the
-# checks of that run appear on the pull request. A branch lima-<version> that
-# has a pull request already, open, closed or merged, gets nothing new.
+# lima-<version>, opens a pull request for it, and starts the workflows "CI"
+# and "VM image" on that branch, because a pull request of a workflow starts no
+# workflow: the checks of these runs appear on the pull request, also the job
+# "lima test", which starts the VM of Devspaces with the new version. A branch
+# lima-<version> that has a pull request already, open, closed or merged, gets
+# nothing new.
 # Opening the pull request needs the repository setting "Allow GitHub Actions
 # to create and approve pull requests" (Settings > Actions > General);
 # without it, the job fails after the push, and the next run tries again. A
@@ -113,7 +115,7 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflows "CI" and "VM image" on that branch.
       actions: write
     steps:
       - name: Check out the source
@@ -154,11 +156,12 @@ jobs:
           cat > "$RUNNER_TEMP/body.md" <<EOF
           The workflow "$WORKFLOW" found [Lima $VERSION](https://github.com/lima-vm/lima/releases/tag/v$VERSION), the newest release of lima-vm/lima. It downloaded the archive of each platform of the pin (macOS and Linux, aarch64 and x86_64), computed its size and SHA-256, checked them against the file \`SHA256SUMS\` of the release, checked that each archive has \`bin/limactl\` and the guest agent of its architecture, and wrote them into \`src/core/vm/limaPin.json\` ([run]($RUN_URL)). Devspaces refuses a download of Lima whose size or SHA-256 differs from the pin.
 
-          Read the [release notes](https://github.com/lima-vm/lima/releases/tag/v$VERSION) for changes that need a change of Devspaces. The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. Merge when CI passes. The next release of Devspaces uses this version.
+          Read the [release notes](https://github.com/lima-vm/lima/releases/tag/v$VERSION) for changes that need a change of Devspaces. The workflow started the workflows "CI" and "VM image" on this branch, because a pull request of a workflow starts no workflow; their checks appear on this pull request. The job "lima test" of "VM image" creates and starts the VM of Devspaces with this version, runs Docker Engine in it, and waits for its power-off by the idle check. Merge when all checks pass. The next release of Devspaces uses this version.
           EOF
           if ! gh pr create --base main --head "$branch" --title "Pin Lima $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
             echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
             exit 1
           fi
           gh workflow run ci.yml --ref "$branch"
-          echo "The pull request of Lima $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
+          gh workflow run vm-image.yml --ref "$branch"
+          echo "The pull request of Lima $VERSION is open, and CI and VM image run on $branch." >> "$GITHUB_STEP_SUMMARY"

@@ -85,5 +85,5 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflows "CI" and "VM image" on that branch.
       actions: write
