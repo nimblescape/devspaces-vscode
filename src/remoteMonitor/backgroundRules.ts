@@ -34,7 +34,7 @@ export interface CacheRunState {
   retries?: number;
   /**
    * When the last run that did not reach the network ended (with `retryAt`): the schedule counts from it while a retry
-   * waits, so a schedule shorter than the wait still runs at its times.
+   * waits, so a time of a cron schedule that comes before the retry still runs.
    */
   lastAttemptAt?: number;
 }

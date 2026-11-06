@@ -1177,7 +1177,7 @@ export async function writeRunRequest(stateDir: string, now: number): Promise<vo
  * internet) does not count as a run: the end of the last run stays, and the run is tried again after runRetryDelay
  * (2, 5, 10, 20, 30 minutes, then every hour) until one reaches it; the retry is kept in the volume too, so a restart of
  * the monitor keeps it. While it waits, the next run comes at its time, or earlier at a time of the schedule counted
- * from the last attempt (`lastAttemptAt`), so a schedule shorter than the wait still runs at its times.
+ * from the last attempt (`lastAttemptAt`), so a time of a cron schedule that comes before the retry still runs.
  */
 export class CacheSchedule {
   /** The end of the last run (the stored one at first; undefined: none is known). */

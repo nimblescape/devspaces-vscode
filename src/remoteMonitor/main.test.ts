@@ -1752,7 +1752,8 @@ describe('monitor.js images', () => {
     expect(scheduleOf({})).toEqual({ text: '7 6 * * *', timeZone: 'Europe/Vienna' });
     expect(scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: '30 5 * * 1-5', DEVSPACE_IMAGE_TZ: 'America/New_York' })).toEqual({ text: '30 5 * * 1-5', timeZone: 'America/New_York' });
     expect(scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: 'soon', DEVSPACE_IMAGE_TZ: 'nowhere' })).toEqual({ text: '7 6 * * *', timeZone: 'Europe/Vienna' });
-    expect(scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: '45' })).toEqual({ text: '45', timeZone: 'Europe/Vienna' });
+    expect(scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: '90' })).toEqual({ text: '90', timeZone: 'Europe/Vienna' });
+    expect(scheduleOf({ DEVSPACE_IMAGE_SCHEDULE: '45' })).toEqual({ text: '7 6 * * *', timeZone: 'Europe/Vienna' });
     const cron = cacheScheduleFromEnv({ DEVSPACE_IMAGE_SCHEDULE: '30 5 * * 1-5' }).schedule;
     expect(cron.kind === 'cron' ? cron.cron.weekdays : undefined).toEqual(new Set([1, 2, 3, 4, 5]));
   });
@@ -1986,29 +1987,29 @@ describe('the settings and the schedule of the image maintenance', () => {
 
   // The times during a pass that a check started are left out, not caught up at once.
   it('leaves out the times of the schedule during a pass that a check started, and logs it', async () => {
-    let time = Date.parse('2026-09-29T06:04:30Z');
+    let time = Date.parse('2026-09-29T05:59:30Z');
     const log: string[] = [];
     let passes = 0;
-    const settings = new CurrentCacheSettings({ ...ENV, DEVSPACE_IMAGE_SCHEDULE: '*/5 * * * *', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {});
+    const settings = new CurrentCacheSettings({ ...ENV, DEVSPACE_IMAGE_SCHEDULE: '0 * * * *', DEVSPACE_IMAGE_TZ: 'UTC' }, stateDir, () => {});
     const schedule = new CacheSchedule({ state: endedAt(time),
       now: () => time,
       log: (message) => log.push(message),
       settings,
       pass: async () => {
         passes++;
-        // The pass takes until 06:17.
-        time = Date.parse('2026-09-29T06:17:00Z');
+        // The pass takes until 08:17, over the times 07:00 and 08:00.
+        time = Date.parse('2026-09-29T08:17:00Z');
       },
     });
-    time = Date.parse('2026-09-29T06:05:10Z');
+    time = Date.parse('2026-09-29T06:00:10Z');
     await schedule.check();
     expect(passes).toBe(1);
     // The text names the background run.
     expect(log).toEqual(['A background run was still running; the times of the schedule during it are left out.']);
-    time = Date.parse('2026-09-29T06:18:00Z');
+    time = Date.parse('2026-09-29T08:18:00Z');
     await schedule.check();
     expect(passes).toBe(1);
-    time = Date.parse('2026-09-29T06:20:10Z');
+    time = Date.parse('2026-09-29T09:00:10Z');
     await schedule.check();
     expect(passes).toBe(2);
   });

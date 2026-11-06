@@ -51,20 +51,20 @@ const storeEnd = (at: number) => fs.writeFileSync(path.join(stateDir, CACHE_RUN_
 const storedEnd = () => (JSON.parse(fs.readFileSync(path.join(stateDir, CACHE_RUN_FILE), 'utf8')) as { lastEndAt?: number }).lastEndAt;
 
 describe('the schedule of the background run: an interval', () => {
-  const ENV = { DEVSPACE_IMAGE_SCHEDULE: '17', DEVSPACE_IMAGE_TZ: 'UTC' };
+  const ENV = { DEVSPACE_IMAGE_SCHEDULE: '90', DEVSPACE_IMAGE_TZ: 'UTC' };
 
   it('runs at its start when no run is known, then N minutes after the end of the previous run, and keeps that end', async () => {
     const s = scheduleOf(ENV, T0);
     await s.schedule.check();
     expect(s.passes()).toBe(1);
     expect(storedEnd()).toBe(T0);
-    s.at(T0 + 17 * MINUTE - 1);
+    s.at(T0 + 90 * MINUTE - 1);
     await s.schedule.check();
     expect(s.passes()).toBe(1);
-    s.at(T0 + 17 * MINUTE);
+    s.at(T0 + 90 * MINUTE);
     await s.schedule.check();
     expect(s.passes()).toBe(2);
-    expect(storedEnd()).toBe(T0 + 17 * MINUTE);
+    expect(storedEnd()).toBe(T0 + 90 * MINUTE);
   });
 
   it('counts from the end of the run, not its start', async () => {
@@ -83,10 +83,10 @@ describe('the schedule of the background run: an interval', () => {
     });
     await schedule.check();
     expect(storedEnd()).toBe(T0 + 10 * MINUTE);
-    time = T0 + 17 * MINUTE;
+    time = T0 + 90 * MINUTE;
     await schedule.check();
     expect(passes).toBe(1);
-    time = T0 + 27 * MINUTE;
+    time = T0 + 100 * MINUTE;
     await schedule.check();
     expect(passes).toBe(2);
   });
@@ -96,10 +96,10 @@ describe('the schedule of the background run: an interval', () => {
     const restarted = scheduleOf(ENV, T0);
     await restarted.schedule.check();
     expect(restarted.passes()).toBe(0);
-    restarted.at(T0 + 7 * MINUTE);
+    restarted.at(T0 + 80 * MINUTE);
     await restarted.schedule.check();
     expect(restarted.passes()).toBe(1);
-    storeEnd(T0 - 18 * MINUTE);
+    storeEnd(T0 - 91 * MINUTE);
     const late = scheduleOf(ENV, T0);
     await late.schedule.check();
     expect(late.passes()).toBe(1);
@@ -108,11 +108,11 @@ describe('the schedule of the background run: an interval', () => {
   it('follows the interval of new settings of another computer', async () => {
     const s = scheduleOf(ENV, T0);
     await s.schedule.check();
-    fs.writeFileSync(path.join(stateDir, IMAGE_SETTINGS_FILE), JSON.stringify({ schedule: '60', timeZone: 'UTC' }));
-    s.at(T0 + 17 * MINUTE);
+    fs.writeFileSync(path.join(stateDir, IMAGE_SETTINGS_FILE), JSON.stringify({ schedule: '120', timeZone: 'UTC' }));
+    s.at(T0 + 90 * MINUTE);
     await s.schedule.check();
     expect(s.passes()).toBe(1);
-    s.at(T0 + 60 * MINUTE);
+    s.at(T0 + 120 * MINUTE);
     await s.schedule.check();
     expect(s.passes()).toBe(2);
   });

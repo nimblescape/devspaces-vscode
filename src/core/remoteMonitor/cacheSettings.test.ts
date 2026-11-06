@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CACHE_UPDATE_SCHEDULE,
   MAX_CACHE_INTERVAL_MINUTES,
+  MIN_CACHE_INTERVAL_MINUTES,
   cacheRunDue,
   monitorRestartPolicy,
   monitorRunsPermanently,
@@ -17,20 +18,21 @@ import {
 const MINUTE = 60_000;
 
 describe('cacheUpdateSchedule', () => {
-  it('takes whole minutes from 5 on as an interval, as a number or its digits', () => {
-    expect(parseCacheSchedule('17')).toEqual({ kind: 'interval', minutes: 17, text: '17' });
-    expect(parseCacheSchedule(5)).toEqual({ kind: 'interval', minutes: 5, text: '5' });
+  it('takes whole minutes from 60 on as an interval, as a number or its digits', () => {
+    expect(MIN_CACHE_INTERVAL_MINUTES).toBe(60);
+    expect(parseCacheSchedule('90')).toEqual({ kind: 'interval', minutes: 90, text: '90' });
+    expect(parseCacheSchedule(60)).toEqual({ kind: 'interval', minutes: 60, text: '60' });
     expect(parseCacheSchedule(' 0060 ')).toEqual({ kind: 'interval', minutes: 60, text: '60' });
     expect(parseCacheSchedule(String(MAX_CACHE_INTERVAL_MINUTES))).toMatchObject({ kind: 'interval', minutes: MAX_CACHE_INTERVAL_MINUTES });
   });
 
   // At most a day (1440 minutes), as the pattern of the setting in package.json.
-  it('refuses fewer than 5 minutes, more than a day, fractions and signs', () => {
+  it('refuses fewer than 60 minutes, more than a day, fractions and signs', () => {
     expect(MAX_CACHE_INTERVAL_MINUTES).toBe(1440);
     expect(parseCacheSchedule('1440')).toEqual({ kind: 'interval', minutes: 1440, text: '1440' });
     expect(parseCacheSchedule('001440')).toEqual({ kind: 'interval', minutes: 1440, text: '1440' });
-    for (const value of ['1441', 1441, '525600', '00000', '000004']) expect(parseCacheSchedule(value), JSON.stringify(value)).toBeUndefined();
-    for (const value of ['4', 4, '0', 0, '-5', -5, '5.0', 5.5, '+5', String(MAX_CACHE_INTERVAL_MINUTES + 1), '1e3', '12345678']) {
+    for (const value of ['1441', 1441, '525600', '00000', '000059']) expect(parseCacheSchedule(value), JSON.stringify(value)).toBeUndefined();
+    for (const value of ['59', 59, '5', 5, '17', '30', '0', 0, '-60', -60, '60.0', 60.5, '+60', String(MAX_CACHE_INTERVAL_MINUTES + 1), '1e3', '12345678']) {
       expect(parseCacheSchedule(value), JSON.stringify(value)).toBeUndefined();
     }
   });
@@ -51,11 +53,11 @@ describe('cacheUpdateSchedule', () => {
   });
 
   // The shortest interval holds for a cron schedule too: `* * * * *` would run the background work every minute.
-  it('refuses a cron schedule with two times less than 5 minutes apart, also across the full hour', () => {
-    for (const value of ['* * * * *', '*/4 * * * *', '0,3 6 * * *', '0,58 * * * *', '0,58 23,0 * * *']) {
+  it('refuses a cron schedule with two times less than 60 minutes apart, also across the full hour', () => {
+    for (const value of ['* * * * *', '*/5 * * * *', '*/30 * * * *', '0,30 6 * * *', '0,55 * * * *', '0,58 6,8 * * *', '0,58 23,0 * * *', '0-59/5 6 * * 1-5']) {
       expect(parseCacheSchedule(value), value).toBeUndefined();
     }
-    for (const value of ['*/5 * * * *', '0,55 * * * *', '0,58 6,8 * * *', '59 6,7 * * *', '7 * * * *', '0-59/5 6 * * 1-5']) {
+    for (const value of ['7 * * * *', '0 */2 * * *', '0 6,8 * * *', '59 6,7 * * *', '30 23,0 * * *', '0 6 * * 1-5']) {
       expect(parseCacheSchedule(value)?.kind, value).toBe('cron');
     }
     expect(normalizeCacheSchedule('* * * * *')).toBe(DEFAULT_CACHE_UPDATE_SCHEDULE);
@@ -70,8 +72,9 @@ describe('cacheUpdateSchedule', () => {
   it('normalizes to the text of the schedule, and anything else to the default, daily at 06:07', () => {
     expect(DEFAULT_CACHE_UPDATE_SCHEDULE).toBe('7 6 * * *');
     expect(parseCacheSchedule(DEFAULT_CACHE_UPDATE_SCHEDULE)?.kind).toBe('cron');
-    expect(normalizeCacheSchedule('30')).toBe('30');
-    expect(normalizeCacheSchedule('17')).toBe('17');
+    expect(normalizeCacheSchedule('90')).toBe('90');
+    expect(normalizeCacheSchedule('0120')).toBe('120');
+    expect(normalizeCacheSchedule('30')).toBe('7 6 * * *');
     expect(normalizeCacheSchedule('7  6 * * *')).toBe('7 6 * * *');
     expect(normalizeCacheSchedule('3')).toBe('7 6 * * *');
     expect(normalizeCacheSchedule('junk')).toBe('7 6 * * *');
@@ -96,7 +99,7 @@ describe('the mode of the monitor and its restart policy', () => {
 
 describe('when a background run is due', () => {
   const T = Date.parse('2026-10-09T10:00:00Z');
-  const interval = parseCacheSchedule('17')!;
+  const interval = parseCacheSchedule('90')!;
 
   it('is due when no run is known', () => {
     expect(cacheRunDue(interval, undefined, T, 'UTC')).toBe(true);
@@ -104,8 +107,8 @@ describe('when a background run is due', () => {
   });
 
   it('with an interval: the interval after the end of the previous run, not before', () => {
-    expect(cacheRunDue(interval, T, T + 17 * MINUTE - 1, 'UTC')).toBe(false);
-    expect(cacheRunDue(interval, T, T + 17 * MINUTE, 'UTC')).toBe(true);
+    expect(cacheRunDue(interval, T, T + 90 * MINUTE - 1, 'UTC')).toBe(false);
+    expect(cacheRunDue(interval, T, T + 90 * MINUTE, 'UTC')).toBe(true);
     // A monitor that starts after a longer pause: its last run is older than the interval.
     expect(cacheRunDue(interval, T - 3 * 60 * MINUTE, T, 'UTC')).toBe(true);
   });

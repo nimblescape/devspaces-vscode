@@ -15,10 +15,11 @@ import { nextCronTime, parseCronSchedule, shortestCronGapMinutes, type CronSched
  */
 export const DEFAULT_CACHE_UPDATE_SCHEDULE = '7 6 * * *';
 /**
- * The shortest interval in minutes (a whole number, at least 5), and the shortest time between two times of a cron
- * schedule.
+ * The shortest interval in minutes (a whole number, at least 60: an hour), and the shortest time between two times of a
+ * cron schedule. A background run pulls images and Dev Container features, so a shorter time would only load the
+ * registries and the computer.
  */
-export const MIN_CACHE_INTERVAL_MINUTES = 5;
+export const MIN_CACHE_INTERVAL_MINUTES = 60;
 /**
  * The longest interval in minutes: a day (1440), as the pattern of the setting in package.json, so that every number
  * that the settings editor takes is one that the monitor takes (a number that the monitor refuses would become the

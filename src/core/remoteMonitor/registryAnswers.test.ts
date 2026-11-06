@@ -35,8 +35,8 @@ describe('the registry answers of the Monitor', () => {
 
   it('the fresh time: the interval plus 5 minutes; a daily cron schedule up to its next run plus 5 minutes, no cap', () => {
     expect(REGISTRY_ANSWER_SLACK_MS).toBe(5 * MIN);
-    expect(registryAnswerMaxAgeMs({ schedule: '17' }, RUN)).toBe(22 * MIN);
-    expect(registryAnswerMaxAgeMs({ schedule: '30' }, RUN)).toBe(35 * MIN);
+    expect(registryAnswerMaxAgeMs({ schedule: '90' }, RUN)).toBe(95 * MIN);
+    expect(registryAnswerMaxAgeMs({ schedule: '120' }, RUN)).toBe(125 * MIN);
     expect(registryAnswerMaxAgeMs({ schedule: '7 6 * * *', timeZone: 'Europe/Vienna' }, RUN)).toBe(24 * 60 * MIN + 5 * MIN);
     // Unknown: no schedule, an invalid one, a cron schedule without its time zone.
     expect(REGISTRY_ANSWER_UNKNOWN_SCHEDULE_MS).toBe(22 * MIN);
@@ -70,8 +70,8 @@ describe('the registry answers of the Monitor', () => {
 
   it('reads the file strictly: a bad entry is no answer, a bad file none at all', () => {
     const key = registryReferenceKey('node:20')!;
-    const text = registryAnswersText({ schedule: '17', timeZone: 'Europe/Vienna', digests: { [key]: { digest: D1, at: RUN } } });
-    expect(parseRegistryAnswers(text)).toEqual({ schedule: '17', timeZone: 'Europe/Vienna', digests: { [key]: { digest: D1, at: RUN } } });
+    const text = registryAnswersText({ schedule: '90', timeZone: 'Europe/Vienna', digests: { [key]: { digest: D1, at: RUN } } });
+    expect(parseRegistryAnswers(text)).toEqual({ schedule: '90', timeZone: 'Europe/Vienna', digests: { [key]: { digest: D1, at: RUN } } });
     const bad = parseRegistryAnswers(
       JSON.stringify({
         schedule: 'every day',

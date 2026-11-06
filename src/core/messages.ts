@@ -282,7 +282,7 @@ export const Messages = {
     `The setting devspaces.defaultImage is not an image reference like ghcr.io/owner/image:tag. It is ignored: ${value}`,
   /** The setting cacheUpdateSchedule is no schedule that the Monitor takes (parseCacheSchedule): the default applies. */
   cacheUpdateScheduleInvalid: (value: string) =>
-    `The setting devspaces.cacheUpdateSchedule is not a cron schedule like 7 6 * * * with at least 5 minutes between its times, and not a number of minutes from 5 to 1440. The Monitor uses the default, daily at 06:07. The value is: ${value}`,
+    `The setting devspaces.cacheUpdateSchedule is not a cron schedule like 7 6 * * * with at least 60 minutes between its times, and not a number of minutes from 60 to 1440. The Monitor uses the default, daily at 06:07. The value is: ${value}`,
   /** Entries of the setting devspaces.hostAccessChecksOff that are no repository name (`owner/name`). */
   hostAccessChecksOffInvalid: (entries: string) =>
     `The setting devspaces.hostAccessChecksOff has entries that are not a repository name like owner/name. They are ignored: ${entries}`,
