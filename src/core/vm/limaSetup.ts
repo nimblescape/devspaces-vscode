@@ -105,17 +105,23 @@ export class LimaSetup {
    * can run. On Linux: `/dev/kvm` and QEMU.
    */
   precondition(): LimaSetupError | undefined {
-    const { platform, arch, env } = this.deps;
+    const { platform, arch } = this.deps;
     if ((platform !== 'darwin' && platform !== 'linux') || (arch !== 'x64' && arch !== 'arm64')) {
       return new LimaSetupError('platform', `Devspaces has no VM for ${platform} on ${arch}.`);
     }
     if (platform !== 'linux') return undefined;
-    const kvm = (this.deps.kvm ?? kvmState)();
+    const { kvm, qemuMissing } = this.linuxNeeds();
     if (kvm === 'missing') return new LimaSetupError('kvmMissing', 'This computer has no /dev/kvm: its processor has no virtualization, or it is turned off.');
     if (kvm === 'access') return new LimaSetupError('kvmAccess', 'Your user may not use /dev/kvm.');
-    const missing = [qemuSystem(arch), 'qemu-img'].filter((name) => findExecutable(name, env, platform) === undefined);
-    if (missing.length > 0) return new LimaSetupError('qemuMissing', `QEMU is not installed: ${missing.join(' and ')} not found.`);
+    if (qemuMissing.length > 0) return new LimaSetupError('qemuMissing', `QEMU is not installed: ${qemuMissing.join(' and ')} not found.`);
     return undefined;
+  }
+
+  /** Linux: the state of `/dev/kvm` for the user, and the programs of QEMU that are not found (qemuInstall.ts installs them). */
+  linuxNeeds(): { kvm: 'ok' | 'missing' | 'access'; qemuMissing: string[] } {
+    const { platform, arch, env } = this.deps;
+    const kvm = (this.deps.kvm ?? kvmState)();
+    return { kvm, qemuMissing: [qemuSystem(arch), 'qemu-img'].filter((name) => findExecutable(name, env, platform) === undefined) };
   }
 
   /**

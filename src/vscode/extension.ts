@@ -101,7 +101,8 @@ import { Controller } from './controller';
 import { DisconnectRequests } from './disconnectRequests';
 import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
-import { DockerSetup } from './dockerSetup';
+import { DockerSetup, currentUserName, readOsRelease } from './dockerSetup';
+import { installTerminalOptions, terminalLines } from '../core/docker/dockerSetup';
 import { MonitorQuestion, STOP_MONITOR_WHEN_IDLE_SETTING } from './monitorQuestion';
 import { OutputChannelLogger } from './logger';
 import { updateOwnersContextKey } from './ownerSelector';
@@ -116,7 +117,7 @@ import { GroupMatchWorkerRunner } from './groupMatcher';
 import { PreviewWorkerRunner } from './groupsPreviewRunner';
 import { RemoteDockerCommands } from './remoteDockerCommands';
 import { WslSetupCommands } from './wslSetupCommands';
-import { LimaSetupCommands } from './limaSetupCommands';
+import { LimaSetupCommands, LimaSetupTexts } from './limaSetupCommands';
 import { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import { SessionCoordinator } from './sessionCoordinator';
 import {
@@ -1171,7 +1172,22 @@ async function activateExtension(
     showLog: () => logger.show(),
     useRemoteHost: () => remoteDocker.useRemoteHost(),
     useHost: (host) => remoteDocker.useHost(host),
+    // Linux: QEMU and the group kvm with one administrator prompt (sudo) in a visible terminal of this computer, with a
+    // fixed shell, folder and environment, as the installation of Docker had.
+    installQemu:
+      platform === 'linux'
+        ? {
+            input: async () => ({ arch: process.arch, osRelease: (await readOsRelease()) ?? {}, userName: currentUserName() }),
+            localWindow: () => vscode.env.remoteName === undefined,
+            runInTerminal: (commands) => {
+              const terminal = vscode.window.createTerminal({ name: LimaSetupTexts.qemuTerminal, ...installTerminalOptions(platform, env, os.homedir(), currentUserName()) });
+              terminal.show();
+              for (const line of terminalLines(commands, platform)) terminal.sendText(line);
+            },
+          }
+        : undefined,
   });
+  context.subscriptions.push(limaSetup);
   // A Docker context or DOCKER_HOST of the user that reaches a host over SSH while Devspaces uses the local Docker: its
   // host is offered once for the list (in the background; the read that found it goes on).
   context.subscriptions.push({

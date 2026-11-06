@@ -151,7 +151,7 @@
       },
       {
         "view": "devspaces.repositories",
-        "contents": "Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. The VM needs QEMU and access to /dev/kvm. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)",
+        "contents": "Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. Without QEMU, Devspaces first installs it in a terminal, where sudo asks for your password. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)",
         "when": "devspaces.dockerSetupRequired && isLinux"
       },
       {
