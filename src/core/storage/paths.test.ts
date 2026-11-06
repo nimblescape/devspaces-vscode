@@ -57,7 +57,7 @@ describe('StoragePaths', () => {
     // No files of a local Monitor (monitor.json, .lock, .version, .exit, .log).
     expect(Object.keys(paths).filter((key) => key.startsWith('monitor'))).toEqual([]);
     expect(paths.helperState).toBe(path.join(root, 'helper.json'));
-    // The answer to the question about the Monitor of each Docker engine.
+    // The removal mark of each Docker engine.
     expect(paths.dockerEngines).toBe(path.join(root, 'docker-engines.json'));
     expect(paths.sessionFile(WINDOW_ID)).toBe(path.join(root, 'sessions', `${WINDOW_ID}.json`));
     expect(paths.pendingFile(ENV_ID)).toBe(path.join(root, 'pending', `${ENV_ID}.json`));

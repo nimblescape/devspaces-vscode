@@ -64,8 +64,8 @@ export class StoragePaths {
   /** Remote Docker hosts: the list of SSH hosts, the Docker host of Devspaces, and the rootless sockets (RemoteDockerState). */
   readonly remoteDocker: string;
   /**
-   * The Docker engines (DockerEngineRecords): the answer to the question about the Monitor of each, the removal mark of
-   * "Remove Devspaces from This Docker Engine…", and the removal that runs in a window. Changed under the lock folder
+   * The Docker engines (DockerEngineRecords): the removal mark of "Remove Devspaces from This Docker Engine…" of each,
+   * and the removal that runs in a window. Changed under the lock folder
    * `docker-engines.lock` next to it.
    */
   readonly dockerEngines: string;

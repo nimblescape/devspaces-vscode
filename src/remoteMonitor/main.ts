@@ -16,8 +16,8 @@
 //                                lock; exits with 0 after REMOTE_IDLE_EXIT_MS without a running devspace container
 //                                and without a fresh record while it maintains no images (a created container does not
 //                                count) and no retry of its background run waits (up to the retry after 30 minutes,
-//                                CacheSchedule.heldRetryAt), unless it runs permanently (DEVSPACE_MONITOR_PERMANENT: the user answered
-//                                the question about it, and stopMonitorWhenIdle is off), image updates or not; and its
+//                                CacheSchedule.heldRetryAt), unless it runs permanently (DEVSPACE_MONITOR_PERMANENT: a
+//                                remote host, and stopMonitorWhenIdle is off), image updates or not; and its
 //                                background run
 //                                (background.ts) by the schedule of cacheUpdateSchedule (CacheSchedule). A permanent
 //                                one ends itself after 30 days in which no window used the engine (UnusedEnd: its
@@ -1602,7 +1602,7 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         }
         // Only here, between two ticks, so never while it holds a lock or stops a container; the removals of the
         // records (each under the lock of the records) end first. The records stay in the volume. A permanent monitor
-        // (after the answer of the user, with stopMonitorWhenIdle off) never exits when idle; one that ends when idle
+        // (a remote host, with stopMonitorWhenIdle off) never exits when idle; one that ends when idle
         // does so also with image updates.
         if (!permanent && loop.idleMs() >= idleExitMs) {
           // Not during a background run (a download would be cut, and its end not stored). The loop does not wait for

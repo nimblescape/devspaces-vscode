@@ -29,29 +29,9 @@ export const ControllerTexts = {
   // "Update All Images Now" (`engine`: describeDockerHost).
   requestingImageUpdate: (engine: string) => `Asking the Monitor on ${engine} to update the images…`,
   imagesUpdatingNow: (engine: string) => `The Monitor on ${engine} updates the images now.`,
-  /** No request: a removal of Devspaces from the engine began and ended after the question about the Monitor. */
+  /** No request: a removal of Devspaces from the engine began and ended after the start of the request. */
   removedInTheMeantime: (engine: string) =>
     `Devspaces was removed from ${engine} in the meantime. No request was sent. Run "Update All Images Now" again to set up Devspaces there again.`,
-  /**
-   * The question about the Monitor of an engine (monitorQuestion.ts), once per engine before the first Monitor there
-   * that would keep running (`engine`: describeDockerHost). "Keep Running" is the first and default button.
-   */
-  monitorQuestion: (engine: string) => `Keep the Devspaces background container running on ${engine}?`,
-  /** `wsl`: the engine is the WSL distribution of Devspaces, which Windows starts at the logon for a Monitor that keeps running (WslKeeper). */
-  monitorQuestionDetail: (wsl: boolean): string =>
-    'The container devspaces-monitor updates the images of your devspaces, the VS Code Server and your extensions, by default once a day. ' +
-    'When the base image or the Features of a devspace changed, it also builds the next image of that devspace, so that the update at the next start is fast. ' +
-    'If you keep it running, it also runs while VS Code is closed, and Docker starts it again after a restart. ' +
-    (wsl ? 'For this, Devspaces adds a start entry of your Windows user, so that WSL starts the distribution when you log on to Windows. ' : '') +
-    'It ends itself after 30 days in which no devspace was used on this Docker engine. ' +
-    'If it stops when idle, it ends 5 minutes after the last devspace stops, and this work runs only while a devspace runs. ' +
-    'Keep Running applies to this Docker engine only. If you choose Stop When Idle, this applies to all Docker engines, each from the next start of a devspace or "Update All Images Now" there. ' +
-    'You can change your answer with the setting "Devspaces: Stop Monitor When Idle". ' +
-    'The command "Devspaces: Remove Devspaces from This Docker Engine…" removes the container.',
-  keepMonitorRunning: 'Keep Running',
-  stopMonitorWhenIdle: 'Stop When Idle',
-  /** The answer to the question about the Monitor could not be stored (the log names the cause). */
-  monitorAnswerNotSaved: 'Your answer about the background container could not be saved. Details are in the log.',
   // "Remove Devspaces from This Docker Engine…" (`engine`: describeDockerHost).
   removeLooking: (engine: string) => `Looking for Devspaces on ${engine}…`,
   removeEngineNotAnswering: (engine: string) => `Devspaces cannot reach ${engine}. Nothing was removed. Start Docker there, then try again.`,

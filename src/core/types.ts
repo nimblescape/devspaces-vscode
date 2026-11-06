@@ -450,9 +450,9 @@ export interface ExtensionSettings {
    */
   cacheUpdateSchedule?: string;
   /**
-   * The Monitor of an engine, local or remote, ends after 5 minutes without a running devspace (true); false, the
-   * default: it runs permanently once the user answered the question about it on that engine (monitorQuestion.ts,
-   * which writes this setting).
+   * The Monitor of a remote host ends after 5 minutes without a running devspace (true); false, the default: it runs
+   * permanently there (monitorRunsPermanently). On the WSL distribution or VM of Devspaces and on the Docker of the
+   * computer, the Monitor always ends when idle, whatever this says.
    */
   stopMonitorWhenIdle?: boolean;
   /**

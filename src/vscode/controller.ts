@@ -58,7 +58,6 @@ import {
   type DisconnectRequests,
 } from './disconnectRequests';
 import type { DockerSetup } from './dockerSetup';
-import type { MonitorQuestion } from './monitorQuestion';
 import { isCancellation, showError as presentError } from './errors';
 import { courseRepository, parseLink, type RepositoryLink } from './links';
 import type { OutputChannelLogger } from './logger';
@@ -218,16 +217,10 @@ export interface ControllerDeps {
   /**
    * The step "Docker start" of an operation, the function that DevspaceOperations gets (startDockerFor with
    * ensureDockerRunning), on the target of the running operation: a local Docker that does not run is started, Podman
-   * is refused, and an SSH host gets the reachability check. "Update All Images Now" runs it in its progress, after
-   * the question about the Monitor (beforeUserFlow) and before it sends its request to the Monitor. Default: nothing.
+   * is refused, and an SSH host gets the reachability check. "Update All Images Now" runs it in its progress, after the
+   * removal mark of the engine went (beforeUserFlow) and before it sends its request to the Monitor. Default: nothing.
    */
   startDocker?: DockerStarter;
-  /**
-   * The question about the Monitor of an engine (MonitorQuestion; once per engine, never rejects), which a Start, a
-   * Rebuild and "Update All Images Now" of the user ask before they run there (beforeUserFlow). The flows that run by
-   * themselves never ask. Without it, nothing is asked.
-   */
-  monitorQuestion?: Pick<MonitorQuestion, 'askIfNeeded'>;
   /**
    * docker-engines.json: the removal mark of an engine ("Remove Devspaces from This Docker Engine…"), which a Start, a
    * Rebuild and "Update All Images Now" of the user clear on their engine (beforeUserFlow), and the entry of a removal
@@ -237,11 +230,6 @@ export interface ControllerDeps {
   engineRecords?: Pick<DockerEngineRecords, 'setRemoved' | 'record' | 'removing' | 'startRemoval' | 'endRemoval' | 'clearRemoved'>;
   /** "Remove Devspaces from This Docker Engine…" (removeFromDockerEngine). Without it, the command does nothing. */
   engineRemoval?: EngineRemovalDeps;
-  /**
-   * "Remove Devspaces from This Docker Engine…" ended on the engine `host`, with or without a change of its removal
-   * mark (the start entry of the WSL distribution of Devspaces follows it). Never throws.
-   */
-  engineRemovalEnded?: (host: string) => void;
   /** The VS Code setting `workbench.list.openMode` (double-click on a row, rowActivation.ts). Default: `readListOpenMode`. */
   listOpenMode?: () => ListOpenMode;
   /** True in an Extension Development Host (a debug run of this extension): the reopen rule is relaxed. */
@@ -1378,8 +1366,8 @@ export class Controller implements vscode.Disposable {
    * progress until it took the request; then a message. The run itself is not waited for (it can take long); the
    * monitor never runs two at once. The command shows a failure (updateImagesNowCommand). A target that is not
    * supported (an endpoint that is neither local nor SSH, a context that cannot be read, or Podman) is refused with its
-   * message, before the question about the Monitor (beforeUserFlow) and before any progress. Before all of this, the
-   * flow is refused while this window removes Devspaces from an engine (refusedWhileRemoving), as Start is.
+   * message, before the removal mark of the engine goes (beforeUserFlow) and before any progress. Before all of this,
+   * the flow is refused while this window removes Devspaces from an engine (refusedWhileRemoving), as Start is.
    * In the progress, the step "Docker start" of Start runs first (startDocker): a local Docker that does not run is
    * started, a Podman engine behind the Docker CLI is refused, and an SSH host is checked. After a Docker start, the
    * progress names the next step (sendingRequest), so that it does not say "Starting Docker" until the Monitor took the
@@ -1387,7 +1375,7 @@ export class Controller implements vscode.Disposable {
    * request and shows nothing. The progress runs in the gate of this window, with the key of the engine
    * (monitorRequestKey): a second request for the engine is not started while it runs (logged), and the removal of
    * Devspaces from an engine in this window is refused (runningOperation). After the Docker start, which can take long,
-   * the request is not sent when a removal of Devspaces began since the question (requestRefusedByRemoval): the request
+   * the request is not sent when a removal of Devspaces began after beforeUserFlow (requestRefusedByRemoval): the request
    * would set up the Monitor, the worker and the volumes again on the engine.
    */
   async updateImagesNow(): Promise<void> {
@@ -1398,7 +1386,7 @@ export class Controller implements vscode.Disposable {
     if (this.refusedWhileRemoving('Update All Images Now')) return;
     const target = await this.operationTarget();
     if (target.kind === 'unsupported') throw dockerEndpointUnsupported(target);
-    // The question about the Monitor of the engine, which the request makes sure of; it reads only local records.
+    // The removal mark of the engine goes; it reads only local records.
     if (!(await this.beforeUserFlow('Update All Images Now'))) return;
     const engine = describeDockerHost(target.host);
     const startDocker = this.deps.startDocker;
@@ -1437,10 +1425,9 @@ export class Controller implements vscode.Disposable {
 
   /**
    * After the Docker start of "Update All Images Now" on the engine `host`, right before its request: true, after a
-   * message, when a removal of Devspaces began since the question about the Monitor (beforeUserFlow). That is a removal
-   * that runs in this window (refusedWhileRemoving; it began before the request took its key in the gate), one that
-   * another window runs on the engine (refusedWhileOtherWindowRemoves), or one that ended and left its removal mark
-   * there: a mark other than `markBefore`, the mark that beforeUserFlow could not clear (none when it cleared it).
+   * message, when a removal of Devspaces began after beforeUserFlow. That is a removal that runs in this window
+   * (refusedWhileRemoving; it began before the request took its key in the gate), one that another window runs on the
+   * engine (refusedWhileOtherWindowRemoves), or one that ended and left its removal mark there: a mark other than `markBefore`, the mark that beforeUserFlow could not clear (none when it cleared it).
    */
   private async requestRefusedByRemoval(host: string, markBefore: number | undefined): Promise<boolean> {
     const operation = 'Update All Images Now';
@@ -1503,7 +1490,6 @@ export class Controller implements vscode.Disposable {
       await this.removeFromCheckedEngine(removal, target, known, here);
     } finally {
       this.removingFrom = undefined;
-      this.deps.engineRemovalEnded?.(target.host);
     }
   }
 
@@ -2761,8 +2747,7 @@ export class Controller implements vscode.Disposable {
   /** Rebuild of a devspace that this window may be connected to. */
   private async rebuildDevspace(target: Target, devspace: Devspace, request: { reason: PendingOperation['reason'] }): Promise<void> {
     const repository = this.shownName(target);
-    // The question about the Monitor of the engine comes first, also before a hand-off: the window that runs the
-    // Rebuild then asks nothing.
+    // The removal mark of the engine goes first, also before a hand-off.
     if (!(await this.beforeUserFlow('Rebuild', devspace))) return;
     if (this.isAttachedHere(devspace)) {
       await this.handOff(target, devspace, { operation: 'rebuild', ...request }, 'rebuild');
@@ -4131,11 +4116,9 @@ export class Controller implements vscode.Disposable {
 
   /**
    * Before a Start, a Rebuild or "Update All Images Now" (`operation`) that the user started on the engine of the
-   * operation: the removal mark of the engine goes (clearRemovalMark), and the question about the Monitor of that engine
-   * comes (MonitorQuestion, once per engine), so the Monitor that the flow makes sure of follows the answer. False, after
-   * a message, when the flow must not run: while this window removes Devspaces from an engine (refusedWhileRemoving),
-   * or another window removes it from the engine of the flow, also when that removal began while the question was open;
-   * the mark stays then. The mark of a removal that began and ended while the question was open goes too.
+   * operation: the removal mark of the engine goes (clearRemovalMark). False, after a message, when the flow must not
+   * run: while this window removes Devspaces from an engine (refusedWhileRemoving), or another window removes it from
+   * the engine of the flow; the mark stays then.
    * Nothing for a target that is neither local nor SSH (every operation refuses it), nor for a `devspace` of another
    * Docker host (its open is refused). Never throws.
    */
@@ -4143,19 +4126,14 @@ export class Controller implements vscode.Disposable {
     if (this.refusedWhileRemoving(operation)) return false;
     const target = await this.operationTarget();
     if (target.kind === 'unsupported' || (devspace !== undefined && !isOnDockerHost(devspace, target.host))) return true;
-    if (!(await this.clearRemovalMark(operation, target.host))) return false;
-    await this.deps.monitorQuestion?.askIfNeeded(target.host, () => this.markBlocker());
-    // Again after the question, which can stay open for long: a removal that another window began meanwhile refuses the
-    // flow while it runs, and the mark of one that ended meanwhile goes.
     return this.clearRemovalMark(operation, target.host);
   }
 
   /**
    * A flow of the user (`operation`) on the engine `host` after "Remove Devspaces from This Docker Engine…" there: the
-   * removal mark goes, so the background work of this computer runs there again (and the question about its Monitor
-   * comes again: the mark forgot the answer). False, after a message, while another window removes Devspaces from the
-   * engine: checked again under the lock of the file, so that the mark of a removal that begins now stays. True
-   * otherwise, also when the file cannot be read or written (logged). Never throws.
+   * removal mark goes, so the background work of this computer runs there again. False, after a message, while another
+   * window removes Devspaces from the engine: checked again under the lock of the file, so that the mark of a removal
+   * that begins now stays. True otherwise, also when the file cannot be read or written (logged). Never throws.
    */
   private async clearRemovalMark(operation: string, host: string): Promise<boolean> {
     const records = this.deps.engineRecords;

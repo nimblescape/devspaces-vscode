@@ -2,8 +2,8 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The command "Update All Images Now": the controller asks the question about the Monitor of the engine
-// (monitorQuestion.ts), runs the step "Docker start" of Start, then sends the request to the Monitor of the Docker
+// The command "Update All Images Now": the controller runs the step "Docker start" of Start, then sends the request to
+// the Monitor of the Docker
 // engine of the operation (the sidebar's) through the worker (`monitorRunNow`), with a progress until the monitor took
 // the request, then the message; the window's call to the worker (workerMonitor.monitorRunNow) with the
 // monitor settings of this computer, its time limit, and a strict answer; and the command and its menu in package.json.
@@ -47,7 +47,6 @@ function controllerWith(
   target: DockerTarget,
   update?: ControllerDeps['updateImagesNow'],
   startDocker?: DockerStarter,
-  monitorQuestion?: ControllerDeps['monitorQuestion'],
 ) {
   const infos: string[] = [];
   const logger = { info: vi.fn((text: string) => void infos.push(text)), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), show: vi.fn() };
@@ -56,7 +55,6 @@ function controllerWith(
     dockerTargets: { current: async () => target, resolve: async () => target, withOperation: <T>(fn: () => Promise<T>) => fn() },
     ...(update !== undefined ? { updateImagesNow: update } : {}),
     ...(startDocker !== undefined ? { startDocker } : {}),
-    ...(monitorQuestion !== undefined ? { monitorQuestion } : {}),
   } as unknown as ControllerDeps;
   return { controller: new Controller(deps), infos };
 }
@@ -97,18 +95,6 @@ describe('the command Update All Images Now', () => {
     expect(infos).toContain('The Monitor on build-box took the request of "Update All Images Now".');
   });
 
-  it('asks about the Monitor of the engine first (monitorQuestion.ts); a closed question goes on with the request', async () => {
-    const order: string[] = [];
-    const update = vi.fn(async () => void order.push('update'));
-    const askIfNeeded = vi.fn(async (host: string) => {
-      order.push(`ask ${host}`);
-      return 'closed' as const;
-    });
-    await controllerWith(REMOTE, update, undefined, { askIfNeeded }).controller.updateImagesNow();
-    expect(order).toEqual(['ask build-box', 'update']);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('The Monitor on build-box updates the images now.');
-  });
-
   it('names the local Docker for a local engine', async () => {
     const { controller } = controllerWith(LOCAL, async () => {});
     await controller.updateImagesNow();
@@ -132,26 +118,22 @@ describe('the command Update All Images Now', () => {
     expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('The Monitor on the local Docker updates the images now.');
   });
 
-  // The order of Start: the question about the Monitor, then in the progress the step "Docker start", then the request.
-  // Each message of the progress ends with the link Show details (progress.ts), which opens the log and hides the
-  // progress, which stays in the notification center with its Cancel button.
-  it('asks the question about the Monitor before the Docker start and the request; each step has the link Show details', async () => {
+  // The order of Start: in the progress the step "Docker start", then the request. Each message of the progress ends
+  // with the link Show details (progress.ts), which opens the log and hides the progress, which stays in the
+  // notification center with its Cancel button.
+  it('runs the Docker start before the request; each step has the link Show details', async () => {
     const order: string[] = [];
     const messages: string[] = [];
     fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (progress: unknown, token: unknown) => Promise<unknown>) =>
       task({ report: (value: { message: string }) => void messages.push(value.message) }, { onCancellationRequested: () => ({ dispose: () => {} }) }),
     );
-    const askIfNeeded = vi.fn(async (host: string) => {
-      order.push(`ask ${host || 'the local Docker'}`);
-      return 'keepRunning' as const;
-    });
     const startDocker = vi.fn<DockerStarter>(async ({ onStarting }) => {
       order.push('start');
       onStarting();
     });
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => void order.push('update'));
-    await controllerWith(LOCAL, update, startDocker, { askIfNeeded }).controller.updateImagesNow();
-    expect(order).toEqual(['ask the local Docker', 'start', 'update']);
+    await controllerWith(LOCAL, update, startDocker).controller.updateImagesNow();
+    expect(order).toEqual(['start', 'update']);
     const title = ControllerTexts.requestingImageUpdate('the local Docker');
     expect(messages).toEqual([
       progressMessage(title, undefined, undefined),
@@ -275,13 +257,11 @@ describe('the command Update All Images Now', () => {
     ['an endpoint that is neither local nor SSH', dockerTargetOf('tcp://10.0.0.5:2375', 'tcp-box'), Messages.dockerEndpointUnsupported('tcp://10.0.0.5:2375')],
   ])('refuses %s with its message, without a progress and without the Monitor', async (_name, target, message) => {
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => {});
-    // Refused before the question about the Monitor and before the step "Docker start", as Start is.
+    // Refused before the step "Docker start", as Start is.
     const startDocker = vi.fn<DockerStarter>(async () => {});
-    const askIfNeeded = vi.fn(async () => 'keepRunning' as const);
-    const { controller } = controllerWith(target, update, startDocker, { askIfNeeded });
+    const { controller } = controllerWith(target, update, startDocker);
     await expect(controller.updateImagesNow()).rejects.toMatchObject({ code: 'dockerEndpointUnsupported', message });
     expect(update).not.toHaveBeenCalled();
-    expect(askIfNeeded).not.toHaveBeenCalled();
     expect(startDocker).not.toHaveBeenCalled();
     expect(fakeVscode.window.withProgress).not.toHaveBeenCalled();
     expect(fakeVscode.window.showInformationMessage).not.toHaveBeenCalled();

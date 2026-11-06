@@ -1,7 +1,7 @@
 {
   "name": "nimblescape-devspaces-2",
   "displayName": "nimblescape Devspaces 2",
-  "description": "Open your GitHub repositories in dev containers on your own Docker. Uses your GitHub sign-in (scopes repo and read:org), runs Docker and the Dev Containers CLI, can install Docker after you confirm, and runs a background container that updates images, the VS Code Server and extensions. Before your first devspace, it does not contact the Docker engine. It asks before the background container keeps running on a Docker engine, and a command removes it.",
+  "description": "Open your GitHub repositories in dev containers on your own Docker. Uses your GitHub sign-in (scopes repo and read:org), runs Docker and the Dev Containers CLI, can install Docker after you confirm, and runs a background container that updates images, the VS Code Server and extensions. Before your first devspace, it does not contact the Docker engine. The background container keeps running only on a remote Docker host, and a command removes it.",
   "version": "0.4.1",
   "publisher": "nimblescape",
   "license": "MIT",
@@ -787,7 +787,7 @@
           "type": "boolean",
           "scope": "application",
           "default": false,
-          "markdownDescription": "End the Monitor container of a Docker engine, local or remote, when no devspace has run there for 5 minutes; the next start starts it again. Off: the first Start or Rebuild on an engine, or **Update All Images Now** there, asks whether the Monitor keeps running there; until you answer, it ends when idle.\n\n[The background run in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run)"
+          "markdownDescription": "End the Monitor container on a remote Docker host when no devspace has run there for 5 minutes; the next start starts it again. Off: it keeps running there. On the WSL distribution or VM of Devspaces and on the Docker of this computer, the Monitor always ends when idle, whatever this says.\n\n[The background run in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-background-run)"
         },
         "devspaces.updateImagesOnConnect": {
           "order": 7,

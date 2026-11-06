@@ -83,11 +83,11 @@ describe('cacheUpdateSchedule', () => {
 });
 
 describe('the mode of the monitor and its restart policy', () => {
-  it('runs permanently on every engine after the answer there, unless stopMonitorWhenIdle is on (default off)', () => {
+  it('runs permanently on a remote host, unless stopMonitorWhenIdle is on (default off)', () => {
     expect(monitorRunsPermanently(undefined, true)).toBe(true);
     expect(monitorRunsPermanently(false, true)).toBe(true);
     expect(monitorRunsPermanently(true, true)).toBe(false);
-    // Before the answer about the Monitor of the engine, it ends when idle.
+    // On the WSL distribution or VM of Devspaces and on the Docker of the computer, it always ends when idle.
     for (const stop of [undefined, false, true]) expect(monitorRunsPermanently(stop, false)).toBe(false);
   });
 

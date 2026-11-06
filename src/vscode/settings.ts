@@ -316,8 +316,8 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     // A cron expression of five fields, or an interval of at least 60 whole minutes; anything else: the default, daily
     // at 06:07 (normalizeCacheSchedule; warnInvalidCacheUpdateSchedule names it).
     cacheUpdateSchedule: normalizeCacheSchedule(get('cacheUpdateSchedule')),
-    // The Monitor of an engine runs permanently once the user answered the question about it there, unless this is
-    // true (monitorQuestion.ts writes it).
+    // The Monitor of a remote host runs permanently unless this is true (monitorRunsPermanently); on the VM of Devspaces
+    // and on the Docker of the computer it always ends when idle.
     stopMonitorWhenIdle: bool('stopMonitorWhenIdle', DEFAULT_SETTINGS.stopMonitorWhenIdle ?? false),
     // `ask`, or else the default `notify`.
     updateContainer: get('updateContainer') === 'ask' ? 'ask' : 'notify',

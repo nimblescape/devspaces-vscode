@@ -551,11 +551,11 @@ export interface ImageSettings {
 }
 
 /**
- * The settings of the Monitor that an open and `monitorEnsure` carry: the image settings (ImageSettings, which
- * the monitor gets with `settings -`), and whether it runs permanently (monitorRunsPermanently: on every engine once the
- * user answered the question about it there, unless stopMonitorWhenIdle is on). The mode is part of its label
- * (monitorModeOf, monitorLabel), never of `settings -`; missing means false. And `computer`, the ID of the computer
- * (isSourceId): the owner of a permanent monitor that it creates (LABEL_MONITOR_OWNER).
+ * The settings of the Monitor that an open and `monitorEnsure` carry: the image settings (ImageSettings, which the
+ * monitor gets with `settings -`), and whether it runs permanently (monitorRunsPermanently: on a remote host unless
+ * stopMonitorWhenIdle is on; never on the WSL distribution or VM of Devspaces and on the Docker of the computer). The
+ * mode is part of its label (monitorModeOf, monitorLabel), never of `settings -`; missing means false. And `computer`,
+ * the ID of the computer (isSourceId): the owner of a permanent monitor that it creates (LABEL_MONITOR_OWNER).
  */
 export interface MonitorSettings extends ImageSettings {
   permanent?: boolean;

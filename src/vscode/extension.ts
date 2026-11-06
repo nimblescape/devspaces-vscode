@@ -14,7 +14,7 @@ import { BootstrapDocker } from '../core/docker/bootstrapDocker';
 import { addDockerFolderToPath, dockerProcessEnv, findDockerCli, findExecutable, putFolderFirstInPath } from '../core/docker/dockerCli';
 import { LOCAL_CLI_VERSION_FORMAT, LOCAL_CLI_VERSION_TIMEOUT_MS, localDockerCliApi, type DockerCliApi } from '../core/docker/dockerApiVersion';
 import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, presentOwnDockerCli } from '../core/docker/ownDockerCli';
-import { WslSetup, dockerDesktopIntegrates, endOf, listsDistribution, outputOf, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
+import { WslSetup, dockerDesktopIntegrates, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { WslKeeper } from '../core/docker/wslKeeper';
 import { WslLifetime } from '../core/docker/wslLifetime';
@@ -109,7 +109,6 @@ import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerSetup, currentUserName, readOsRelease } from './dockerSetup';
 import { installTerminalOptions, terminalLines } from '../core/docker/dockerSetup';
-import { MonitorQuestion, STOP_MONITOR_WHEN_IDLE_SETTING } from './monitorQuestion';
 import { OutputChannelLogger } from './logger';
 import { updateOwnersContextKey } from './ownerSelector';
 import { updateDevspacesOnlyContextKey } from './devspacesOnly';
@@ -367,8 +366,8 @@ async function activateExtension(
   // read at the start of each operation.
   const remoteState = new RemoteDockerState(paths.remoteDocker, logger);
   const targets = new DockerTargets(docker, env, logger, platform, remoteState, usesComputerDocker(platform));
-  // What this computer remembers about each Docker engine (docker-engines.json): the answer to the question about its
-  // Monitor (MonitorQuestion), and the removal mark of "Remove Devspaces from This Docker Engine…".
+  // What this computer remembers about each Docker engine (docker-engines.json): the removal mark of "Remove Devspaces
+  // from This Docker Engine…".
   const engineRecords = new DockerEngineRecords(paths.dockerEngines, { logger });
   // After "Remove Devspaces from This Docker Engine…", this computer does no Docker work on that engine by itself (no
   // worker for a passive read, no background build of the helper image, no background work at the start) until a
@@ -878,42 +877,25 @@ async function activateExtension(
   // read once (each open and each repair of the heartbeats asks for it; a failed read is tried again at the next call).
   let knownComputerId: string | undefined;
   const computerId = (): string => (knownComputerId ??= readOrCreateComputerId(paths.computerId));
-  // The open carries the settings of this computer for the Monitor of its engine (no image prefixes and no
-  // image list): the schedule of the monitor's whole background run (cacheUpdateSchedule), and its mode, by the same
-  // rule on every engine (monitorRunsPermanently: permanent once the user answered the question about the Monitor of
-  // that engine, unless stopMonitorWhenIdle is on). In monitorSettings.ts, tested by its behaviour.
+  // The open carries the settings of this computer for the Monitor of its engine (no image prefixes and no image list):
+  // the schedule of the monitor's whole background run (cacheUpdateSchedule), and its mode (monitorRunsPermanently,
+  // R-DS-003: permanent on a remote host unless stopMonitorWhenIdle is on; on the WSL distribution or VM of Devspaces
+  // and on the Docker of the computer it always ends when idle). In monitorSettings.ts, tested by its behaviour.
   const monitorSettings = monitorSettingsOf({
     settings: getSettings,
-    answered: (host) => engineRecords.monitorAnswered(host),
     // An unknown zone of Node.js (`Etc/Unknown`) is UTC.
     timeZone: () => usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
     computerId,
-    logger,
   });
   // The WSL distribution of Devspaces runs while this window holds its idle session there (from its first `wsl.exe` for
   // the distribution, until no devspace, no Monitor and no helper container of Devspaces runs there, or the window
-  // closes), and while its keeper runs (while a container runs there, also after VS Code closed; and from the logon to
-  // Windows while its Monitor runs permanently). A Docker call in the background starts a distribution that does not
-  // run only while its Monitor runs permanently (docs/architecture.md "The WSL distribution of Devspaces"). Its sessions
-  // end after the release of deactivate(), which may need them.
-  let listWarning: string | undefined;
+  // closes), and while its keeper runs (while a container runs there, also after VS Code closed). A Docker call in the
+  // background does not start a distribution that does not run (docs/architecture.md "The WSL distribution of
+  // Devspaces"). Its sessions end after the release of deactivate(), which may need them.
   const keeper = new WslKeeper({
-    runner,
     wslPath,
     env,
     launch: (file, args, onExit) => launchDetachedProcess(file, args, onExit, { windowsHide: true }),
-    // Only WSL_E_DEFAULT_DISTRO_NOT_FOUND counts as a list without it; another failure tells nothing (logged once while
-    // it stays the same).
-    registered: async (distribution) => {
-      const result = await runWslList().catch(() => undefined);
-      const listed = result === undefined || result.timedOut ? undefined : listsDistribution(result, distribution);
-      const warning = listed !== undefined ? undefined : `WSL did not tell whether it lists the distribution ${distribution}, so its start entry stays as it is${result === undefined ? '' : ` (${endOf(result, WSL_LIST_TIMEOUT_MS)}: ${outputOf(result)})`}.`;
-      if (warning !== undefined && warning !== listWarning) logger.warn(warning);
-      listWarning = warning;
-      return listed;
-    },
-    monitorPermanent: (host) => monitorSettings.permanentIfKnown(host),
-    knows: async (host) => (await engineRecords.record(host)) !== undefined,
     logger,
   });
   context.subscriptions.push({ dispose: () => keeper.dispose() });
@@ -942,7 +924,6 @@ async function activateExtension(
     runner,
     wslPath,
     env,
-    monitorPermanent: (host) => monitorSettings.permanent(host),
     keeper,
     upgrade,
     logger,
@@ -1263,11 +1244,8 @@ async function activateExtension(
       return used;
     },
     forgetHost: (host) => remoteDocker.forgetHost(host),
-    // A new distribution is a new engine: the question about its Monitor comes again, and the start entry goes. Without
-    // the distribution, the Docker context of the setting createDockerContext goes too.
+    // Without the distribution, the Docker context of the setting createDockerContext goes too.
     forgetDistribution: async () => {
-      await engineRecords.forgetMonitorAnswer(WSL_HOST).catch((error: unknown) => logger.warn(`The answer about the Monitor on ${describeDockerHost(WSL_HOST)} could not be forgotten: ${errorMessage(error)}`));
-      await keeper.removeStartEntry(WSL_DISTRIBUTION);
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
     },
   });
@@ -1369,15 +1347,11 @@ async function activateExtension(
     // "Update All Images Now", through this window's worker of the engine, with the monitor settings of this computer
     // for that engine (as the repair of a heartbeat).
     updateImagesNow: async (target, signal) => monitorCalls.monitorRunNow(target, await monitorSettings.forTarget(target), signal),
-    // Before the request, after the question about the Monitor, the step "Docker start" of Start: Podman is refused, a
-    // local Docker that does not run is started.
+    // Before the request, the step "Docker start" of Start: Podman is refused, a local Docker that does not run is
+    // started.
     startDocker,
-    // The question about the Monitor of an engine, which a Start, a Rebuild and "Update All Images Now" of the user ask
-    // there first (once per engine); its answer goes into the setting stopMonitorWhenIdle and the records of the engines.
-    monitorQuestion: new MonitorQuestion({ records: engineRecords, settings: getSettings, logger, showLog: () => logger.show(), answered: (host) => updateStartEntry(host) }),
     // The removal mark of the engines, which a Start, a Rebuild and "Update All Images Now" of the user clear there.
     engineRecords,
-    engineRemovalEnded: (host) => updateStartEntry(host),
     // "Remove Devspaces from This Docker Engine…": whether the engine answers (as for the background builds: Docker is
     // never started, a remote host gets the SSH check without questions first), the Docker CLI of the extension for the
     // inventory and the removal, the end of this window's worker there, and the ID of this computer.
@@ -1421,16 +1395,6 @@ async function activateExtension(
   const background = (promise: Promise<unknown>, what: string): void => {
     promise.catch((error: unknown) => logger.error(`Could not ${what}.`, error));
   };
-  // The start entry of the WSL distribution of Devspaces (only that one) follows the mode of its Monitor
-  // (WslKeeper.updateStartEntry): at the start of the window, after an answer to the question about its Monitor, after a
-  // change of stopMonitorWhenIdle, and after "Remove Devspaces from This Docker Engine…" there. Each reads the
-  // registry; another VS Code (for example VS Code Insiders, with its own storage and no answer there) only removes an
-  // entry of a distribution that WSL does not list (WslKeeperDeps.knows).
-  const updateStartEntry = (host: string): void => {
-    if (host !== WSL_HOST || wslPath() === undefined) return;
-    background(keeper.updateStartEntry(WSL_HOST, WSL_DISTRIBUTION), 'update the start entry of the WSL distribution of Devspaces');
-  };
-  updateStartEntry(WSL_HOST);
   // The distribution of Devspaces is never the default distribution of WSL, and Docker Desktop does not integrate it
   // (only with its folder; WslSetupCommands.checkSeparation).
   if (wslPath() !== undefined) background(wslSetup.checkSeparation(), 'check the WSL distribution of Devspaces');
@@ -1562,7 +1526,6 @@ async function activateExtension(
       if (!affectsSettings(event)) return;
       const previous = settings;
       settings = readSettings();
-      if (event.affectsConfiguration(`${SETTINGS_SECTION}.${STOP_MONITOR_WHEN_IDLE_SETTING}`)) updateStartEntry(WSL_HOST);
       warnInvalidHostAccessChecksOff(logger, hostAccessWarnings, event);
       warnInvalidDefaultImage(logger, defaultImageWarnings, event);
       warnInvalidCacheUpdateSchedule(logger, cacheScheduleWarnings, event);
