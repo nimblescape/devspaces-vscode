@@ -37,9 +37,6 @@ export const INSTALL_WATCH_TIMEOUT_MS = 30 * 60_000;
  */
 export const WSL_INSTALL_COMMAND = 'wsl --install --no-distribution';
 
-/** The packages of Docker Engine from download.docker.com (apt and dnf). */
-export const DOCKER_ENGINE_PACKAGES = 'docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin';
-
 // User-visible texts that messages.ts lacks; to be moved there.
 export const DockerSetupTexts = {
   /** While the terminal installs WSL 2 (no question before it: Windows asks for administrator permission itself). */

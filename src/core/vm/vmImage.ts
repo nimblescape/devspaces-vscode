@@ -27,7 +27,8 @@ export interface VmImagePin {
   files: Partial<Record<string, Partial<Record<VmImageKind, VmImageFile>>>>;
 }
 
-const PIN: VmImagePin = pinFile;
+/** The pin of this version of Devspaces (vmImagePin.json). */
+export const VM_IMAGE_PIN: VmImagePin = pinFile;
 /** A digest of the pin. */
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 /** The time limit of the token of the registry. */
@@ -43,7 +44,7 @@ export function vmImageArch(arch: string): 'amd64' | 'arm64' | undefined {
 }
 
 /** The file of `kind` for the processor `arch` with the version of the pin; undefined without a pin or such a file. */
-export function vmImageFile(kind: VmImageKind, arch: string, pin: VmImagePin = PIN): (VmImageFile & { version: string }) | undefined {
+export function vmImageFile(kind: VmImageKind, arch: string, pin: VmImagePin = VM_IMAGE_PIN): (VmImageFile & { version: string }) | undefined {
   const imageArch = vmImageArch(arch);
   const file = imageArch === undefined ? undefined : pin.files[imageArch]?.[kind];
   if (pin.version === null || file === undefined || !DIGEST.test(file.digest)) return undefined;
@@ -79,7 +80,7 @@ export interface DownloadVmImageOptions {
  * came for a minute, and with an AbortError when the signal aborts.
  */
 export async function downloadVmImage(options: DownloadVmImageOptions): Promise<VmImageFile & { version: string }> {
-  const pin = options.pin ?? PIN;
+  const pin = options.pin ?? VM_IMAGE_PIN;
   const file = vmImageFile(options.kind, options.arch, pin);
   if (file === undefined) throw new Error(`Devspaces has no image of its VM for ${options.kind} on ${options.arch}.`);
   const { host, repository } = registryOf(pin);

@@ -2,87 +2,45 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The setup of the WSL distribution of Devspaces on Windows (docs/architecture.md "The WSL distribution of Devspaces"):
-// Devspaces downloads the Debian file of the list of WSL distributions of Microsoft (DistributionInfo.json, the list that
-// `wsl --install` itself uses), checks it against the SHA-256 of that list, and registers it for the Windows user with
-// `wsl --install --from-file` under the name `devspaces`, with its virtual disk in a folder of Devspaces. Then a script
-// runs as root in the distribution: it turns on systemd and installs Docker Engine from download.docker.com. After a
-// restart of the distribution, systemd starts Docker. The removal is `wsl --unregister devspaces`. Whether Devspaces set
-// up the distribution comes from the registry of the Windows user (the folder of its virtual disk). No `vscode`.
+// The setup of the WSL distribution of Devspaces on Windows (docs/architecture.md "The WSL distribution of Devspaces",
+// R-ENG-005): Devspaces downloads the `.wsl` file of the image of its VM (R-VM-002, src/core/vm/vmImage.ts) from ghcr.io
+// for the architecture of Windows, checks it against the SHA-256 that its code pins, and registers it for the Windows
+// user with `wsl --install --from-file` under the name `devspaces`, with its virtual disk in a folder of Devspaces. The
+// image brings systemd, Docker Engine and the settings of WSL, so systemd starts Docker at the first start of the
+// distribution; the VM upgrades its packages itself (R-VM-007). The removal is `wsl --unregister devspaces`. Whether
+// Devspaces set up the distribution comes from the registry of the Windows user (the folder of its virtual disk). No
+// `vscode`.
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { errorMessage } from '../errors';
-import type { HttpTransport } from '../http';
-import { abortError, isAbortError, type Logger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
+import { abortError, type Logger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
 import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
 import { errorCode } from '../storage/paths';
 import { envValue } from './dockerCli';
-import { downloadFile, type DownloadOptions } from './dockerDownload';
 import { WSL_DISTRIBUTION, WSL_LIST_ARGS, WSL_START_ATTEMPTS, parseWslList, wslCommandArgs, wslEnv, wslStartTimedOut, wslText } from './dockerHost';
-import { DOCKER_ENGINE_PACKAGES, isHttpsUrl } from './dockerSetup';
+import { downloadVmImage, VM_IMAGE_PIN, vmImageFile, type DownloadVmImageOptions, type VmImageFile, type VmImagePin } from '../vm/vmImage';
 
-/** The list of the WSL distributions that `wsl --install` offers, with the URL and the SHA-256 of each file. */
-export const WSL_DISTRIBUTION_LIST_URL = 'https://raw.githubusercontent.com/microsoft/WSL/master/distributions/DistributionInfo.json';
 /** `wsl --install --from-file`, with `--name` and `--location`, needs WSL 2.4.4 or later. */
 export const WSL_FROM_FILE_VERSION: readonly [number, number, number] = [2, 4, 4];
 export const WSL_VERSION_ARGS: readonly string[] = ['--version'];
 export const WSL_STATUS_ARGS: readonly string[] = ['--status'];
-/** Stops the distribution, so that the next start reads /etc/wsl.conf (systemd). */
-export const WSL_TERMINATE_ARGS: readonly string[] = ['--terminate', WSL_DISTRIBUTION];
 /** Deletes the distribution with its virtual disk: everything in it is lost. */
 export const WSL_UNREGISTER_ARGS: readonly string[] = ['--unregister', WSL_DISTRIBUTION];
-/** The log of the script in the distribution. */
-export const WSL_SETUP_LOG = '/var/log/devspaces-setup.log';
-/** The line of the policy-rc.d of the script, so that a later run knows the file of a run that was stopped. */
-export const WSL_POLICY_MARK = '# Written by the setup of Devspaces.';
-/** The lock of the script in the distribution (flock): one run at a time, also of the upgrade (wslUpgrade.ts). */
-export const WSL_SETUP_LOCK = '/run/devspaces-setup.lock';
-/**
- * The policy-rc.d of the script: no service starts while a run holds WSL_SETUP_LOCK. The file of a run that `wsl
- * --terminate` stopped, whose trap did not remove it, keeps no service from starting after that.
- */
-export const WSL_POLICY = ['#!/bin/sh', WSL_POLICY_MARK, `flock -n ${WSL_SETUP_LOCK} true || exit 101`].join('\n');
-/**
- * The lines of a script that write WSL_POLICY to /usr/sbin/policy-rc.d for the run (not over a policy-rc.d of another
- * origin), and remove it at its end.
- */
-export const WSL_POLICY_INSTALL = `if [ ! -e /usr/sbin/policy-rc.d ] || grep -qxF '${WSL_POLICY_MARK}' /usr/sbin/policy-rc.d; then
-cat > /usr/sbin/policy-rc.d <<'POLICY'
-${WSL_POLICY}
-POLICY
-chmod 755 /usr/sbin/policy-rc.d
-trap 'rm -f /usr/sbin/policy-rc.d' EXIT
-trap 'exit 1' HUP INT TERM
-fi`;
 /** The key of the registry with the WSL distributions of the Windows user: one subkey for each, with its name and folder. */
 export const LXSS_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss';
 
 /** The code in the answer of `wsl.exe --list` without any distribution (its text is in the language of Windows). */
 const NO_DISTRIBUTIONS = /WSL_E_DEFAULT_DISTRO_NOT_FOUND/;
-/** The largest list that is read. */
-const MAX_LIST_BYTES = 1024 * 1024;
-const MAX_REDIRECTS = 5;
-/** A download that receives no bytes for this long stops (also before the answer of the server). */
-const STALLED_AFTER_MS = 60_000;
-/** The largest Debian file that is downloaded (it has some 100 MB), so that a body without an end does not fill the disk. */
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024 * 1024;
 const SHORT_CALL_MS = 15_000;
 const REGISTER_MS = 15 * 60_000;
-const PROVISION_MS = 30 * 60_000;
-const TERMINATE_MS = 60_000;
 /**
- * The start of the distribution and the script that waits for Docker (DOCKER_WAIT_SCRIPT): the script ends within about
- * 4 minutes (180 seconds of waits, then calls with their own limits), so a failure still gives its reason.
+ * The first start of the distribution and the script that waits for Docker (DOCKER_WAIT_SCRIPT): the script ends within
+ * about 4 minutes (180 seconds of waits, then calls with their own limits), so a failure still gives its reason.
  */
 const START_MS = 5 * 60_000;
 const UNREGISTER_MS = 5 * 60_000;
-/**
- * The name of the downloaded file in the folder `download`; it is removed after the registration, and it stays only when
- * WSL could not start its virtual machine (`vmUnavailable`), for the next setup.
- */
-const DOWNLOAD_NAME = 'debian.wsl';
 /**
  * Marks in the output of `wsl.exe` when WSL 2 cannot start its virtual machine, because the Virtual Machine Platform of
  * Windows does not run: Windows has not restarted since the installation of WSL, the platform is off, or virtualization
@@ -96,8 +54,6 @@ const VM_UNAVAILABLE_MARKS = ['HCS_E_SERVICE_NOT_AVAILABLE', 'HCS_E_HYPERV_NOT_I
 const ENVIRONMENT_KEY = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
 /** The file of `reg.exe export`, in a new folder of the temporary folder that is removed after the read. */
 const REGISTRY_EXPORT_NAME = 'distributions.reg';
-/** The start of the lines of the script that name its next step. */
-const STEP_PREFIX = 'devspaces-step ';
 /**
  * The lock of the setup for all windows (withLockFolder): its holder refreshes it every 15 seconds, so that a lock
  * older than a minute is of a window that ended; another window waits for it one second. After the computer slept for
@@ -105,8 +61,6 @@ const STEP_PREFIX = 'devspaces-step ';
  * still runs only once at a time (flock), and WSL registers the name only once.
  */
 const LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
-/** The longest wait for the list of WSL distributions and for the size of the Debian file. */
-const REQUEST_MS = 30_000;
 /** The folders `disk-2` and so on that a new registration may take when `disk` has files of unknown use. */
 const MAX_DISK_FOLDERS = 20;
 
@@ -128,35 +82,18 @@ export function wslInstallArgs(file: string, location: string): string[] {
   return ['--install', '--from-file', file, '--name', WSL_DISTRIBUTION, '--location', location, '--version', '2', '--no-launch'];
 }
 
-/** One file of the list of WSL distributions. */
-export interface WslImage {
-  /** The name of the distribution in the list, for example `Debian`. */
-  name: string;
-  /** An HTTPS URL. */
-  url: string;
-  /** The SHA-256 of the file, hex in lower case. */
-  sha256: string;
-  /** The size in bytes, when a HEAD request tells it (WslSetup.image). */
-  size?: number;
-}
-
-const SHA256 = /^(?:0x)?([0-9a-f]{64})$/i;
-
 /**
- * The Debian file of the list of WSL distributions (DistributionInfo.json) for the architecture `arch` (`process.arch`:
- * `x64` or `arm64`): the entry `Default` of `ModernDistributions.Debian`, else its first entry. Undefined when the list
- * has none, or when its URL is not HTTPS or its SHA-256 is not 64 hex digits (the list writes some with `0x`).
+ * The `.wsl` file of the image of the VM of Devspaces for the architecture of Windows (vmImageFile): its name, digest
+ * and size in the pin, with the version of the image. The file in the folder `download` has its name; it is removed
+ * after the registration, and it stays only when WSL could not start its virtual machine (`vmUnavailable`), for the
+ * next setup.
  */
-export function debianImageOf(list: unknown, arch: string): WslImage | undefined {
-  const key = arch === 'x64' ? 'Amd64Url' : arch === 'arm64' ? 'Arm64Url' : undefined;
-  const entries = (list as { ModernDistributions?: { Debian?: unknown } } | null)?.ModernDistributions?.Debian;
-  if (key === undefined || !Array.isArray(entries)) return undefined;
-  const entry = (entries.find((candidate: { Default?: unknown } | null) => candidate?.Default === true) ?? entries[0]) as Record<string, unknown> | undefined;
-  const file = entry?.[key] as { Url?: unknown; Sha256?: unknown } | undefined;
-  const name = typeof entry?.Name === 'string' ? entry.Name : 'Debian';
-  if (typeof file?.Url !== 'string' || typeof file.Sha256 !== 'string' || !isHttpsUrl(file.Url)) return undefined;
-  const sha256 = SHA256.exec(file.Sha256)?.[1];
-  return sha256 === undefined ? undefined : { name, url: file.Url, sha256: sha256.toLowerCase() };
+export interface WslImage extends VmImageFile {
+  version: string;
+  /** The architecture of Windows (`x64` or `arm64`) that the file is for. */
+  arch: string;
+  /** The repository of the pin, for the log: `ghcr.io/nimblescape/devspaces-vm`. */
+  repository: string;
 }
 
 /** True when `wsl.exe` ended because WSL ran out of time to start the distribution (wslStartTimedOut). */
@@ -183,7 +120,7 @@ export function parseWindowsArch(output: string): string | undefined {
 }
 
 /**
- * The architecture of Windows itself, for the Debian file of the WSL distribution, whose programs must run in WSL:
+ * The architecture of Windows itself, for the `.wsl` file of the WSL distribution, whose programs must run in WSL:
  * `process.arch` of VS Code is `x64` also for VS Code for x64 in the emulation of Windows on Arm, but the registry has the
  * architecture of Windows. `fallback` (`process.arch`) when the registry does not tell it (logged). Never throws.
  */
@@ -192,12 +129,12 @@ export async function readWindowsArch(runner: ProcessRunner, env: NodeJS.Process
     const result = await runner.run(regExePath(env), WINDOWS_ARCH_ARGS, { timeoutMs: SHORT_CALL_MS });
     const arch = result.exitCode === 0 ? parseWindowsArch(result.stdout) : undefined;
     if (arch !== undefined) {
-      if (arch !== fallback) logger.info(`Windows runs on ${arch}, VS Code on ${fallback}: the WSL distribution of Devspaces gets the Debian file for ${arch}.`);
+      if (arch !== fallback) logger.info(`Windows runs on ${arch}, VS Code on ${fallback}: the WSL distribution of Devspaces gets the .wsl file for ${arch}.`);
       return arch;
     }
-    logger.info(`The registry does not tell the architecture of Windows (${result.timedOut ? 'no answer' : `exit code ${result.exitCode}`}): the Debian file for ${fallback} is used.`);
+    logger.info(`The registry does not tell the architecture of Windows (${result.timedOut ? 'no answer' : `exit code ${result.exitCode}`}): the .wsl file for ${fallback} is used.`);
   } catch (error) {
-    logger.info(`The registry does not tell the architecture of Windows (${errorMessage(error)}): the Debian file for ${fallback} is used.`);
+    logger.info(`The registry does not tell the architecture of Windows (${errorMessage(error)}): the .wsl file for ${fallback} is used.`);
   }
   return fallback;
 }
@@ -412,115 +349,13 @@ async function isWithinResolved(folder: string, parent: string): Promise<boolean
   return realFolder !== undefined && realParent !== undefined && isWithin(realFolder, realParent);
 }
 
-/** The steps of the script in the distribution (PROVISION_SCRIPT), in this order. */
-export type ProvisionPhase = 'packages' | 'repository' | 'docker';
-const PHASES: readonly ProvisionPhase[] = ['packages', 'repository', 'docker'];
-
-/** The progress of `apt-get` in a step of the script: its downloads, then the installation of the packages, in percent. */
-export interface AptProgress {
-  action: 'download' | 'install';
-  percent: number;
-}
-
 /**
- * The progress in a line of APT::Status-Fd (`dlstatus:<file>:<percent>:<text>` while apt-get downloads,
- * `pmstatus:<package>:<percent>:<text>` while dpkg installs); undefined for another line.
- */
-export function parseAptStatus(line: string): AptProgress | undefined {
-  const match = /^(dlstatus|pmstatus):[^:]*:(\d+(?:\.\d+)?):/.exec(line);
-  if (match === null) return undefined;
-  return { action: match[1] === 'dlstatus' ? 'download' : 'install', percent: Math.min(100, Number(match[2])) };
-}
-
-/**
- * The settings of WSL for the distribution: systemd starts Docker; root is the user of `wsl -d devspaces`; WSL mounts no
- * drive of Windows at the start and turns off the start of Windows programs, so that Docker and the devspaces do not see
- * the files of the Windows user by default. These are no wall: root in the distribution can mount the drives again
- * (docs/security.md).
- */
-export const WSL_CONF = [
-  '# Written by Devspaces: the settings of the WSL distribution of Devspaces.',
-  '[boot]',
-  'systemd=true',
-  '',
-  '[user]',
-  'default=root',
-  '',
-  '[automount]',
-  'enabled=false',
-  '',
-  '[interop]',
-  'enabled=false',
-  'appendWindowsPath=false',
-].join('\n');
-
-/**
- * The script that sets up the distribution, as root (`sh -s`, on standard input). It can run again on a distribution
- * that it set up before, also after a run that was stopped: each file is written anew, dpkg ends an interrupted
- * installation, and apt installs or updates. Only one run at a time (flock): a second one fails at once. The output of
- * the commands goes to WSL_SETUP_LOG; standard output gets only the step lines (`devspaces-step <phase>`). On a failure,
- * standard error gets the last 40 lines of the log. The body is a function that runs with its standard input from
- * /dev/null, so no command reads the rest of the script. No service starts during the installation (a policy-rc.d with
- * WSL_POLICY_MARK, removed at the end; one of another program stays): systemd starts Docker after the restart of the
- * distribution.
- */
-export const PROVISION_SCRIPT = `set -eu
-main() {
-log=${WSL_SETUP_LOG}
-exec 9> ${WSL_SETUP_LOCK}
-if ! flock -n 9; then
-echo "Another setup of Docker, or the daily upgrade of the packages, runs in the distribution. Try again after it." >&2
-exit 1
-fi
-: > "$log"
-step() { echo "${STEP_PREFIX}$1"; echo "== $1" >> "$log"; }
-fail() { echo "The setup failed. The last lines of $log:" >&2; tail -n 40 "$log" >&2; exit 1; }
-run() { "$@" >> "$log" 2>&1 || fail; }
-# apt-get install writes its progress to standard output (APT::Status-Fd, parseAptStatus), and the rest to the log.
-# apt-get update only writes to the log: its downloads would start the percent of the step again at 0.
-run_apt() { apt-get -o APT::Status-Fd=3 "$@" 3>&1 >> "$log" 2>&1 || fail; }
-export DEBIAN_FRONTEND=noninteractive
-${WSL_POLICY_INSTALL}
-step packages
-run dpkg --configure -a
-run apt-get update
-run_apt install -y ca-certificates curl systemd systemd-sysv
-cat > /etc/wsl.conf <<'WSLCONF'
-${WSL_CONF}
-WSLCONF
-step repository
-. /etc/os-release
-if [ "\${ID:-}" != debian ] || [ -z "\${VERSION_CODENAME:-}" ]; then
-echo "The distribution is not Debian with a code name in /etc/os-release: \${PRETTY_NAME:-unknown}." >&2
-exit 1
-fi
-arch=$(dpkg --print-architecture)
-run install -m 0755 -d /etc/apt/keyrings
-run curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
-run chmod a+r /etc/apt/keyrings/docker.asc
-cat > /etc/apt/sources.list.d/docker.sources <<SOURCES
-Types: deb
-URIs: https://download.docker.com/linux/debian
-Suites: $VERSION_CODENAME
-Components: stable
-Architectures: $arch
-Signed-By: /etc/apt/keyrings/docker.asc
-SOURCES
-step docker
-run apt-get update
-run_apt install -y ${DOCKER_ENGINE_PACKAGES}
-run systemctl enable docker.service containerd.service
-run apt-get clean
-}
-main < /dev/null
-`;
-
-/**
- * The script that waits up to 180 seconds for Docker after the restart (`sh -s`, as root): in a slow virtual machine,
- * Docker needs about 45 seconds to start, after the start of the distribution. Each `docker info` waits for the start of
- * Docker (the socket of systemd), at most 30 seconds, and every other command has a limit too, so that a start that
- * hangs still ends the script with its reason within about 4 minutes, before START_MS. Standard output: the version of
- * the engine. On a failure, standard error gets the answer of `docker info` and the state of the service.
+ * The script that waits up to 180 seconds for Docker at the first start of the distribution (`sh -s`, as root): in a
+ * slow virtual machine, Docker needs about 45 seconds to start, after the start of the distribution. Each `docker
+ * info` waits for the start of Docker (the socket of systemd), at most 30 seconds, and every other command has a limit
+ * too, so that a start that hangs still ends the script with its reason within about 4 minutes, before START_MS.
+ * Standard output: the version of the engine. On a failure, standard error gets the answer of `docker info` and the
+ * state of the service.
  */
 export const DOCKER_WAIT_SCRIPT = `end=$(($(date +%s) + 180))
 until timeout 30 docker info > /dev/null 2>&1; do
@@ -549,16 +384,12 @@ export type WslSetupProblem =
   | 'restartNeeded'
   /** WSL 2 cannot start its virtual machine (virtualMachineUnavailable). */
   | 'vmUnavailable'
-  /** The list of WSL distributions could not be loaded or read. */
-  | 'listFailed'
-  /** The list has no Debian file for this computer. */
+  /** The pin of the image of the VM has no `.wsl` file for the architecture of Windows. */
   | 'noImage'
   | 'downloadFailed'
   /** `wsl --install --from-file` failed. */
   | 'registerFailed'
-  /** The script in the distribution failed. */
-  | 'dockerFailed'
-  /** Docker did not answer after the restart. */
+  /** Docker did not answer at the first start of the distribution. */
   | 'dockerNotRunning'
   /** `wsl --unregister` failed. */
   | 'removeFailed'
@@ -591,11 +422,7 @@ export type WslRegistration = 'none' | 'own' | 'foreign';
 export type WslSetupStep =
   | { kind: 'download'; received: number; total: number | undefined }
   | { kind: 'register' }
-  /** The first start of the distribution, before its script runs (in a virtual machine, it can take minutes). */
-  | { kind: 'launch' }
-  /** A step of the script, with the progress of apt-get in it. */
-  | { kind: 'docker'; phase: ProvisionPhase; progress?: AptProgress }
-  | { kind: 'restart' }
+  /** The first start of the distribution and of Docker in it (in a virtual machine, it can take minutes). */
   | { kind: 'start' };
 
 export interface WslSetupDeps {
@@ -603,16 +430,16 @@ export interface WslSetupDeps {
   /** The path of `wsl.exe` (findExecutable), or undefined. */
   wslPath: () => string | undefined;
   env: NodeJS.ProcessEnv;
-  /** The architecture of Windows (readWindowsArch, `x64` or `arm64`), for the Debian file; read at each new setup. */
+  /** The architecture of Windows (readWindowsArch, `x64` or `arm64`), for the `.wsl` file; read at each new setup. */
   arch: () => Promise<string>;
   /** The folder of Devspaces for the distribution (wslSetupFolder): the virtual disk in `disk`, the download in `download`. */
   folder: string;
   logger: Logger;
-  /** The list of WSL distributions and the size of the Debian file. */
-  http: HttpTransport;
-  /** For tests. Default: `downloadFile`. */
-  download?: (options: DownloadOptions) => Promise<void>;
-  /** For tests: STALLED_AFTER_MS. */
+  /** For tests. Default: `downloadVmImage`. */
+  download?: (options: DownloadVmImageOptions) => Promise<unknown>;
+  /** For tests. Default: VM_IMAGE_PIN. */
+  pin?: VmImagePin;
+  /** For tests. Default: a minute without a byte stops the download (downloadVmImage). */
   stalledAfterMs?: number;
 }
 
@@ -720,97 +547,33 @@ export class WslSetup {
   }
 
   /**
-   * The Debian file of the list of WSL distributions for this computer, with its size when a HEAD request tells it.
-   * Throws WslSetupError `listFailed` (also when the list does not arrive within 30 seconds) or `noImage`.
+   * The `.wsl` file of the image of the VM of Devspaces for the architecture of Windows, from the pin in the code of
+   * Devspaces (no request). Throws WslSetupError `noImage` when the pin has none for it.
    */
-  async image(signal?: AbortSignal): Promise<WslImage> {
-    let list: unknown;
-    try {
-      const response = await this.deps.http.request({ method: 'GET', url: WSL_DISTRIBUTION_LIST_URL, maxBodyBytes: MAX_LIST_BYTES }, withTimeout(signal, REQUEST_MS));
-      if (response.status !== 200) throw new Error(`HTTP status ${response.status}`);
-      list = JSON.parse(response.body);
-    } catch (error) {
-      if (signal?.aborted) throw abortError();
-      throw new WslSetupError('listFailed', `The list of WSL distributions could not be loaded from ${WSL_DISTRIBUTION_LIST_URL}: ${errorMessage(error)}`);
-    }
+  async image(): Promise<WslImage> {
     const arch = await this.deps.arch();
-    const image = debianImageOf(list, arch);
-    if (image === undefined) throw new WslSetupError('noImage', `The list of WSL distributions has no Debian file for ${arch}.`);
-    const size = await this.sizeOf(image.url, signal);
-    return size === undefined ? image : { ...image, size };
+    const pin = this.deps.pin ?? VM_IMAGE_PIN;
+    const file = vmImageFile('wsl', arch, pin);
+    if (file === undefined) throw new WslSetupError('noImage', `The image ${pin.version ?? '(none)'} of the VM of Devspaces has no .wsl file for ${arch}.`);
+    return { ...file, arch, repository: pin.repository };
   }
 
   /**
-   * Sets up the distribution: with `image`, downloads it into the folder `download`, registers it with its virtual disk
-   * in a folder `disk` (diskFolderFor), and removes the download; then the script installs Docker Engine (PROVISION_SCRIPT), the
-   * distribution restarts, and Docker must answer. Without `image`, only the script, the restart and the check run (a
-   * distribution that Devspaces set up before). Returns the version of the engine, and what WslSetup.separate found
-   * after the registration (or before the script). Throws WslSetupError, or an
-   * AbortError when the signal aborts. The registration itself is not cancelled: the service of WSL would go on with it
-   * after the end of wsl.exe, so a cancel takes effect after it. When the script is cancelled or ends by its time
-   * limit, the distribution stops, because the script would go on there after the end of wsl.exe; its next run goes on
-   * from there.
+   * Sets up the distribution: downloads `image` into the folder `download`, registers it with its virtual disk in a
+   * folder `disk` (diskFolderFor), and removes the download; then the first start of the distribution, in which systemd
+   * starts Docker, and Docker must answer. Returns the version of the engine, and what WslSetup.separate found after
+   * the registration. Throws WslSetupError, or an AbortError when the signal aborts. The registration itself is not
+   * cancelled: the service of WSL would go on with it after the end of wsl.exe, so a cancel takes effect after it.
    */
-  async setUp(image: WslImage | undefined, onStep: (step: WslSetupStep) => void, signal?: AbortSignal): Promise<{ version: string; separation: WslSeparation }> {
-    if (image !== undefined) {
-      await this.register(image, onStep, signal);
-    } else {
-      // A download that could not be removed after the registration (WSL still had it open).
-      await fs.promises.rm(this.downloadFolder, { recursive: true, force: true }).catch(() => undefined);
-    }
+  async setUp(image: WslImage, onStep: (step: WslSetupStep) => void, signal?: AbortSignal): Promise<{ version: string; separation: WslSeparation }> {
+    await this.register(image, onStep, signal);
     // WSL makes a new distribution the default when it has none.
     const separation = await this.separate();
-    let pending = '';
-    let current: ProvisionPhase | undefined;
-    let provision: RunResult;
-    // The first start of a new distribution can take minutes (in a virtual machine), before the script says its first step.
-    onStep({ kind: 'launch' });
-    try {
-      for (let attempt = 1; ; attempt++) {
-        pending = '';
-        provision = await this.runWsl(wslCommandArgs(WSL_DISTRIBUTION, ['sh', '-s']), {
-          input: PROVISION_SCRIPT,
-          timeoutMs: PROVISION_MS,
-          signal,
-          onStdout: (text) => {
-            pending += wslText(text);
-            const lines = pending.split(/\r?\n/);
-            pending = lines.pop() ?? '';
-            for (const line of lines) {
-              const phase = line.startsWith(STEP_PREFIX) ? (line.slice(STEP_PREFIX.length).trim() as ProvisionPhase) : undefined;
-              if (phase !== undefined && PHASES.includes(phase)) {
-                current = phase;
-                this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION}: ${phase}.`);
-                onStep({ kind: 'docker', phase });
-                continue;
-              }
-              // The progress of apt-get in the step (not logged: it changes every second).
-              const progress = current === undefined ? undefined : parseAptStatus(line);
-              if (current !== undefined && progress !== undefined) onStep({ kind: 'docker', phase: current, progress });
-            }
-          },
-        });
-        // WSL ran out of time to start the distribution, so the script did not run (it said no step): it starts again.
-        if (current !== undefined || provision.timedOut || attempt >= WSL_START_ATTEMPTS || !startTimedOut(provision)) break;
-        this.deps.logger.info(`WSL ran out of time to start the distribution ${WSL_DISTRIBUTION} (attempt ${attempt} of ${WSL_START_ATTEMPTS}), so Devspaces starts it again: ${outputOf(provision)}`);
-      }
-    } catch (error) {
-      if (isAbortError(error)) await this.stopDistribution('the setup was cancelled');
-      throw error;
-    }
-    if (provision.timedOut) await this.stopDistribution(`the script did not end within ${duration(PROVISION_MS)}`);
-    if (provision.exitCode !== 0) {
-      throw new WslSetupError('dockerFailed', `Docker Engine could not be installed in the WSL distribution ${WSL_DISTRIBUTION} (${endOf(provision, PROVISION_MS)}): ${outputOf(provision)}`);
-    }
-    this.deps.logger.info(`Docker Engine is installed in the WSL distribution ${WSL_DISTRIBUTION}; the distribution restarts, so that systemd starts Docker.`);
-    onStep({ kind: 'restart' });
-    const terminate = await this.runWsl(WSL_TERMINATE_ARGS, { timeoutMs: TERMINATE_MS, signal });
-    // Docker then starts without systemd, if at all; the check below says so.
-    if (terminate.exitCode !== 0) this.deps.logger.warn(`wsl.exe ${WSL_TERMINATE_ARGS.join(' ')} failed (${endOf(terminate, TERMINATE_MS)}): ${outputOf(terminate)}`);
+    // The first start of a new distribution can take minutes (in a virtual machine).
     onStep({ kind: 'start' });
     const wait = await this.waitForDocker(signal);
     if (wait.exitCode !== 0) {
-      throw new WslSetupError('dockerNotRunning', `Docker does not answer in the WSL distribution ${WSL_DISTRIBUTION} after its restart (${endOf(wait, START_MS)}): ${outputOf(wait)}`);
+      throw new WslSetupError('dockerNotRunning', `Docker does not answer at the first start of the WSL distribution ${WSL_DISTRIBUTION} (${endOf(wait, START_MS)}): ${outputOf(wait)}`);
     }
     const version = wslText(wait.stdout).trim();
     this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} runs Docker Engine ${version}.`);
@@ -872,10 +635,11 @@ export class WslSetup {
   }
 
   private async register(image: WslImage, onStep: (step: WslSetupStep) => void, signal?: AbortSignal): Promise<void> {
-    const file = path.join(this.downloadFolder, DOWNLOAD_NAME);
+    const file = path.join(this.downloadFolder, image.name);
     const diskFolder = await this.diskFolderFor(signal);
     await fs.promises.mkdir(this.downloadFolder, { recursive: true });
     await fs.promises.mkdir(diskFolder, { recursive: true });
+    await this.removeOtherDownloads(image.name);
     let keep = false;
     try {
       onStep({ kind: 'download', received: 0, total: image.size });
@@ -884,8 +648,8 @@ export class WslSetup {
       const args = wslInstallArgs(file, diskFolder);
       this.deps.logger.info(`wsl.exe ${args.join(' ')}`);
       // Without the signal (setUp). After the time limit, WSL may still end the registration: the next setup then finds
-      // the distribution of Devspaces and only runs the script. Windows removes no file that WSL still has open (the
-      // download, the virtual disk): such a removal fails, below and in diskFolderFor, and changes nothing.
+      // the distribution of Devspaces and uses it. Windows removes no file that WSL still has open (the download, the
+      // virtual disk): such a removal fails, below and in diskFolderFor, and changes nothing.
       const result = await this.runWsl(args, { timeoutMs: REGISTER_MS });
       if (result.exitCode !== 0) {
         const detail = `wsl.exe --install --from-file failed (${endOf(result, REGISTER_MS)}): ${outputOf(result)}`;
@@ -912,70 +676,48 @@ export class WslSetup {
   }
 
   /**
-   * The download, checked against the SHA-256 of the list; it stops when no bytes arrive for a minute. The file of an
-   * earlier setup that WSL could not register (`vmUnavailable`) is used again when it has the SHA-256 of the list.
+   * Removes the files in the folder `download` other than `keep`: a download that stayed for the next setup
+   * (`vmUnavailable`) of another version of the image, or of an older version of Devspaces. A failure is logged.
    */
-  private async downloadImage(image: WslImage, file: string, onStep: (step: WslSetupStep) => void, signal?: AbortSignal): Promise<void> {
-    const kept = await fileSize(file, image.sha256);
-    if (kept !== undefined) {
-      this.deps.logger.info(`The ${image.name} file for WSL of an earlier setup is used again: ${file} has the SHA-256 ${image.sha256} of ${WSL_DISTRIBUTION_LIST_URL}.`);
-      onStep({ kind: 'download', received: kept, total: kept });
-      return;
-    }
-    const stalledAfterMs = this.deps.stalledAfterMs ?? STALLED_AFTER_MS;
-    const stall = new AbortController();
-    let stallTimer: NodeJS.Timeout | undefined;
-    const watch = (): void => {
-      clearTimeout(stallTimer);
-      stallTimer = setTimeout(() => stall.abort(), stalledAfterMs);
-    };
-    this.deps.logger.info(`The ${image.name} file for WSL is downloaded from ${image.url} (SHA-256 ${image.sha256} of ${WSL_DISTRIBUTION_LIST_URL}).`);
-    watch();
-    try {
-      await (this.deps.download ?? downloadFile)({
-        url: image.url,
-        host: new URL(image.url).hostname,
-        expected: { sha256: image.sha256 },
-        // The file of a build server is often served from another host (its storage); the SHA-256 checks it.
-        anyHttpsRedirect: true,
-        target: file,
-        maxBytes: MAX_IMAGE_BYTES,
-        signal: signal === undefined ? stall.signal : AbortSignal.any([signal, stall.signal]),
-        onProgress: (received, total) => {
-          watch();
-          onStep({ kind: 'download', received, total: total ?? image.size });
-        },
-      });
-    } catch (error) {
-      if (signal?.aborted) throw abortError();
-      const reason = stall.signal.aborted ? `it received no bytes for ${Math.round(stalledAfterMs / 1000)} seconds` : errorMessage(error);
-      throw new WslSetupError('downloadFailed', `The ${image.name} file for WSL could not be downloaded from ${image.url}: ${reason}`);
-    } finally {
-      clearTimeout(stallTimer);
+  private async removeOtherDownloads(keep: string): Promise<void> {
+    for (const name of (await filesOf(this.downloadFolder)) ?? []) {
+      if (name === keep) continue;
+      const other = path.join(this.downloadFolder, name);
+      await fs.promises.rm(other, { recursive: true, force: true }).then(
+        () => this.deps.logger.info(`The download ${other} of an earlier setup was removed.`),
+        (error: unknown) => this.deps.logger.warn(`The download ${other} of an earlier setup could not be removed: ${errorMessage(error)}`),
+      );
     }
   }
 
-  /** The size of the file at `url` from HEAD requests (HTTPS redirects followed, all within 30 seconds), or undefined (logged). */
-  private async sizeOf(url: string, signal?: AbortSignal): Promise<number | undefined> {
-    let current = url;
-    const deadline = withTimeout(signal, REQUEST_MS);
+  /**
+   * The download from ghcr.io (downloadVmImage), checked against the SHA-256 of the pin; it stops when no bytes arrive
+   * for a minute. The file of an earlier setup that WSL could not register (`vmUnavailable`) is used again when it has
+   * the SHA-256 of the pin.
+   */
+  private async downloadImage(image: WslImage, file: string, onStep: (step: WslSetupStep) => void, signal?: AbortSignal): Promise<void> {
+    const sha256 = image.digest.slice('sha256:'.length);
+    const kept = await fileSize(file, sha256);
+    if (kept !== undefined) {
+      this.deps.logger.info(`The .wsl file of the VM of Devspaces of an earlier setup is used again: ${file} has the SHA-256 ${sha256} of the pin.`);
+      onStep({ kind: 'download', received: kept, total: kept });
+      return;
+    }
+    this.deps.logger.info(`The .wsl file of the image ${image.version} of the VM of Devspaces is downloaded from ${image.repository} (${image.name}, ${image.size} bytes, SHA-256 ${sha256}).`);
     try {
-      for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects++) {
-        const response = await this.deps.http.request({ method: 'HEAD', url: current }, deadline);
-        const location = response.headers.location;
-        if (response.status >= 300 && response.status < 400 && location) {
-          current = new URL(location, current).href;
-          if (!isHttpsUrl(current)) return undefined;
-          continue;
-        }
-        const length = Number.parseInt(response.headers['content-length'] ?? '', 10);
-        return response.status === 200 && Number.isFinite(length) && length > 0 ? length : undefined;
-      }
+      await (this.deps.download ?? downloadVmImage)({
+        kind: 'wsl',
+        arch: image.arch,
+        target: file,
+        signal,
+        pin: this.deps.pin,
+        stalledAfterMs: this.deps.stalledAfterMs,
+        onProgress: (received, total) => onStep({ kind: 'download', received, total: total ?? image.size }),
+      });
     } catch (error) {
       if (signal?.aborted) throw abortError();
-      this.deps.logger.info(`The size of ${url} is not known: ${errorMessage(error)}`);
+      throw new WslSetupError('downloadFailed', `The .wsl file of the VM of Devspaces could not be downloaded from ${image.repository}: ${errorMessage(error)}`);
     }
-    return undefined;
   }
 
   /**
@@ -1156,17 +898,6 @@ export class WslSetup {
     }
   }
 
-  /** Stops the distribution, and with it a script that goes on there after the end of wsl.exe. Never throws (logged). */
-  private async stopDistribution(reason: string): Promise<void> {
-    try {
-      const result = await this.runWsl(WSL_TERMINATE_ARGS, { timeoutMs: TERMINATE_MS });
-      if (result.exitCode === 0) this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was stopped: ${reason}.`);
-      else this.deps.logger.warn(`wsl.exe ${WSL_TERMINATE_ARGS.join(' ')} failed (${endOf(result, TERMINATE_MS)}): ${outputOf(result)}`);
-    } catch (error) {
-      this.deps.logger.warn(`The WSL distribution ${WSL_DISTRIBUTION} could not be stopped (${reason}): ${errorMessage(error)}`);
-    }
-  }
-
   /** A short call of `wsl.exe` (runWsl) that must end within 15 seconds: else WslSetupError `wslNotAnswering`. */
   private async runShort(args: readonly string[], signal?: AbortSignal): Promise<RunResult> {
     const result = await this.runWsl(args, { timeoutMs: SHORT_CALL_MS, signal });
@@ -1214,12 +945,6 @@ async function filesOf(folder: string): Promise<string[] | undefined> {
   } catch (error) {
     return errorCode(error) === 'ENOENT' ? [] : undefined;
   }
-}
-
-/** `signal`, which also aborts after `ms` (a server that never answers). */
-function withTimeout(signal: AbortSignal | undefined, ms: number): AbortSignal {
-  const timeout = AbortSignal.timeout(ms);
-  return signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
 }
 
 /** The output of a call for the log (wslText): standard error, else standard output. */

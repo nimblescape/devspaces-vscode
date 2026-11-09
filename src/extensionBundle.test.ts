@@ -67,8 +67,6 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'wslSetup.ts',
     // The record of the installation of WSL, so that the setup goes on after the restart of Windows.
     'wslAfterInstall.ts',
-    // The daily upgrade of the packages of the WSL distribution of Devspaces.
-    'wslUpgrade.ts',
     // The scheduled task of Task Scheduler that starts the WSL distribution of Devspaces at the times of the schedule.
     'wslTask.ts',
   ],

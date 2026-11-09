@@ -19,7 +19,6 @@ import { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { WslKeeper, wslgPathOf } from '../core/docker/wslKeeper';
 import { WslTask } from '../core/docker/wslTask';
 import { WslLifetime } from '../core/docker/wslLifetime';
-import { WslUpgrade } from '../core/docker/wslUpgrade';
 import {
   LIMA_HOST,
   WSL_DISTRIBUTION,
@@ -903,33 +902,21 @@ async function activateExtension(
     logger,
   });
   context.subscriptions.push({ dispose: () => keeper.dispose() });
-  // The setup of the WSL distribution of Devspaces (Windows): the distribution with Docker Engine in a folder of
-  // LOCALAPPDATA. About once a day, a window that uses it upgrades its packages (WslUpgrade), only when Devspaces set
-  // it up.
+  // The setup of the WSL distribution of Devspaces (Windows): the `.wsl` file of the image of the VM of Devspaces, with
+  // its virtual disk in a folder of LOCALAPPDATA. The VM upgrades its packages itself (R-VM-007).
   const wslFolder = platform === 'win32' ? wslSetupFolder(env) : undefined;
   const wslSetupCore =
     wslFolder === undefined
       ? undefined
-      : new WslSetup({ runner, wslPath, env, arch: () => readWindowsArch(runner, env, process.arch, logger), folder: wslFolder, logger, http: nodeHttpsTransport });
+      : new WslSetup({ runner, wslPath, env, arch: () => readWindowsArch(runner, env, process.arch, logger), folder: wslFolder, logger });
   // The record of the installation of WSL (Windows): after the restart of Windows, the first window goes on with the setup
   // of Docker for Devspaces, and with the link that needed it (Controller.goOnAfterWslInstall).
   const wslAfterInstall = platform === 'win32' ? new WslAfterInstall({ files: sessionFiles, logger }) : undefined;
-  const upgrade = new WslUpgrade({
-    runner,
-    wslPath,
-    env,
-    logger,
-    own: async () => (await wslSetupCore?.registration()) === 'own',
-    locked: async (task) => wslSetupCore?.locked(task),
-    runs: async (distribution) => wslLifetime?.running(distribution),
-  });
-  context.subscriptions.push({ dispose: () => upgrade.dispose() });
   const lifetime = new WslLifetime({
     runner,
     wslPath,
     env,
     keeper,
-    upgrade,
     logger,
   });
   wslLifetime = lifetime;

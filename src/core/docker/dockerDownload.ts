@@ -3,9 +3,9 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Downloads over HTTPS from one host: the Docker CLI of Devspaces (download.docker.com, with its pinned SHA-256;
-// ownDockerCli.ts), the Debian file of the WSL distribution of Devspaces (the host in the list of WSL, with the SHA-256
-// of that list; wslSetup.ts), Lima (github.com, with its pinned SHA-256; src/core/vm/lima.ts), whose redirects may lead
-// to another HTTPS host, and the disk of the VM (ghcr.io; src/core/vm/vmImage.ts).
+// ownDockerCli.ts), Lima (github.com, with its pinned SHA-256; src/core/vm/lima.ts), whose redirects may lead to
+// another HTTPS host, and the files of the image of the VM (ghcr.io; src/core/vm/vmImage.ts): the disk for Lima and the
+// `.wsl` file of the WSL distribution of Devspaces (wslSetup.ts).
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as https from 'https';

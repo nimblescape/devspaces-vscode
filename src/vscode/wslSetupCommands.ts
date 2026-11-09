@@ -4,21 +4,18 @@
 
 // "Set Up Docker for Devspaces in WSL…" and "Remove the WSL Distribution of Devspaces…" on Windows (docs/architecture.md "The
 // WSL distribution of Devspaces"): the setup of a new distribution asks nothing (the click or the link is the decision;
-// the log names the downloads and the folder), shows its steps in a progress notification, and then makes the
-// distribution the Docker host of Devspaces, as "Use a Remote Docker Host…" does. The setup of an existing distribution
-// asks first, because it restarts the distribution. The removal asks first, because it deletes every devspace in the
-// distribution; the button "Remove and Set Up Again" of the error about a damaged disk of the distribution removes it
-// and sets it up again without another question, because that message says what it deletes. A distribution with the
-// name devspaces that Devspaces did not set up is never changed or removed. The work is in src/core/docker/wslSetup.ts.
+// the log names the download and the folder), shows its steps in a progress notification, and then makes the
+// distribution the Docker host of Devspaces, as "Use a Remote Docker Host…" does. A distribution that Devspaces set up
+// before is used as it is. The removal asks first, because it deletes every devspace in the distribution; the button
+// "Remove and Set Up Again" of the error about a damaged disk of the distribution removes it and sets it up again
+// without another question, because that message says what it deletes. A distribution with the name devspaces that
+// Devspaces did not set up is never changed or removed. The work is in src/core/docker/wslSetup.ts.
 import { WSL_DISTRIBUTION, WSL_HOST, wslDiskCorrupt } from '../core/docker/dockerHost';
 import { DockerSetupTexts, WSL_INSTALL_COMMAND } from '../core/docker/dockerSetup';
 import {
-  WSL_DISTRIBUTION_LIST_URL,
   WSL_FROM_FILE_VERSION,
   WslSetupError,
-  duration,
   isWslSetupError,
-  type ProvisionPhase,
   type WslImage,
   type WslRegistration,
   type WslSetup,
@@ -26,7 +23,6 @@ import {
   type WslSetupProblem,
   type WslSetupStep,
 } from '../core/docker/wslSetup';
-import { UPGRADE_MS } from '../core/docker/wslUpgrade';
 import { errorMessage } from '../core/errors';
 import { Actions, dockerHostReason } from '../core/messages';
 import { isAbortError, type Logger } from '../core/ports';
@@ -35,20 +31,10 @@ import { DockerSetupUiTexts } from './dockerSetup';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 
-const PHASE_TEXTS: Record<ProvisionPhase, string> = {
-  packages: 'Installing the base packages',
-  repository: 'Adding the package repository of Docker',
-  docker: 'Installing Docker Engine',
-};
-
 /** The part of the bar of the setup that the download fills with its bytes, in percent. */
-const DOWNLOAD_PART = 40;
-/** Where the first start of the distribution is on the bar, in percent. */
-const LAUNCH_POSITION = 45;
-/** Where the other steps start on the bar, in percent, so that the bar is full only at the end. */
-const PHASE_STARTS: Record<ProvisionPhase, number> = { packages: 50, repository: 60, docker: 65 };
-/** Where the steps end on the bar: the progress of apt-get fills the part between start and end. */
-const PHASE_ENDS: Record<ProvisionPhase, number> = { packages: 60, repository: 65, docker: 90 };
+const DOWNLOAD_PART = 70;
+/** Where the first start of the distribution is on the bar, in percent, so that the bar is full only at the end. */
+const START_POSITION = 85;
 
 /** The place of `step` on the bar of the setup, in percent. */
 function barPosition(step: WslSetupStep): number {
@@ -57,17 +43,8 @@ function barPosition(step: WslSetupStep): number {
       return step.total ? Math.min(DOWNLOAD_PART, Math.floor((step.received * DOWNLOAD_PART) / step.total)) : 0;
     case 'register':
       return DOWNLOAD_PART;
-    case 'launch':
-      return LAUNCH_POSITION;
-    case 'docker': {
-      // The downloads of apt-get fill the first half of the part of the step, the installation of the packages the second.
-      const part = step.progress === undefined ? 0 : step.progress.action === 'download' ? step.progress.percent / 200 : 0.5 + step.progress.percent / 200;
-      return Math.floor(PHASE_STARTS[step.phase] + (PHASE_ENDS[step.phase] - PHASE_STARTS[step.phase]) * part);
-    }
-    case 'restart':
-      return 90;
     case 'start':
-      return 95;
+      return START_POSITION;
   }
 }
 
@@ -79,18 +56,13 @@ export const WslSetupTexts = {
   notWindows: 'The WSL distribution of Devspaces exists only on Windows.',
   noLocalAppData: 'Devspaces does not find the folder LOCALAPPDATA of your Windows user, where the WSL distribution of Devspaces has its files.',
   busy: 'The WSL distribution of Devspaces is being set up or removed in this window. Try again after that.',
-  busyElsewhere:
-    'The WSL distribution of Devspaces is being set up or removed in another VS Code window, or a VS Code window runs the daily upgrade of its packages ' +
-    `(up to ${duration(UPGRADE_MS)}). Try again after that.`,
+  busyElsewhere: 'The WSL distribution of Devspaces is being set up or removed in another VS Code window. Try again after that.',
   changedElsewhere: 'The WSL distribution of Devspaces was set up or removed in another VS Code window after the check, so nothing was changed. Try again.',
   /** The log of a new setup, which asks nothing: what Devspaces downloads, and the folder. */
   setUpLog: (image: WslImage, folder: string) =>
-    `The WSL distribution ${WSL_DISTRIBUTION} of Devspaces is set up in ${folder}, with Docker Engine. Downloads: ${image.name} for WSL` +
-    `${image.size === undefined ? '' : ` (${Math.ceil(image.size / 1_048_576)} MB)`} from ${image.url}, checked against its SHA-256 in the list of WSL distributions of Microsoft (${WSL_DISTRIBUTION_LIST_URL}); ` +
-    'Docker Engine from download.docker.com, and the packages that it needs from Debian (about 120 MB). Devspaces runs its commands there as root with wsl.exe.',
-  confirmRepair: 'Set up Docker in the WSL distribution of Devspaces again?',
-  confirmRepairDetail: `The WSL distribution "${WSL_DISTRIBUTION}" of Devspaces exists. Devspaces installs Docker Engine there again from download.docker.com, or updates it, and then restarts the distribution: devspaces that run there stop, and their windows lose the connection. Your devspaces stay. Then Devspaces uses Docker there.`,
-  setUp: 'Set Up',
+    `The WSL distribution ${WSL_DISTRIBUTION} of Devspaces is set up in ${folder} from the .wsl file of the image ${image.version} of the VM of Devspaces ` +
+    `(${Math.ceil(image.size / 1_048_576)} MB from ${image.repository}, checked against its SHA-256 in the code of Devspaces), which brings Docker Engine. ` +
+    'Devspaces runs its commands there as root with wsl.exe.',
   confirmRemove: 'Remove the WSL distribution of Devspaces?',
   confirmRemoveDetail: (folder: string) =>
     [
@@ -124,22 +96,12 @@ export const WslSetupTexts = {
         const total = step.total === undefined ? undefined : Math.ceil(step.total / 1_048_576);
         // The end of the download shows the total, also when its last megabyte is not full.
         const received = step.total !== undefined && step.received >= step.total ? total : Math.floor(step.received / 1_048_576);
-        return `Downloading Debian: ${DockerSetupUiTexts.downloadProgress(received ?? 0, total)}`;
+        return `Downloading the VM of Devspaces: ${DockerSetupUiTexts.downloadProgress(received ?? 0, total)}`;
       }
       case 'register':
         return 'Creating the WSL distribution.';
-      case 'launch':
-        return 'Starting the WSL distribution. The first start can take some minutes.';
-      case 'docker': {
-        const { progress } = step;
-        return progress === undefined
-          ? `${PHASE_TEXTS[step.phase]}.`
-          : `${PHASE_TEXTS[step.phase]}: ${progress.action === 'download' ? 'downloading' : 'installing'} ${Math.floor(progress.percent)} %.`;
-      }
-      case 'restart':
-        return 'Restarting the WSL distribution.';
       case 'start':
-        return 'Starting Docker.';
+        return 'Starting the WSL distribution and Docker. The first start can take some minutes.';
     }
   },
   problem: (problem: WslSetupProblem): string => {
@@ -158,16 +120,12 @@ export const WslSetupTexts = {
         );
       case 'wslNotAnswering':
         return 'WSL does not answer. Try again. When it does not help, run "wsl --shutdown" in a terminal.';
-      case 'listFailed':
-        return 'The list of WSL distributions could not be loaded from GitHub. Check the internet connection and try again.';
       case 'noImage':
-        return 'The list of WSL distributions has no Debian file for this computer.';
+        return 'Devspaces has no image of its VM for the processor of this computer.';
       case 'downloadFailed':
-        return 'The Debian file for WSL could not be downloaded. Check the internet connection and try again.';
+        return 'The image of the VM of Devspaces could not be downloaded. Check the internet connection and try again.';
       case 'registerFailed':
         return `WSL could not create the distribution "${WSL_DISTRIBUTION}". The details show why.`;
-      case 'dockerFailed':
-        return `Docker Engine could not be installed in the WSL distribution "${WSL_DISTRIBUTION}". The details show why. Set up Docker for Devspaces again to go on from there.`;
       case 'dockerNotRunning':
         return `Docker does not start in the WSL distribution "${WSL_DISTRIBUTION}". The details show why. Try again.`;
       case 'removeFailed':
@@ -244,9 +202,8 @@ export class WslSetupCommands {
   /**
    * "Set Up Docker for Devspaces in WSL…": checks WSL (without WSL, it installs WSL first, and the setup goes on after the
    * restart of Windows), sets up the distribution without a question with a progress notification, and makes it the
-   * Docker host of Devspaces. A distribution that Devspaces set up before is set up again after a question (Docker
-   * Engine installed or updated, and the distribution restarts); one that the user made is only offered for use. Only a
-   * new distribution needs the version of WSL that registers a file. Never throws.
+   * Docker host of Devspaces. A distribution that Devspaces set up before is used as it is; one that the user made is
+   * only offered for use. Only a new distribution needs the version of WSL that registers a file. Never throws.
    */
   async setUp(): Promise<void> {
     await this.run('command');
@@ -293,7 +250,7 @@ export class WslSetupCommands {
     }
     if (!this.start()) return false;
     try {
-      const plan = await this.withProgress(WslSetupTexts.checking, async (signal) => {
+      const plan = await this.withProgress(WslSetupTexts.checking, async (signal): Promise<{ registration: 'own' } | { registration: 'foreign' } | { registration: 'none'; image: WslImage }> => {
         const registration = await setup.registration(signal);
         if (registration !== 'none') return { registration };
         const version = await setup.checkWsl(signal);
@@ -309,7 +266,7 @@ export class WslSetupCommands {
           }
           throw error;
         }
-        return { registration, image: await setup.image(signal) };
+        return { registration, image: await setup.image() };
       });
       if (plan.registration === 'foreign') {
         this.deps.logger.info(`A WSL distribution ${WSL_DISTRIBUTION} exists that Devspaces did not set up; Devspaces does not change it.`);
@@ -324,29 +281,25 @@ export class WslSetupCommands {
           .then(undefined, (error: unknown) => this.deps.logger.error(`${WSL_HOST} could not be used: ${errorMessage(error)}`));
         return false;
       }
-      if (mode === 'flow' && plan.registration === 'own') {
-        // A flow needs Docker, not a repair: the distribution of Devspaces is used as it is (useHost tests it). Under the
-        // lock of all windows, so that a removal in another window does not come between.
+      if (plan.registration === 'own') {
+        // The distribution of Devspaces is used as it is (useHost tests it): its VM upgrades its packages itself. Under
+        // the lock of all windows, so that a removal in another window does not come between.
         this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} of Devspaces exists, so Devspaces uses it.`);
         const done = await setup.locked(async () => ((await setup.registration()) === 'own' ? { used: await this.deps.useHost(WSL_HOST) } : false));
         return await this.usedNow(this.finished(done)?.used === true);
       }
-      // A new distribution needs no question: the click or the link is the decision, and the log names the downloads and
-      // the folder. The setup of an existing one asks, because it restarts the distribution and its devspaces.
-      if (plan.image === undefined) {
-        if (!(await this.confirm(WslSetupTexts.confirmRepair, WslSetupTexts.confirmRepairDetail, WslSetupTexts.setUp))) return false;
-        this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} is set up again.`);
-      } else {
-        this.deps.logger.info(WslSetupTexts.setUpLog(plan.image, folder));
-      }
-      // The lock of all windows only from here: an open question holds nothing. Under the lock, the distribution must
-      // still be as checked: another window may have set it up or removed it meanwhile. Devspaces chooses the host under
+      // A new distribution needs no question: the click or the link is the decision, and the log names the download and
+      // the folder.
+      const { image } = plan;
+      this.deps.logger.info(WslSetupTexts.setUpLog(image, folder));
+      // The lock of all windows only from here. Under the lock, the distribution must still be missing: another window
+      // may have set it up meanwhile. Devspaces chooses the host under
       // the lock too, so that a removal in another window does not come between.
       const done = await setup.locked(async () => {
         const ready = await this.withProgress(WslSetupTexts.settingUp, async (signal, report) => {
-          if ((await setup.registration(signal)) !== plan.registration) return undefined;
-          if (plan.registration === 'none') await this.deps.forgetDistribution?.();
-          return await setup.setUp(plan.image, (step) => report(step), signal);
+          if ((await setup.registration(signal)) !== 'none') return undefined;
+          await this.deps.forgetDistribution?.();
+          return await setup.setUp(image, (step) => report(step), signal);
         });
         if (ready === undefined) return false;
         // useHost shows its own problem.
@@ -456,11 +409,11 @@ export class WslSetupCommands {
     let removed = false;
     try {
       // Before anything is removed, what the new setup needs: a WSL that registers a file, its virtual machine, and the
-      // list of WSL distributions (the setup checks them again). A failure keeps the distribution.
+      // image of the VM for this computer (the setup checks them again). A failure keeps the distribution.
       await this.withProgress(WslSetupTexts.checking, async (signal) => {
         await setup.checkWsl(signal);
         await setup.checkVirtualMachine(signal);
-        await setup.image(signal);
+        await setup.image();
       });
       // `wsl --unregister` is not cancelled, as in remove. Under the lock of all windows, with the registration of then.
       const done = await setup.locked(async () =>

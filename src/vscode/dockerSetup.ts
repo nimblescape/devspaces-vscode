@@ -49,7 +49,7 @@ const OS_RELEASE_FILES = ['/etc/os-release', '/usr/lib/os-release'];
 export const DockerSetupUiTexts = {
   /** A terminal of a remote window runs on the remote computer, not on this one. */
   localWindowNeeded: 'Open a local window to install WSL 2.',
-  /** The progress of a download in megabytes (the Debian file of WSL). */
+  /** The progress of a download in megabytes (the image of the VM of Devspaces). */
   downloadProgress: (receivedMb: number, totalMb: number | undefined) =>
     totalMb === undefined ? `${receivedMb} MB.` : `${receivedMb} of ${totalMb} MB.`,
   wslAlreadyInstalled: 'WSL 2 is already installed on this computer.',

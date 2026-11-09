@@ -8,30 +8,21 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { HttpRequest, HttpResponse, HttpTransport } from '../http';
 import { isAbortError, type RunOptions, type RunResult } from '../ports';
-import type { DownloadOptions } from './dockerDownload';
 import { LockTimeoutError } from '../storage/lockFolder';
+import type { DownloadVmImageOptions, VmImagePin } from '../vm/vmImage';
 import { WSL_LIST_ARGS } from './dockerHost';
 import {
   DOCKER_WAIT_SCRIPT,
   LXSS_KEY,
-  PROVISION_SCRIPT,
-  WSL_CONF,
-  WSL_DISTRIBUTION_LIST_URL,
-  WSL_POLICY,
-  WSL_POLICY_MARK,
-  WSL_TERMINATE_ARGS,
   WSL_UNREGISTER_ARGS,
   WslSetup,
   WslSetupError,
-  debianImageOf,
   dockerDesktopIntegrates,
   dockerDesktopSettingsFiles,
   listsDistribution,
   parseLxss,
   distributionFoldersOf,
-  parseAptStatus,
   parseWindowsArch,
   parseWslVersion,
   readWindowsArch,
@@ -42,23 +33,20 @@ import {
   WINDOWS_ARCH_ARGS,
   wslInstallArgs,
   wslSetupFolder,
+  type WslImage,
   type WslSetupStep,
 } from './wslSetup';
 
 const WSL = 'C:\\Windows\\System32\\wsl.exe';
 const REG = 'C:\\Windows\\System32\\reg.exe';
-const SHA = 'ab'.repeat(32);
-const DEBIAN_URL = 'https://salsa.debian.org/debian/WSL/-/jobs/1/artifacts/raw/Debian_WSL_AMD64_v1.0.0.0.wsl';
-const LIST = {
-  ModernDistributions: {
-    Debian: [
-      {
-        Name: 'Debian',
-        Default: true,
-        Amd64Url: { Url: DEBIAN_URL, Sha256: SHA },
-        Arm64Url: { Url: 'https://salsa.debian.org/debian/WSL/-/jobs/1/artifacts/raw/Debian_WSL_ARM64_v1.0.0.0.wsl', Sha256: `0x${'CD'.repeat(32)}` },
-      },
-    ],
+const REPOSITORY = 'ghcr.io/nimblescape/devspaces-vm';
+/** A pin of the image of the VM with a `.wsl` file for amd64 and arm64. */
+const PIN: VmImagePin = {
+  version: '13.20261109.1850',
+  repository: REPOSITORY,
+  files: {
+    amd64: { wsl: { name: 'devspaces-vm-amd64.wsl', digest: `sha256:${'ab'.repeat(32)}`, size: 10 }, lima: { name: 'devspaces-vm-amd64.qcow2', digest: `sha256:${'ef'.repeat(32)}`, size: 20 } },
+    arm64: { wsl: { name: 'devspaces-vm-arm64.wsl', digest: `sha256:${'cd'.repeat(32)}`, size: 11 } },
   },
 };
 
@@ -125,20 +113,6 @@ function withRawRegistry<R extends ReturnType<typeof wslRunner>>(runner: R, line
   };
 }
 
-function http(answers: Record<string, () => Partial<HttpResponse> | Error>): HttpTransport & { requests: HttpRequest[] } {
-  const requests: HttpRequest[] = [];
-  return {
-    requests,
-    request: async (request) => {
-      requests.push(request);
-      const answer = answers[`${request.method} ${request.url}`]?.();
-      if (answer === undefined) throw new Error(`unexpected ${request.method} ${request.url}`);
-      if (answer instanceof Error) throw answer;
-      return { status: 200, headers: {}, body: '', ...answer };
-    },
-  };
-}
-
 const isScript = (args: readonly string[]) => args.join(' ') === '-d devspaces -u root --cd / --exec sh -s';
 
 let folder: string;
@@ -153,8 +127,8 @@ afterEach(() => {
 
 function setup(options: {
   runner: ReturnType<typeof wslRunner>;
-  http?: HttpTransport;
-  download?: (options: DownloadOptions) => Promise<void>;
+  download?: (options: DownloadVmImageOptions) => Promise<unknown>;
+  pin?: VmImagePin;
   arch?: string;
   wslPath?: string | undefined;
   log?: ReturnType<typeof logger>;
@@ -167,8 +141,8 @@ function setup(options: {
     arch: async () => options.arch ?? 'x64',
     folder,
     logger: options.log ?? logger(),
-    http: options.http ?? http({}),
     download: options.download,
+    pin: options.pin ?? PIN,
     stalledAfterMs: options.stalledAfterMs,
   });
 }
@@ -196,32 +170,6 @@ describe('wslInstallArgs', () => {
       '2',
       '--no-launch',
     ]);
-  });
-});
-
-describe('debianImageOf', () => {
-  it('takes the Debian file of the architecture, with its SHA-256 in lower case and without 0x', () => {
-    expect(debianImageOf(LIST, 'x64')).toEqual({ name: 'Debian', url: DEBIAN_URL, sha256: SHA });
-    expect(debianImageOf(LIST, 'arm64')).toEqual({ name: 'Debian', url: LIST.ModernDistributions.Debian[0].Arm64Url.Url, sha256: 'cd'.repeat(32) });
-  });
-
-  it('takes the default entry, else the first one', () => {
-    const other = { Name: 'Debian-12', Amd64Url: { Url: 'https://example.org/12.wsl', Sha256: SHA } };
-    expect(debianImageOf({ ModernDistributions: { Debian: [other, LIST.ModernDistributions.Debian[0]] } }, 'x64')?.url).toBe(DEBIAN_URL);
-    expect(debianImageOf({ ModernDistributions: { Debian: [other] } }, 'x64')).toEqual({ name: 'Debian-12', url: 'https://example.org/12.wsl', sha256: SHA });
-  });
-
-  it('gives none for another architecture, a list without Debian, a URL that is not HTTPS, or a SHA-256 that is not one', () => {
-    expect(debianImageOf(LIST, 'ia32')).toBeUndefined();
-    expect(debianImageOf({ ModernDistributions: { Ubuntu: [] } }, 'x64')).toBeUndefined();
-    expect(debianImageOf(null, 'x64')).toBeUndefined();
-    expect(debianImageOf('text', 'x64')).toBeUndefined();
-    const entry = (Url: unknown, Sha256: unknown) => ({ ModernDistributions: { Debian: [{ Name: 'Debian', Amd64Url: { Url, Sha256 } }] } });
-    expect(debianImageOf(entry('http://salsa.debian.org/x.wsl', SHA), 'x64')).toBeUndefined();
-    expect(debianImageOf(entry('https://salsa.debian.org:8443/x.wsl', SHA), 'x64')).toBeUndefined();
-    expect(debianImageOf(entry(DEBIAN_URL, 'ab'.repeat(31)), 'x64')).toBeUndefined();
-    expect(debianImageOf(entry(DEBIAN_URL, 42), 'x64')).toBeUndefined();
-    expect(debianImageOf(entry(42, SHA), 'x64')).toBeUndefined();
   });
 });
 
@@ -326,7 +274,7 @@ describe('the architecture of Windows', () => {
     await expect(readWindowsArch(runner, { SystemRoot: 'C:\\Windows' }, 'x64', log)).resolves.toBe('arm64');
     expect(runner.run).toHaveBeenCalledWith(REG, WINDOWS_ARCH_ARGS, { timeoutMs: 15_000 });
     expect(WINDOWS_ARCH_ARGS).toEqual(['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', '/v', 'PROCESSOR_ARCHITECTURE']);
-    expect(log.info).toHaveBeenCalledWith('Windows runs on arm64, VS Code on x64: the WSL distribution of Devspaces gets the Debian file for arm64.');
+    expect(log.info).toHaveBeenCalledWith('Windows runs on arm64, VS Code on x64: the WSL distribution of Devspaces gets the .wsl file for arm64.');
     expect(parseWindowsArch('    PROCESSOR_ARCHITECTURE    REG_SZ    AMD64')).toBe('x64');
     expect(parseWindowsArch('    PROCESSOR_ARCHITECTURE    REG_SZ    x86')).toBeUndefined();
   });
@@ -334,16 +282,6 @@ describe('the architecture of Windows', () => {
   it('is the architecture of VS Code when the registry does not tell it', async () => {
     await expect(readWindowsArch(answer('', 1), {}, 'x64', logger())).resolves.toBe('x64');
     await expect(readWindowsArch({ run: vi.fn(async () => Promise.reject(new Error('spawn reg.exe ENOENT'))) }, {}, 'arm64', logger())).resolves.toBe('arm64');
-  });
-});
-
-describe('parseAptStatus', () => {
-  it('reads the progress of the downloads and of the installation, and nothing else', () => {
-    expect(parseAptStatus('dlstatus:3:42.5000:Retrieving file 3 of 40')).toEqual({ action: 'download', percent: 42.5 });
-    expect(parseAptStatus('pmstatus:docker-ce:80.0000:Installed docker-ce (amd64)')).toEqual({ action: 'install', percent: 80 });
-    expect(parseAptStatus('pmstatus:dpkg-exec:100:Running dpkg')).toEqual({ action: 'install', percent: 100 });
-    expect(parseAptStatus('pmerror:docker-ce:50.0000:error')).toBeUndefined();
-    expect(parseAptStatus('Get:1 http://deb.debian.org dlstatus:1:2:x')).toBeUndefined();
   });
 });
 
@@ -677,51 +615,39 @@ describe('dockerDesktopIntegrates', () => {
 });
 
 describe('WslSetup.image', () => {
-  it('loads the list of WSL and gives the Debian file with the size of a HEAD request after its redirect', async () => {
-    const storage = 'https://storage.example.org/Debian.wsl';
-    const transport = http({
-      [`GET ${WSL_DISTRIBUTION_LIST_URL}`]: () => ({ body: JSON.stringify(LIST) }),
-      [`HEAD ${DEBIAN_URL}`]: () => ({ status: 302, headers: { location: storage } }),
-      [`HEAD ${storage}`]: () => ({ headers: { 'content-length': '123456789' } }),
+  it('gives the .wsl file of the pin for the architecture of Windows, with the version and the repository, without a request', async () => {
+    const runner = wslRunner(() => undefined);
+    await expect(setup({ runner }).image()).resolves.toEqual({
+      name: 'devspaces-vm-amd64.wsl',
+      digest: `sha256:${'ab'.repeat(32)}`,
+      size: 10,
+      version: '13.20261109.1850',
+      arch: 'x64',
+      repository: REPOSITORY,
     });
-    await expect(setup({ runner: wslRunner(() => undefined), http: transport }).image()).resolves.toEqual({ name: 'Debian', url: DEBIAN_URL, sha256: SHA, size: 123456789 });
-    expect(transport.requests[0]).toMatchObject({ method: 'GET', maxBodyBytes: 1024 * 1024 });
+    await expect(setup({ runner, arch: 'arm64' }).image()).resolves.toMatchObject({ name: 'devspaces-vm-arm64.wsl', size: 11, arch: 'arm64' });
+    expect(runner.calls).toEqual([]);
   });
 
-  it('gives the file without a size when the HEAD request fails or names none, or a redirect leaves HTTPS', async () => {
-    for (const head of [() => new Error('ECONNRESET'), () => ({}), () => ({ status: 302, headers: { location: 'http://storage.example.org/x' } })]) {
-      const transport = http({ [`GET ${WSL_DISTRIBUTION_LIST_URL}`]: () => ({ body: JSON.stringify(LIST) }), [`HEAD ${DEBIAN_URL}`]: head });
-      await expect(setup({ runner: wslRunner(() => undefined), http: transport }).image()).resolves.toEqual({ name: 'Debian', url: DEBIAN_URL, sha256: SHA });
-    }
-  });
-
-  it('fails with listFailed on an HTTP error, a list that is not JSON, or no connection, and with noImage for another architecture', async () => {
-    for (const answer of [() => ({ status: 404 }), () => ({ body: '<html>' }), () => new Error('getaddrinfo ENOTFOUND')]) {
-      const transport = http({ [`GET ${WSL_DISTRIBUTION_LIST_URL}`]: answer });
-      await expect(setup({ runner: wslRunner(() => undefined), http: transport }).image()).rejects.toMatchObject({ problem: 'listFailed' });
-    }
-    const transport = http({ [`GET ${WSL_DISTRIBUTION_LIST_URL}`]: () => ({ body: JSON.stringify(LIST) }) });
-    await expect(setup({ runner: wslRunner(() => undefined), http: transport, arch: 'ia32' }).image()).rejects.toMatchObject({
+  it('fails with noImage for another architecture, and without a version of the image in the pin', async () => {
+    const runner = wslRunner(() => undefined);
+    await expect(setup({ runner, arch: 'ia32' }).image()).rejects.toMatchObject({
       problem: 'noImage',
-      message: 'The list of WSL distributions has no Debian file for ia32.',
+      message: 'The image 13.20261109.1850 of the VM of Devspaces has no .wsl file for ia32.',
     });
-  });
-
-  it('is cancelled with the signal', async () => {
-    const abort = new AbortController();
-    const transport = http({
-      [`GET ${WSL_DISTRIBUTION_LIST_URL}`]: () => {
-        abort.abort();
-        return new Error('aborted');
-      },
+    await expect(setup({ runner, pin: { version: null, repository: REPOSITORY, files: {} } }).image()).rejects.toMatchObject({
+      problem: 'noImage',
+      message: 'The image (none) of the VM of Devspaces has no .wsl file for x64.',
     });
-    const error = await setup({ runner: wslRunner(() => undefined), http: transport }).image(abort.signal).catch((caught: unknown) => caught);
-    expect(isAbortError(error)).toBe(true);
+    // A pin with only the disk for Lima.
+    await expect(setup({ runner, pin: { ...PIN, files: { amd64: { lima: PIN.files.amd64?.lima } } } }).image()).rejects.toMatchObject({ problem: 'noImage' });
   });
 });
 
 describe('WslSetup.setUp', () => {
-  const image = { name: 'Debian', url: DEBIAN_URL, sha256: SHA, size: 10 };
+  const image: WslImage = { name: 'devspaces-vm-amd64.wsl', digest: `sha256:${'ab'.repeat(32)}`, size: 10, version: '13.20261109.1850', arch: 'x64', repository: REPOSITORY };
+  /** The file of the download of `image` in the folder of Devspaces. */
+  const downloaded = () => path.join(folder, 'download', image.name);
 
   /** A distribution that answers each step; `override` changes the answer of one; `registry` as in wslRunner. */
   function distribution(override: (args: readonly string[], options?: RunOptions) => RunResult | Error | undefined = () => undefined, registry?: Record<string, string> | RunResult) {
@@ -729,15 +655,6 @@ describe('WslSetup.setUp', () => {
       const own = override(args, options);
       if (own !== undefined) return own;
       if (args[0] === '--install') return ok('The operation completed successfully.');
-      if (isScript(args) && options?.input === PROVISION_SCRIPT) {
-        // The lines of the steps arrive in pieces.
-        options.onStdout?.('dlstatus:1:0.0000:Retrieving file 1 of 5\n');
-        options.onStdout?.('devspaces-step pack');
-        options.onStdout?.('ages\ndlstatus:1:50.0000:Retrieving file 1 of 5\ndevspaces-step repository\r\ndevspaces-step unknown\n');
-        options.onStdout?.('devspaces-step docker\npmstatus:docker-ce:12.5000:Unpacking docker-ce (amd64)\nother line\n');
-        return ok();
-      }
-      if (args.join(' ') === WSL_TERMINATE_ARGS.join(' ')) return ok();
       if (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT) return ok('29.9.2\n');
       return undefined;
     }, registry);
@@ -745,112 +662,103 @@ describe('WslSetup.setUp', () => {
 
   /** The calls of `wsl.exe` of `runner`, without those of `reg.exe`. */
   const wslCalls = (runner: { calls: Call[] }) => runner.calls.filter((call) => call.file === WSL);
+  /** The calls of the script that waits for Docker. */
+  const waits = (runner: { calls: Call[] }) => runner.calls.filter((call) => isScript(call.args) && call.options?.input === DOCKER_WAIT_SCRIPT);
 
   function writingDownload() {
-    return vi.fn(async (options: DownloadOptions) => {
+    return vi.fn(async (options: DownloadVmImageOptions) => {
       options.onProgress?.(10, 10);
       fs.writeFileSync(options.target, 'distribution');
     });
   }
 
-  it('downloads, registers, installs Docker, restarts, and checks Docker, in this order', async () => {
+  it('downloads the .wsl file of the pin, registers it, and checks Docker at the first start, in this order', async () => {
     const runner = distribution();
     const download = writingDownload();
     const steps: WslSetupStep[] = [];
-    await expect(setup({ runner, download }).setUp(image, (step) => steps.push(step))).resolves.toMatchObject({ version: '29.9.2' });
-    const file = path.join(folder, 'download', 'debian.wsl');
-    expect(download).toHaveBeenCalledWith(
-      expect.objectContaining({ url: DEBIAN_URL, host: 'salsa.debian.org', expected: { sha256: SHA }, anyHttpsRedirect: true, target: file }),
+    const log = logger();
+    await expect(setup({ runner, download, log }).setUp(image, (step) => steps.push(step))).resolves.toMatchObject({ version: '29.9.2' });
+    const file = downloaded();
+    expect(download).toHaveBeenCalledWith(expect.objectContaining({ kind: 'wsl', arch: 'x64', target: file, pin: PIN, stalledAfterMs: undefined }));
+    expect(log.info).toHaveBeenCalledWith(
+      `The .wsl file of the image 13.20261109.1850 of the VM of Devspaces is downloaded from ${REPOSITORY} (devspaces-vm-amd64.wsl, 10 bytes, SHA-256 ${'ab'.repeat(32)}).`,
     );
     // After the registration, the registry tells whether WSL made the new distribution its default (WslSetup.separate).
+    // No script sets up Docker, and the distribution does not restart: the image brings Docker and the settings of WSL.
     expect(runner.calls.map((call) => (call.file === REG ? call.args[0] : call.args))).toEqual([
       wslInstallArgs(file, path.join(folder, 'disk')),
       'export',
       ['-d', 'devspaces', '-u', 'root', '--cd', '/', '--exec', 'sh', '-s'],
-      WSL_TERMINATE_ARGS,
-      ['-d', 'devspaces', '-u', 'root', '--cd', '/', '--exec', 'sh', '-s'],
     ]);
     expect(runner.calls[0].args.join(' ')).toContain('--version 2 --no-launch');
     expect(runner.calls.filter((call) => call.file === WSL).every((call) => call.options?.env?.WSL_UTF8 === '1')).toBe(true);
-    expect(steps).toEqual([
-      { kind: 'download', received: 0, total: 10 },
-      { kind: 'download', received: 10, total: 10 },
-      { kind: 'register' },
-      { kind: 'launch' },
-      // A status of apt-get before the first step is not shown.
-      { kind: 'docker', phase: 'packages' },
-      { kind: 'docker', phase: 'packages', progress: { action: 'download', percent: 50 } },
-      { kind: 'docker', phase: 'repository' },
-      { kind: 'docker', phase: 'docker' },
-      { kind: 'docker', phase: 'docker', progress: { action: 'install', percent: 12.5 } },
-      { kind: 'restart' },
-      { kind: 'start' },
-    ]);
+    expect(waits(runner)[0].options?.timeoutMs).toBe(5 * 60_000);
+    expect(steps).toEqual([{ kind: 'download', received: 0, total: 10 }, { kind: 'download', received: 10, total: 10 }, { kind: 'register' }, { kind: 'start' }]);
     // The download is gone after the registration; the folder of the disk stays.
     expect(fs.existsSync(file)).toBe(false);
     expect(fs.existsSync(path.join(folder, 'disk'))).toBe(true);
   });
 
-  it('runs only the script, the restart, and the check without a file', async () => {
-    const runner = distribution();
-    const download = writingDownload();
-    // The runner writes no registry: separate tells that it cannot be read.
-    await expect(setup({ runner, download }).setUp(undefined, () => undefined)).resolves.toEqual({ version: '29.9.2', separation: { state: 'unknown', dockerDesktop: undefined } });
-    expect(download).not.toHaveBeenCalled();
-    expect(wslCalls(runner).map((call) => call.args[0])).toEqual(['-d', '--terminate', '-d']);
-    // Also a setup again keeps the distribution off the default of WSL (WslSetup.separate).
-    expect(runner.calls.filter((call) => call.file === REG).map((call) => call.args[0])).toEqual(['export']);
+  it('passes the time without a byte to the download, and takes the size of the pin when the server tells none', async () => {
+    const steps: WslSetupStep[] = [];
+    const download = vi.fn(async (options: DownloadVmImageOptions) => {
+      options.onProgress?.(4, undefined);
+      fs.writeFileSync(options.target, 'distribution');
+    });
+    await setup({ runner: distribution(), download, stalledAfterMs: 20 }).setUp(image, (step) => steps.push(step));
+    expect(download).toHaveBeenCalledWith(expect.objectContaining({ stalledAfterMs: 20 }));
+    expect(steps[1]).toEqual({ kind: 'download', received: 4, total: 10 });
   });
 
   it('fails with downloadFailed and registers nothing when the download fails', async () => {
     const runner = distribution();
-    const download = vi.fn(async (options: DownloadOptions) => {
+    const download = vi.fn(async (options: DownloadVmImageOptions) => {
       fs.writeFileSync(options.target, 'part');
-      throw new Error('The download of x is not the file of its pin');
+      throw new Error('The download of x received no bytes for 60 seconds.');
     });
     await expect(setup({ runner, download }).setUp(image, () => undefined)).rejects.toMatchObject({
       problem: 'downloadFailed',
-      message: `The Debian file for WSL could not be downloaded from ${DEBIAN_URL}: The download of x is not the file of its pin`,
+      message: `The .wsl file of the VM of Devspaces could not be downloaded from ${REPOSITORY}: The download of x received no bytes for 60 seconds.`,
     });
-    expect(runner.calls).toEqual([]);
-    expect(fs.existsSync(path.join(folder, 'download', 'debian.wsl'))).toBe(false);
-  });
-
-  it('stops a download that receives no bytes', async () => {
-    const download = vi.fn((options: DownloadOptions) => new Promise<void>((_resolve, reject) => options.signal?.addEventListener('abort', () => reject(new Error('aborted')))));
-    await expect(setup({ runner: distribution(), download, stalledAfterMs: 20 }).setUp(image, () => undefined)).rejects.toMatchObject({
-      problem: 'downloadFailed',
-      message: expect.stringContaining('it received no bytes for 0 seconds'),
-    });
+    // Only the registry, for the folder of the disk.
+    expect(wslCalls(runner)).toEqual([]);
+    expect(fs.existsSync(downloaded())).toBe(false);
   });
 
   it('is cancelled with the signal during the download, and removes the download', async () => {
     const abort = new AbortController();
-    const download = vi.fn(async (options: DownloadOptions) => {
+    const download = vi.fn(async (options: DownloadVmImageOptions) => {
       fs.writeFileSync(options.target, 'part');
       abort.abort();
       throw new Error('aborted');
     });
     const error = await setup({ runner: distribution(), download }).setUp(image, () => undefined, abort.signal).catch((caught: unknown) => caught);
     expect(isAbortError(error)).toBe(true);
-    expect(fs.existsSync(path.join(folder, 'download', 'debian.wsl'))).toBe(false);
+    expect(fs.existsSync(downloaded())).toBe(false);
   });
 
-  it('ends the registration after a cancel, and then stops before the script', async () => {
+  it('ends the registration after a cancel, keeps the distribution off the default of WSL, and does not start it', async () => {
     const abort = new AbortController();
-    const runner = distribution((args) => {
-      if (args[0] !== '--install') return undefined;
-      abort.abort();
-      return ok();
-    });
+    const runner = distribution(
+      (args) => {
+        if (args[0] === '--set-default') return ok();
+        if (args[0] !== '--install') return undefined;
+        abort.abort();
+        return ok();
+      },
+      { Ubuntu: 'C:\\u', devspaces: path.join(folder, 'disk') },
+    );
     const error = await setup({ runner, download: writingDownload() }).setUp(image, () => undefined, abort.signal).catch((caught: unknown) => caught);
     expect(isAbortError(error)).toBe(true);
-    expect(wslCalls(runner).map((call) => call.args[0])).toEqual(['--install']);
+    expect(wslCalls(runner).map((call) => call.args[0])).toEqual(['--install', '--set-default']);
     expect(wslCalls(runner)[0].options?.signal).toBeUndefined();
     // WSL may have made the new distribution its default (WslSetup.separate, without the signal).
-    expect(runner.calls.map((call) => call.args[0])).toEqual(['--install', 'export']);
-    expect(runner.calls[1].options?.signal).toBeUndefined();
-    expect(fs.existsSync(path.join(folder, 'download', 'debian.wsl'))).toBe(false);
+    const afterInstall = runner.calls.slice(runner.calls.findIndex((call) => call.args[0] === '--install') + 1);
+    expect(afterInstall.map((call) => [call.args[0], call.options?.signal])).toEqual([
+      ['export', undefined],
+      ['--set-default', undefined],
+    ]);
+    expect(fs.existsSync(downloaded())).toBe(false);
   });
 
   it('fails with registerFailed with the message of WSL, and removes the download', async () => {
@@ -859,17 +767,17 @@ describe('WslSetup.setUp', () => {
       problem: 'registerFailed',
       message: 'wsl.exe --install --from-file failed (exit code 1): WSL_E_DISTRO_EXISTS',
     });
-    expect(runner.calls).toHaveLength(1);
-    expect(fs.existsSync(path.join(folder, 'download', 'debian.wsl'))).toBe(false);
+    expect(wslCalls(runner)).toHaveLength(1);
+    expect(fs.existsSync(downloaded())).toBe(false);
   });
 
   it('fails with vmUnavailable when WSL cannot start its virtual machine, and keeps the download for the next setup', async () => {
     const content = 'distribution';
-    const checked = { ...image, sha256: createHash('sha256').update(content).digest('hex') };
+    const checked = { ...image, digest: `sha256:${createHash('sha256').update(content).digest('hex')}` };
     const hcs =
       'The operation could not be started because a required feature is not installed.\r\nError code: Wsl/Service/RegisterDistro/CreateVm/HCS/HCS_E_SERVICE_NOT_AVAILABLE';
     const broken = distribution((args) => (args[0] === '--install' ? failed(hcs, 4294967295) : undefined));
-    const file = path.join(folder, 'download', 'debian.wsl');
+    const file = downloaded();
     await expect(setup({ runner: broken, download: writingDownload() }).setUp(checked, () => undefined)).rejects.toMatchObject({
       problem: 'vmUnavailable',
       message: expect.stringContaining(`HCS_E_SERVICE_NOT_AVAILABLE The download stays for the next setup: ${file}`),
@@ -887,122 +795,74 @@ describe('WslSetup.setUp', () => {
       { kind: 'download', received: content.length, total: content.length },
       { kind: 'register' },
     ]);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining(`The Debian file for WSL of an earlier setup is used again: ${file}`));
-    expect(runner.calls[0].args).toEqual(wslInstallArgs(file, path.join(folder, 'disk')));
+    expect(log.info).toHaveBeenCalledWith(expect.stringContaining(`The .wsl file of the VM of Devspaces of an earlier setup is used again: ${file}`));
+    expect(wslCalls(runner)[0].args).toEqual(wslInstallArgs(file, path.join(folder, 'disk')));
     expect(fs.existsSync(file)).toBe(false);
   });
 
-  it('downloads again when the file of an earlier setup is not the file of the list', async () => {
+  it('downloads again when the file of an earlier setup is not the file of the pin', async () => {
     fs.mkdirSync(path.join(folder, 'download'), { recursive: true });
-    fs.writeFileSync(path.join(folder, 'download', 'debian.wsl'), 'another file');
+    fs.writeFileSync(downloaded(), 'another file');
     const download = writingDownload();
     await setup({ runner: distribution(), download }).setUp(image, () => undefined);
     expect(download).toHaveBeenCalledTimes(1);
   });
 
+  // Mutation: a setup that keeps the other files of the folder fails it (a download of 200 MB of another version would
+  // stay there for good).
+  it('removes the download of another version of the image or of an older Devspaces, and keeps its own', async () => {
+    const downloads = path.join(folder, 'download');
+    fs.mkdirSync(downloads, { recursive: true });
+    fs.writeFileSync(path.join(downloads, 'debian.wsl'), 'of an older Devspaces');
+    fs.writeFileSync(path.join(downloads, 'devspaces-vm-arm64.wsl'), 'of another architecture');
+    const log = logger();
+    const download = vi.fn(async (options: DownloadVmImageOptions) => {
+      expect(fs.readdirSync(downloads)).toEqual([]);
+      fs.writeFileSync(options.target, 'distribution');
+    });
+    await setup({ runner: distribution(), download, log }).setUp(image, () => undefined);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith(`The download ${path.join(downloads, 'debian.wsl')} of an earlier setup was removed.`);
+    expect(fs.readdirSync(downloads)).toEqual([]);
+  });
+
   it('fails with registerFailed, not vmUnavailable, when the registration ends by its time limit', async () => {
     const runner = distribution((args) => (args[0] === '--install' ? { ...timedOut, stderr: 'HCS_E_SERVICE_NOT_AVAILABLE' } : undefined));
     await expect(setup({ runner, download: writingDownload() }).setUp(image, () => undefined)).rejects.toMatchObject({ problem: 'registerFailed' });
-    expect(fs.existsSync(path.join(folder, 'download', 'debian.wsl'))).toBe(false);
+    expect(fs.existsSync(downloaded())).toBe(false);
   });
 
   // Hannes's log on a slow virtual machine: Wsl/Service/CreateInstance/ERROR_TIMEOUT at the first start with systemd.
   it('starts the distribution again when WSL ran out of time to start it, at most three times', async () => {
-    const timeout = failed('This operation returned because the timeout period expired. \r\nError code: Wsl/Service/CreateInstance/ERROR_TIMEOUT', 4294967295);
-    let starts = 0;
-    const runner = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT && ++starts === 1 ? timeout : undefined));
-    const log = logger();
-    await expect(setup({ runner, log }).setUp(undefined, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
-    expect(starts).toBe(2);
-    expect(log.info).toHaveBeenCalledWith(expect.stringContaining('WSL ran out of time to start the distribution devspaces (attempt 1 of 3), so Devspaces starts it again'));
-    // Three times, then the problem.
-    const always = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT ? timeout : undefined));
-    await expect(setup({ runner: always }).setUp(undefined, () => undefined)).rejects.toMatchObject({ problem: 'dockerNotRunning', message: expect.stringContaining('ERROR_TIMEOUT') });
-    expect(always.calls.filter((call) => isScript(call.args) && call.options?.input === DOCKER_WAIT_SCRIPT)).toHaveLength(3);
-    // Another failure, or the time limit of the script itself, is not started again.
-    for (const answer of [failed('systemd does not run in the distribution.'), timedOut]) {
-      const other = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT ? answer : undefined));
-      await expect(setup({ runner: other }).setUp(undefined, () => undefined)).rejects.toMatchObject({ problem: 'dockerNotRunning' });
-      expect(other.calls.filter((call) => isScript(call.args) && call.options?.input === DOCKER_WAIT_SCRIPT)).toHaveLength(1);
-    }
-  });
-
-  it('starts the distribution again for the script when WSL ran out of time to start it, but not after the script began', async () => {
     // wsl.exe writes its errors to the standard output.
     const timeout: RunResult = { exitCode: 4294967295, stdout: 'This operation returned because the timeout period expired. \r\nError code: Wsl/Service/CreateInstance/ERROR_TIMEOUT\r\n', stderr: '', timedOut: false };
     let starts = 0;
-    const runner = distribution((args, options) => (isScript(args) && options?.input === PROVISION_SCRIPT && ++starts === 1 ? timeout : undefined));
+    const runner = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT && ++starts === 1 ? timeout : undefined));
     const log = logger();
-    await expect(setup({ runner, log }).setUp(undefined, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
+    await expect(setup({ runner, log, download: writingDownload() }).setUp(image, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
     expect(starts).toBe(2);
     expect(log.info).toHaveBeenCalledWith(expect.stringContaining('WSL ran out of time to start the distribution devspaces (attempt 1 of 3), so Devspaces starts it again: This operation returned'));
     // Three times, then the problem.
-    const always = distribution((args, options) => (isScript(args) && options?.input === PROVISION_SCRIPT ? timeout : undefined));
-    await expect(setup({ runner: always }).setUp(undefined, () => undefined)).rejects.toMatchObject({ problem: 'dockerFailed', message: expect.stringContaining('ERROR_TIMEOUT') });
-    expect(always.calls.filter((call) => isScript(call.args) && call.options?.input === PROVISION_SCRIPT)).toHaveLength(3);
-    // A script that said its first step ran: it is not started again.
-    const began = distribution((args, options) => {
-      if (!isScript(args) || options?.input !== PROVISION_SCRIPT) return undefined;
-      options.onStdout?.('devspaces-step packages\n');
-      return timeout;
+    const always = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT ? timeout : undefined));
+    await expect(setup({ runner: always, download: writingDownload() }).setUp(image, () => undefined)).rejects.toMatchObject({
+      problem: 'dockerNotRunning',
+      message: expect.stringContaining('ERROR_TIMEOUT'),
     });
-    await expect(setup({ runner: began }).setUp(undefined, () => undefined)).rejects.toMatchObject({ problem: 'dockerFailed' });
-    expect(began.calls.filter((call) => isScript(call.args) && call.options?.input === PROVISION_SCRIPT)).toHaveLength(1);
+    expect(waits(always)).toHaveLength(3);
+    // Another failure, or the time limit of the script itself, is not started again.
+    for (const answer of [failed('systemd does not run in the distribution.'), timedOut]) {
+      const other = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT ? answer : undefined));
+      await expect(setup({ runner: other, download: writingDownload() }).setUp(image, () => undefined)).rejects.toMatchObject({ problem: 'dockerNotRunning' });
+      expect(waits(other)).toHaveLength(1);
+    }
   });
 
-  it('fails with dockerFailed and the lines of the log that the script wrote to standard error', async () => {
-    const runner = distribution((args, options) =>
-      isScript(args) && options?.input === PROVISION_SCRIPT ? failed('The setup failed. The last lines of /var/log/devspaces-setup.log:\nE: Unable to locate package curl', 1) : undefined,
-    );
-    await expect(setup({ runner }).setUp(undefined, () => undefined)).rejects.toMatchObject({
-      problem: 'dockerFailed',
-      message: expect.stringContaining('(exit code 1): The setup failed. The last lines of /var/log/devspaces-setup.log:\nE: Unable to locate package curl'),
+  it('fails with dockerNotRunning when Docker does not answer at the first start, with the reason of the script', async () => {
+    const runner = distribution((args, options) => (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT ? failed('systemd does not run in the distribution.') : undefined));
+    await expect(setup({ runner, download: writingDownload() }).setUp(image, () => undefined)).rejects.toMatchObject({
+      problem: 'dockerNotRunning',
+      message: 'Docker does not answer at the first start of the WSL distribution devspaces (exit code 1): systemd does not run in the distribution.',
     });
-    expect(wslCalls(runner)).toHaveLength(1);
-  });
-
-  it('names the time limit of a script that does not end, and stops the distribution so that the script ends', async () => {
-    const log = logger();
-    const runner = distribution((args, options) => (isScript(args) && options?.input === PROVISION_SCRIPT ? timedOut : undefined));
-    await expect(setup({ runner, log }).setUp(undefined, () => undefined)).rejects.toMatchObject({
-      problem: 'dockerFailed',
-      message: expect.stringContaining('(no end within 30 minutes): (no output)'),
-    });
-    expect(wslCalls(runner)[0].options?.timeoutMs).toBe(30 * 60_000);
-    expect(wslCalls(runner).map((call) => call.args[0])).toEqual(['-d', '--terminate']);
-    expect(log.info).toHaveBeenCalledWith('The WSL distribution devspaces was stopped: the script did not end within 30 minutes.');
-  });
-
-  it('stops the distribution when the script is cancelled, so that it does not go on there', async () => {
-    const abort = new AbortController();
-    const runner = distribution((args, options) => {
-      if (!isScript(args) || options?.input !== PROVISION_SCRIPT) return undefined;
-      abort.abort();
-      return new Error('The operation was aborted');
-    });
-    const error = await setup({ runner }).setUp(undefined, () => undefined, abort.signal).catch((caught: unknown) => caught);
-    expect(isAbortError(error)).toBe(true);
-    expect(wslCalls(runner).map((call) => call.args)).toEqual([['-d', 'devspaces', '-u', 'root', '--cd', '/', '--exec', 'sh', '-s'], WSL_TERMINATE_ARGS]);
-    // The stop itself is not cancelled.
-    expect(wslCalls(runner)[1].options?.signal).toBeUndefined();
-  });
-
-  // Mutation: a check with the signal fails it (a cancel then would leave a new distribution the default of WSL).
-  it('does not cancel the check of the default of WSL', async () => {
-    const abort = new AbortController();
-    const base = distribution((args) => (args[0] === '--set-default' ? ok() : undefined), { Ubuntu: 'C:\\u', devspaces: path.join(folder, 'disk') });
-    const runner = {
-      ...base,
-      run: vi.fn(async (file: string, args: readonly string[], options?: RunOptions) => {
-        if (file === REG) abort.abort();
-        return base.run(file, args, options);
-      }),
-    };
-    await setup({ runner }).setUp(undefined, () => undefined, abort.signal).catch(() => undefined);
-    expect(base.calls.filter((call) => call.file === REG || call.args[0] === '--set-default').map((call) => [call.args[0], call.options?.signal])).toEqual([
-      ['export', undefined],
-      ['--set-default', undefined],
-    ]);
   });
 
   it('removes the virtual disk of a setup that did not end before it registers the file again', async () => {
@@ -1012,7 +872,7 @@ describe('WslSetup.setUp', () => {
     const log = logger();
     const runner = distribution(undefined, { Ubuntu: 'C:\\WSL\\Ubuntu' });
     await expect(setup({ runner, download: writingDownload(), log }).setUp(image, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
-    expect(runner.calls.map((call) => call.file)).toEqual([REG, WSL, REG, WSL, WSL, WSL]);
+    expect(runner.calls.map((call) => call.file)).toEqual([REG, WSL, REG, WSL]);
     expect(fs.readdirSync(disk)).toEqual([]);
     expect(log.info).toHaveBeenCalledWith(`The folder ${disk} has the files of a setup that did not end (ext4.vhdx); they are removed.`);
   });
@@ -1024,7 +884,7 @@ describe('WslSetup.setUp', () => {
     const log = logger();
     const used = distribution(undefined, { other: disk });
     await expect(setup({ runner: used, download: writingDownload(), log }).setUp(image, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
-    const file = path.join(folder, 'download', 'debian.wsl');
+    const file = downloaded();
     expect(used.calls.find((call) => call.args[0] === '--install')?.args).toEqual(wslInstallArgs(file, path.join(folder, 'disk-2')));
     expect(log.info).toHaveBeenCalledWith(
       `The folder ${disk} has files (ext4.vhdx), and the WSL distribution other has its virtual disk there; the new distribution gets the folder ${path.join(folder, 'disk-2')}.`,
@@ -1042,7 +902,7 @@ describe('WslSetup.setUp', () => {
     const disk = path.join(folder, 'disk');
     fs.mkdirSync(disk, { recursive: true });
     fs.writeFileSync(path.join(disk, 'ext4.vhdx'), 'in use');
-    const file = path.join(folder, 'download', 'debian.wsl');
+    const file = downloaded();
     const installArgs = (runner: ReturnType<typeof wslRunner>) => runner.calls.find((call) => call.args[0] === '--install')?.args;
     // A distribution with its disk there, next to one whose folder the registry does not tell.
     const mixed = withRawRegistry(distribution(), [
@@ -1080,19 +940,11 @@ describe('WslSetup.setUp', () => {
       const runner = distribution(undefined, { Ubuntu: 'C:\\WSL\\Ubuntu' });
       const log = logger();
       await setup({ runner, download: writingDownload(), log }).setUp(image, () => undefined);
-      const file = path.join(folder, 'download', 'debian.wsl');
-      expect(runner.calls.find((call) => call.args[0] === '--install')?.args).toEqual(wslInstallArgs(file, path.join(folder, 'disk-2')));
+      expect(runner.calls.find((call) => call.args[0] === '--install')?.args).toEqual(wslInstallArgs(downloaded(), path.join(folder, 'disk-2')));
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining('and they could not be removed (EBUSY: resource busy or locked)'));
     } finally {
       spy.mockRestore();
     }
-  });
-
-  it('removes a download that stayed after a registration when it sets up the distribution again', async () => {
-    fs.mkdirSync(path.join(folder, 'download'), { recursive: true });
-    fs.writeFileSync(path.join(folder, 'download', 'debian.wsl'), 'kept');
-    await setup({ runner: distribution() }).setUp(undefined, () => undefined);
-    expect(fs.existsSync(path.join(folder, 'download'))).toBe(false);
   });
 
   it('removes the virtual disk of a setup that did not end without the registry when WSL does not list the distribution', async () => {
@@ -1102,26 +954,6 @@ describe('WslSetup.setUp', () => {
     const runner = distribution((args) => (args.join(' ') === WSL_LIST_ARGS.join(' ') ? ok('Ubuntu\r\n') : undefined), failed('Access is denied.'));
     await expect(setup({ runner, download: writingDownload() }).setUp(image, () => undefined)).resolves.toMatchObject({ version: '29.9.2' });
     expect(fs.readdirSync(disk)).toEqual([]);
-  });
-
-  it('limits the size of the download', async () => {
-    const download = writingDownload();
-    await setup({ runner: distribution(), download }).setUp(image, () => undefined);
-    expect(download).toHaveBeenCalledWith(expect.objectContaining({ maxBytes: 2 * 1024 * 1024 * 1024 }));
-  });
-
-  it('goes on after a failed restart (logged), and fails with dockerNotRunning when Docker does not answer', async () => {
-    const log = logger();
-    const runner = distribution((args, options) => {
-      if (args[0] === '--terminate') return failed('There is no distribution with the supplied name.');
-      if (isScript(args) && options?.input === DOCKER_WAIT_SCRIPT) return failed('systemd does not run in the distribution.');
-      return undefined;
-    });
-    await expect(setup({ runner, log }).setUp(undefined, () => undefined)).rejects.toMatchObject({
-      problem: 'dockerNotRunning',
-      message: expect.stringContaining('after its restart (exit code 1): systemd does not run in the distribution.'),
-    });
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('wsl.exe --terminate devspaces failed (exit code 1)'));
   });
 });
 
@@ -1212,56 +1044,10 @@ describe('WslSetup.removeLeftovers', () => {
   });
 });
 
-describe('the scripts in the distribution', () => {
-  it('are valid for sh', () => {
-    for (const script of [PROVISION_SCRIPT, DOCKER_WAIT_SCRIPT]) {
-      const result = spawnSync('sh', ['-n'], { input: script, encoding: 'utf8' });
-      expect(result.stderr).toBe('');
-      expect(result.status).toBe(0);
-    }
-  });
-
-  it('write the settings of WSL and install the packages of Docker from its repository, in the order of the steps', () => {
-    expect(PROVISION_SCRIPT).toContain(`cat > /etc/wsl.conf <<'WSLCONF'\n${WSL_CONF}\nWSLCONF\n`);
-    expect(WSL_CONF).toContain('[boot]\nsystemd=true');
-    expect(PROVISION_SCRIPT).toContain('run_apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin');
-    expect(PROVISION_SCRIPT).toContain('URIs: https://download.docker.com/linux/debian');
-    const steps = [...PROVISION_SCRIPT.matchAll(/^step (\w+)$/gm)].map((match) => match[1]);
-    expect(steps).toEqual(['packages', 'repository', 'docker']);
-    // No command reads the rest of the script from standard input.
-    expect(PROVISION_SCRIPT.trimEnd().endsWith('main < /dev/null')).toBe(true);
-  });
-
-  it('send only the progress of apt-get to standard output, and the rest of its output to the log', () => {
-    const log = path.join(folder, 'setup.log');
-    const definitions = PROVISION_SCRIPT.split('\n').filter((line) => /^(fail|run_apt)\(\)/.test(line));
-    expect(definitions).toHaveLength(2);
-    // An apt-get that writes its status to the file descriptor of APT::Status-Fd, and other lines to its output.
-    const bin = path.join(folder, 'bin');
-    fs.mkdirSync(bin);
-    fs.writeFileSync(
-      path.join(bin, 'apt-get'),
-      '#!/bin/sh\nfd=${2#APT::Status-Fd=}\necho "Get:1 http://deb.debian.org"\necho "dlstatus:1:50.0000:Retrieving file 1 of 2" >&"$fd"\necho "W: a warning" >&2\n[ "$3" != broken ]\n',
-      { mode: 0o755 },
-    );
-    const script = [`log='${log}'`, ...definitions, 'run_apt update', 'run_apt broken'].join('\n');
-    const result = spawnSync('sh', ['-s'], { input: script, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` } });
-    expect(result.stdout).toBe('dlstatus:1:50.0000:Retrieving file 1 of 2\ndlstatus:1:50.0000:Retrieving file 1 of 2\n');
-    expect(result.status).toBe(1);
-    expect(fs.readFileSync(log, 'utf8')).toBe('Get:1 http://deb.debian.org\nW: a warning\nGet:1 http://deb.debian.org\nW: a warning\n');
-    expect(result.stderr).toContain(`The setup failed. The last lines of ${log}:`);
-  });
-
-  it('run one at a time, end an interrupted installation first, and know their own policy-rc.d', () => {
-    expect(PROVISION_SCRIPT).toContain('exec 9> /run/devspaces-setup.lock\nif ! flock -n 9; then');
-    expect(PROVISION_SCRIPT.indexOf('run dpkg --configure -a')).toBeLessThan(PROVISION_SCRIPT.indexOf('run apt-get update'));
-    // Only apt-get install reports its progress: the downloads of apt-get update would start the percent again at 0.
-    expect(PROVISION_SCRIPT).not.toContain('run_apt update');
-    // systemd is on only after its installation.
-    expect(PROVISION_SCRIPT.indexOf('systemd systemd-sysv')).toBeLessThan(PROVISION_SCRIPT.indexOf('cat > /etc/wsl.conf'));
-    expect(PROVISION_SCRIPT).toContain(`grep -qxF '${WSL_POLICY_MARK}' /usr/sbin/policy-rc.d`);
-    expect(PROVISION_SCRIPT).toContain(`cat > /usr/sbin/policy-rc.d <<'POLICY'\n${WSL_POLICY}\nPOLICY\n`);
-    // It keeps services from starting only while a run holds the lock.
-    expect(WSL_POLICY).toBe(`#!/bin/sh\n${WSL_POLICY_MARK}\nflock -n /run/devspaces-setup.lock true || exit 101`);
+describe('the script in the distribution', () => {
+  it('is valid for sh', () => {
+    const result = spawnSync('sh', ['-n'], { input: DOCKER_WAIT_SCRIPT, encoding: 'utf8' });
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
   });
 });
