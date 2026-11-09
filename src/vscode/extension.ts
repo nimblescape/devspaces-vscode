@@ -333,8 +333,8 @@ async function activateExtension(
   let remoteShells: RemoteShells | undefined;
   // The key of Devspaces for its SSH logins (the key offer), set below; the `ssh` of the Docker CLI uses it too.
   let keyOffer: SshKeyOffer | undefined;
-  // The idle sessions of this window in the WSL distribution of Devspaces, and the rule for the Docker calls in the
-  // background there (WslLifetime); set below, once the settings of the Monitor are known.
+  // The keeper of the WSL distribution of Devspaces at each `wsl.exe` of this window, and the rule for the Docker calls
+  // in the background there (WslLifetime); set below, once the settings of the Monitor are known.
   let wslLifetime: WslLifetime | undefined;
   // WslLifetime.leavesStopped, for the checks whether an engine answers and for the refresh of the states.
   const leavesStopped = (host: string): Promise<boolean> => wslLifetime?.leavesStopped(host) ?? Promise.resolve(false);
@@ -890,11 +890,10 @@ async function activateExtension(
     timeZone: () => usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
     computerId,
   });
-  // The WSL distribution of Devspaces runs while this window holds its idle session there (from its first `wsl.exe` for
-  // the distribution, until no devspace, no Monitor and no helper container of Devspaces runs there, or the window
-  // closes), and while its keeper runs (while a container runs there, also after VS Code closed). A Docker call in the
-  // background does not start a distribution that does not run (docs/architecture.md "The WSL distribution of
-  // Devspaces"). Its sessions end after the release of deactivate(), which may need them.
+  // The WSL distribution of Devspaces runs while its keeper runs: each `wsl.exe` of this window there starts it, and the
+  // idle script of the VM in it holds the distribution while something runs there, also after VS Code closed
+  // (R-VM-004). A Docker call in the background does not start a distribution that does not run, or one that stops now
+  // (docs/architecture.md "The WSL distribution of Devspaces"). No keeper starts after the release of deactivate().
   const keeper = new WslKeeper({
     wslPath,
     env,

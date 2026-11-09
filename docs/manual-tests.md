@@ -14,6 +14,16 @@ The runners of GitHub have no WSL 2 on Windows and no nested virtualization on m
 6. **The command again.** Run **Devspaces: Set Up Docker for Devspaces in WSL…** again: no question, no download, and the log says that the distribution exists and Devspaces uses it.
 7. **Without a connection.** Remove the distribution (**Devspaces: Remove the WSL Distribution of Devspaces…**), turn off the network, and set it up again: the message says that the image of the VM could not be downloaded, and **Show details** names `ghcr.io`. Turn on the network, and set it up again.
 
+## The idle script in WSL
+
+[`R-VM-004`](requirements.md#r-vm-004), `src/core/docker/wslKeeper.ts` and `src/core/docker/wslLifetime.ts`. Before the tests: the WSL distribution of Devspaces set up with this build, and no devspace running there. `wsl --list --running` shows whether the distribution runs without starting it; each `wsl -d devspaces …` below starts it when it does not run, and WSL stops it again 15 seconds after that command ended when nothing else holds it.
+
+1. **One keeper, no window.** Start a devspace in the distribution and open it, and open a second VS Code window with the view of Devspaces. No console window appears. `wsl -d devspaces -u root --exec pgrep -c -x idle` says `1`. The log of Devspaces has "Devspaces starts the keeper of the WSL distribution devspaces (wslg.exe)".
+2. **Runs after VS Code closed.** Choose **Keep Running When Closed** for the devspace of test 1, and close VS Code. 10 minutes later, `wsl --list --running` still names `devspaces`.
+3. **Stops when nothing runs, also with a window open.** Open VS Code, choose **Stop When Closed** and **Stop** for the devspace, and leave the window open without using Devspaces. The Monitor ends 5 minutes after the stop, and the workers of Devspaces close 10 minutes after their last use; about 2 minutes after the last container stopped, `wsl --list --running` no longer names `devspaces`. Then `wsl -d devspaces -u root -- cat /var/log/devspaces-idle.log` shows "The keeper runs the idle script.", "Busy: a container runs.", "Nothing runs in the VM of Devspaces (1 of 2 checks).", "(2 of 2 checks)" and "The VM of Devspaces stops.".
+4. **The background leaves it stopped.** After test 3, click into the view of Devspaces: the view shows the devspace as stopped, with **Start**, `wsl --list --running` still does not name `devspaces`, and the log of Devspaces says that the distribution does not run and that Devspaces does not start it for its work in the background.
+5. **A start starts it.** Start the devspace again: the distribution runs, and `pgrep -c -x idle` of test 1 says `1` again.
+
 ## The scheduled task on Windows
 
 [`R-VM-005`](requirements.md#r-vm-005), `src/core/docker/wslTask.ts`. Before the tests: Windows 10 or 11 (Home too), a Windows user without administrator rights, WSL of the Microsoft Store, the WSL distribution of Devspaces set up with this build, and one devspace started there once, so that the Monitor exists. `whoami /user` shows the SID of your user; below, `<task>` is `nimblescape Devspaces WSL <SID>`.

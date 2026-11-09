@@ -8,7 +8,20 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WSL_DISTRIBUTION, wslCommandArgs } from './dockerHost';
-import { KEEPER_EARLY_END_MS, KEEPER_LAUNCH_MS, KEEPER_LOCK, KEEPER_LOCK_WAIT_SECONDS, KEEPER_SCRIPT, WslKeeper, keeperWslgArgs, wslgPathOf, type WslKeeperDeps } from './wslKeeper';
+import {
+  KEEPER_EARLY_END_MS,
+  KEEPER_LAUNCH_MS,
+  KEEPER_LOCK,
+  KEEPER_LOCK_WAIT_SECONDS,
+  KEEPER_SCRIPT,
+  WSL_IDLE_LOG,
+  WSL_IDLE_LOG_LINES,
+  WSL_IDLE_SCRIPT,
+  WslKeeper,
+  keeperWslgArgs,
+  wslgPathOf,
+  type WslKeeperDeps,
+} from './wslKeeper';
 
 const WSL = 'C:\\Windows\\System32\\wsl.exe';
 const WSLG = 'C:\\Program Files\\WSL\\wslg.exe';
@@ -101,7 +114,7 @@ describe('the keeper of the WSL distribution', () => {
     subject.keep(WSL_DISTRIBUTION);
     await vi.waitFor(() =>
       expect(log.warn).toHaveBeenCalledWith(
-        'The keeper of the WSL distribution devspaces could not start: spawn EPERM. Without a keeper, WSL stops the distribution 15 seconds after VS Code closed, also while a container runs there.',
+        'The keeper of the WSL distribution devspaces could not start: spawn EPERM. Without a keeper, WSL stops the distribution 15 seconds after the last command of Devspaces there ended, also while a container runs there.',
       ),
     );
     await new Promise((resolve) => setImmediate(resolve));
@@ -124,7 +137,7 @@ describe('the keeper of the WSL distribution', () => {
     now += KEEPER_EARLY_END_MS - 1;
     launches[0]?.exit(1);
     expect(log.warn).toHaveBeenCalledWith(
-      'The keeper of the WSL distribution devspaces ended at once (exit code 1). Without a keeper, WSL stops the distribution 15 seconds after VS Code closed, also while a container runs there.',
+      'The keeper of the WSL distribution devspaces ended at once (exit code 1). Without a keeper, WSL stops the distribution 15 seconds after the last command of Devspaces there ended, also while a container runs there.',
     );
     await start(2);
     launches[1]?.exit(1);
@@ -138,6 +151,63 @@ describe('the keeper of the WSL distribution', () => {
     launches[3]?.exit(null);
     expect(endsAtOnce()).toHaveLength(2);
     expect(log.warn).toHaveBeenLastCalledWith(expect.stringContaining('ended at once (exit code none)'));
+  });
+
+  // Mutation: a hint that is missing for exit code 127 fails it: a distribution of an earlier version has no idle script.
+  it('names the missing idle script for a keeper that ends at once with exit code 127', async () => {
+    const { subject, launches, log } = keeper({ now: () => 1_000_000 });
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+    launches[0]?.exit(127);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'ended at once (exit code 127); the distribution may have no idle script /usr/lib/devspaces/idle, because an earlier version of Devspaces set it up: remove it with "Remove the WSL Distribution of Devspaces…" and set it up again.',
+      ),
+    );
+  });
+
+  // Mutation: holds that stays true after the end, or stopping after an end with another exit code (the wait for the lock
+  // ended, the distribution stopped), after an end at once, after a minute, or after a new keeper, fails it.
+  it('holds while its keeper runs, and stops for a minute after its idle script ended (exit code 0)', async () => {
+    let now = 1_000_000;
+    const { subject, launches } = keeper({ now: () => now });
+    expect(subject.holds(WSL_DISTRIBUTION)).toBe(false);
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+    expect(subject.holds(WSL_DISTRIBUTION)).toBe(true);
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(false);
+    now += 2 * KEEPER_LAUNCH_MS;
+    launches[0]?.exit(0);
+    expect(subject.holds(WSL_DISTRIBUTION)).toBe(false);
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(true);
+    expect(subject.stopping('Ubuntu')).toBe(false);
+    now += KEEPER_LAUNCH_MS - 1;
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(true);
+    now += 1;
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(false);
+    // A new keeper ends the stop.
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(2));
+    now += 2 * KEEPER_LAUNCH_MS;
+    launches[1]?.exit(0);
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(true);
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(3));
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(false);
+    // The end of the wait for the lock (exit code 1) is no stop.
+    now += 2 * KEEPER_LAUNCH_MS;
+    launches[2]?.exit(1);
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(false);
+    // A keeper that a flow starts within the stop ends it, also when it ends at once.
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(4));
+    now += 2 * KEEPER_LAUNCH_MS;
+    launches[3]?.exit(0);
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(true);
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(5));
+    launches[4]?.exit(0);
+    expect(subject.stopping(WSL_DISTRIBUTION)).toBe(false);
   });
 
   // Mutation: a start log that is used up by a keep without a program fails it.
@@ -162,8 +232,8 @@ describe('the keeper of the WSL distribution', () => {
   });
 });
 
-// The keeper script with the real `sh`, `flock`, `timeout` and `grep`, and with a `sleep` that returns at once and a
-// `docker` that answers from a file of the test. The lock file is one of the test instead of KEEPER_LOCK.
+// The keeper script with the real `sh`, `flock`, `tail` and `date`, and with an idle script of the test in place of
+// WSL_IDLE_SCRIPT. The lock file and the log are files of the test instead of KEEPER_LOCK and WSL_IDLE_LOG.
 describe.skipIf(process.platform === 'win32')('the keeper script', () => {
   let folder: string | undefined;
   afterEach(() => {
@@ -172,85 +242,103 @@ describe.skipIf(process.platform === 'win32')('the keeper script', () => {
   });
 
   /**
-   * Starts the script in its own folder `name`, with the lock of the test: `docker ps -q` prints the next line of
-   * `answers` (the last one stays); `none`: nothing. `lockWait`: the wait for the lock in seconds, in place of
-   * KEEPER_LOCK_WAIT_SECONDS.
+   * Starts the script with an idle script in its own folder `name` that writes two lines, says whether it got the file
+   * descriptor 9 of the lock, sleeps `idleSeconds` and ends with `exitCode`; `noIdle`: without an idle script.
+   * `lockWait`: the wait for the lock in seconds, in place of KEEPER_LOCK_WAIT_SECONDS. All keepers of a test share the
+   * lock and the log.
    */
-  function startScript(answers: readonly string[], options: { slowSleep?: boolean; name?: string; lockWait?: number } = {}) {
+  function startScript(options: { name?: string; idleSeconds?: number; exitCode?: number; lockWait?: number; noIdle?: boolean } = {}) {
     folder ??= fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-keeper-'));
     const lock = path.join(folder, 'lock');
+    const log = path.join(folder, 'idle.log');
     const dir = path.join(folder, options.name ?? 'first');
-    const bin = path.join(dir, 'bin');
-    fs.mkdirSync(bin, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'answers'), answers.join('\n') + '\n');
-    fs.writeFileSync(path.join(bin, 'sleep'), `#!/bin/sh\nexec /bin/sleep ${options.slowSleep ? '5' : '0.01'}\n`, { mode: 0o755 });
-    fs.writeFileSync(
-      path.join(bin, 'docker'),
-      [
-        '#!/bin/sh',
-        `dir='${dir}'`,
-        'echo "$*" >> "$dir/args"',
-        'n=$(($(cat "$dir/calls" 2>/dev/null || echo 0) + 1)); echo "$n" > "$dir/calls"',
-        'total=$(wc -l < "$dir/answers")',
-        '[ "$n" -le "$total" ] || n=$total',
-        'line=$(sed -n "${n}p" "$dir/answers")',
-        '[ "$line" = none ] && exit 0',
-        'printf "%s\\n" "$line"',
-      ].join('\n'),
-      { mode: 0o755 },
-    );
-    const script = KEEPER_SCRIPT.replace(KEEPER_LOCK, lock).replace(`-w ${KEEPER_LOCK_WAIT_SECONDS} `, `-w ${options.lockWait ?? KEEPER_LOCK_WAIT_SECONDS} `);
-    expect(script).not.toBe(KEEPER_SCRIPT);
-    const child = spawn('sh', ['-c', script], { env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` }, stdio: 'ignore' });
+    fs.mkdirSync(dir, { recursive: true });
+    const idle = path.join(dir, 'idle');
+    if (options.noIdle !== true) {
+      fs.writeFileSync(
+        idle,
+        [
+          '#!/bin/sh',
+          `echo "idle ${options.name ?? 'first'} runs"`,
+          `touch '${dir}/ran'`,
+          '[ -e /proc/self/fd/9 ] && echo "idle has the lock" || echo "idle has no lock"',
+          `sleep ${options.idleSeconds ?? 0}`,
+          `exit ${options.exitCode ?? 0}`,
+        ].join('\n') + '\n',
+        { mode: 0o755 },
+      );
+    }
+    const script = KEEPER_SCRIPT.replace(KEEPER_LOCK, lock)
+      .split(WSL_IDLE_LOG)
+      .join(log)
+      .replace(WSL_IDLE_SCRIPT, idle)
+      .replace(`-w ${KEEPER_LOCK_WAIT_SECONDS} `, `-w ${options.lockWait ?? KEEPER_LOCK_WAIT_SECONDS} `);
+    const child = spawn('sh', ['-c', script], { stdio: 'ignore' });
     const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
-    const calls = () => (fs.existsSync(path.join(dir, 'calls')) ? Number(fs.readFileSync(path.join(dir, 'calls'), 'utf8').trim()) : 0);
-    return { child, exited, calls, args: () => fs.readFileSync(path.join(dir, 'args'), 'utf8') };
+    return { child, exited, ran: () => fs.existsSync(path.join(dir, 'ran')), log: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '') };
   }
 
-  it('is one line without a double quote and without a backslash', () => {
+  it('is one line without a double quote and without a backslash, and runs the idle script of the image', () => {
     expect(KEEPER_SCRIPT).not.toMatch(/["\\\n\r]/);
+    expect(KEEPER_SCRIPT).toContain(`;${WSL_IDLE_SCRIPT} 9>&-`);
+    expect(WSL_IDLE_SCRIPT).toBe('/usr/lib/devspaces/idle');
   });
 
-  it('ends after two checks in a row without a running container, and runs on while one runs', async () => {
-    const { exited, calls, args } = startScript(['abc123', 'abc123', 'none']);
-    expect(await exited).toBe(0);
-    expect(calls()).toBe(4);
-    expect(args()).toContain('ps -q');
+  // Mutation: an idle script that gets the file descriptor of the lock fails it (a `sleep` of a killed keeper would hold
+  // the lock); so does a keeper that does not end with the idle script, or loses its output.
+  it('runs the idle script without the lock, with its output in the log after a line with the time, and ends with its exit code', async () => {
+    const done = startScript();
+    expect(await done.exited).toBe(0);
+    expect(done.log()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00 The keeper runs the idle script\.\nidle first runs\nidle has no lock\n$/);
+    const failed = startScript({ name: 'second', exitCode: 3 });
+    expect(await failed.exited).toBe(3);
+    expect(failed.log()).toContain('idle second runs');
   });
 
-  it('starts the count again after a check that found a running container', async () => {
-    const { exited, calls } = startScript(['none', 'abc123', 'none', 'none']);
-    expect(await exited).toBe(0);
-    expect(calls()).toBe(4);
+  it('keeps the last 300 lines of the log of earlier keepers', async () => {
+    const first = startScript();
+    await first.exited;
+    const log = path.join(folder as string, 'idle.log');
+    fs.writeFileSync(log, Array.from({ length: 400 }, (_, index) => `old ${index}`).join('\n') + '\n');
+    expect(WSL_IDLE_LOG_LINES).toBe(300);
+    const second = startScript({ name: 'second' });
+    await second.exited;
+    const lines = second.log().trimEnd().split('\n');
+    expect(lines).toHaveLength(WSL_IDLE_LOG_LINES + 3);
+    expect(lines[0]).toBe('old 100');
+    expect(lines.at(-2)).toBe('idle second runs');
   });
 
-  // Mutation: a script without the lock lets every window start one more keeper; one that ends at once while another
-  // holds the lock leaves no keeper when that one ends right after (it was on its last check).
+  // Mutation: a script without the lock lets every window start one more idle script; one that ends at once while
+  // another holds the lock leaves no keeper when that one ends right after (it was on its last check).
   it('waits for the lock while another keeper holds it, and takes over when that one ends', async () => {
-    const first = startScript(['abc123'], { slowSleep: true });
-    await vi.waitFor(() => expect(fs.existsSync(path.join(folder as string, 'lock'))).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const second = startScript(['none'], { name: 'second' });
+    const first = startScript({ idleSeconds: 5 });
+    await vi.waitFor(() => expect(first.ran()).toBe(true));
+    const second = startScript({ name: 'second' });
     let secondEnded = false;
     void second.exited.then(() => (secondEnded = true));
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(secondEnded).toBe(false);
-    expect(second.calls()).toBe(0);
-    // The end of the first one frees the lock at once, also while its `sleep` runs on (it does not hold the lock).
+    expect(second.ran()).toBe(false);
+    // The end of the first one frees the lock at once, also while its idle script runs on (it does not hold the lock).
     first.child.kill();
     await first.exited;
     expect(await second.exited).toBe(0);
-    expect(second.calls()).toBe(2);
+    expect(second.ran()).toBe(true);
   });
 
-  it('ends after its wait for the lock while another keeper holds it', async () => {
-    const first = startScript(['abc123'], { slowSleep: true });
-    await vi.waitFor(() => expect(fs.existsSync(path.join(folder as string, 'lock'))).toBe(true));
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    const second = startScript(['abc123'], { name: 'second', lockWait: 1 });
+  it('ends after its wait for the lock while another keeper holds it, without the idle script', async () => {
+    const first = startScript({ idleSeconds: 5 });
+    await vi.waitFor(() => expect(first.ran()).toBe(true));
+    const second = startScript({ name: 'second', lockWait: 1 });
     expect(await second.exited).not.toBe(0);
-    expect(second.calls()).toBe(0);
+    expect(second.ran()).toBe(false);
     first.child.kill();
     await first.exited;
+  });
+
+  it('ends at once with exit code 127 in a distribution without the idle script', async () => {
+    const missing = startScript({ noIdle: true });
+    expect(await missing.exited).toBe(127);
   });
 });
