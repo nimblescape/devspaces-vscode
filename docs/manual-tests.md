@@ -2,6 +2,18 @@
 
 The runners of GitHub have no WSL 2 on Windows and no nested virtualization on macOS, so CI cannot test the VM of Devspaces there. Each step that changes the VM on Windows or macOS has a list of manual tests here ([`R-VM-009`](requirements.md#r-vm-009)). Run them with a build of the branch (`npm run install-local`), and write the results into the pull request.
 
+## The WSL distribution from the image of the VM
+
+[`R-ENG-005`](requirements.md#r-eng-005), [`R-VM-002`](requirements.md#r-vm-002), [`R-VM-007`](requirements.md#r-vm-007), `src/core/docker/wslSetup.ts` and `src/vscode/wslSetupCommands.ts`. Before the tests: Windows 10 or 11 (Home too), on x64 and, when one is at hand, on Arm, a Windows user without administrator rights, WSL of the Microsoft Store, and no distribution `devspaces` (`wsl --list`).
+
+1. **Setup without a question.** **Set Up Docker for Devspaces** in the view: no question of Devspaces and no prompt of Windows. The progress shows "Downloading the VM of Devspaces" with the megabytes, then "Creating the WSL distribution.", then "Starting the WSL distribution and Docker." The log names the version of the image, `ghcr.io/nimblescape/devspaces-vm`, the size of the file, and `Docker Engine` with its version at the end. Write down how long the first start took.
+2. **The system of the image.** `wsl -d devspaces -u root -- cat /etc/os-release` names Debian 13, `wsl -d devspaces -u root -- systemctl is-active docker devspaces-upgrade.timer` says `active` twice, and `wsl -d devspaces -u root -- ls /mnt/c` fails, because no drive of Windows is mounted. The Start menu has no entry `devspaces`, and Windows Terminal has no profile for it.
+3. **Not the default.** `wsl --list` does not mark `devspaces` as the default, also on a computer with no other distribution (then WSL has no default).
+4. **A devspace.** Start a devspace and open it: it works as with Docker Desktop.
+5. **The upgrade in the VM.** Keep the distribution running for 2 minutes after its first start: `wsl -d devspaces -u root -- journalctl -u devspaces-upgrade --no-pager` shows a run of the service. It says `skipped` when the image is less than 20 hours old (the version of the image in the log is its build time in UTC), and otherwise it upgrades the packages. The devspace of test 4 still runs afterwards.
+6. **The command again.** Run **Devspaces: Set Up Docker for Devspaces in WSL…** again: no question, no download, and the log says that the distribution exists and Devspaces uses it.
+7. **Without a connection.** Remove the distribution (**Devspaces: Remove the WSL Distribution of Devspaces…**), turn off the network, and set it up again: the message says that the image of the VM could not be downloaded, and **Show details** names `ghcr.io`. Turn on the network, and set it up again.
+
 ## The scheduled task on Windows
 
 [`R-VM-005`](requirements.md#r-vm-005), `src/core/docker/wslTask.ts`. Before the tests: Windows 10 or 11 (Home too), a Windows user without administrator rights, WSL of the Microsoft Store, the WSL distribution of Devspaces set up with this build, and one devspace started there once, so that the Monitor exists. `whoami /user` shows the SID of your user; below, `<task>` is `nimblescape Devspaces WSL <SID>`.

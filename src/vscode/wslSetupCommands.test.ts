@@ -16,11 +16,13 @@ import { WslSetupCommands, WslSetupTexts, type WslSetupCommandsDeps } from './ws
 
 const { window } = fakeVscode;
 const FOLDER = 'C:\\Users\\ana\\AppData\\Local\\nimblescape\\devspaces\\wsl';
-const IMAGE: WslImage & { size: number } = {
-  name: 'Debian',
-  url: 'https://salsa.debian.org/debian/WSL/-/jobs/1/artifacts/raw/Debian_WSL_AMD64_v1.0.0.0.wsl',
-  sha256: 'ab'.repeat(32),
+const IMAGE: WslImage = {
+  name: 'devspaces-vm-amd64.wsl',
+  digest: `sha256:${'ab'.repeat(32)}`,
   size: 117 * 1_048_576 + 1,
+  version: '13.20261109.1850',
+  arch: 'x64',
+  repository: 'ghcr.io/nimblescape/devspaces-vm',
 };
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
 const LINK = { path: '/course', query: 'repository=school/course-<username>' };
@@ -69,7 +71,7 @@ beforeEach(() => {
     checkWsl: vi.fn(async (_signal?: AbortSignal) => '2.6.1'),
     checkVirtualMachine: vi.fn(async (_signal?: AbortSignal) => undefined),
     registration: vi.fn(async (): Promise<WslRegistration> => 'none'),
-    image: vi.fn(async (_signal?: AbortSignal): Promise<WslImage> => IMAGE),
+    image: vi.fn(async (): Promise<WslImage> => IMAGE),
     setUp: vi.fn(async (_image: unknown, onStep: (step: WslSetupStep) => void, _signal?: AbortSignal) => {
       onStep({ kind: 'download', received: 0, total: IMAGE.size });
       onStep({ kind: 'download', received: IMAGE.size / 2, total: IMAGE.size });
@@ -77,7 +79,7 @@ beforeEach(() => {
       onStep({ kind: 'download', received: IMAGE.size / 2 + 1024, total: IMAGE.size });
       onStep({ kind: 'download', received: IMAGE.size, total: IMAGE.size });
       onStep({ kind: 'register' });
-      onStep({ kind: 'docker', phase: 'docker' });
+      onStep({ kind: 'start' });
       return { version: '29.9.2', separation: { state: 'separate', dockerDesktop: true } as WslSeparation };
     }),
     remove: vi.fn(async (_signal?: AbortSignal) => true),
@@ -144,7 +146,6 @@ describe('the check at the start of a window', () => {
     setup.separate.mockRejectedValueOnce(new Error('EPERM'));
     await commands().checkSeparation();
     expect(logger.error).toHaveBeenCalledWith('The WSL distribution of Devspaces could not be checked.', expect.any(Error));
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     setup.separate.mockClear();
     await commands({ dockerDesktopIntegrates: async () => true }).setUp();
     expect(window.showWarningMessage).toHaveBeenLastCalledWith(WslSetupTexts.dockerDesktopIntegrates);
@@ -278,7 +279,7 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(questions()).toEqual([]);
     const log = WslSetupTexts.setUpLog(IMAGE, FOLDER);
     expect(logger.info).toHaveBeenCalledWith(log);
-    expect(log).toContain(`Debian for WSL (118 MB) from ${IMAGE.url}, checked against its SHA-256`);
+    expect(log).toContain('from the .wsl file of the image 13.20261109.1850 of the VM of Devspaces (118 MB from ghcr.io/nimblescape/devspaces-vm, checked against its SHA-256');
     expect(log).toContain(`set up in ${FOLDER}`);
     expect(setup.setUp).toHaveBeenCalledWith(IMAGE, expect.any(Function), expect.any(AbortSignal));
     expect(useHost).toHaveBeenCalledWith(WSL_HOST);
@@ -287,20 +288,19 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(messages).toEqual([
       WslSetupTexts.checking,
       WslSetupTexts.settingUp,
-      `${WslSetupTexts.settingUp} Downloading Debian: 0 of 118 MB.`,
-      `${WslSetupTexts.settingUp} Downloading Debian: 58 of 118 MB.`,
-      `${WslSetupTexts.settingUp} Downloading Debian: 118 of 118 MB.`,
+      `${WslSetupTexts.settingUp} Downloading the VM of Devspaces: 0 of 118 MB.`,
+      `${WslSetupTexts.settingUp} Downloading the VM of Devspaces: 58 of 118 MB.`,
+      `${WslSetupTexts.settingUp} Downloading the VM of Devspaces: 118 of 118 MB.`,
       `${WslSetupTexts.settingUp} Creating the WSL distribution.`,
-      `${WslSetupTexts.settingUp} Installing Docker Engine.`,
+      `${WslSetupTexts.settingUp} Starting the WSL distribution and Docker. The first start can take some minutes.`,
     ]);
-    // The download fills 40 percent; the other steps start at their places, so the bar is full only at the end.
-    expect(reports.map((report) => report.increment).filter((increment) => increment !== undefined)).toEqual([20, 20, 25]);
+    // The download fills 70 percent; the first start has its place, so the bar is full only at the end.
+    expect(reports.map((report) => report.increment).filter((increment) => increment !== undefined)).toEqual([35, 35, 15]);
     // Only the work after the check holds the lock of all windows.
     expect(setup.locked).toHaveBeenCalledTimes(1);
   });
 
   it('sets up and removes nothing while another window sets up or removes the distribution', async () => {
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     setup.locked.mockResolvedValueOnce(undefined);
     await commands().setUp();
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.busyElsewhere);
@@ -316,7 +316,6 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
   });
 
   it('changes nothing when another window set up or removed the distribution after the check', async () => {
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     setup.registration.mockResolvedValueOnce('none').mockResolvedValueOnce('own');
     await commands().setUp();
     expect(setup.setUp).not.toHaveBeenCalled();
@@ -333,7 +332,6 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
   });
 
   it('says that the setup is done when Devspaces cannot use the distribution yet', async () => {
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     useHost.mockResolvedValue(false);
     await commands().setUp();
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.readyNotUsed);
@@ -341,36 +339,29 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     expect(window.showErrorMessage).not.toHaveBeenCalled();
   });
 
-  it('does nothing when the question before the setup of an existing distribution is closed', async () => {
-    registered('own');
-    await commands().setUp();
-    expect(questions()).toHaveLength(1);
-    expect(setup.setUp).not.toHaveBeenCalled();
-    expect(useHost).not.toHaveBeenCalled();
-  });
-
   // Mutation: a setup of a new distribution that does not first forget one that was removed by hand (its Docker
-  // context) fails it; so does a repair that forgets it.
-  it('forgets the old distribution before a new one is set up, and not for a repair', async () => {
+  // context) fails it; so does the use of a distribution that exists, when it forgets it.
+  it('forgets the old distribution before a new one is set up, and not when it uses one that exists', async () => {
     const order: string[] = [];
     const forgetDistribution = vi.fn(async () => void order.push('forget'));
     setup.setUp.mockImplementation(async () => (order.push('set up'), { version: '29.9.2', separation: { state: 'separate', dockerDesktop: true } }));
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     await commands({ forgetDistribution }).setUp();
     expect(order).toEqual(['forget', 'set up']);
     registered('own');
     await commands({ forgetDistribution }).setUp();
-    expect(order).toEqual(['forget', 'set up', 'set up']);
+    expect(order).toEqual(['forget', 'set up']);
   });
 
-  it('sets up a distribution of Devspaces again without a download', async () => {
+  // Mutation: a setup again of the distribution of Devspaces fails it: its VM upgrades its packages itself (R-VM-007),
+  // and a question would only cost a click.
+  it('uses a distribution that Devspaces set up before as it is, without a question and without a download', async () => {
     registered('own');
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
     await commands().setUp();
+    expect(questions()).toEqual([]);
     expect(setup.image).not.toHaveBeenCalled();
-    expect(questions()).toEqual([{ message: WslSetupTexts.confirmRepair, detail: WslSetupTexts.confirmRepairDetail, button: WslSetupTexts.setUp }]);
-    expect(setup.setUp).toHaveBeenCalledWith(undefined, expect.any(Function), expect.any(AbortSignal));
-    expect(useHost).toHaveBeenCalledWith(WSL_HOST);
+    expect(setup.setUp).not.toHaveBeenCalled();
+    expect(setup.locked).toHaveBeenCalledTimes(1);
+    expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
     // Only a new distribution needs WSL 2.4.4.
     expect(setup.checkWsl).not.toHaveBeenCalled();
   });
@@ -393,7 +384,7 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
     registered('own');
     await instance.setUp();
     expect(window.showInformationMessage).not.toHaveBeenCalledWith(WslSetupTexts.busy);
-    expect(questions()).toHaveLength(1);
+    expect(useHost.mock.calls).toEqual([[WSL_HOST]]);
   });
 
   // The process of Windows without Docker: WSL first. Its installation says what happens itself (DockerSetup.installWsl),
@@ -419,11 +410,10 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
   });
 
   it('names the problem of a failed step, with Show details, and uses nothing', async () => {
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
-    setup.setUp.mockRejectedValue(new WslSetupError('dockerFailed', 'E: Unable to locate package curl'));
+    setup.setUp.mockRejectedValue(new WslSetupError('dockerNotRunning', 'systemd does not run in the distribution.'));
     window.showErrorMessage.mockResolvedValue(Actions.showDetails);
     await commands().setUp();
-    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('dockerFailed'), Actions.showDetails);
+    expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('dockerNotRunning'), Actions.showDetails);
     await vi.waitFor(() => expect(showLog).toHaveBeenCalledTimes(1));
     expect(useHost).not.toHaveBeenCalled();
   });
@@ -620,15 +610,15 @@ describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
   });
 
   // Mutation: a removal before these checks fails it: without them, the distribution would be gone and no new one set up.
-  it('removes nothing when WSL, its virtual machine or the list of WSL distributions would stop the new setup', async () => {
+  it('removes nothing when WSL, its virtual machine or the image of the VM would stop the new setup', async () => {
     registered('own');
     setup.checkVirtualMachine.mockRejectedValueOnce(new WslSetupError('vmUnavailable', 'WSL 2 cannot start.'));
     await commands().removeAndSetUpAgain();
-    setup.image.mockRejectedValueOnce(new WslSetupError('listFailed', 'ECONNRESET'));
+    setup.image.mockRejectedValueOnce(new WslSetupError('noImage', 'The image of the VM of Devspaces has no .wsl file for ia32.'));
     await commands().removeAndSetUpAgain();
     expect(window.showErrorMessage.mock.calls).toEqual([
       [WslSetupTexts.problem('vmUnavailable'), Actions.showDetails],
-      [WslSetupTexts.problem('listFailed'), Actions.showDetails],
+      [WslSetupTexts.problem('noImage'), Actions.showDetails],
     ]);
     expect(setup.remove).not.toHaveBeenCalled();
     expect(setup.setUp).not.toHaveBeenCalled();
@@ -655,9 +645,9 @@ describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
   });
 
   it('offers Remove and Set Up Again when a setup finds the disk of the distribution damaged', async () => {
-    registered('own');
-    window.showWarningMessage.mockResolvedValue(WslSetupTexts.setUp);
-    setup.setUp.mockRejectedValueOnce(new WslSetupError('dockerFailed', `Failed to attach disk: The file or directory is corrupted and unreadable.\r\n${CORRUPT}`));
+    // The check and the check under the lock find no distribution; the removal of the button finds the new one.
+    setup.registration.mockResolvedValueOnce('none').mockResolvedValueOnce('none').mockResolvedValue('own');
+    setup.setUp.mockRejectedValueOnce(new WslSetupError('dockerNotRunning', `Failed to attach disk: The file or directory is corrupted and unreadable.\r\n${CORRUPT}`));
     window.showErrorMessage.mockResolvedValue(Actions.resetWsl);
     await commands().setUp();
     expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.diskCorrupt, Actions.showDetails, Actions.resetWsl);
@@ -672,22 +662,9 @@ describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
 
 describe('the texts of the steps', () => {
   it('name each step, with the megabytes of the download', () => {
-    expect(WslSetupTexts.step({ kind: 'download', received: 3 * 1_048_576, total: undefined })).toBe('Downloading Debian: 3 MB.');
-    expect(WslSetupTexts.step({ kind: 'download', received: 0, total: 10 * 1_048_576 })).toBe('Downloading Debian: 0 of 10 MB.');
-    expect(WslSetupTexts.step({ kind: 'docker', phase: 'packages' })).toBe('Installing the base packages.');
-    expect(WslSetupTexts.step({ kind: 'docker', phase: 'repository' })).toBe('Adding the package repository of Docker.');
-    expect(WslSetupTexts.step({ kind: 'restart' })).toBe('Restarting the WSL distribution.');
-    expect(WslSetupTexts.step({ kind: 'start' })).toBe('Starting Docker.');
-  });
-
-  it('show the first start of the distribution and the progress of apt-get', () => {
-    expect(WslSetupTexts.step({ kind: 'launch' })).toBe('Starting the WSL distribution. The first start can take some minutes.');
-    expect(WslSetupTexts.step({ kind: 'docker', phase: 'docker', progress: { action: 'download', percent: 42.7 } })).toBe('Installing Docker Engine: downloading 42 %.');
-    expect(WslSetupTexts.step({ kind: 'docker', phase: 'packages', progress: { action: 'install', percent: 80 } })).toBe('Installing the base packages: installing 80 %.');
-  });
-
-  it('give the log a size only when it is known', () => {
-    const { size: _size, ...withoutSize } = IMAGE;
-    expect(WslSetupTexts.setUpLog(withoutSize, FOLDER)).toContain(`Debian for WSL from ${IMAGE.url}`);
+    expect(WslSetupTexts.step({ kind: 'download', received: 3 * 1_048_576, total: undefined })).toBe('Downloading the VM of Devspaces: 3 MB.');
+    expect(WslSetupTexts.step({ kind: 'download', received: 0, total: 10 * 1_048_576 })).toBe('Downloading the VM of Devspaces: 0 of 10 MB.');
+    expect(WslSetupTexts.step({ kind: 'register' })).toBe('Creating the WSL distribution.');
+    expect(WslSetupTexts.step({ kind: 'start' })).toBe('Starting the WSL distribution and Docker. The first start can take some minutes.');
   });
 });
