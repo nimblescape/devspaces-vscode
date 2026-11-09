@@ -515,7 +515,7 @@ After the setup and at the start of each window, Devspaces checks whether its di
 
 ### Start and stop of the distribution
 
-By default, WSL stops a distribution 15 seconds after the last Windows process for it ended (`instanceIdleTimeout` of WSL), with Docker and all its containers. A service of systemd, such as `dockerd`, does not keep it running. So Devspaces keeps Windows processes for the distribution running while it is needed ([`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`src/core/docker/wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts)):
+By default, WSL stops a distribution 15 seconds after the last Windows process for it ended (`instanceIdleTimeout` of WSL), with Docker and all its containers. A service of systemd, such as `dockerd`, does not keep it running. So one Windows process of Devspaces, the keeper, runs the idle script of the VM in the distribution and holds it while something runs there ([`R-VM-004`](requirements.md#r-vm-004); [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`src/core/docker/wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts)):
 
 ```mermaid
 flowchart LR
@@ -523,23 +523,21 @@ flowchart LR
     direction TB
     VS["VS Code window that uses the distribution"]
     P["wsl.exe processes of the window:<br/>shell before the relay, connection of the relay,<br/>dial-stdio of the Docker pipes"]
-    I["Idle session of the window:<br/>docker ps every minute"]
-    K["Keeper: wslg.exe, not a child of VS Code,<br/>docker ps every minute"]
+    K["Keeper: wslg.exe, not a child of VS Code"]
   end
   subgraph VM["WSL 2 virtual machine"]
     D["Distribution devspaces:<br/>systemd, dockerd, containers"]
+    S["Idle script of the VM:<br/>a check every minute"]
   end
   VS --> P
-  VS --> I
   VS -- "starts at most once a minute" --> K
   P -- "keep it running while they run" --> D
-  I -- "keeps it running while a container of Devspaces runs" --> D
-  K -- "keeps it running while any container runs" --> D
+  K -- "runs" --> S
+  S -- "keeps it running while something runs" --> D
 ```
 
-- **The idle session**: from the first `wsl.exe` of a window for the distribution, the window also runs one idle session there. Every minute, it looks for a running container of Devspaces (a devspace, the Monitor, or a helper container). It ends after two checks in a row without one, or when the window closes.
-- **The keeper**: a window also starts `wslg.exe -d devspaces -u root --cd / --shell-type none sh -c <script>`. It is not a child of VS Code, so it runs on after VS Code closed. Every minute it looks for any running container, and it ends after two checks in a row without one. A lock in the distribution (`/run/devspaces-keeper`) lets only one keeper run at a time.
-- **Work in the background** (the refresh of the sidebar, the background builds) does not start the distribution: it first asks `wsl.exe --list --running --quiet`, and when the distribution does not run, the sidebar shows its devspaces as stopped. The Monitor there ends when idle, so no such work starts the distribution for it. A flow of the user always starts it.
+- **The keeper**: each `wsl.exe` of a window for the distribution starts `wslg.exe -d devspaces -u root --cd / --shell-type none sh -c <script>`, at most once a minute, and not while the keeper of that window runs. It is not a child of VS Code, so it runs on after VS Code closed. It runs the idle script of the image of the VM, `/usr/lib/devspaces/idle`, the same script as in Lima: every minute it looks whether a container runs, a program is connected to Docker Engine, or the package upgrade runs, and it ends after two checks in a row at which nothing ran. A lock in the distribution (`/run/devspaces-keeper`) lets only one keeper run at a time. Its output goes to `/var/log/devspaces-idle.log`. No other process of Devspaces keeps the distribution running when nothing runs there, also not while a window is open.
+- **Work in the background** (the refresh of the sidebar, the background builds) does not start the distribution: it first asks `wsl.exe --list --running --quiet`, and when the distribution does not run, the sidebar shows its devspaces as stopped. For one minute after the idle script of the keeper of the window ended, it does not ask and does not run either, so that WSL can stop the distribution. The Monitor there ends when idle, so no such work starts the distribution for it. A flow of the user always starts it.
 
 ### Upkeep and removal
 
@@ -593,7 +591,7 @@ The CI job "vscode attach remote" counts the logins of the open of a restored wi
 | Wait while another program serves the address of a pipe | 15 s | `PIPE_IN_USE_WAIT_MS` |
 | New time of the socket and its folder | every hour | `PIPE_REFRESH_INTERVAL_MS` |
 | Download of the Docker CLI without any byte | 30 s | `STALLED_AFTER_MS` in [`ownDockerCli.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/ownDockerCli.ts) |
-| WSL: checks of the idle session and of the keeper | every 60 s, end after 2 checks without a container | [`wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) |
+| WSL: checks of the idle script of the keeper | every 60 s, end after 2 checks with nothing running; for 60 s after its end, no work in the background there | [`wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) |
 | WSL: next try of the Docker pipe of the extension | 10 s | `WSL_PIPE_RETRY_MS` in [`hostPipes.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/relay/hostPipes.ts) |
 
 ## When a part fails
@@ -673,4 +671,4 @@ The design [design/remote-devspaces-one-ssh-login.md](design/remote-devspaces-on
 | [`src/core/sshAskpass.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshAskpass.ts), [`src/vscode/sshLoginPrompts.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshLoginPrompts.ts) | The questions of SSH logins in VS Code |
 | [`src/core/sshKey.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/sshKey.ts), [`src/vscode/sshKeyOffer.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/sshKeyOffer.ts) | The key of Devspaces |
 | [`src/core/docker/wslSetup.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslSetup.ts), [`src/vscode/wslSetupCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/wslSetupCommands.ts) | The setup and the removal of the WSL distribution |
-| [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) | The idle session and the keeper |
+| [`src/core/docker/wslLifetime.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslLifetime.ts), [`wslKeeper.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/wslKeeper.ts) | The keeper of the distribution with the idle script of the VM, and the rule for the work in the background |

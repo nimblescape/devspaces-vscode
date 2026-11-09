@@ -8,8 +8,8 @@
 // computer (no WakeToRun), runs on battery, has no time limit, and starts a time that the computer missed after the
 // wake or the login (StartWhenAvailable). Its action is `wslg.exe`, a program without a console window (without it
 // `wsl.exe`), with a script in the distribution (wslTaskScript): it starts the Monitor, gives it the schedule and the
-// time zone, and then holds the distribution as the keeper does (KEEPER_SCRIPT) while a container runs there. Devspaces
-// registers the task again when the setting changes (WslTask). No `vscode`.
+// time zone, and then runs the idle script of the VM as the keeper does (KEEPER_SCRIPT), which holds the distribution
+// while something runs there. Devspaces registers the task again when the setting changes (WslTask). No `vscode`.
 import * as fs from 'fs';
 import * as path from 'path';
 import { errorMessage } from '../errors';
@@ -147,9 +147,9 @@ function scriptText(text: string): string {
  * percent sign, so that neither the command line nor the environment variables of Task Scheduler can change it: it
  * keeps the last WSL_TASK_LOG_LINES lines of its log, waits for Docker (`docker info`, WSL_TASK_DOCKER_TRIES times; systemd
  * starts it with the distribution), starts the Monitor (`docker start`), gives it the settings (`monitor.js settings -`,
- * the JSON in base64, which has no quote), writes each step into its log, and then runs the script of the keeper, which
- * holds the distribution while a container runs there (the Monitor during its background run) and ends after two quiet
- * checks. `set -f`: no file names for the `*` of a schedule.
+ * the JSON in base64, which has no quote), writes each step into its log, and then runs the script of the keeper: the
+ * idle script of the VM holds the distribution while something runs there (the Monitor during its background run) and
+ * ends after two checks in a row at which nothing ran. `set -f`: no file names for the `*` of a schedule.
  */
 export function wslTaskScript(settings: ImageSettings): string {
   const input = Buffer.from(JSON.stringify(imageSettingsOf(settings))).toString('base64');

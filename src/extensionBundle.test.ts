@@ -59,9 +59,9 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'engineRemoval.ts',
     'ownDockerCli.ts',
     'remoteDocker.ts',
-    // The idle session of a WSL distribution, and the rule for the work in the background there.
+    // The rule for the `wsl.exe` of a window and for the work in the background in a WSL distribution.
     'wslLifetime.ts',
-    // The keeper of a WSL distribution after VS Code closed.
+    // The keeper of a WSL distribution, which runs the idle script of the VM.
     'wslKeeper.ts',
     // The setup and the removal of the WSL distribution of Devspaces on Windows.
     'wslSetup.ts',
