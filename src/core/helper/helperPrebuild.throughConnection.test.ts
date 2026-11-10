@@ -343,7 +343,8 @@ describe('HelperPrebuild once per Docker host', () => {
     const background = prebuild(images(), { connection });
     const first = background.start(SSH_HOST);
     const second = background.start(other);
-    await vi.waitFor(() => expect(waits).toEqual(['build-box', 'other-box']));
+    // Both read their state files at the same time, so either one may wait first.
+    await vi.waitFor(() => expect([...waits].sort()).toEqual(['build-box', 'other-box']));
     await background.stop(other);
     expect(await second).toBe('cancelled');
     let firstEnded = false;

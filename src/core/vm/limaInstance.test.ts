@@ -114,10 +114,11 @@ describe('limaConfig', () => {
           mode: 'system',
           script: [
             '#!/bin/sh',
+            "printf 'a+ /run/docker.sock - - - - u:{{.UID}}:rw\\n' > /run/devspaces-lima-socket.conf",
             'mkdir -p /run/systemd/system/docker.socket.d',
-            "printf '[Socket]\\nExecStartPost=-/bin/chown {{.UID}} /run/docker.sock\\n' > /run/systemd/system/docker.socket.d/50-devspaces-lima.conf",
+            "printf '[Socket]\\nExecStartPost=-/usr/bin/systemd-tmpfiles --create /run/devspaces-lima-socket.conf\\n' > /run/systemd/system/docker.socket.d/50-devspaces-lima.conf",
             'systemctl daemon-reload',
-            '[ ! -S /run/docker.sock ] || chown {{.UID}} /run/docker.sock',
+            '[ ! -S /run/docker.sock ] || systemd-tmpfiles --create /run/devspaces-lima-socket.conf',
             '',
           ].join('\n'),
         },

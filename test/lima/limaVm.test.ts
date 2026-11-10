@@ -35,6 +35,9 @@ const runner = new NodeProcessRunner();
 const POWER_OFF_MS = 8 * 60_000;
 /** The image of the stand-in of the Monitor: Node.js 24, as in the helper image of the real Monitor. */
 const MONITOR_STAND_IN_IMAGE = 'mirror.gcr.io/library/node:24-alpine';
+/** Node.js in a container: GET /_ping on the Docker socket of the engine; exit code 0 for its answer 200. */
+const PING_SOCKET_SCRIPT =
+  'require("http").get({ socketPath: "/var/run/docker.sock", path: "/_ping" }, (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on("error", (e) => { console.error(e.message); process.exit(1); })';
 /** The stand-in of the Monitor ends this long after its start, as an idle Monitor ends when no devspace runs. */
 const MONITOR_STAND_IN_SECONDS = 60;
 /** A schedule with a time in the last 25 hours, whenever the test runs. */
@@ -118,6 +121,12 @@ describe('the Lima VM of Devspaces', () => {
     expect(await inVm('id -u')).toBe('0');
     console.log(`Docker Engine ${await inVm("docker version --format '{{.Server.Version}}'")}`);
     await inVm('docker run --rm mirror.gcr.io/library/busybox:latest true');
+    // The Docker socket stays root:docker with mode 0660, as in the WSL distribution of Devspaces; the user of Lima reaches
+    // it through its ACL entry (the provision script, below through the SSH of Lima). So a container of root without
+    // capabilities reaches it, as the build container of the helper image (buildxRunArgs: --cap-drop ALL,
+    // no-new-privileges, the socket as a bind mount).
+    expect(await inVm("stat -c '%U:%G %a' /run/docker.sock")).toBe('root:docker 660');
+    await inVm(`docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock ${MONITOR_STAND_IN_IMAGE} node -e '${PING_SOCKET_SCRIPT}'`);
     // No folder of this computer in the VM, and Lima installed no containerd of its own.
     expect(await inVm("findmnt --noheadings --output TARGET --types virtiofs,9p,fuse.sshfs || true")).toBe('');
     expect(await inVm('command -v nerdctl || true')).toBe('');

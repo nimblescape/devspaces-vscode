@@ -66,18 +66,27 @@ export function limaEnv(base: NodeJS.ProcessEnv, paths: LimaPaths): NodeJS.Proce
 }
 
 /**
- * The provision script of Lima at each start of the VM: the user of Lima (by its UID, which exists also before the user)
- * owns the Docker socket, so that the SSH of Lima can carry it to this computer. The socket exists already, or
- * docker.socket creates it later in this boot: then its drop-in in /run, which ends with the boot, gives it that owner.
- * Neither can fail docker.socket (`-`), and the upgrade never restarts it (vm/rootfs/usr/lib/devspaces/upgrade). The group
- * stays `docker`.
+ * The tmpfiles.d line of the provision script (LIMA_SOCKET_SCRIPT): an ACL entry that lets the user of Lima (by its UID,
+ * which exists also before the user) read and write the Docker socket.
+ */
+const LIMA_SOCKET_TMPFILES = '/run/devspaces-lima-socket.conf';
+
+/**
+ * The provision script of Lima at each start of the VM: the user of Lima may use the Docker socket, so that the SSH of
+ * Lima can carry it to this computer. The socket stays `root:docker` with mode 0660, as in the WSL distribution of
+ * Devspaces: root owns it, so that a container of root without capabilities (the build container of the helper image,
+ * `--cap-drop ALL`) reaches it as on every other Docker engine. The user of Lima gets an ACL entry instead
+ * (systemd-tmpfiles, `a+`). The socket exists already, or docker.socket creates it later in this boot: then its drop-in
+ * in /run, which ends with the boot, adds the entry. Neither can fail docker.socket (`-`), and the upgrade never
+ * restarts it (vm/rootfs/usr/lib/devspaces/upgrade).
  */
 const LIMA_SOCKET_SCRIPT = [
   '#!/bin/sh',
+  `printf 'a+ /run/docker.sock - - - - u:{{.UID}}:rw\\n' > ${LIMA_SOCKET_TMPFILES}`,
   'mkdir -p /run/systemd/system/docker.socket.d',
-  "printf '[Socket]\\nExecStartPost=-/bin/chown {{.UID}} /run/docker.sock\\n' > /run/systemd/system/docker.socket.d/50-devspaces-lima.conf",
+  `printf '[Socket]\\nExecStartPost=-/usr/bin/systemd-tmpfiles --create ${LIMA_SOCKET_TMPFILES}\\n' > /run/systemd/system/docker.socket.d/50-devspaces-lima.conf`,
   'systemctl daemon-reload',
-  '[ ! -S /run/docker.sock ] || chown {{.UID}} /run/docker.sock',
+  `[ ! -S /run/docker.sock ] || systemd-tmpfiles --create ${LIMA_SOCKET_TMPFILES}`,
   '',
 ].join('\n');
 
