@@ -45,16 +45,10 @@ export async function diskSpace(files: readonly string[]): Promise<number | unde
   return total;
 }
 
-/** The disk files of the Lima VM of Devspaces: the disk of the image, and the disk with the changes. */
-export function limaDiskFiles(paths: Pick<LimaPaths, 'home'>): string[] {
-  const folder = path.join(paths.home, LIMA_INSTANCE);
-  return [path.join(folder, 'basedisk'), path.join(folder, 'diffdisk')];
-}
-
-/** The virtual disks (`*.vhdx`) of the WSL distribution of Devspaces in its folder and one level below it. */
-export async function wslDiskFiles(folder: string): Promise<string[]> {
+/** The regular files in `folder` and up to `depth` levels below it that `accept` takes. */
+async function filesBelow(folder: string, depth: number, accept: (name: string) => boolean): Promise<string[]> {
   const found: string[] = [];
-  const look = async (dir: string, depth: number): Promise<void> => {
+  const look = async (dir: string, left: number): Promise<void> => {
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -63,12 +57,25 @@ export async function wslDiskFiles(folder: string): Promise<string[]> {
     }
     for (const entry of entries) {
       const file = path.join(dir, entry.name);
-      if (entry.isFile() && entry.name.toLowerCase().endsWith('.vhdx')) found.push(file);
-      else if (entry.isDirectory() && depth > 0) await look(file, depth - 1);
+      if (entry.isFile() && accept(entry.name)) found.push(file);
+      else if (entry.isDirectory() && left > 0) await look(file, left - 1);
     }
   };
-  await look(folder, 1);
+  await look(folder, depth);
   return found;
+}
+
+/**
+ * The files of the Lima VM of Devspaces: every file of its instance folder and one level below it (its disks, whose
+ * names differ between the versions and drivers of Lima, its cloud-init image and its logs; sockets are no files).
+ */
+export function limaInstanceFiles(paths: Pick<LimaPaths, 'home'>): Promise<string[]> {
+  return filesBelow(path.join(paths.home, LIMA_INSTANCE), 1, () => true);
+}
+
+/** The virtual disks (`*.vhdx`) of the WSL distribution of Devspaces in its folder and one level below it. */
+export function wslDiskFiles(folder: string): Promise<string[]> {
+  return filesBelow(folder, 1, (name) => name.toLowerCase().endsWith('.vhdx'));
 }
 
 export interface LimaVmStateDeps {
@@ -87,7 +94,7 @@ export interface LimaVmStateDeps {
 export async function limaVmState(deps: LimaVmStateDeps): Promise<VmState> {
   try {
     if (!(await deps.exists())) return { kind: 'notSetUp' };
-    const diskBytes = await diskSpace(limaDiskFiles(deps.paths));
+    const diskBytes = await diskSpace(await limaInstanceFiles(deps.paths));
     const disk = diskBytes === undefined ? {} : { diskBytes };
     const limactl = deps.limactl();
     if (limactl === undefined) return { kind: 'unknown', ...disk, detail: 'The pinned Lima is not installed.' };

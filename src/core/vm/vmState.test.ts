@@ -9,7 +9,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunResult } from '../ports';
 import { limaPaths, type LimaPaths } from './limaInstance';
-import { diskSpace, limaDiskFiles, limaVmState, wslDiskFiles, wslVmState } from './vmState';
+import { diskSpace, limaInstanceFiles, limaVmState, wslDiskFiles, wslVmState } from './vmState';
 
 const silent: Logger = silentLogger;
 
@@ -46,11 +46,15 @@ describe('limaVmState', () => {
 
   it('reads the state, the memory and the CPUs with limactl list, and the space of the disk', async () => {
     await fs.promises.mkdir(path.join(paths.home, 'devspaces'), { recursive: true });
-    await fs.promises.writeFile(limaDiskFiles(paths)[1], Buffer.alloc(8192, 1));
+    // A disk with a name of Lima 2 (any file of the instance folder counts), and one in a folder below it.
+    await fs.promises.writeFile(path.join(paths.home, 'devspaces', 'disk'), Buffer.alloc(8192, 1));
+    await fs.promises.mkdir(path.join(paths.home, 'devspaces', 'extra'), { recursive: true });
+    await fs.promises.writeFile(path.join(paths.home, 'devspaces', 'extra', 'data'), Buffer.alloc(4096, 1));
+    expect((await limaInstanceFiles(paths)).map((file) => path.relative(paths.home, file)).sort()).toEqual([path.join('devspaces', 'disk'), path.join('devspaces', 'extra', 'data')]);
     const calls: string[][] = [];
     const state = await limaVmState({ exists: async () => true, limactl: () => '/x/limactl', paths, runner: runner({ exitCode: 0, stdout: listLine('Stopped'), stderr: '', timedOut: false }, calls), logger: silent });
     expect(state).toMatchObject({ kind: 'stopped', memoryGiB: 4, cpus: 2 });
-    expect(state.diskBytes).toBeGreaterThanOrEqual(8192);
+    expect(state.diskBytes).toBeGreaterThanOrEqual(8192 + 4096);
     // Only the list: never a start.
     expect(calls).toEqual([['/x/limactl', 'list', '--json']]);
   });
