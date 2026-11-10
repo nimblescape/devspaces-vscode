@@ -4,8 +4,9 @@
 
 # The daily checks of the pins of Devspaces, in one run every day and on a
 # manual start. Each job calls the workflow of one pin, which checks the
-# current pin and, when there is a newer version, opens a pull request for it
-# and starts the workflow "CI" on its branch:
+# current pin and, when there is a newer version, opens a pull request for it,
+# starts the workflow "CI" on its branch, and deletes the runs of the pull
+# request that wait for an approval (scripts/drop-approval-runs.sh):
 #   Docker CLI    docker-cli.yml    the Docker CLI of Devspaces
 #                                   (src/core/docker/dockerCliPin.json)
 #   Buildx image  buildx-image.yml  the build image of Devspaces
@@ -53,7 +54,7 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
 
   buildx-image:
@@ -64,7 +65,7 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
 
   vm-image:
@@ -75,7 +76,7 @@ jobs:
       contents: write
       # The pull request of that branch, and the close of the older ones.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
       # The push to ghcr.io/nimblescape/devspaces-vm and the deletion of old versions.
       packages: write
@@ -88,7 +89,8 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflows "CI" and "VM image" on that branch.
+      # The start of the workflows "CI" and "VM image" on that branch, and the deletion of the waiting runs of the pull
+      # request.
       actions: write
 
   node-version:
@@ -99,5 +101,5 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write

@@ -28,6 +28,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { defineConfig } from '@vscode/test-cli';
+import { allowSlowConnects } from './scripts/connectAttempts.mjs';
+
+// @vscode/test-cli downloads VS Code in the process that loads this file: each connection attempt to one address of a
+// host gets more than 250 ms (scripts/connectAttempts.mjs).
+allowSlowConnects();
 
 const manifest = JSON.parse(fs.readFileSync(new URL('package.json', import.meta.url), 'utf8'));
 const vsix = fileURLToPath(new URL(`${manifest.name}-${manifest.version}.vsix`, import.meta.url));

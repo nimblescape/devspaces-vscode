@@ -29,6 +29,8 @@
 // With DEVSPACE_TEST_ATTACH_PREPARE=update (the runs `previous` and `updated`, a CI job of its own), the test VS Code
 // also gets the last released version of the extension from the VSIX of its GitHub release, and the helper image is
 // built as that version builds it (prepareUpdate). That run has no plain container.
+// Each download from the network (VS Code, Dev Containers and the VSIX of the last release) is tried again after an
+// error (withTries, NETWORK_TRIES), and the process ends as soon as the preparation is done (see the call of main).
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -47,6 +49,7 @@ import { dockerPipeAddress, dockerPipeBase, dockerPipeId } from '../../../src/co
 import { newComputerId } from '../../../src/core/storage/computerId';
 import { folderUriParts, type WindowDocker } from '../../../src/vscode/connection/authority';
 import { answerAttachQuestion } from '../../../scripts/attachQuestion.mjs';
+import { allowSlowConnects } from '../../../scripts/connectAttempts.mjs';
 
 /** The checkout: the bundle runs from out/test/vscode/attach/. */
 const ROOT = path.resolve(__dirname, '../../../..');
@@ -130,6 +133,14 @@ const ENGINE_HOST_START = `${SSH_HOST_SETUP}exec /usr/sbin/sshd -D -e
 `;
 /** The longest wait for the Docker engine of the other computer to answer over SSH. */
 const REMOTE_ENGINE_WAIT_MS = 120_000;
+/**
+ * The tries of each download from the network, and the wait before the second try (twice as long before the third).
+ * A download failed once in a while on CI and failed the whole job: GitHub answered 504 for the VSIX of the last
+ * release (run 42581587847), and the version check of @vscode/test-electron, which it does not try again, failed to
+ * connect (runs 42235034672 and 42805047747, see scripts/connectAttempts.mjs).
+ */
+const NETWORK_TRIES = 3;
+const NETWORK_RETRY_WAIT_MS = 10_000;
 
 const log: Logger = {
   info: (message) => console.log(`INFO  ${message}`),
@@ -137,6 +148,37 @@ const log: Logger = {
   error: (message, error) => console.log(`ERROR ${message}${error === undefined ? '' : `: ${String(error)}`}`),
   output: (text) => process.stdout.write(text),
 };
+
+/**
+ * The result of `run`, which tries again after an error, NETWORK_TRIES times in all, with a growing wait between the
+ * tries. `run` learns whether its try is the last one, so that it can return a failed answer there instead of an
+ * error. `what` names the download in the log.
+ */
+async function withTries<T>(what: string, run: (lastTry: boolean) => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run(attempt === NETWORK_TRIES);
+    } catch (error) {
+      if (attempt >= NETWORK_TRIES) throw error;
+      const waitMs = NETWORK_RETRY_WAIT_MS * attempt;
+      log.warn(`${what} failed (try ${attempt} of ${NETWORK_TRIES}), the next try in ${waitMs / 1000} s: ${String(error)}`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
+
+/**
+ * The answer of a GET of `url` with its whole body. A network error, a time limit, 429 and an answer of 500 or more are
+ * tried again (withTries); the last try returns such an answer for the error of the caller.
+ */
+async function fetchWithTries(url: string, headers: Record<string, string>, timeoutMs: number): Promise<{ ok: boolean; status: number; body: Buffer }> {
+  return withTries(url, async (lastTry) => {
+    const answer = await fetch(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    const body = Buffer.from(await answer.arrayBuffer());
+    if (!lastTry && (answer.status === 429 || answer.status >= 500)) throw new Error(`HTTP ${answer.status}`);
+    return { ok: answer.ok, status: answer.status, body };
+  });
+}
 
 const SEED_SCRIPT = `set -eu
 mkdir -p "$1/.devcontainer"
@@ -155,10 +197,14 @@ git -c user.name=Test -c user.email=test@example.invalid commit -q -m 'Initial c
  * attach question (scripts/attachQuestion.mjs). Returns the command line of the test VS Code.
  */
 async function trustExtension(): Promise<TestVscode> {
-  const executable = await downloadAndUnzipVSCode(process.env.VSCODE_TEST_VERSION || 'stable');
+  const requested = process.env.VSCODE_TEST_VERSION || 'stable';
+  const executable = await withTries(`The download of VS Code ${requested}`, () => downloadAndUnzipVSCode(requested));
   const [cli, ...cliArgs] = resolveCliArgsFromVSCodeExecutablePath(executable);
-  const install = childProcess.spawnSync(cli, [...cliArgs, '--install-extension', 'ms-vscode-remote.remote-containers'], { encoding: 'utf8' });
-  log.info(`Dev Containers: exit code ${install.status}\n${install.stdout}${install.stderr}`);
+  await withTries('The installation of Dev Containers from the Marketplace', async () => {
+    const install = childProcess.spawnSync(cli, [...cliArgs, '--install-extension', 'ms-vscode-remote.remote-containers'], { encoding: 'utf8' });
+    log.info(`Dev Containers: exit code ${install.status}\n${install.stdout}${install.stderr}`);
+    if (install.status !== 0) throw new Error(`exit code ${install.status}`);
+  });
   const extensionsDir = cliArgs.find((arg) => arg.startsWith('--extensions-dir='))?.slice('--extensions-dir='.length);
   if (!extensionsDir) throw new Error(`No extensions folder in ${cliArgs.join(' ')}.`);
   for (const line of answerAttachQuestion(extensionsDir)) log.info(line);
@@ -348,13 +394,13 @@ async function latestReleaseVsix(folder: string, token: string | undefined): Pro
   if (!repository) throw new Error('GITHUB_REPOSITORY is not set (GitHub Actions sets it).');
   const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const answer = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, { headers, signal: AbortSignal.timeout(30_000) });
+  const answer = await fetchWithTries(`https://api.github.com/repos/${repository}/releases/latest`, headers, 30_000);
   if (answer.status === 404) {
     log.info(`${repository} has no release.`);
     return undefined;
   }
-  if (!answer.ok) throw new Error(`The latest release of ${repository} could not be read: ${answer.status} ${await answer.text()}`);
-  const release = (await answer.json()) as { tag_name: string; assets: { name: string; browser_download_url: string }[] };
+  if (!answer.ok) throw new Error(`The latest release of ${repository} could not be read: ${answer.status} ${answer.body.toString('utf8')}`);
+  const release = JSON.parse(answer.body.toString('utf8')) as { tag_name: string; assets: { name: string; browser_download_url: string }[] };
   const assets = release.assets.filter((asset) => asset.name.endsWith('.vsix'));
   if (assets.length !== 1) throw new Error(`The release ${release.tag_name} of ${repository} has ${assets.length} VSIX files: ${assets.map((asset) => asset.name).join(', ')}`);
   const { name } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { name: string };
@@ -362,11 +408,11 @@ async function latestReleaseVsix(folder: string, token: string | undefined): Pro
     log.info(`The latest release ${release.tag_name} of ${repository} holds ${assets[0].name}, not a package of ${name}.`);
     return undefined;
   }
-  const download = await fetch(assets[0].browser_download_url, { signal: AbortSignal.timeout(120_000) });
+  const download = await fetchWithTries(assets[0].browser_download_url, {}, 120_000);
   if (!download.ok) throw new Error(`${assets[0].browser_download_url} could not be downloaded: ${download.status}`);
   fs.mkdirSync(folder, { recursive: true });
   const file = path.join(folder, assets[0].name);
-  fs.writeFileSync(file, Buffer.from(await download.arrayBuffer()));
+  fs.writeFileSync(file, download.body);
   return { tag: release.tag_name, file };
 }
 
@@ -471,7 +517,14 @@ async function main(): Promise<void> {
   log.info(`Prepared in ${((Date.now() - started) / 1000).toFixed(0)} s.`);
 }
 
-main().catch((error: unknown) => {
-  console.error(error);
-  process.exit(1);
-});
+allowSlowConnects();
+// The process ends also when a program that it started still runs: after a failed try of its download, @vscode/test-electron
+// leaves the `tar` of that try running, which waits for the rest of the archive forever, and Node.js waits for that child
+// process (run 42254008768 waited 10 minutes after "Prepared in 72 s." until the time limit of the job).
+main().then(
+  () => process.exit(0),
+  (error: unknown) => {
+    console.error(error);
+    process.exit(1);
+  },
+);

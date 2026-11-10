@@ -40,10 +40,13 @@
 #   pull request  When the pin changed: commits it to the branch
 #                 vm-image-<version>, opens a pull request for it, closes the
 #                 older open pull requests of the image, and starts the
-#                 workflow "CI" on the branch, because a pull request of a
-#                 workflow starts no workflow. Opening the pull request needs
-#                 the repository setting "Allow GitHub Actions to create and
-#                 approve pull requests" (Settings > Actions > General).
+#                 workflow "CI" on the branch, because GitHub runs the
+#                 workflows of a pull request that a workflow opened only
+#                 after an approval: scripts/drop-approval-runs.sh deletes
+#                 those waiting runs, which would end as failed runs. Opening
+#                 the pull request needs the repository setting "Allow GitHub
+#                 Actions to create and approve pull requests" (Settings >
+#                 Actions > General).
 #   prune         Deletes the versions on ghcr.io that are not kept: the
 #                 version of each published release of Devspaces, of the pin
 #                 on the main branch, and the newest 5 stay.
@@ -349,7 +352,7 @@ jobs:
       contents: write
       # The pull request of that branch, and the close of the older ones.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
     steps:
       - name: Check out the source
@@ -390,7 +393,7 @@ jobs:
           cat > "$RUNNER_TEMP/body.md" <<EOF
           The workflow "$WORKFLOW" built the image of the VM of Devspaces for amd64 and arm64, checked the kernels of the image and of WSL, started the disk of amd64 with QEMU and KVM, and pushed the image to ghcr.io/nimblescape/devspaces-vm as the version $VERSION, because the list of its packages or its recipe changed since the version before ([run]($RUN_URL)). This pull request writes the digests and sizes of its files into \`src/core/vm/vmImagePin.json\`; the job "push" read each file back from ghcr.io without a login, as Devspaces does.
 
-          The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. Merge when CI passes. The next release of Devspaces sets up new VMs from this version; a VM that exists keeps its system and upgrades its packages itself.
+          The workflow started the workflow "CI" on this branch, because GitHub runs the workflows of a pull request that a workflow opened only after an approval (the workflow deletes those waiting runs); its checks appear on this pull request. Merge when CI passes. The next release of Devspaces sets up new VMs from this version; a VM that exists keeps its system and upgrades its packages itself.
           EOF
           if ! gh pr create --base main --head "$branch" --title "Pin the image of the VM $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
             echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
@@ -402,6 +405,7 @@ jobs:
           done
           gh workflow run ci.yml --ref "$branch"
           echo "The pull request of the image $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/drop-approval-runs.sh "$branch"
 
   prune:
     name: prune
