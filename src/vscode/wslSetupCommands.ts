@@ -71,11 +71,11 @@ export const WslSetupTexts = {
     ].join('\n\n'),
   remove: 'Remove',
   /**
-   * `nowLocal`: Devspaces used it, and now uses the local Docker (when that is not supported, its own warning says so).
+   * `noHost`: Devspaces used it, and has no Docker host now.
    * `keptFolder`: the folder of the distribution, when it stays.
    */
-  removed: (nowLocal: boolean, keptFolder?: string) =>
-    `The WSL distribution of Devspaces was removed.${nowLocal ? ' Devspaces now uses the local Docker.' : ''}${keptFolder === undefined ? '' : ` Its folder stays (the log of Devspaces says why): ${keptFolder}`}`,
+  removed: (noHost: boolean, keptFolder?: string) =>
+    `The WSL distribution of Devspaces was removed.${noHost ? ' Devspaces has no Docker host now: set up Docker for Devspaces again in the Devspaces view, or choose another host.' : ''}${keptFolder === undefined ? '' : ` Its folder stays (the log of Devspaces says why): ${keptFolder}`}`,
   removedStillListed: `The WSL distribution of Devspaces was removed, but Devspaces could not take "${WSL_HOST}" out of its list of Docker hosts. Take it out with "Remove a Host from the List…".`,
   readyNotUsed: `Docker Engine runs in the WSL distribution of Devspaces, but Devspaces does not use it yet. To use it, choose "${WSL_HOST}" in "Use a Remote Docker Host…".`,
   notInstalled: 'The WSL distribution of Devspaces is not installed.',
@@ -160,10 +160,10 @@ export interface WslSetupCommandsDeps {
   /** Devspaces uses the host after its test (RemoteDockerCommands.useHost); true when it does. */
   useHost: (host: string) => Promise<boolean>;
   /**
-   * The host leaves the list of Devspaces (RemoteDockerCommands.forgetHost): whether it was the Docker host, and
-   * whether the local Docker that takes its place is supported.
+   * The host leaves the list of Devspaces (RemoteDockerCommands.forgetHost): whether it was the Docker host, so that
+   * Devspaces has no Docker host now.
    */
-  forgetHost: (host: string) => Promise<'notDockerHost' | 'local' | 'unsupported'>;
+  forgetHost: (host: string) => Promise<boolean>;
   /**
    * The distribution is gone, or a new one takes its place (also after a removal with `wsl --unregister` by hand): the
    * Docker context of the distribution follows. Never rejects.
@@ -333,7 +333,7 @@ export class WslSetupCommands {
 
   /**
    * "Remove the WSL Distribution of Devspaces…": after a warning, `wsl --unregister devspaces` and the folder of the
-   * distribution; the host leaves the list of Devspaces, and when Devspaces used it, the local Docker takes its place.
+   * distribution; the host leaves the list of Devspaces, and when Devspaces used it, Devspaces has no Docker host then.
    * Only a distribution that Devspaces set up. Never throws.
    */
   async remove(): Promise<void> {
@@ -383,7 +383,7 @@ export class WslSetupCommands {
         this.showError(WslSetupTexts.removedStillListed);
         return;
       }
-      this.inform(WslSetupTexts.removed(result.forgotten === 'local', result.folderGone ? undefined : folder));
+      this.inform(WslSetupTexts.removed(result.forgotten, result.folderGone ? undefined : folder));
     } catch (error) {
       this.showFailure(error, WslSetupTexts.removeFailedUnknown, 'The removal of the WSL distribution of Devspaces was cancelled.');
     } finally {

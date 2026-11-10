@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
-import { dockerTargetOf, remoteDockerTarget, LOCAL_DOCKER_TARGET, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
+import { remoteDockerTarget, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
 import { DockerTargets, NO_DOCKER_HOST_TARGET, runWithDockerTarget, operationDockerTarget } from '../core/docker/dockerTargets';
 import { ENGINE_INFO_FORMAT } from '../core/docker/remoteDocker';
 import { Actions, Messages, dockerHostReason } from '../core/messages';
@@ -17,7 +17,6 @@ import type { RunOptions, RunResult } from '../core/ports';
 import { RemoteDockerState } from '../core/storage/remoteDockerState';
 import { RemoteDockerCommands, RemoteDockerTexts, describeEntry, type RemoteDockerDeps } from './remoteDockerCommands';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
-import { MonitorIcons } from './treeModel';
 
 const ok = (stdout = ''): RunResult => ({ exitCode: 0, stdout, stderr: '', timedOut: false });
 const fail = (stderr: string): RunResult => ({ exitCode: 1, stdout: '', stderr, timedOut: false });
@@ -76,7 +75,8 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() }
 const { window } = fakeVscode;
 
 function create(extra: Partial<RemoteDockerDeps> = {}): RemoteDockerCommands {
-  targets = new DockerTargets(cli, env, logger, 'linux', state, extra.computerDocker !== false);
+  // As extension.ts: Devspaces never uses the Docker of this computer (R-ENG-001).
+  targets = new DockerTargets(cli, env, logger, 'linux', state, false);
   const created = new RemoteDockerCommands({
     docker: cli,
     runner,
@@ -94,8 +94,6 @@ function create(extra: Partial<RemoteDockerDeps> = {}): RemoteDockerCommands {
     onDidSwitch,
     ...extra,
   });
-  // As extension.ts: each read of the Docker host may offer the SSH host of a Docker context of the user.
-  targets.onDidResolve((target) => void created.offerDockerContextHost(target));
   return created;
 }
 
@@ -132,7 +130,7 @@ function shown(index = 0): Array<[string, string | undefined]> {
   return (window.showQuickPick.mock.calls[index][0] as Item[]).map((item) => [item.label, item.description]);
 }
 
-/** The list of Devspaces holds `hosts`; Devspaces uses `current` (the local Docker when undefined). */
+/** The list of Devspaces holds `hosts`; Devspaces uses `current` (no host when undefined). */
 async function listed(hosts: string[], current?: string): Promise<void> {
   for (const host of hosts) await state.setDockerHost(host);
   await state.setDockerHost(current);
@@ -194,11 +192,14 @@ describe('Use a Remote Docker Host…', () => {
     ]);
     expect(shown(1).filter(([label]) => label === RemoteDockerTexts.wslGroup)).toEqual([]);
     await state.removeHost(WSL_HOST);
+    // Not registered: its setup instead (below); a list that fails offers neither (logged).
     wslDistributions.mockResolvedValueOnce(['Ubuntu']);
     await commands.useRemoteHost();
+    expect(shown(2).some(([label]) => label === WSL_HOST)).toBe(false);
+    expect(shown(2).filter(([label]) => label === RemoteDockerTexts.wslGroup)).toHaveLength(1);
     wslDistributions.mockRejectedValueOnce(new Error('wsl.exe --list --quiet failed: exit code 1'));
     await commands.useRemoteHost();
-    expect([shown(2), shown(3)].flat().some(([label]) => label === WSL_HOST)).toBe(false);
+    expect(shown(3).some(([label]) => label === WSL_HOST || label === RemoteDockerTexts.wslGroup)).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith('The WSL distributions could not be listed: wsl.exe --list --quiet failed: exit code 1');
   });
 
@@ -224,14 +225,16 @@ describe('Use a Remote Docker Host…', () => {
     expect(runner.run).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(`Devspaces uses ${LIMA_HOST} (lima://devspaces). No Docker context was changed.`);
     expect(RemoteDockerTexts.testing(LIMA_HOST)).toBe('Starting and testing the VM of Devspaces…');
-    // A VM that does not exist, or that cannot be checked, is not offered (logged).
+    // A VM that does not exist is not offered (its setup instead, below), and one that cannot be checked gets no entry
+    // at all (logged).
     await state.setDockerHost(undefined);
     await state.removeHost(LIMA_HOST);
     limaVmExists.mockResolvedValueOnce(false);
     await commands.useRemoteHost();
+    expect(shown(2).some(([label]) => label === LIMA_HOST)).toBe(false);
     limaVmExists.mockRejectedValueOnce(new Error('EACCES'));
     await commands.useRemoteHost();
-    expect([shown(2), shown(3)].flat().some(([label]) => label === LIMA_HOST || label === RemoteDockerTexts.limaGroup)).toBe(false);
+    expect(shown(3).some(([label]) => label === LIMA_HOST || label === RemoteDockerTexts.limaGroup)).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith('The Lima VM of Devspaces could not be checked: EACCES');
   });
 
@@ -452,7 +455,7 @@ describe('Use a Remote Docker Host…', () => {
 
 // The choice of the Docker host (from the first row of the list).
 describe('Choose the Docker Host… (the choice of the first row)', () => {
-  it('lists the hosts with the current one marked, "Enter an SSH address…", and the local Docker last', async () => {
+  it('lists the hosts with the current one marked, and "Enter an SSH address…", without the local Docker', async () => {
     await listed(['build-box', 'me@192.0.2.10:2222'], 'me@192.0.2.10:2222');
     await commands.chooseDockerHost();
     expect(shown()).toEqual([
@@ -464,32 +467,22 @@ describe('Choose the Docker Host… (the choice of the first row)', () => {
       ['', undefined],
       [RemoteDockerTexts.enterAddress, RemoteDockerTexts.enterAddressDetail],
       [RemoteDockerTexts.removeHost, undefined],
-      ['', undefined],
-      [`$(${MonitorIcons.off}) ${RemoteDockerTexts.useLocal}`, undefined],
     ]);
     const options = window.showQuickPick.mock.calls[0][1] as { title: string; placeHolder: string };
     expect(options.title).toBe('Docker host: me@192.0.2.10:2222');
-    expect(options.placeHolder).toBe(RemoteDockerTexts.choosePlaceholder);
+    expect(options.placeHolder).toBe(RemoteDockerTexts.pickPlaceholder);
   });
 
-  it('marks the local Docker as current when Devspaces uses it', async () => {
+  // docs/requirements.md R-ENG-001: Devspaces never uses the Docker of this computer, on any platform.
+  it('says in its title that Devspaces has no host yet, and reads no Docker context of this computer', async () => {
     await commands.chooseDockerHost();
-    expect(shown().at(-1)).toEqual([`$(check) ${RemoteDockerTexts.useLocal}`, RemoteDockerTexts.current]);
-    expect((window.showQuickPick.mock.calls[0][1] as { title: string }).title).toBe('Docker host: the local Docker');
+    expect(shown().at(-1)).toEqual([RemoteDockerTexts.enterAddress, RemoteDockerTexts.enterAddressDetail]);
+    expect((window.showQuickPick.mock.calls[0][1] as { title: string }).title).toBe('Docker host: none');
+    expect(targets.last).toBeUndefined();
+    expect(cli.calls.filter((call) => call.args[0] === 'context' && call.args[1] !== 'ls')).toEqual([]);
   });
 
-  // As the first row: the local Docker that Devspaces cannot use now (here a Docker context of the user on an SSH host).
-  it('does not mark the local Docker as current while Devspaces cannot use it', async () => {
-    cli.contexts.set('mine', 'ssh://me@mybox');
-    cli.current = 'mine';
-    await state.claimOffer('me@mybox');
-    await targets.resolve();
-    await commands.chooseDockerHost();
-    expect(shown().at(-1)).toEqual([`$(${MonitorIcons.off}) ${RemoteDockerTexts.useLocal}`, undefined]);
-    expect((window.showQuickPick.mock.calls[0][1] as { title: string }).title).toBe('Docker host: Local Docker (not supported now)');
-  });
-
-  it('switches to the picked host, says so for the current one, and goes local on "Use the Local Docker"', async () => {
+  it('switches to the picked host, and says so for the current one', async () => {
     cli.hosts.set('gpu', engineInfo());
     pick('gpu');
     await commands.chooseDockerHost();
@@ -497,11 +490,6 @@ describe('Choose the Docker Host… (the choice of the first row)', () => {
     pick('$(check) gpu');
     await commands.chooseDockerHost();
     expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.alreadyHost('gpu'));
-    pick(`$(${MonitorIcons.off}) ${RemoteDockerTexts.useLocal}`);
-    await commands.chooseDockerHost();
-    expect(await state.dockerHost()).toBeUndefined();
-    expect(await state.remoteHosts()).toEqual(['gpu']);
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.nowLocal);
     expect(cli.changes).toEqual([]);
   });
 
@@ -511,58 +499,79 @@ describe('Choose the Docker Host… (the choice of the first row)', () => {
     expect(await state.dockerHost()).toBe('build-box');
     expect(onDidSwitch).not.toHaveBeenCalled();
   });
-});
 
-describe('Use the Local Docker', () => {
-  it('goes back to the local Docker of the current context, and keeps the host in the list', async () => {
+  // Mutation: a choice without the setup while the VM does not exist fails it: a user on a remote host has no way back
+  // to the VM of Devspaces, which takes the place of the local Docker on every platform.
+  it('offers the setup of the Lima VM while it does not exist (macOS, Linux), and starts it; once the VM exists, the VM instead', async () => {
+    const limaVmExists = vi.fn(async () => false);
+    commands = create({ limaVmExists });
     await listed(['build-box'], 'build-box');
-    await commands.useLocalDocker();
-    expect(await state.dockerHost()).toBeUndefined();
-    expect(await state.remoteHosts()).toEqual(['build-box']);
-    expect(targets.last).toMatchObject({ kind: 'local', context: 'desktop-linux' });
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.nowLocal);
-    expect(onDidSwitch).toHaveBeenCalledTimes(1);
-    expect(cli.changes).toEqual([]);
-  });
-
-  it('says so when Devspaces uses the local Docker already', async () => {
-    await commands.useLocalDocker();
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.alreadyLocal);
+    await commands.chooseDockerHost();
+    const setUp = `$(add) ${RemoteDockerTexts.setUpVm}`;
+    expect(shown().filter(([label]) => label === RemoteDockerTexts.limaGroup || label === setUp)).toEqual([
+      [RemoteDockerTexts.limaGroup, undefined],
+      [setUp, RemoteDockerTexts.setUpVmDetail],
+    ]);
+    pick(setUp);
+    await commands.chooseDockerHost();
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.setUpLimaVm');
+    expect(await state.dockerHost()).toBe('build-box');
     expect(onDidSwitch).not.toHaveBeenCalled();
+    // "Use a Remote Docker Host…" offers it too.
+    pick(setUp);
+    await commands.useRemoteHost();
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledTimes(2);
+    // The VM exists: it is offered as a host, without the setup.
+    limaVmExists.mockResolvedValue(true);
+    await commands.chooseDockerHost();
+    const labels = shown(3).map(([label]) => label);
+    expect(labels).toContain(LIMA_HOST);
+    expect(labels).not.toContain(setUp);
+    // A VM that cannot be checked gets no entry.
+    limaVmExists.mockRejectedValue(new Error('EACCES'));
+    await commands.chooseDockerHost();
+    expect(shown(4).some(([label]) => label === setUp || label === LIMA_HOST)).toBe(false);
   });
 
-  // Not "already uses the local Docker" for a local Docker that Devspaces cannot use.
-  it('says why the local Docker is not supported when Devspaces uses it already', async () => {
-    cli.contexts.set('tcp', 'tcp://192.0.2.10:2376');
-    cli.current = 'tcp';
-    await commands.useLocalDocker();
-    expect(window.showInformationMessage).not.toHaveBeenCalledWith(RemoteDockerTexts.alreadyLocal);
-    expect(window.showWarningMessage).toHaveBeenCalledWith(Messages.dockerEndpointUnsupported('tcp://192.0.2.10:2376'), 'Show details');
-    expect(onDidSwitch).not.toHaveBeenCalled();
-  });
-
-  it('never says "local" when the current Docker context does not point to the local Docker', async () => {
+  // The same on Windows, where the VM of Devspaces is its WSL distribution.
+  it('offers the setup of the WSL distribution while it is not registered (Windows), and starts it; once registered, the distribution instead', async () => {
+    const wslDistributions = vi.fn(async () => ['Ubuntu']);
+    commands = create({ wslDistributions });
     await listed(['build-box'], 'build-box');
-    cli.contexts.set('tcp', 'tcp://192.0.2.10:2376');
-    cli.current = 'tcp';
-    await commands.useLocalDocker();
-    expect(await state.dockerHost()).toBeUndefined();
-    expect(window.showInformationMessage).not.toHaveBeenCalledWith(RemoteDockerTexts.nowLocal);
-    expect(window.showWarningMessage).toHaveBeenCalledWith(Messages.dockerEndpointUnsupported('tcp://192.0.2.10:2376'), 'Show details');
+    await commands.chooseDockerHost();
+    const setUp = `$(add) ${RemoteDockerTexts.setUpWsl}`;
+    expect(shown().filter(([label]) => label === RemoteDockerTexts.wslGroup || label === setUp)).toEqual([
+      [RemoteDockerTexts.wslGroup, undefined],
+      [setUp, RemoteDockerTexts.setUpWslDetail],
+    ]);
+    // Neither the setup of the Lima VM nor the Lima group where Devspaces has no Lima VM.
+    expect(shown().some(([label]) => label === RemoteDockerTexts.limaGroup || label.includes(RemoteDockerTexts.setUpVm))).toBe(false);
+    pick(setUp);
+    await commands.chooseDockerHost();
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.setUpWslDistribution');
+    expect(await state.dockerHost()).toBe('build-box');
+    // Without any distribution (also without WSL), the setup too.
+    wslDistributions.mockResolvedValue([]);
+    await commands.chooseDockerHost();
+    expect(shown(2).map(([label]) => label)).toContain(setUp);
+    // Registered: the distribution, without the setup.
+    wslDistributions.mockResolvedValue(['Ubuntu', 'devspaces']);
+    await commands.chooseDockerHost();
+    expect(shown(3).map(([label]) => label)).toContain(WSL_HOST);
+    expect(shown(3).map(([label]) => label)).not.toContain(setUp);
   });
 
-  // The offer asks instead of the warning; once offered, the warning says it.
-  it('offers the SSH host of the current context of the user once, else says that Devspaces does not follow it', async () => {
-    await listed(['build-box'], 'build-box');
-    cli.contexts.set('mine', 'ssh://me@mybox');
-    cli.current = 'mine';
-    await commands.useLocalDocker();
-    await vi.waitFor(() => expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.offer('me@mybox', 'mine'), 'Use me@mybox', 'No'));
-    expect(window.showWarningMessage).not.toHaveBeenCalled();
-    await state.setDockerHost('build-box');
-    await commands.useLocalDocker();
-    expect(window.showWarningMessage).toHaveBeenCalledWith(Messages.dockerContextHost('me@mybox', 'mine'), 'Show details');
-    expect(window.showInformationMessage.mock.calls.filter((call) => call[0] === RemoteDockerTexts.offer('me@mybox', 'mine'))).toHaveLength(1);
+  it('offers no setup where Devspaces has no own VM of that kind (no check of WSL or of Lima given)', async () => {
+    await commands.chooseDockerHost();
+    expect(shown().some(([label]) => label.startsWith('$(add)'))).toBe(false);
+  });
+
+  it('"Use the Local Docker" is no command anymore: Devspaces never uses the Docker of this computer', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+      contributes: { commands: Array<{ command: string; title: string }> };
+    };
+    expect(manifest.contributes.commands.map((entry) => entry.title)).not.toContain('Use the Local Docker');
+    expect('useLocalDocker' in commands).toBe(false);
   });
 });
 
@@ -586,128 +595,26 @@ describe('Remove a Host from the List…', () => {
     expect(cli.calls.filter((call) => call.args[0] === '-H')).toEqual([]);
   });
 
-  it('removes the host that Devspaces uses: the local Docker takes its place', async () => {
+  it('removing the host that Devspaces uses leaves it without a Docker host, without a warning', async () => {
     await listed(['gpu'], 'gpu');
     pick(RemoteDockerTexts.removeHost, 'gpu');
     await commands.chooseDockerHost();
     expect(await state.remoteHosts()).toEqual([]);
     expect(await state.dockerHost()).toBeUndefined();
-    expect(targets.last).toMatchObject({ kind: 'local' });
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.removed('gpu', 0, true));
-    expect(onDidSwitch).toHaveBeenCalledTimes(1);
-  });
-
-  it('says how many devspaces stay, and that Devspaces uses the local Docker', () => {
-    expect(RemoteDockerTexts.removed('box', 0, false)).toBe('box is no longer in the list of Devspaces.');
-    expect(RemoteDockerTexts.removed('box', 1, false)).toBe('box is no longer in the list of Devspaces. Its devspace stays on that computer: add box again to show it in the sidebar.');
-    expect(RemoteDockerTexts.removed('box', 3, true)).toBe(
-      'box is no longer in the list of Devspaces. Its 3 devspaces stay on that computer: add box again to show them in the sidebar. Devspaces now uses the local Docker.',
-    );
-  });
-});
-
-// docs/requirements.md R-ENG-001: on macOS and Linux, Devspaces never uses the Docker of this computer.
-describe('on macOS and Linux, without the Docker of this computer', () => {
-  beforeEach(() => {
-    commands = create({ computerDocker: false });
-  });
-
-  it('the choice of the Docker host has no local Docker, and its title says that there is no host yet', async () => {
-    await commands.chooseDockerHost();
-    expect(shown().map(([label]) => label)).not.toContain(`$(${MonitorIcons.off}) ${RemoteDockerTexts.useLocal}`);
-    expect(shown().map(([label]) => label)).not.toContain(`$(check) ${RemoteDockerTexts.useLocal}`);
-    expect(shown().at(-1)).toEqual([RemoteDockerTexts.enterAddress, RemoteDockerTexts.enterAddressDetail]);
-    const options = window.showQuickPick.mock.calls[0][1] as { title: string; placeHolder: string };
-    expect(options.title).toBe('Docker host: none');
-    expect(options.placeHolder).toBe(RemoteDockerTexts.choosePlaceholderNoLocal);
-    // With a host, the title names it.
-    await listed(['build-box'], 'build-box');
-    await commands.chooseDockerHost();
-    expect((window.showQuickPick.mock.calls[1][1] as { title: string }).title).toBe('Docker host: build-box');
-  });
-
-  it('"Use the Local Docker" is in the Command Palette only on Windows; elsewhere it only says why, and changes nothing', async () => {
-    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as { contributes: { menus: { commandPalette: Array<{ command: string; when?: string }> } } };
-    expect(manifest.contributes.menus.commandPalette.filter((entry) => entry.command === 'devspaces.useLocalDocker')).toEqual([{ command: 'devspaces.useLocalDocker', when: 'isWindows' }]);
-    await listed(['build-box'], 'build-box');
-    await commands.useLocalDocker();
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.noLocalDocker);
-    expect(await state.dockerHost()).toBe('build-box');
-    expect(onDidSwitch).not.toHaveBeenCalled();
-    expect(cli.calls).toEqual([]);
-  });
-
-  it('removing the host that Devspaces uses leaves it without a Docker host, without a warning', async () => {
-    await listed(['gpu'], 'gpu');
-    pick(RemoteDockerTexts.removeHost, 'gpu');
-    await commands.chooseDockerHost();
-    expect(await state.dockerHost()).toBeUndefined();
     expect(targets.last).toBe(NO_DOCKER_HOST_TARGET);
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.removedNoLocal('gpu', 0, true));
+    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.removed('gpu', 0, true));
     expect(window.showWarningMessage).not.toHaveBeenCalled();
     expect(onDidSwitch).toHaveBeenCalledTimes(1);
-    expect(RemoteDockerTexts.removedNoLocal('box', 2, true)).toBe(
-      'box is no longer in the list of Devspaces. Its 2 devspaces stay on that computer: add box again to show them in the sidebar. Devspaces has no Docker host now: set up Docker for Devspaces in the Devspaces view, or choose another host.',
-    );
     // No Docker context of this computer is read for the target (the choice lists only the SSH hosts of the contexts).
     expect(cli.calls.filter((call) => call.args[0] === 'context' && call.args[1] !== 'ls')).toEqual([]);
   });
-});
 
-// A Docker context or DOCKER_HOST of the user that reaches a host over SSH, while Devspaces uses the local Docker.
-describe('the offer of the SSH host of a Docker context of the user', () => {
-  const MINE = dockerTargetOf('ssh://me@mybox', 'mine');
-
-  it('asks once per host; "Use <host>" makes it the Docker host of Devspaces as the command does', async () => {
-    cli.hosts.set('me@mybox', engineInfo());
-    window.showInformationMessage.mockImplementation(async (_message: string, use?: string) => use);
-    await commands.offerDockerContextHost(MINE);
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.offer('me@mybox', 'mine'), 'Use me@mybox', 'No');
-    expect(await state.dockerHost()).toBe('me@mybox');
-    expect((await state.read()).offered).toEqual(['me@mybox']);
-    expect(cli.changes).toEqual([]);
-    await state.setDockerHost(undefined);
-    window.showInformationMessage.mockClear();
-    await commands.offerDockerContextHost(MINE);
-    expect(window.showInformationMessage).not.toHaveBeenCalled();
-  });
-
-  it('remembers the offer also when the user says No, and names DOCKER_HOST when it decides', async () => {
-    await commands.offerDockerContextHost(dockerTargetOf('ssh://me@other', undefined));
-    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.offer('me@other', undefined), 'Use me@other', 'No');
-    expect(RemoteDockerTexts.offer('me@other', undefined)).toContain('(DOCKER_HOST)');
-    expect(await state.dockerHost()).toBeUndefined();
-    expect((await state.read()).offered).toEqual(['me@other']);
-  });
-
-  it('does not offer a host of the list, another target, or an address that Devspaces cannot use', async () => {
-    await listed(['me@mybox']);
-    await commands.offerDockerContextHost(MINE);
-    await commands.offerDockerContextHost(LOCAL_DOCKER_TARGET);
-    await commands.offerDockerContextHost(remoteDockerTarget('gpu'));
-    await commands.offerDockerContextHost(dockerTargetOf('tcp://192.0.2.10:2376', 'tcp'));
-    await commands.offerDockerContextHost(dockerTargetOf('ssh://-oProxyCommand=x', 'evil'));
-    expect(window.showInformationMessage).not.toHaveBeenCalled();
-    expect((await state.read()).offered).toBeUndefined();
-  });
-
-  // Several windows read the same Docker context at their start: only one of them asks.
-  it('asks in one window only when several read the context at the same time', async () => {
-    const windows = [commands, create(), create()];
-    await Promise.all(windows.map((each) => each.offerDockerContextHost(MINE)));
-    expect(window.showInformationMessage.mock.calls.filter((call) => call[0] === RemoteDockerTexts.offer('me@mybox', 'mine'))).toHaveLength(1);
-    expect((await state.read()).offered).toEqual(['me@mybox']);
-  });
-
-  it('shows one offer at a time', async () => {
-    let answer: (value: string | undefined) => void = () => {};
-    window.showInformationMessage.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
-    const first = commands.offerDockerContextHost(MINE);
-    await vi.waitFor(() => expect(window.showInformationMessage).toHaveBeenCalledTimes(1));
-    await commands.offerDockerContextHost(dockerTargetOf('ssh://me@other', 'other'));
-    answer(undefined);
-    await first;
-    expect(window.showInformationMessage).toHaveBeenCalledTimes(1);
+  it('says how many devspaces stay, and that Devspaces has no Docker host when it used the removed one', () => {
+    expect(RemoteDockerTexts.removed('box', 0, false)).toBe('box is no longer in the list of Devspaces.');
+    expect(RemoteDockerTexts.removed('box', 1, false)).toBe('box is no longer in the list of Devspaces. Its devspace stays on that computer: add box again to show it in the sidebar.');
+    expect(RemoteDockerTexts.removed('box', 2, true)).toBe(
+      'box is no longer in the list of Devspaces. Its 2 devspaces stay on that computer: add box again to show them in the sidebar. Devspaces has no Docker host now: set up Docker for Devspaces in the Devspaces view, or choose another host.',
+    );
   });
 });
 
@@ -756,31 +663,24 @@ describe('useHost and forgetHost (the WSL distribution of Devspaces after its se
     expect(await state.dockerHost()).toBeUndefined();
   });
 
-  it('forgetHost removes the host from the list without a message; when it was current, the local Docker takes its place', async () => {
+  it('forgetHost removes the host from the list without a message; when it was current, Devspaces has no Docker host', async () => {
     await state.setDockerHost(WSL_HOST);
-    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe('local');
+    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe(true);
     expect(await state.dockerHost()).toBeUndefined();
     expect(await state.remoteHosts()).toEqual([]);
+    expect(targets.last).toBe(NO_DOCKER_HOST_TARGET);
     expect(onDidSwitch).toHaveBeenCalledTimes(1);
     expect(window.showInformationMessage).not.toHaveBeenCalled();
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
     // Not in the list (anymore): nothing changes.
-    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe('notDockerHost');
+    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe(false);
     expect(onDidSwitch).toHaveBeenCalledTimes(1);
-  });
-
-  it('forgetHost says why the local Docker that takes the place of the host is not supported', async () => {
-    await state.setDockerHost(WSL_HOST);
-    cli.contexts.set('tcp', 'tcp://192.0.2.10:2376');
-    cli.current = 'tcp';
-    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe('unsupported');
-    expect(window.showWarningMessage).toHaveBeenCalledWith(Messages.dockerEndpointUnsupported('tcp://192.0.2.10:2376'), 'Show details');
-    expect(window.showInformationMessage).not.toHaveBeenCalled();
   });
 
   it('forgetHost keeps the current host when it removes another one', async () => {
     await state.setDockerHost(WSL_HOST);
     await state.setDockerHost('build-box');
-    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe('notDockerHost');
+    await expect(commands.forgetHost(WSL_HOST)).resolves.toBe(false);
     expect(await state.dockerHost()).toBe('build-box');
     expect(await state.remoteHosts()).toEqual(['build-box']);
     expect(onDidSwitch).not.toHaveBeenCalled();

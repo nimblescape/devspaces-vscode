@@ -20,9 +20,9 @@ describe('OutputChannelLogger', () => {
     const channel = fakeVscode.outputChannels[0];
     expect(channel.name).toBe(OUTPUT_CHANNEL_NAME);
     expect(OUTPUT_CHANNEL_NAME).toBe('Devspaces');
-    logger.info('Step: Starting Docker');
+    logger.info('Step: Starting devspace');
     logger.warn('careful');
-    expect(channel.text).toMatch(/^\[\d\d:\d\d:\d\d\] info Step: Starting Docker\n\[\d\d:\d\d:\d\d\] warn careful\n$/);
+    expect(channel.text).toMatch(/^\[\d\d:\d\d:\d\d\] info Step: Starting devspace\n\[\d\d:\d\d:\d\d\] warn careful\n$/);
   });
 
   it('is the name that the messages give the output: "see the Devspaces output"', () => {

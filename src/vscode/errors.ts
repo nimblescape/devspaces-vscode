@@ -17,8 +17,9 @@ import { showErrorMessage, showWarningMessage } from './notifications';
 export const OPERATION_FAILED = 'The operation failed.';
 
 /**
- * Command of the action "Install Docker…" (Show Docker Setup, hidden): shows the sidebar view, whose welcome view has
- * the steps of the Docker setup while the CLI is missing (a CLI lost since it was found is reported by BootstrapDocker).
+ * Command of the action "Show Docker Setup…" (Show Docker Setup, hidden): looks for the Docker CLI again (a CLI lost
+ * since it was found is reported by BootstrapDocker) and shows the sidebar view, whose welcome view has the steps of the
+ * Docker setup while Devspaces has no Docker host.
  */
 const INSTALL_DOCKER_COMMAND = 'devspaces.dockerSetup.show';
 
@@ -101,7 +102,7 @@ const ACTIONS: Record<UserErrorCode, ErrorAction[] | 'retry' | 'retryOnly'> = {
   hostAccess: ['showDetails'],
   otherAccount: [],
   cancelled: [],
-  // Never Install Docker… for a remote host.
+  // Never Show Docker Setup… for a remote host.
   dockerHostUnreachable: 'retry',
   // Try again cannot help: WSL cannot start the distribution. Its button runs Try again after the new setup.
   wslDiskCorrupt: ['showDetails', 'resetWsl'],

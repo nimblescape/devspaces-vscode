@@ -1472,7 +1472,7 @@ export interface Harness {
   token: string | undefined;
   /** The account of the session (getAccount); none while `token` is `undefined`. */
   account: GitHubAccount;
-  /** Docker is stopped: the starter reports a start and starts it. */
+  /** Docker does not answer: the starter starts it, as the login starts the VM of Devspaces. */
   dockerStopped: boolean;
   dockerStartError: Maybe<Error>;
   dockerStarts: number;
@@ -1640,12 +1640,11 @@ export function createHarness(overrides: HarnessOverrides = {}): Harness {
   // so the token write by its name gets the token that getToken gives.
   docker.secretOf = (name) => (name === SECRET_TOKEN ? h.token : undefined);
 
-  const startDocker: DockerStarter = async ({ onStarting, signal }) => {
+  const startDocker: DockerStarter = async ({ signal }) => {
     h.dockerStarts++;
     if (signal?.aborted) throw abortError();
     if (h.dockerStartError) throw h.dockerStartError;
     if (h.dockerStopped) {
-      onStarting();
       h.dockerStopped = false;
       h.docker.running = true;
     }

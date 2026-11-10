@@ -9,10 +9,31 @@ The runners of GitHub have no WSL 2 on Windows and no nested virtualization on m
 1. **Setup without a question.** **Set Up Docker for Devspaces** in the view: no question of Devspaces and no prompt of Windows. The progress shows "Downloading the VM of Devspaces" with the megabytes, then "Creating the WSL distribution.", then "Starting the WSL distribution and Docker." The log names the version of the image, `ghcr.io/nimblescape/devspaces-vm`, the size of the file, and `Docker Engine` with its version at the end. Write down how long the first start took.
 2. **The system of the image.** `wsl -d devspaces -u root -- cat /etc/os-release` names Debian 13, `wsl -d devspaces -u root -- systemctl is-active docker devspaces-upgrade.timer` says `active` twice, and `wsl -d devspaces -u root -- ls /mnt/c` fails, because no drive of Windows is mounted. The Start menu has no entry `devspaces`, and Windows Terminal has no profile for it.
 3. **Not the default.** `wsl --list` does not mark `devspaces` as the default, also on a computer with no other distribution (then WSL has no default).
-4. **A devspace.** Start a devspace and open it: it works as with Docker Desktop.
+4. **A devspace.** Start a devspace and open it: it opens as on macOS and Linux, and `wsl -d devspaces -u root -- docker ps` lists its container.
 5. **The upgrade in the VM.** Keep the distribution running for 2 minutes after its first start: `wsl -d devspaces -u root -- journalctl -u devspaces-upgrade --no-pager` shows a run of the service. It says `skipped` when the image is less than 20 hours old (the version of the image in the log is its build time in UTC), and otherwise it upgrades the packages. The devspace of test 4 still runs afterwards.
 6. **The command again.** Run **Devspaces: Set Up Docker for Devspaces in WSL…** again: no question, no download, and the log says that the distribution exists and Devspaces uses it.
 7. **Without a connection.** Remove the distribution (**Devspaces: Remove the WSL Distribution of Devspaces…**), turn off the network, and set it up again: the message says that the image of the VM could not be downloaded, and **Show details** names `ghcr.io`. Turn on the network, and set it up again.
+
+## The choice of the Docker host
+
+[`R-ENG-001`](requirements.md#r-eng-001), `src/vscode/remoteDockerCommands.ts`. Run it on Windows, macOS and Linux. Before the tests: the VM of Devspaces is not set up (on Windows no distribution `devspaces` in `wsl --list`; on macOS and Linux no folder `~/.nimblescape/devspaces/vm/devspaces`), and Devspaces uses a remote host (**Devspaces: Use a Remote Docker Host…**).
+
+1. **No entry for the Docker of this computer.** The command palette has no **Devspaces: Use the Local Docker**. **Devspaces: Choose the Docker Host…** (also the first row of the view) lists the remote host, and in the group **WSL** (Windows) or **Lima** (macOS and Linux) the entry **Set Up Docker for Devspaces in WSL…** or **Set Up Docker for Devspaces in Its VM…**. It has no entry for Docker Desktop or for the Docker Engine of this computer, also when one of them runs.
+2. **The setup from the choice.** Choose that entry: the setup of the VM runs as from the button of the view, and afterwards Devspaces uses the VM. **Choose the Docker Host…** then lists `wsl:devspaces` (Windows) or the Lima VM (macOS and Linux) in that group, and no setup entry.
+3. **Back to the VM.** Choose the remote host, and then the VM again in **Choose the Docker Host…**: no setup runs, and the first row of the view names the VM.
+4. **Removal of the current host.** While Devspaces uses the remote host, remove it with **Devspaces: Remove a Host from the List…**: the message says that Devspaces has no Docker host now, and the view shows the Docker setup, not the Docker of this computer.
+
+## Windows with Docker Desktop
+
+[`R-ENG-001`](requirements.md#r-eng-001), [`R-VM-008`](requirements.md#r-vm-008). Before the tests: Windows 10 or 11 with Docker Desktop on WSL 2, running, a Windows user without administrator rights for Devspaces, and no distribution `devspaces` (`wsl --list`). Write down the versions of Windows, WSL (`wsl --version`) and Docker Desktop, and `docker context show` in a terminal of Windows.
+
+1. **The setup shows although Docker Desktop runs.** The view of Devspaces shows the Docker setup with **Set Up Docker for Devspaces**, not the repositories. **Devspaces: Choose the Docker Host…** has no entry for Docker Desktop.
+2. **The setup next to Docker Desktop.** Run **Set Up Docker for Devspaces**: it runs as test 1 of [The WSL distribution from the image of the VM](#the-wsl-distribution-from-the-image-of-the-vm). Afterwards `wsl --list --verbose` shows `devspaces` and `docker-desktop` as running, and `docker context show` names the same context as before.
+3. **Two engines.** `wsl -d devspaces -u root -- docker info --format "{{.Name}}"` names the distribution of Devspaces, and `docker info --format "{{.Name}}"` in a terminal of Windows names `docker-desktop`. `docker ps -a` in a terminal of Windows does not list the containers of Devspaces.
+4. **No integration of Docker Desktop.** Docker Desktop, **Settings**, **Resources**, **WSL integration**: `devspaces` is not turned on. Write down whether Docker Desktop lists it.
+5. **A devspace next to a container of Docker Desktop.** Start a devspace and open it. In a terminal of Windows, run `docker run -d --rm --name port-test -p 8080:80 nginx` on Docker Desktop, and `wsl -d devspaces -u root -- docker run -d --rm --name port-test -p 127.0.0.1:8080:80 nginx` in the distribution of Devspaces. Write down whether both start, and what `curl http://localhost:8080` in a terminal of Windows and `wsl -d devspaces -u root -- curl -s http://127.0.0.1:8080` answer. Then stop both containers (`docker stop port-test`, `wsl -d devspaces -u root -- docker stop port-test`).
+6. **Docker Desktop quits.** Quit Docker Desktop (its icon in the notification area, **Quit Docker Desktop**): the devspace of test 5 keeps running, and its window stays connected. Start Docker Desktop again: the same.
+7. **Devspaces of an older version.** On a computer where an older version of Devspaces made devspaces in Docker Desktop: they stay in Docker Desktop (`docker ps -a`), and Devspaces does not move or remove them. Write down what the view of Devspaces shows for them.
 
 ## The idle script in WSL
 

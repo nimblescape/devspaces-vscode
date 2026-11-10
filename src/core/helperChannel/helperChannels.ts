@@ -726,7 +726,7 @@ export class HelperChannels {
 
   /**
    * No worker for the window that closes, or for an endpoint that is neither local nor SSH, a current context that
-   * could not be read, Podman, or no Docker host on macOS and Linux.
+   * could not be read, Podman, or no Docker host of Devspaces.
    */
   private refuseUnsupported(target: DockerTarget): void {
     if (this.disposed) throw new HelperChannelError('unavailable', 'the window is closing');

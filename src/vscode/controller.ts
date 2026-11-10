@@ -182,8 +182,8 @@ export interface ControllerDeps {
     sshHostOf(devspace: Devspace): string | undefined;
     connect(host: string, options: { signal?: AbortSignal; again?: boolean }): Promise<void>;
   };
-  /** "Use a Remote Docker Host…", "Use the Local Docker", and the choice of the first row of the view. */
-  remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'useLocalDocker' | 'chooseDockerHost'>;
+  /** "Use a Remote Docker Host…" and the choice of the first row of the view. */
+  remoteDocker?: Pick<RemoteDockerCommands, 'useRemoteHost' | 'chooseDockerHost'>;
   /** "Set Up Docker for Devspaces…", "Remove the WSL Distribution of Devspaces…", and "Remove and Set Up Again" (Windows). */
   wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'removeAndSetUpAgain' | 'ensureDockerHost' | 'wslInstalled'>;
   /** "Set Up Docker for Devspaces in Its VM…" (macOS and Linux), also for a link on a computer without Docker. */
@@ -528,7 +528,6 @@ export class Controller implements vscode.Disposable {
       dockerSetupInstallWsl: () => this.deps.dockerSetup.installWsl(),
       dockerSetupShow: () => this.deps.dockerSetup.show(),
       useRemoteDockerHost: async () => this.deps.remoteDocker?.useRemoteHost(),
-      useLocalDocker: async () => this.deps.remoteDocker?.useLocalDocker(),
       chooseDockerHost: async () => this.deps.remoteDocker?.chooseDockerHost(),
       setUpWslDistribution: async () => this.deps.wslSetup?.setUp(),
       removeWslDistribution: async () => this.deps.wslSetup?.remove(),
@@ -545,7 +544,6 @@ export class Controller implements vscode.Disposable {
     // details of a running operation).
     const ownTarget = new Set<CommandName>([
       'useRemoteDockerHost',
-      'useLocalDocker',
       'chooseDockerHost',
       'setUpWslDistribution',
       'removeWslDistribution',
@@ -1368,13 +1366,11 @@ export class Controller implements vscode.Disposable {
    * supported (an endpoint that is neither local nor SSH, a context that cannot be read, or Podman) is refused with its
    * message, before the removal mark of the engine goes (beforeUserFlow) and before any progress. Before all of this,
    * the flow is refused while this window removes Devspaces from an engine (refusedWhileRemoving), as Start is.
-   * In the progress, the step "Docker start" of Start runs first (startDocker): a local Docker that does not run is
-   * started, a Podman engine behind the Docker CLI is refused, and an SSH host is checked. After a Docker start, the
-   * progress names the next step (sendingRequest), so that it does not say "Starting Docker" until the Monitor took the
-   * request. The progress can be cancelled, as the one of Start: a cancel during the Docker start sends the Monitor no
-   * request and shows nothing. The progress runs in the gate of this window, with the key of the engine
+   * In the progress, the Docker check of Start runs first (startDocker): the engine of the host must answer (the WSL
+   * distribution or the Lima VM of Devspaces starts with its login). The progress can be cancelled, as the one of
+   * Start: a cancel during the Docker check sends the Monitor no request and shows nothing. The progress runs in the gate of this window, with the key of the engine
    * (monitorRequestKey): a second request for the engine is not started while it runs (logged), and the removal of
-   * Devspaces from an engine in this window is refused (runningOperation). After the Docker start, which can take long,
+   * Devspaces from an engine in this window is refused (runningOperation). After the Docker check, which can take long,
    * the request is not sent when a removal of Devspaces began after beforeUserFlow (requestRefusedByRemoval): the request
    * would set up the Monitor, the worker and the volumes again on the engine.
    */
@@ -1398,17 +1394,10 @@ export class Controller implements vscode.Disposable {
       await runWithProgress({
         title: ControllerTexts.requestingImageUpdate(engine),
         cancellable: true,
-        task: async (progress, signal) => {
-          let started = false;
-          const onStarting = (): void => {
-            started = true;
-            progress.step('startingDocker');
-          };
-          await startDocker?.({ onStarting, signal });
+        task: async (_progress, signal) => {
+          await startDocker?.({ signal });
           if (signal.aborted) throw new UserFacingError('cancelled', PipelineTexts.cancelled);
           if (await this.requestRefusedByRemoval(target.host, markBefore)) return;
-          // A Docker that runs already showed no step, and shows none now.
-          if (started) progress.step('sendingRequest');
           await update(target, signal);
           sent = true;
         },
@@ -4044,11 +4033,11 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * Docker for a link (R-GEN-002, R-ENG-005, R-VM-001), `uri`: when the current engine is the local Docker and no Docker
-   * CLI runs its calls (BootstrapDocker.canRunOn), or when Devspaces has no Docker host on macOS and Linux, where it
-   * never uses the Docker of this computer (isNoDockerHostTarget, R-ENG-001), the VM of Devspaces becomes the Docker host
-   * of Devspaces, and the link goes on there. On Windows its WSL distribution (WslSetupCommands.ensureDockerHost: the check of WSL, the setup without
-   * a question, and the Docker CLI of Devspaces); without WSL, Devspaces installs it, and the link opens again after the
+   * Docker for a link (R-GEN-002, R-ENG-005, R-VM-001), `uri`: when Devspaces has no Docker host, as it never uses the
+   * Docker of this computer (isNoDockerHostTarget, R-ENG-001), or when the current engine is a local Docker that no
+   * Docker CLI runs (BootstrapDocker.canRunOn; only the tests of the engine), the VM of Devspaces becomes the Docker host
+   * of Devspaces, and the link goes on there. On Windows its WSL distribution (WslSetupCommands.ensureDockerHost: the
+   * check of WSL, the setup without a question, and the Docker CLI of Devspaces); without WSL, Devspaces installs it, and the link opens again after the
    * restart of Windows (goOnAfterWslInstall). On macOS and Linux its Lima VM (LimaSetupCommands.ensureDockerHost, also
    * without a question). False when Devspaces does not use the VM (a closed question, the installation of WSL, or a
    * problem with its message): the link opens nothing now. True otherwise, also where this computer has no VM setup:

@@ -47,30 +47,37 @@ export const LOADER_BUNDLE_TIMEOUT_MS = 60_000;
  * The program of the container (`node -e PIPE_LOADER <path> <sha256> <entry>`). Only Node.js built-ins, one line.
  * `x`: fail; `h`: sha256 hex over UTF-8; `go`: load the stored file and call its entry. The first line is decoded as
  * UTF-8 (`D`, a StringDecoder) up to its line feed, the byte 10, which is never a part of another character in UTF-8.
+ * `timeoutMs`: the time for the first line, LOADER_BUNDLE_TIMEOUT_MS in PIPE_LOADER; only the test of that time passes
+ * a shorter one, so that it does not wait a minute.
  */
-export const PIPE_LOADER = [
-  `const fs=require('fs'),c=require('crypto'),p=require('path'),[,P,H,E]=process.argv,M=${MAX_BUNDLE_LINE_LENGTH},`,
-  `x=t=>{process.stderr.write('devspace loader: '+t+'\\n');process.exit(${LOADER_EXIT_CODE})},`,
-  `h=t=>c.createHash('sha256').update(t,'utf8').digest('hex'),`,
-  `go=()=>{let f;try{f=require(P)[E]}catch(e){x('the bundle cannot be loaded: '+e.message)}`,
-  `if(typeof f!=='function')x('the bundle has no function '+E);try{f()}catch(e){x('the entry failed: '+(e&&e.message))}};`,
-  `if(!/^[0-9a-f]{64}$/.test(H||'')||!P||!p.isAbsolute(P)||!/^[A-Za-z]+$/.test(E||''))x('invalid arguments');`,
-  `let o;try{o=fs.readFileSync(P,'utf8')}catch{}`,
-  `if(o!==undefined&&h(o)===H)go();else{`,
-  `try{if(fs.existsSync(P+'.started'))x('started before without its bundle');`,
-  `fs.mkdirSync(p.dirname(P),{recursive:true});fs.writeFileSync(P+'.started','')}catch(e){x('the bundle cannot be stored: '+e.message)}`,
-  `let b='';const s=process.stdin,D=new(require('string_decoder').StringDecoder);`,
-  `const t=setTimeout(()=>x('no bundle within ${LOADER_BUNDLE_TIMEOUT_MS / 1000} s'),${LOADER_BUNDLE_TIMEOUT_MS}),`,
-  `e=()=>x('the input ended before the bundle'),`,
-  `f=d=>{const i=d.indexOf(10);b+=i<0?D.write(d):D.write(d.subarray(0,i))+D.end();if(b.length>M)x('the bundle is too long');if(i<0)return;`,
-  `s.off('data',f);s.off('end',e);s.pause();clearTimeout(t);`,
-  `let v;try{v=JSON.parse(b)}catch{}`,
-  `if(typeof v!=='string'||h(v)!==H)x('the bundle does not match its hash');`,
-  `try{fs.writeFileSync(P+'.tmp',v);fs.renameSync(P+'.tmp',P)}`,
-  `catch(e){x('the bundle cannot be stored: '+e.message)}`,
-  `s.unshift(d.subarray(i+1));go()};`,
-  `s.on('data',f);s.on('end',e)}`,
-].join('');
+export function pipeLoaderSource(timeoutMs: number): string {
+  return [
+    `const fs=require('fs'),c=require('crypto'),p=require('path'),[,P,H,E]=process.argv,M=${MAX_BUNDLE_LINE_LENGTH},`,
+    `x=t=>{process.stderr.write('devspace loader: '+t+'\\n');process.exit(${LOADER_EXIT_CODE})},`,
+    `h=t=>c.createHash('sha256').update(t,'utf8').digest('hex'),`,
+    `go=()=>{let f;try{f=require(P)[E]}catch(e){x('the bundle cannot be loaded: '+e.message)}`,
+    `if(typeof f!=='function')x('the bundle has no function '+E);try{f()}catch(e){x('the entry failed: '+(e&&e.message))}};`,
+    `if(!/^[0-9a-f]{64}$/.test(H||'')||!P||!p.isAbsolute(P)||!/^[A-Za-z]+$/.test(E||''))x('invalid arguments');`,
+    `let o;try{o=fs.readFileSync(P,'utf8')}catch{}`,
+    `if(o!==undefined&&h(o)===H)go();else{`,
+    `try{if(fs.existsSync(P+'.started'))x('started before without its bundle');`,
+    `fs.mkdirSync(p.dirname(P),{recursive:true});fs.writeFileSync(P+'.started','')}catch(e){x('the bundle cannot be stored: '+e.message)}`,
+    `let b='';const s=process.stdin,D=new(require('string_decoder').StringDecoder);`,
+    `const t=setTimeout(()=>x('no bundle within ${timeoutMs / 1000} s'),${timeoutMs}),`,
+    `e=()=>x('the input ended before the bundle'),`,
+    `f=d=>{const i=d.indexOf(10);b+=i<0?D.write(d):D.write(d.subarray(0,i))+D.end();if(b.length>M)x('the bundle is too long');if(i<0)return;`,
+    `s.off('data',f);s.off('end',e);s.pause();clearTimeout(t);`,
+    `let v;try{v=JSON.parse(b)}catch{}`,
+    `if(typeof v!=='string'||h(v)!==H)x('the bundle does not match its hash');`,
+    `try{fs.writeFileSync(P+'.tmp',v);fs.renameSync(P+'.tmp',P)}`,
+    `catch(e){x('the bundle cannot be stored: '+e.message)}`,
+    `s.unshift(d.subarray(i+1));go()};`,
+    `s.on('data',f);s.on('end',e)}`,
+  ].join('');
+}
+
+/** The program of the container, with LOADER_BUNDLE_TIMEOUT_MS for the first line (pipeLoaderSource). */
+export const PIPE_LOADER = pipeLoaderSource(LOADER_BUNDLE_TIMEOUT_MS);
 
 /** The sha256 of a bundle as the loader checks it: 64 lower-case hex digits over its UTF-8 bytes. */
 export function bundleHash(bundle: string): string {

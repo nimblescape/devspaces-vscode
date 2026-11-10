@@ -246,17 +246,7 @@ describe('DockerTargets.resolve (the Docker host of Devspaces, else the current 
       };
       const docker = new BootstrapDocker(cli, DOCKER, env, silentLogger, 'linux', { fileIdentity: async () => answers.file });
       const targets = new DockerTargets(docker, env, silentLogger, 'linux');
-      const startLocal = vi.fn(() =>
-        ensureDockerRunning(docker, silentLogger, {
-          platform: 'linux',
-          timeoutMs: 1,
-          sleep: async () => undefined,
-          exists: () => false,
-          launchDetached: async () => {
-            throw new Error('not expected');
-          },
-        }),
-      );
+      const startLocal = vi.fn(() => ensureDockerRunning(docker, silentLogger));
       const state = { rootlessSocket: async () => undefined, setRootlessSocket: async () => undefined };
       // The Docker start of an operation (extension.ts), with the target that the operation read.
       const start = async () => startDockerFor(await targets.resolve(), startLocal, { docker, runner: cli, state, logger: silentLogger, sshPath: undefined, env });

@@ -623,7 +623,7 @@ describe('startDockerFor (remote mode skips the Docker Desktop start)', () => {
     const docker = fakeDocker(() => info());
     const refused = startDockerFor(NO_DOCKER_HOST_TARGET, startLocal, { docker, runner: { run: vi.fn() }, state, logger, sshPath: undefined, env: {} });
     await expect(refused).rejects.toMatchObject({ code: 'dockerEndpointUnsupported', message: Messages.noDockerHost });
-    await expect(refused).rejects.toMatchObject({ detail: 'Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer.' });
+    await expect(refused).rejects.toMatchObject({ detail: 'Devspaces has no Docker host yet: it never uses the Docker of this computer.' });
     expect(startLocal).not.toHaveBeenCalled();
     expect(docker.calls).toEqual([]);
   });

@@ -2,72 +2,21 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// Docker start: Docker Desktop on Windows, the only Docker of this computer that Devspaces uses (docs/requirements.md
-// R-ENG-001). On macOS and Linux, Devspaces starts no Docker of this computer.
+// The check of a local Docker before an operation. Devspaces never uses the Docker of this computer
+// (docs/requirements.md R-ENG-001), so it starts none: a local Docker is only the engine of the tests of the engine
+// (DockerTargets with `computerDocker`). Also the start of a program that outlives this process
+// (launchDetachedProcess, for the keeper of the WSL distribution of Devspaces).
 import { spawn } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import { errorMessage, UserFacingError } from '../errors';
+import { UserFacingError } from '../errors';
 import { Messages } from '../messages';
-import { abortError, isAbortError, sleep as defaultSleep, systemClock, type Clock, type Logger, type RunResult } from '../ports';
+import { abortError, type Logger } from '../ports';
 import type { BootstrapDocker } from './bootstrapDocker';
-import { DOCKER_INFO_TIMEOUT_MS } from './dockerTimeouts';
-import { windowsDockerDesktopFolders } from './dockerCli';
 
-/** The start command gets this head start before the polling of `docker info` begins; it keeps running in parallel. */
-export const START_COMMAND_WAIT_MS = 10_000;
-const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_INTERVAL_MS = 2_000;
-const MIN_INFO_TIMEOUT_MS = 2_000;
-const WINDOWS_DESKTOP_EXE = 'Docker Desktop.exe';
 /** `docker info` of a user without access to the socket of a running engine. */
 const SOCKET_PERMISSION_DENIED = /permission denied/i;
 
-export interface DockerStarterOptions {
-  platform: NodeJS.Platform;
-  /** Called once, when Docker is not running and a start begins (progress step "Starting Docker"). */
-  onStarting?: () => void;
-  signal?: AbortSignal;
-  /** Default 120000. */
-  timeoutMs?: number;
-  /** Default 2000. */
-  intervalMs?: number;
-  /** For tests. */
-  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
-  clock?: Clock;
-  /** For tests: checks the file `Docker Desktop.exe` on win32. */
-  exists?: (file: string) => boolean;
-  /** Environment for the installation folder of Docker Desktop on win32 (`ProgramFiles`). Default: `process.env`. */
-  env?: NodeJS.ProcessEnv;
-  /**
-   * For tests: starts a program detached, without waiting for it to end. Resolves when the process has started.
-   * Default: `child_process.spawn` with `detached: true`, then `unref()`.
-   */
-  launchDetached?: (file: string, args: readonly string[]) => Promise<void>;
-}
-
-type StartOutcome =
-  /** A start command succeeded, or a program was launched. Docker gets ready later. */
-  | { kind: 'started'; detail: string }
-  /** Nothing could start Docker. */
-  | { kind: 'failed'; detail: string };
-
-function outputOf(result: RunResult): string {
-  return `${result.stdout}\n${result.stderr}`.trim();
-}
-
 /**
- * True if the CLI has no `docker desktop start`: the `desktop` plugin is missing (`docker: unknown command: docker desktop`,
- * older CLIs `'desktop' is not a docker command`), or the plugin does not know `start` (it then prints its usage, exit code 0).
- */
-// Assumption: these outputs identify a CLI without `docker desktop start` (checked with Docker CLI 29.8 only).
-function desktopStartUnsupported(result: RunResult): boolean {
-  if (result.exitCode === 0) return /^\s*Usage:/m.test(result.stdout);
-  return /unknown command|is not a docker command/i.test(outputOf(result));
-}
-
-/**
- * Starts a GUI program without waiting for it; `onExit` runs with its exit code (null when a signal ended it) when it
+ * Starts a program without waiting for it; `onExit` runs with its exit code (null when a signal ended it) when it
  * ended while this process runs. `windowsHide`: no window on Windows, also not a console window (a program that runs in
  * the background).
  */
@@ -88,160 +37,29 @@ export function launchDetachedProcess(
   });
 }
 
-async function startDocker(
-  docker: BootstrapDocker,
-  logger: Logger,
-  options: DockerStarterOptions,
-  timeoutMs: number,
-  signal: AbortSignal,
-): Promise<StartOutcome> {
-  // On macOS and Linux, Devspaces never uses the Docker of this computer, so it starts none there.
-  if (options.platform !== 'win32') return { kind: 'failed', detail: 'Devspaces starts the Docker of this computer only on Windows.' };
-  let desktopDetail: string;
-  logger.info('Starting Docker: docker desktop start');
-  try {
-    // Assumption: `docker desktop start` either returns at once or waits until Docker is ready. The caller polls
-    // `docker info` in parallel and ends it.
-    const result = await docker.run(['desktop', 'start'], { signal, timeoutMs: timeoutMs + START_COMMAND_WAIT_MS });
-    const unsupported = desktopStartUnsupported(result);
-    if (result.exitCode === 0 && !unsupported) return { kind: 'started', detail: 'docker desktop start succeeded.' };
-    desktopDetail = `docker desktop start: ${outputOf(result) || `exit code ${result.exitCode}`}`;
-  } catch (error) {
-    if (isAbortError(error)) return { kind: 'failed', detail: 'The start was cancelled.' };
-    desktopDetail = `docker desktop start: ${errorMessage(error)}`;
-  }
-  logger.info(desktopDetail);
-
-  // Assumption: versions of Docker Desktop without `docker desktop start` start with `Docker Desktop.exe`.
-  const exists = options.exists ?? ((file: string) => fs.existsSync(file));
-  const candidates = windowsDockerDesktopFolders(options.env ?? process.env).map((folder) => path.win32.join(folder, WINDOWS_DESKTOP_EXE));
-  const program = candidates.find((file) => exists(file));
-  if (!program) {
-    return { kind: 'failed', detail: `${desktopDetail}\n${WINDOWS_DESKTOP_EXE} was not found in ${candidates.join(', ')}.` };
-  }
-  logger.info(`Starting Docker: ${program}`);
-  try {
-    await (options.launchDetached ?? launchDetachedProcess)(program, []);
-    return { kind: 'started', detail: `${program} was started.` };
-  } catch (error) {
-    return { kind: 'failed', detail: `${desktopDetail}\n${program}: ${errorMessage(error)}` };
-  }
-}
-
-/** Waits for `promise`, but at most `ms`. Rejects only when `signal` aborts. */
-async function waitAtMost(
-  promise: Promise<unknown>,
-  ms: number,
-  sleepFn: (ms: number, signal?: AbortSignal) => Promise<void>,
-  signal: AbortSignal | undefined,
-): Promise<void> {
-  const timer = new AbortController();
-  const onAbort = () => timer.abort();
-  signal?.addEventListener('abort', onAbort, { once: true });
-  try {
-    await Promise.race([
-      promise.then(() => undefined),
-      sleepFn(ms, timer.signal).catch((error: unknown) => {
-        if (!isAbortError(error)) throw error;
-      }),
-    ]);
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
-    timer.abort();
-  }
-  if (signal?.aborted) throw abortError();
-}
-
-function startFailed(detail: string): UserFacingError {
-  return new UserFacingError('dockerStartFailed', Messages.dockerStartFailed, detail);
-}
-
 /**
- * Resolves when `docker info` succeeds. Starts Docker Desktop on Windows when needed: `docker desktop start`, with the
- * fallback `Docker Desktop.exe` from C:\Program Files\Docker\Docker or %LOCALAPPDATA%\Programs\DockerDesktop
- * (windowsDockerDesktopFolders; spawned detached, not awaited). On macOS and Linux it starts nothing: a Docker that does
- * not run there is UserFacingError('dockerStartFailed'). No CLI → UserFacingError('dockerNotInstalled'). Timeout, or no way to start Docker → UserFacingError('dockerStartFailed',
- * Messages.dockerStartFailed, detail). Podman as the CLI or as the engine (BootstrapDocker.podmanInUse) →
- * UserFacingError('dockerEndpointUnsupported', Messages.podmanNotSupported), without a start. Rejects with an AbortError
- * when the signal aborts.
- *
- * The start command runs in parallel with the polling (every `intervalMs`, for at most `timeoutMs`); it gets a head start of
- * at most 10 s, and it is ended when this function returns.
+ * Resolves when `docker info` of the local Docker succeeds; it starts nothing (see the module comment). No CLI →
+ * UserFacingError('dockerNotInstalled'). A Docker that does not run, or that this user may not use →
+ * UserFacingError('dockerStartFailed', Messages.dockerStartFailed, detail). Podman as the CLI or as the engine
+ * (BootstrapDocker.podmanInUse) → UserFacingError('dockerEndpointUnsupported', Messages.podmanNotSupported). Rejects
+ * with an AbortError when the signal aborts.
  */
-export async function ensureDockerRunning(
-  docker: BootstrapDocker,
-  logger: Logger,
-  options: DockerStarterOptions,
-): Promise<void> {
+export async function ensureDockerRunning(docker: BootstrapDocker, logger: Logger, options: { signal?: AbortSignal } = {}): Promise<void> {
   const { signal } = options;
-  const clock = options.clock ?? systemClock;
-  const sleepFn = options.sleep ?? defaultSleep;
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-
   if (!docker.isInstalled()) throw new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled);
   if (signal?.aborted) throw abortError();
-  const initial = await docker.daemonStatus(signal);
-  // Podman is refused before anything else, and Docker is not started for it: `podman info` has no server version, so
-  // the CLI of the package podman-docker reads as a Docker that does not run.
-  const podman = await docker.podmanInUse(initial.running, signal);
+  const status = await docker.daemonStatus(signal);
+  // Podman is refused before anything else: `podman info` has no server version, so the CLI of the package
+  // podman-docker reads as a Docker that does not run.
+  const podman = await docker.podmanInUse(status.running, signal);
   if (podman !== undefined) {
     logger.warn(`Podman is used instead of Docker, which Devspaces does not support. ${podman}`);
     throw new UserFacingError('dockerEndpointUnsupported', Messages.podmanNotSupported, podman);
   }
-  if (initial.running) return;
-  if (SOCKET_PERMISSION_DENIED.test(initial.detail)) {
-    // The engine runs, but this user may not use it (Windows: not in the group docker-users). A start does not help.
-    throw startFailed(
-      `The Docker engine runs, but this user has no access to it. Docker Desktop on Windows gives access to the members ` +
-        `of the group docker-users: add the user to that group and sign in again.\ndocker info: ${initial.detail}`,
-    );
-  }
-
-  logger.info(`Docker is not running: ${initial.detail}`);
-  options.onStarting?.();
-  const deadline = clock.now() + timeoutMs;
-  const startControl = new AbortController();
-  const forwardAbort = () => startControl.abort();
-  signal?.addEventListener('abort', forwardAbort, { once: true });
-
-  let outcome: StartOutcome | undefined;
-  const startTask = startDocker(docker, logger, options, timeoutMs, startControl.signal).then(
-    (result) => {
-      outcome = result;
-      logger.info(`Docker start: ${result.detail}`);
-    },
-    (error: unknown) => {
-      // startDocker catches its errors; this is only a safety net against an unhandled rejection.
-      outcome = { kind: 'failed', detail: errorMessage(error) };
-    },
-  );
-
-  try {
-    await waitAtMost(startTask, Math.min(START_COMMAND_WAIT_MS, timeoutMs), sleepFn, signal);
-    let lastDetail = initial.detail;
-    for (;;) {
-      if (signal?.aborted) throw abortError();
-      const remaining = deadline - clock.now();
-      const infoTimeout = Math.min(DOCKER_INFO_TIMEOUT_MS, Math.max(MIN_INFO_TIMEOUT_MS, remaining));
-      const status = await docker.daemonStatus(signal, infoTimeout);
-      if (status.running) {
-        logger.info(`Docker is ready (${status.detail}).`);
-        return;
-      }
-      lastDetail = status.detail;
-      const after = outcome as StartOutcome | undefined;
-      if (after?.kind === 'failed') throw startFailed(`${after.detail}\ndocker info: ${lastDetail}`);
-      const left = deadline - clock.now();
-      if (left <= 0) {
-        const start = after ? after.detail : 'The start command had not ended.';
-        throw startFailed(`Docker was not ready after ${Math.round(timeoutMs / 1000)} seconds.\n${start}\ndocker info: ${lastDetail}`);
-      }
-      await sleepFn(Math.min(intervalMs, left), signal);
-    }
-  } finally {
-    signal?.removeEventListener('abort', forwardAbort);
-    // Ends a `docker desktop start` that still waits. Docker itself keeps starting or running.
-    startControl.abort();
-  }
+  if (status.running) return;
+  const reason = SOCKET_PERMISSION_DENIED.test(status.detail)
+    ? 'The Docker engine runs, but this user has no access to it.'
+    : 'The local Docker does not run, and Devspaces starts no Docker of this computer.';
+  logger.info(`${reason} docker info: ${status.detail}`);
+  throw new UserFacingError('dockerStartFailed', Messages.dockerStartFailed, `${reason}\ndocker info: ${status.detail}`);
 }

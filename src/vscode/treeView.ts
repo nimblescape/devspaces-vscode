@@ -68,14 +68,14 @@ export const DockerHostRowTexts = {
     shown.kind === 'local'
       ? 'Docker runs on this computer. Click to use a remote Docker host.'
       : shown.kind === 'remote'
-        ? `Docker runs on ${shown.host} over SSH. Click to choose another host or the local Docker.`
+        ? `Devspaces uses Docker on ${shown.host}. Click to choose another host.`
         : shown.kind === 'podman'
           ? Messages.podmanNotSupportedTooltip
           : shown.kind === 'sshContext'
             ? `${shown.context === undefined ? 'DOCKER_HOST' : `The Docker context ${shown.context}`} of this computer reaches ${shown.host} over SSH. Devspaces uses a remote host only from its own list, so it does nothing with Docker now. Click to choose the Docker host.`
             : shown.host === ''
               ? Messages.dockerContextUnreadableTooltip
-              : 'Docker is set to an endpoint that Devspaces does not support (only the local Docker and SSH hosts). Click to choose the Docker host.',
+              : 'Docker is set to an endpoint that Devspaces does not support. Click to choose the Docker host.',
 } as const;
 
 // The monitors of the rows, switched off, with the connection sign for a remote host and the warning sign for an

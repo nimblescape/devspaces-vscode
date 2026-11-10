@@ -2,18 +2,18 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// "Devspaces: Use a Remote Docker Host…", "Devspaces: Use the Local Docker", and the choice of the first row of the view.
-// Devspaces keeps its own list of SSH hosts (RemoteDockerState, docs/architecture.md "Remote Docker hosts"): "Use a
-// Remote Docker Host…" tests a host with one SSH login, which may ask for a password or an unknown host key in VS Code
-// (sshLoginPrompts.ts), and makes it the Docker host of Devspaces (it joins the list); "Use the Local Docker" goes back to the Docker of this computer, which the current Docker context names. Nothing
-// else is written: no Docker context, no setting, no DOCKER_HOST, no setting of the Dev Containers extension, so the
-// docker command in the terminals of the user keeps its target. One Docker host at a time, for every window of
-// Devspaces on this computer. A Docker context or DOCKER_HOST of the user that reaches a host over SSH is offered once
-// for the list (offerDockerContextHost). A computer without a Docker CLI gets the Docker CLI of Devspaces for the remote
-// host first (ensureRemoteCli), so no Docker needs to be installed on it. On Windows, the WSL distribution of Devspaces
-// is offered as a host when it is registered (wslHosts): Devspaces reaches it with `wsl.exe`, without SSH. On macOS and
-// Linux, the Lima VM of Devspaces (LIMA_HOST) is offered when it exists (limaHosts): Devspaces reaches it over the SSH of
-// Lima, without a login of the user.
+// "Devspaces: Use a Remote Docker Host…" and the choice of the first row of the view. Devspaces never uses the Docker
+// of this computer (docs/requirements.md R-ENG-001): its Docker host is its own VM, or a host of its own list of SSH
+// hosts (RemoteDockerState, docs/architecture.md "Remote Docker hosts"). "Use a Remote Docker Host…" tests a host with
+// one SSH login, which may ask for a password or an unknown host key in VS Code (sshLoginPrompts.ts), and makes it the
+// Docker host of Devspaces (it joins the list). Nothing else is written: no Docker context, no setting, no DOCKER_HOST,
+// no setting of the Dev Containers extension, so the docker command in the terminals of the user keeps its target. One
+// Docker host at a time, for every window of Devspaces on this computer. A computer without a Docker CLI gets the
+// Docker CLI of Devspaces for the remote host first (ensureRemoteCli), so no Docker needs to be installed on it. The
+// own VM of Devspaces is offered as a host when it exists: on Windows its WSL distribution (WSL_HOST, wslState), which
+// Devspaces reaches with `wsl.exe`, without SSH; on macOS and Linux its Lima VM (LIMA_HOST, limaState), which Devspaces
+// reaches over the SSH of Lima, without a login of the user. While the own VM does not exist, the choice offers its
+// setup instead, so that every platform can go back to it from a remote host.
 import * as vscode from 'vscode';
 import {
   LIMA_HOST,
@@ -21,11 +21,7 @@ import {
   WSL_HOST,
   describeDockerHost,
   hostEndpoint,
-  isDockerContextHostTarget,
-  isNoDockerHostTarget,
   parseSshAddress,
-  sshTargetOf,
-  type DockerTarget,
   type SshAddressProblem,
 } from '../core/docker/dockerHost';
 import type { DockerTargets } from '../core/docker/dockerTargets';
@@ -33,7 +29,6 @@ import {
   recordRootlessSocket,
   sshHostsOfContexts,
   testRemoteDockerHost,
-  unsupportedTargetMessage,
   type RemoteDockerCli,
   type RemoteShellAccess,
   type SshLoginCache,
@@ -44,9 +39,8 @@ import { isAbortError, type Logger, type ProcessRunner } from '../core/ports';
 import type { SshHostEntry } from '../core/sshConfig';
 import type { RemoteDockerState } from '../core/storage/remoteDockerState';
 import { Commands } from './commands';
-import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
+import { showErrorMessage, showInformationMessage } from './notifications';
 import { withNotificationProgress } from './progress';
-import { MonitorIcons } from './treeModel';
 
 /** User-visible texts of the remote Docker host (plain language). No `vscode` in them. */
 export const RemoteDockerTexts = {
@@ -62,6 +56,12 @@ export const RemoteDockerTexts = {
   /** The group and the description of the Lima VM of Devspaces in the choice (macOS and Linux). */
   limaGroup: 'Lima',
   limaVm: 'the VM of Devspaces (Lima)',
+  /** The entry of the choice on macOS and Linux while the VM of Devspaces does not exist: its setup (devspaces.setUpLimaVm). */
+  setUpVm: 'Set Up Docker for Devspaces in Its VM…',
+  setUpVmDetail: 'creates the VM of Devspaces on this computer and uses it',
+  /** The entry of the choice on Windows while the WSL distribution of Devspaces does not exist: its setup (devspaces.setUpWslDistribution). */
+  setUpWsl: 'Set Up Docker for Devspaces in WSL…',
+  setUpWslDetail: 'creates the WSL distribution of Devspaces and uses it',
   enterAddress: 'Enter an SSH address…',
   enterAddressDetail: 'user@host or user@host:port',
   addressPrompt: 'The SSH address of the computer with Docker, for example me@build-box or me@192.0.2.10:2222',
@@ -93,26 +93,14 @@ export const RemoteDockerTexts = {
       : host === LIMA_HOST
         ? 'Starting and testing the VM of Devspaces…'
         : `Testing the connection to ${host}…`,
-  useHost: (host: string) => `Use ${host}`,
-  useLocal: 'Use the Local Docker',
   nowRemote: (host: string, rootless: boolean) =>
     `Devspaces now uses Docker on ${host}.${rootless ? ' Its Docker engine runs rootless: ports below 1024 cannot be published there.' : ''} The docker command in your terminals keeps its Docker context.`,
-  nowLocal: 'Devspaces now uses the local Docker.',
-  alreadyLocal: 'Devspaces already uses the local Docker.',
-  /** "Use the Local Docker" on macOS and Linux, where Devspaces never uses the Docker of this computer (R-ENG-001). */
-  noLocalDocker: 'On macOS and Linux, Devspaces runs the devspaces only in its own VM or on a remote host, never in the Docker of this computer. Choose "Set Up Docker for Devspaces" in the Devspaces view, or "Devspaces: Use a Remote Docker Host…".',
-  /** The title of the choice of the Docker host while Devspaces has none (macOS and Linux). */
+  /** The title of the choice of the Docker host while Devspaces has none. */
   noHost: 'none',
-  /** The placeholder of that choice on macOS and Linux, without the local Docker. */
-  choosePlaceholderNoLocal: 'Choose a host, or enter an SSH address',
   alreadyHost: (host: string) => `Devspaces already uses ${host}.`,
   switchFailed: 'The Docker host of Devspaces could not be changed.',
   /** The title of the choice of the Docker host (the first row of the view). */
   chooseTitle: (host: string) => `Docker host: ${host}`,
-  /** The local Docker in that title while Devspaces cannot use it (the current Docker context is not supported). */
-  localNotSupported: 'Local Docker (not supported now)',
-  /** One list of the hosts and the local Docker. */
-  choosePlaceholder: 'Choose a host, enter an SSH address, or use the local Docker',
   current: 'current',
   /** Neither the Docker CLI of this computer nor one of Devspaces (Docker publishes none for this computer). */
   cliMissing: 'Docker publishes no Docker CLI that Devspaces can download for this computer, so a remote Docker host needs the Docker CLI of Docker Desktop here. Install Docker first.',
@@ -123,16 +111,7 @@ export const RemoteDockerTexts = {
   removed: (host: string, devspaces: number, wasCurrent: boolean) =>
     `${host} is no longer in the list of Devspaces.${
       devspaces > 0 ? ` ${devspaces === 1 ? 'Its devspace stays' : `Its ${devspaces} devspaces stay`} on that computer: add ${host} again to show ${devspaces === 1 ? 'it' : 'them'} in the sidebar.` : ''
-    }${wasCurrent ? ' Devspaces now uses the local Docker.' : ''}`,
-  /** The same on macOS and Linux, where no local Docker takes the place of the removed host. */
-  removedNoLocal: (host: string, devspaces: number, wasCurrent: boolean) =>
-    `${host} is no longer in the list of Devspaces.${
-      devspaces > 0 ? ` ${devspaces === 1 ? 'Its devspace stays' : `Its ${devspaces} devspaces stay`} on that computer: add ${host} again to show ${devspaces === 1 ? 'it' : 'them'} in the sidebar.` : ''
     }${wasCurrent ? ' Devspaces has no Docker host now: set up Docker for Devspaces in the Devspaces view, or choose another host.' : ''}`,
-  /** The offer of a host of a Docker context or of DOCKER_HOST of the user (offerDockerContextHost). */
-  offer: (host: string, context: string | undefined) =>
-    `Docker on this computer is set to ${host} over SSH (${context === undefined ? 'DOCKER_HOST' : `Docker context ${context}`}). Devspaces keeps its own list of remote hosts and does not follow the Docker context. Use ${host} for Devspaces?`,
-  notNow: 'No',
 } as const;
 
 export interface RemoteDockerDeps {
@@ -159,21 +138,16 @@ export interface RemoteDockerDeps {
   /** The environment of a Docker call with `ssh://<host>` with that key (SshCheckDeps.sshEnv). */
   sshEnv?(host: string, env: NodeJS.ProcessEnv): void;
   /**
-   * The names of the WSL distributions of this Windows user (`wsl.exe --list --quiet`); none elsewhere, without WSL, or
-   * when they cannot be listed. Without it, the WSL distribution of Devspaces is not offered.
+   * The names of the WSL distributions of this Windows user (`wsl.exe --list --quiet`); none without WSL. Only on
+   * Windows: without it, neither the WSL distribution of Devspaces nor its setup is offered.
    */
   wslDistributions?: () => Promise<string[]>;
-  /** Whether the Lima VM of Devspaces exists (macOS and Linux). Without it, the Lima VM is not offered. */
+  /** Whether the Lima VM of Devspaces exists. Only on macOS and Linux: without it, neither the Lima VM nor its setup is offered. */
   limaVmExists?: () => Promise<boolean>;
   /** The number of devspaces of this computer on `host` (its registry), for the message of a removed host. */
   devspaceCount?: (host: string) => Promise<number>;
   /** After a change of the Docker host of Devspaces: the sidebar shows the devspaces of the new host. */
   onDidSwitch: () => Promise<void>;
-  /**
-   * Whether Devspaces uses the Docker of this computer (usesComputerDocker; default true). False on macOS and Linux: the
-   * choice of the Docker host has no local Docker, and "Use the Local Docker" only says why.
-   */
-  computerDocker?: boolean;
   /**
    * Downloads the Docker CLI of Devspaces with a progress notification (installOwnDockerCliWithProgress) for a computer
    * without a Docker CLI: its path, or undefined when the download failed (the message says so) or was cancelled.
@@ -184,20 +158,20 @@ export interface RemoteDockerDeps {
 
 interface HostItem extends vscode.QuickPickItem {
   host?: string;
-  /** The entry "Use the Local Docker" of the choice of the Docker host. */
-  local?: boolean;
   /** The entry "Remove a Host from the List…". */
   remove?: boolean;
+  /** The command of the entry "Set Up Docker for Devspaces in Its VM…" or "… in WSL…", while the own VM does not exist. */
+  setUp?: string;
 }
 
-/** pickHost: the user chose the local Docker, or to remove a host from the list. */
-const LOCAL_CHOICE = Symbol('local Docker');
+/** pickHost: the user chose to remove a host from the list. */
 const REMOVE_CHOICE = Symbol('remove a host');
+/** pickHost: the user chose the setup of the own VM of Devspaces, with this command. */
+interface SetUpChoice {
+  setUp: string;
+}
 
 export class RemoteDockerCommands {
-  /** The offer that runs now (offerDockerContextHost): its host, and whether this window asks (claimOffer). */
-  private offering: { host: string; claimed: Promise<boolean> } | undefined;
-
   constructor(private readonly deps: RemoteDockerDeps) {}
 
   /**
@@ -205,54 +179,33 @@ export class RemoteDockerCommands {
    * downloaded after the pick (ensureRemoteCli). Never throws.
    */
   async useRemoteHost(): Promise<void> {
-    try {
-      const current = await this.deps.state.dockerHost();
-      const host = await this.pickHost({ currentHost: current });
-      if (host === undefined || host === LOCAL_CHOICE) return;
-      if (host === REMOVE_CHOICE) {
-        await this.removeHost();
-        return;
-      }
-      // The host of the list without a Docker CLI for it (DockerTargets.resolve gave the local Docker): as a new choice.
-      if (host === current && this.remoteCliReady()) {
-        this.inform(RemoteDockerTexts.alreadyHost(host));
-        return;
-      }
-      if (!(await this.ensureRemoteCli())) return;
-      await this.switchToRemote(host);
-    } catch (error) {
-      this.showFailure(error);
-    }
+    await this.pickAndUse(false);
   }
 
   /**
-   * The first row of the sidebar, which names the Docker host (the title bar has no icons for it): another remote host
-   * ("Use a Remote Docker Host…") or the local Docker ("Use the Local Docker"), the current one marked. Never throws.
+   * The first row of the sidebar, which names the Docker host (the title bar has no icons for it): the same choice as
+   * "Use a Remote Docker Host…", with the current host in the title. Never throws.
    */
   async chooseDockerHost(): Promise<void> {
+    await this.pickAndUse(true);
+  }
+
+  /** The choice of both commands; `titled`: the title names the current Docker host. Never throws. */
+  private async pickAndUse(titled: boolean): Promise<void> {
     try {
       const current = await this.deps.state.dockerHost();
-      const computerDocker = this.deps.computerDocker !== false;
-      // The local Docker as the first row shows it (the last read): one that Devspaces cannot use is not marked current.
-      const localSupported = current !== undefined || this.deps.targets.last?.kind !== 'unsupported';
-      const title = !computerDocker && current === undefined ? RemoteDockerTexts.noHost : localSupported ? describeDockerHost(current ?? '') : RemoteDockerTexts.localNotSupported;
-      // One choice: the hosts, the current one marked, and the local Docker last (not on macOS and Linux).
-      const picked = await this.pickHost({
-        title: RemoteDockerTexts.chooseTitle(title),
-        placeHolder: computerDocker ? RemoteDockerTexts.choosePlaceholder : RemoteDockerTexts.choosePlaceholderNoLocal,
-        currentHost: current,
-        offerLocal: computerDocker,
-        localSupported,
-      });
+      const title = titled ? RemoteDockerTexts.chooseTitle(current === undefined ? RemoteDockerTexts.noHost : describeDockerHost(current)) : undefined;
+      const picked = await this.pickHost({ title, currentHost: current });
       if (picked === undefined) return;
-      if (picked === LOCAL_CHOICE) {
-        await this.useLocalDocker();
-        return;
-      }
       if (picked === REMOVE_CHOICE) {
         await this.removeHost();
         return;
       }
+      if (typeof picked === 'object') {
+        await this.setUpVm(picked.setUp);
+        return;
+      }
+      // The host of the list without a Docker CLI for it (DockerTargets.resolve gave no host): as a new choice.
       if (picked === current && this.remoteCliReady()) {
         this.inform(RemoteDockerTexts.alreadyHost(picked));
         return;
@@ -265,51 +218,12 @@ export class RemoteDockerCommands {
   }
 
   /**
-   * "Use the Local Docker": Devspaces uses the Docker of this computer again. While it uses it already, it says so, or
-   * why that Docker is not supported now. On macOS and Linux (`computerDocker` false), it only says that Devspaces never
-   * uses the Docker of this computer there (the command palette does not show it). Never throws.
+   * The setup of the own VM of Devspaces (`command`: LimaSetupCommands or WslSetupCommands), which makes the VM the
+   * Docker host of Devspaces.
    */
-  async useLocalDocker(): Promise<void> {
-    try {
-      if (this.deps.computerDocker === false) {
-        this.deps.logger.info('"Use the Local Docker" does nothing on macOS and Linux: Devspaces never uses the Docker of this computer there.');
-        this.inform(RemoteDockerTexts.noLocalDocker);
-        return;
-      }
-      if ((await this.deps.state.dockerHost()) === undefined) {
-        await this.reportLocal(await this.deps.targets.resolve(), RemoteDockerTexts.alreadyLocal);
-        return;
-      }
-      await this.switchToLocal();
-    } catch (error) {
-      this.showFailure(error);
-    }
-  }
-
-  /**
-   * The offer of the host of a Docker context, or of DOCKER_HOST, of the user that reaches a host over SSH while
-   * Devspaces uses the local Docker (isDockerContextHostTarget): once per host on this computer (remembered before the
-   * question, under the lock of the file, so that another window does not ask it too: RemoteDockerState.claimOffer),
-   * "Use <host>" makes it the Docker host of Devspaces as "Use a Remote Docker Host…" does. A host of the list is not
-   * offered. Never throws.
-   */
-  async offerDockerContextHost(target: DockerTarget): Promise<void> {
-    if (!isDockerContextHostTarget(target) || this.offering !== undefined) return;
-    const host = target.sshHost;
-    const claimed = this.claimOffer(host);
-    this.offering = { host, claimed };
-    try {
-      if (!(await claimed)) return;
-      this.deps.logger.info(`Docker on this computer is set to ${host} over SSH, which is not in the list of Devspaces; Devspaces offers it once.`);
-      const use = RemoteDockerTexts.useHost(host);
-      const choice = await showInformationMessage(RemoteDockerTexts.offer(host, target.context), use, RemoteDockerTexts.notNow);
-      if (choice !== use || !(await this.ensureRemoteCli())) return;
-      await this.switchToRemote(host);
-    } catch (error) {
-      this.showFailure(error);
-    } finally {
-      this.offering = undefined;
-    }
+  private async setUpVm(command: string): Promise<void> {
+    this.deps.logger.info(`The choice of the Docker host starts the setup of the own VM of Devspaces (${command}).`);
+    await vscode.commands.executeCommand(command);
   }
 
   /**
@@ -329,33 +243,17 @@ export class RemoteDockerCommands {
 
   /**
    * `host` leaves the list of Devspaces without a choice (the removal of the WSL distribution of Devspaces); when
-   * Devspaces used it, the local Docker takes its place and the sidebar follows. Returns `notDockerHost` when Devspaces
-   * did not use it; else `local`, or `unsupported` when the local Docker of Devspaces is not supported (its warning is
-   * shown, as for "Use the Local Docker"). Throws only when the list cannot be changed: the steps after the change
-   * never throw.
+   * Devspaces used it, Devspaces has no Docker host afterwards, and the sidebar shows the Docker setup. Returns whether
+   * Devspaces used it. Throws only when the list cannot be changed: the steps after the change never throw.
    */
-  async forgetHost(host: string): Promise<'notDockerHost' | 'local' | 'unsupported'> {
+  async forgetHost(host: string): Promise<boolean> {
     const { removed, wasDockerHost } = await this.deps.state.removeHost(host);
     if (removed) this.deps.logger.info(`${host} was removed from the list of Devspaces.`);
-    if (!wasDockerHost) return 'notDockerHost';
-    const now = await this.deps.targets.resolve();
-    await this.reportLocal(now);
+    if (!wasDockerHost) return false;
+    await this.deps.targets.resolve();
+    this.deps.logger.info('Devspaces has no Docker host now; the sidebar shows the Docker setup.');
     await this.afterSwitch();
-    return now.kind === 'local' ? 'local' : 'unsupported';
-  }
-
-  /**
-   * Whether offerDockerContextHost asks about `host`: one that Devspaces can use, and that is neither in the list nor
-   * offered before (RemoteDockerState.claimOffer, which remembers it). False when the file cannot be changed (logged).
-   */
-  private async claimOffer(host: string): Promise<boolean> {
-    if (sshTargetOf(host) === undefined) return false;
-    try {
-      return await this.deps.state.claimOffer(host);
-    } catch (error) {
-      this.deps.logger.warn(`The offer of ${host} could not be remembered, so it is not shown: ${errorMessage(error)}`);
-      return false;
-    }
+    return true;
   }
 
   /** Test, rootless socket, use. True when Devspaces uses `host` afterwards. */
@@ -415,38 +313,9 @@ export class RemoteDockerCommands {
     return true;
   }
 
-  /** Devspaces uses the local Docker again (reportLocal). */
-  private async switchToLocal(): Promise<void> {
-    await this.deps.state.setDockerHost(undefined);
-    this.deps.logger.info('Devspaces uses the local Docker again.');
-    await this.reportLocal(await this.deps.targets.resolve(), RemoteDockerTexts.nowLocal);
-    await this.afterSwitch();
-  }
-
   /**
-   * Says `local` (when given) when the local Docker of Devspaces, as read in `now`, is supported; else its message,
-   * except for the SSH host of a context of the user that this window offers now (the read of `now` started the offer,
-   * extension.ts).
-   */
-  private async reportLocal(now: DockerTarget, local?: string): Promise<void> {
-    if (now.kind === 'local') {
-      if (local !== undefined) this.inform(local);
-      return;
-    }
-    // No Docker host on macOS and Linux: the sidebar shows the Docker setup.
-    if (isNoDockerHostTarget(now)) {
-      this.deps.logger.info('Devspaces has no Docker host now; the sidebar shows the Docker setup.');
-      return;
-    }
-    this.deps.logger.warn(`The local Docker of Devspaces is not supported now: ${now.endpoint || now.host}`);
-    const offering = this.offering;
-    const offered = isDockerContextHostTarget(now) && offering?.host === now.sshHost && (await offering.claimed);
-    if (!offered) this.showWarning(unsupportedTargetMessage(now));
-  }
-
-  /**
-   * "Remove a Host from the List…": the chosen host leaves the list; when Devspaces uses it, the local Docker takes its
-   * place. Its devspaces stay on that computer, and nothing there is changed.
+   * "Remove a Host from the List…": the chosen host leaves the list; when Devspaces uses it, Devspaces has no Docker host
+   * afterwards. Its devspaces stay on that computer, and nothing there is changed.
    */
   private async removeHost(): Promise<void> {
     const { remoteHosts: hosts = [], dockerHost: current } = await this.deps.state.read();
@@ -467,7 +336,7 @@ export class RemoteDockerCommands {
       return 0;
     });
     this.deps.logger.info(`${picked.host} was removed from the list of Devspaces (${count} devspaces on it).`);
-    this.inform((this.deps.computerDocker === false ? RemoteDockerTexts.removedNoLocal : RemoteDockerTexts.removed)(picked.host, count, wasDockerHost));
+    this.inform(RemoteDockerTexts.removed(picked.host, count, wasDockerHost));
     if (!wasDockerHost) return;
     await this.deps.targets.resolve();
     await this.afterSwitch();
@@ -498,21 +367,21 @@ export class RemoteDockerCommands {
 
   /**
    * A host or a typed SSH address: the hosts of the list of Devspaces, then the other hosts of the SSH config, then the
-   * SSH hosts of the Docker contexts of the user, then the WSL distribution of Devspaces when it is registered and not in
-   * the list (each host once); `currentHost` is marked. "Remove a Host from the
-   * List…" when the list has a host. With `offerLocal` (the choice of the first row of the sidebar), the local Docker is
-   * the last entry (LOCAL_CHOICE), marked when no host is current and `localSupported` is not false.
+   * SSH hosts of the Docker contexts of the user, then the own VM of Devspaces when it exists and is not in the list
+   * (each host once); `currentHost` is marked. "Remove a Host from the List…" when the list has a host. While the own VM
+   * of Devspaces does not exist, its group has its setup instead (SetUpChoice): on Windows the WSL group, while the WSL
+   * distribution of Devspaces is not registered, and on macOS and Linux the Lima group, while the VM does not exist.
    */
-  private async pickHost(
-    options: { title?: string; placeHolder?: string; currentHost?: string; offerLocal?: boolean; localSupported?: boolean },
-  ): Promise<string | typeof LOCAL_CHOICE | typeof REMOVE_CHOICE | undefined> {
+  private async pickHost(options: { title?: string; currentHost?: string }): Promise<string | typeof REMOVE_CHOICE | SetUpChoice | undefined> {
     let entries: SshHostEntry[] = [];
     try {
       entries = this.deps.sshHosts();
     } catch (error) {
       this.deps.logger.warn(`The SSH config could not be read: ${errorMessage(error)}`);
     }
-    const [listed, contextHosts, wslHosts, limaHosts] = await Promise.all([this.deps.state.remoteHosts(), this.contextHosts(), this.wslHosts(), this.limaHosts()]);
+    const [listed, contextHosts, wsl, lima] = await Promise.all([this.deps.state.remoteHosts(), this.contextHosts(), this.wslState(), this.limaState()]);
+    const wslHosts = wsl === 'exists' ? [WSL_HOST] : [];
+    const limaHosts = lima === 'exists' ? [LIMA_HOST] : [];
     const shown = new Set<string>();
     const item = (host: string, description: string | undefined): HostItem => {
       shown.add(host);
@@ -532,8 +401,20 @@ export class RemoteDockerCommands {
         label: RemoteDockerTexts.contextGroup,
         items: contextHosts.filter((entry) => !shown.has(entry.host)).map((entry) => item(entry.host, RemoteDockerTexts.dockerContext(entry.context))),
       },
-      { label: RemoteDockerTexts.wslGroup, items: wslHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))) },
-      { label: RemoteDockerTexts.limaGroup, items: limaHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))) },
+      {
+        label: RemoteDockerTexts.wslGroup,
+        items:
+          wsl === 'missing'
+            ? [{ label: `$(add) ${RemoteDockerTexts.setUpWsl}`, description: RemoteDockerTexts.setUpWslDetail, setUp: Commands.setUpWslDistribution }]
+            : wslHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))),
+      },
+      {
+        label: RemoteDockerTexts.limaGroup,
+        items:
+          lima === 'missing'
+            ? [{ label: `$(add) ${RemoteDockerTexts.setUpVm}`, description: RemoteDockerTexts.setUpVmDetail, setUp: Commands.setUpLimaVm }]
+            : limaHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))),
+      },
     ];
     const items: HostItem[] = [];
     for (const group of groups) {
@@ -543,23 +424,14 @@ export class RemoteDockerCommands {
     if (items.length > 0) items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
     items.push({ label: RemoteDockerTexts.enterAddress, description: RemoteDockerTexts.enterAddressDetail });
     if (listed.length > 0) items.push({ label: RemoteDockerTexts.removeHost, remove: true });
-    if (options.offerLocal) {
-      items.push({ label: '', kind: vscode.QuickPickItemKind.Separator });
-      // The local Docker is marked when it is current and Devspaces can use it.
-      items.push(
-        options.currentHost === undefined && options.localSupported !== false
-          ? { label: `$(check) ${RemoteDockerTexts.useLocal}`, description: RemoteDockerTexts.current, local: true }
-          : { label: `$(${MonitorIcons.off}) ${RemoteDockerTexts.useLocal}`, local: true },
-      );
-    }
     const picked = await vscode.window.showQuickPick(items, {
       title: options.title ?? RemoteDockerTexts.pickTitle,
-      placeHolder: options.placeHolder ?? RemoteDockerTexts.pickPlaceholder,
+      placeHolder: RemoteDockerTexts.pickPlaceholder,
       matchOnDescription: true,
     });
     if (!picked) return undefined;
-    if (picked.local) return LOCAL_CHOICE;
     if (picked.remove) return REMOVE_CHOICE;
+    if (picked.setUp !== undefined) return { setUp: picked.setUp };
     if (picked.host !== undefined) return picked.host;
     const typed = await vscode.window.showInputBox({
       title: RemoteDockerTexts.pickTitle,
@@ -592,27 +464,31 @@ export class RemoteDockerCommands {
   }
 
   /**
-   * The WSL distribution of Devspaces as a host (WSL_HOST) when it is registered (WSL compares the names without case);
-   * none when the distributions cannot be listed (logged).
+   * Whether the WSL distribution of Devspaces is registered, for the choice of the host (WSL compares the names without
+   * case): `none` where Devspaces uses no WSL (macOS, Linux), `unknown` when the distributions cannot be listed
+   * (logged).
    */
-  private async wslHosts(): Promise<string[]> {
-    if (this.deps.wslDistributions === undefined) return [];
+  private async wslState(): Promise<'exists' | 'missing' | 'unknown' | 'none'> {
+    if (this.deps.wslDistributions === undefined) return 'none';
     try {
-      return (await this.deps.wslDistributions()).some((name) => name.toLowerCase() === WSL_DISTRIBUTION) ? [WSL_HOST] : [];
+      return (await this.deps.wslDistributions()).some((name) => name.toLowerCase() === WSL_DISTRIBUTION) ? 'exists' : 'missing';
     } catch (error) {
       this.deps.logger.warn(`The WSL distributions could not be listed: ${errorMessage(error)}`);
-      return [];
+      return 'unknown';
     }
   }
 
-  /** The Lima VM of Devspaces as a host (LIMA_HOST) when it exists; none when it cannot be checked (logged). */
-  private async limaHosts(): Promise<string[]> {
-    if (this.deps.limaVmExists === undefined) return [];
+  /**
+   * Whether the Lima VM of Devspaces exists, for the choice of the host: `none` without a Lima VM of Devspaces on this
+   * computer (Windows), `unknown` when it cannot be checked (logged).
+   */
+  private async limaState(): Promise<'exists' | 'missing' | 'unknown' | 'none'> {
+    if (this.deps.limaVmExists === undefined) return 'none';
     try {
-      return (await this.deps.limaVmExists()) ? [LIMA_HOST] : [];
+      return (await this.deps.limaVmExists()) ? 'exists' : 'missing';
     } catch (error) {
       this.deps.logger.warn(`The Lima VM of Devspaces could not be checked: ${errorMessage(error)}`);
-      return [];
+      return 'unknown';
     }
   }
 
@@ -645,15 +521,6 @@ export class RemoteDockerCommands {
             .executeCommand(Commands.resetWslDistribution)
             .then(undefined, (error: unknown) => this.deps.logger.error('The WSL distribution of Devspaces could not be set up again.', error));
         }
-      },
-      (error: unknown) => this.deps.logger.error('Could not show the message.', error),
-    );
-  }
-
-  private showWarning(message: string): void {
-    showWarningMessage(message, Actions.showDetails).then(
-      (choice) => {
-        if (choice === Actions.showDetails) this.deps.showLog();
       },
       (error: unknown) => this.deps.logger.error('Could not show the message.', error),
     );

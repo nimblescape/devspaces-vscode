@@ -6,12 +6,6 @@
 import { LIMA_HOST, WSL_HOST, sshCommandLine, wslDistributionOf, type DockerHostProblem } from './docker/dockerHost';
 
 export const Steps = {
-  startingDocker: 'Starting Docker',
-  /**
-   * Update All Images Now, after a Docker start: the worker is made ready, and the request goes to the Monitor. Not
-   * "Asking the Monitor": the title of that progress says it already.
-   */
-  sendingRequest: 'Sending the request',
   downloadingRepository: 'Downloading repository',
   checkingImage: 'Checking for a newer image',
   downloadingImage: 'Downloading the new image',
@@ -23,9 +17,9 @@ export const Steps = {
 export type ProgressStep = keyof typeof Steps;
 
 export const Messages = {
-  dockerNotInstalled: 'Docker Desktop is not installed.',
+  dockerNotInstalled: 'Devspaces found no Docker CLI for its Docker host.',
   dockerStartFailed: 'Docker could not be started.',
-  /** The engine of the worker does not answer (on the VM of Devspaces, a remote host, or Docker Desktop on Windows). */
+  /** The engine of the worker does not answer (on the VM of Devspaces or a remote host). */
   dockerEngineNotRunning: 'Docker does not answer on the Docker host of Devspaces. Try again in a moment. On a remote host, check that its Docker service runs.',
   /**
    * The docker command of this computer is Podman (for example the package podman-docker), or the engine that it
@@ -433,11 +427,11 @@ export const Messages = {
   /** The Docker host of a context that could not be read, in other texts ("Docker is set to …"). */
   unreadableDockerContextHost: 'a Docker context that cannot be read',
   /**
-   * macOS and Linux without a Docker host of Devspaces (NO_DOCKER_HOST_TARGET): Devspaces never uses the Docker of the
-   * computer there (docs/requirements.md R-ENG-001), so the VM of Devspaces or a remote host must be set up first.
+   * Without a Docker host of Devspaces (NO_DOCKER_HOST_TARGET): Devspaces never uses the Docker of the computer
+   * (docs/requirements.md R-ENG-001), so the VM of Devspaces or a remote host must be set up first.
    */
   noDockerHost:
-    'Devspaces has no Docker host yet. On macOS and Linux, it runs the devspaces in its own VM, never in the Docker of this computer: choose "Set Up Docker for Devspaces" in the Devspaces view, or "Devspaces: Use a Remote Docker Host…".',
+    'Devspaces has no Docker host yet. It runs the devspaces in its own VM, never in the Docker of this computer: choose "Set Up Docker for Devspaces" in the Devspaces view, or "Devspaces: Use a Remote Docker Host…".',
   /** The Docker host of NO_DOCKER_HOST_TARGET, in other texts ("Docker is set to …") and in the log. */
   noDockerHostName: 'no Docker host of Devspaces',
   /** The view's title and the first row of the sidebar while the current Docker context cannot be read. */
@@ -570,7 +564,7 @@ export function dockerHostReason(
 
 export const Actions = {
   /** Shows the sidebar view with the steps of the Docker setup (action of the error dockerNotInstalled). */
-  installDocker: 'Install Docker…',
+  installDocker: 'Show Docker Setup…',
   showDetails: 'Show details',
   tryAgain: 'Try again',
   signIn: 'Sign in',

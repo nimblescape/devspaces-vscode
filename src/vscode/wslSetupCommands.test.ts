@@ -88,7 +88,7 @@ beforeEach(() => {
     separate: vi.fn(async (): Promise<WslSeparation> => ({ state: 'separate', dockerDesktop: true })),
   };
   useHost = vi.fn(async (_host: string) => true);
-  forgetHost = vi.fn(async (_host: string): Promise<'notDockerHost' | 'local' | 'unsupported'> => 'notDockerHost');
+  forgetHost = vi.fn(async (_host: string): Promise<boolean> => false);
   showLog = vi.fn();
   installWsl = vi.fn(async () => undefined);
   window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
@@ -453,7 +453,7 @@ describe('Set Up Docker for Devspaces in WSL…', () => {
 describe('Remove the WSL Distribution of Devspaces…', () => {
   it('removes the distribution of Devspaces after a warning and forgets its host', async () => {
     registered('own');
-    forgetHost.mockResolvedValue('local');
+    forgetHost.mockResolvedValue(true);
     window.showWarningMessage.mockResolvedValue(WslSetupTexts.remove);
     await commands().remove();
     expect(questions()).toEqual([{ message: WslSetupTexts.confirmRemove, detail: WslSetupTexts.confirmRemoveDetail(FOLDER), button: WslSetupTexts.remove }]);
@@ -461,7 +461,10 @@ describe('Remove the WSL Distribution of Devspaces…', () => {
     expect(setup.remove).toHaveBeenCalledTimes(1);
     expect(forgetHost).toHaveBeenCalledWith(WSL_HOST);
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.removed(true));
-    expect(WslSetupTexts.removed(true)).toBe('The WSL distribution of Devspaces was removed. Devspaces now uses the local Docker.');
+    // Devspaces never uses the Docker of this computer: without its distribution, it has no Docker host.
+    expect(WslSetupTexts.removed(true)).toBe(
+      'The WSL distribution of Devspaces was removed. Devspaces has no Docker host now: set up Docker for Devspaces again in the Devspaces view, or choose another host.',
+    );
     // The check before the removal must be sure that the distribution is there or gone.
     expect(setup.registration.mock.calls.every((call) => call[1] === true)).toBe(true);
   });
@@ -496,9 +499,9 @@ describe('Remove the WSL Distribution of Devspaces…', () => {
     expect(WslSetupTexts.removed(false, FOLDER)).toBe(`The WSL distribution of Devspaces was removed. Its folder stays (the log of Devspaces says why): ${FOLDER}`);
   });
 
-  it('does not say "local Docker" after the removal when the local Docker is not supported', async () => {
+  it('says nothing about the Docker host after the removal when Devspaces used another host', async () => {
     registered('own');
-    forgetHost.mockResolvedValue('unsupported');
+    forgetHost.mockResolvedValue(false);
     window.showWarningMessage.mockResolvedValue(WslSetupTexts.remove);
     await commands().remove();
     expect(window.showInformationMessage).toHaveBeenCalledWith(WslSetupTexts.removed(false));

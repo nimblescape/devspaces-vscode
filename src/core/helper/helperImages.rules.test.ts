@@ -201,7 +201,7 @@ describe('HelperImages.ensureImageUse', () => {
   it('passes other user-facing errors through', async () => {
     const helper = createImages();
     docker.imageExists = async () => {
-      throw new UserFacingError('dockerNotInstalled', 'Docker Desktop is not installed.');
+      throw new UserFacingError('dockerNotInstalled', 'Devspaces found no Docker CLI for its Docker host.');
     };
     await expect(helper.ensureImageUse()).rejects.toMatchObject({ code: 'dockerNotInstalled' });
   });

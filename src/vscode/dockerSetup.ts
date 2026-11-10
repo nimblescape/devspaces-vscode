@@ -3,15 +3,13 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // Docker setup: the context keys of the welcome view (the setup in the sidebar) and the commands of its buttons: Install
-// WSL 2 on Windows runs its command in a visible terminal. Devspaces never installs Docker Desktop or Docker Engine on
-// this computer: Set Up Docker for Devspaces sets up its VM (wslSetupCommands.ts, limaSetupCommands.ts). Only an
-// operation starts an installed Docker Desktop on Windows (ensureDockerRunning, src/core/docker/dockerStart.ts). The
-// rules are pure functions in src/core/docker/dockerSetup.ts.
+// WSL 2 on Windows runs its command in a visible terminal. Devspaces never installs, starts or uses Docker Desktop or
+// Docker Engine of this computer (docs/requirements.md R-ENG-001): Set Up Docker for Devspaces sets up its VM
+// (wslSetupCommands.ts, limaSetupCommands.ts). The rules are pure functions in src/core/docker/dockerSetup.ts.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as vscode from 'vscode';
 import type { BootstrapDocker } from '../core/docker/bootstrapDocker';
-import { usesComputerDocker } from '../core/docker/dockerHost';
 import {
   DockerContextKeys,
   DockerSetupTexts,
@@ -67,8 +65,8 @@ export interface DockerSetupDeps {
    */
   onDidChangeInstalled: () => void;
   /**
-   * True when a remote Docker host is configured (a host of the list of Devspaces, also its VM): a missing local CLI then
-   * needs no setup, and on macOS and Linux only such a host needs none (see `dockerSetupRequired`).
+   * True when Devspaces has a Docker host (a host of its list, also its VM): only then the sidebar needs no Docker setup
+   * (see `dockerSetupRequired`).
    */
   remoteDockerHostConfigured: () => boolean;
   /**
@@ -133,11 +131,11 @@ export class DockerSetup implements vscode.Disposable {
   }
 
   /**
-   * True while the sidebar shows the Docker setup instead of the repositories (`dockerSetupRequired`: no remote Docker
-   * host is configured and the local Docker is not available; on macOS and Linux, Devspaces never uses it).
+   * True while the sidebar shows the Docker setup instead of the repositories (`dockerSetupRequired`: Devspaces has no
+   * Docker host, neither its own VM nor another host of its list).
    */
   get setupRequired(): boolean {
-    return dockerSetupRequired(this.dockerMissing, this.deps.remoteDockerHostConfigured(), usesComputerDocker(this.deps.platform));
+    return dockerSetupRequired(this.deps.remoteDockerHostConfigured());
   }
 
   /**
@@ -175,7 +173,7 @@ export class DockerSetup implements vscode.Disposable {
   }
 
   /**
-   * Command devspaces.dockerSetup.show (action Install Docker… of the error "Docker Desktop is not installed."):
+   * Command devspaces.dockerSetup.show (action Set Up Docker… of the error dockerNotInstalled):
    * updates the context keys from the adapter (a missing CLI may be found again; a lost CLI was reported already by
    * `reportCliLost`), then shows the sidebar view.
    */
@@ -323,7 +321,7 @@ export class DockerSetup implements vscode.Disposable {
     const before = this.state;
     const first = this.shown === undefined;
     this.state = nextDockerSetupState(before, event);
-    const values = dockerContextValues(this.state, this.deps.remoteDockerHostConfigured(), usesComputerDocker(this.deps.platform));
+    const values = dockerContextValues(this.state, this.deps.remoteDockerHostConfigured());
     for (const [key, value] of changedContextValues(this.shown, values)) {
       vscode.commands.executeCommand('setContext', key, value).then(undefined, (error: unknown) => {
         this.deps.logger.warn(`Could not set the context key ${key}: ${errorMessage(error)}`);

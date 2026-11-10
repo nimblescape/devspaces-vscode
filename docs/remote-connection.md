@@ -39,7 +39,7 @@ Nothing needs setup on your computer: when an SSH login asks for a password or a
 
 | Word | Meaning |
 | --- | --- |
-| Docker host of Devspaces | The Docker engine that Devspaces uses in all its windows on this computer: the local Docker, or one host of its own list. |
+| Docker host of Devspaces | The Docker engine that Devspaces uses in all its windows on this computer: one host of its own list, also its own VM. Devspaces never uses the Docker of this computer. |
 | Host of the list | One entry of the own list of Devspaces: an alias of the SSH config, an SSH address `user@host[:port]`, or `wsl:devspaces` for the WSL distribution of Devspaces. |
 | Transport | The program on this computer whose standard input and output reach `sh` on the host: `ssh … sh -s`, or `wsl.exe … sh -s`. |
 | Shell before the relay | One login of the transport on which the extension runs the checks that only read, before the relay starts. The relay then takes this login over. |
@@ -177,7 +177,7 @@ The steps in words:
 
 **Start from the sidebar.** A **Start** runs steps 3 to 7 in the window where you clicked it, as a flow with its progress notification. Then the extension opens the folder URI of the devspace. VS Code starts a new extension host for that window, also when the same window is used. The new extension host has no connection yet. Before `activate()` returns, it opens one to the SSH host of the devspace, through its worker ([`Controller.connectAfterStart`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/controller.ts)). First it logs in without questions, so a login with a key shows nothing. When that login fails, for example on a host that needs a password, it logs in again in a flow with the progress notification "Connecting to `<host>` for `<repository>`…", whose login may ask (see [SSH logins without setup](#ssh-logins-without-setup)). The Docker pipe of the window then uses this connection. When this login fails too or is cancelled, the window shows the error, and **Reconnect** in the status bar runs the open flow. A devspace on the WSL distribution needs no such step, because its logins ask nothing.
 
-**A devspace on the local Docker** has no Docker pipe and no relay. Its window URI names no Docker host, its worker starts with the Docker CLI of this computer, and the Dev Containers extension uses the current Docker context.
+**A devspace on the local Docker** exists only in the tests of the engine: it has no Docker pipe and no relay. Its window URI names no Docker host, its worker starts with the Docker CLI of this computer, and the Dev Containers extension uses the current Docker context. Devspaces itself never uses the Docker of this computer ([`R-ENG-001`](requirements.md#r-eng-001)).
 
 ## The list of hosts
 
@@ -186,18 +186,16 @@ Devspaces keeps its own list of hosts in `remote-docker.json` of its global stor
 The file holds:
 
 - `remoteHosts`: the hosts of the list, in the order in which they were added;
-- `dockerHost`: the Docker host of Devspaces, one host of the list; absent for the local Docker;
-- `hosts`: for each host, the socket of a rootless engine there (`rootlessSocket`), and the state of the key of Devspaces (`sshKey`: `installed` or `declined`);
-- `offered`: the SSH hosts of Docker contexts that Devspaces offered once for its list.
+- `dockerHost`: the Docker host of Devspaces, one host of the list; absent while Devspaces has none;
+- `hosts`: for each host, the socket of a rootless engine there (`rootlessSocket`), and the state of the key of Devspaces (`sshKey`: `installed` or `declined`).
 
 Each change of the file runs under the lock folder `remote-docker.lock`, because every window of this computer changes it.
 
 The commands ([`src/vscode/remoteDockerCommands.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/vscode/remoteDockerCommands.ts)):
 
-- **Use a Remote Docker Host…** lists the hosts of the list, the other hosts of the SSH config, the SSH hosts of the Docker contexts of the user, and on Windows `wsl:devspaces` when WSL lists that distribution. It also takes a typed SSH address. It tests the host with a new login and `docker info` on it, and then makes it the Docker host of Devspaces. On a computer without a Docker CLI, it downloads the Docker CLI of Devspaces first.
-- **Use the Local Docker** goes back to the Docker of this computer and keeps the list.
-- **Choose the Docker Host…** (the first row of the sidebar) offers both in one list.
-- **Remove a Host from the List…** forgets a host. Its devspaces stay on that computer.
+- **Use a Remote Docker Host…** lists the hosts of the list, the other hosts of the SSH config, the SSH hosts of the Docker contexts of the user, and the VM of Devspaces: on Windows `wsl:devspaces` when WSL lists that distribution, else **Set Up Docker for Devspaces in WSL…**; on macOS and Linux the Lima VM when it exists, else **Set Up Docker for Devspaces in Its VM…**. It also takes a typed SSH address. It tests the host with a new login and `docker info` on it, and then makes it the Docker host of Devspaces. On a computer without a Docker CLI, it downloads the Docker CLI of Devspaces first.
+- **Choose the Docker Host…** (the first row of the sidebar) offers the same list, with the current host in its title. It has no entry for the Docker of this computer ([`R-ENG-001`](requirements.md#r-eng-001)).
+- **Remove a Host from the List…** forgets a host. Its devspaces stay on that computer. When it was the Docker host of Devspaces, Devspaces has none afterwards, and the sidebar shows the Docker setup.
 
 An operation reads the Docker host of Devspaces once, at its start (`DockerTargets.resolve` in [`src/core/docker/dockerTargets.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerTargets.ts)). Every Docker call of that operation runs on that host, so a change of the host in another window cannot move the operation to another engine. The window of a devspace always uses the host of its devspace. More rules: [architecture.md, Remote Docker hosts](architecture.md#remote-docker-hosts).
 
@@ -427,7 +425,7 @@ Docker publishes no checksums and no signatures for these files. So [`scripts/do
 
 - The window of a devspace whose URI names a Docker pipe puts the folder first in `PATH` of its extension host. The Dev Containers extension runs in the same extension host, so it starts this CLI for every Docker call of the window. When the download fails or is cancelled, the window uses the Docker CLI of this computer, if it has one.
 - The Docker calls of Devspaces in an operation on a remote host use this CLI in every window once it is installed (option `ownCli` of `BootstrapDocker`).
-- The calls for the local Docker keep the Docker CLI of this computer. `PATH` of your terminals does not change.
+- `PATH` of your terminals does not change.
 
 **API versions.** The Docker CLI asks the engine for its newest API version and speaks the lower of that and its own newest one. With an engine that is older than its oldest API version, it speaks its newest one, and the engine refuses it. An engine also refuses an API version below its minimum (`DOCKER_MIN_API_VERSION` of `dockerd`). So before the attach, Devspaces checks that the newest API version of the engine is at least the oldest one of the CLI, and that the minimum of the engine is at most the newest one of the CLI ([`src/core/docker/dockerApiVersion.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/src/core/docker/dockerApiVersion.ts)). It takes the API versions of the engine from the probe of the worker (`GET /version`). When a Docker call of this CLI fails before the worker (the engine identity, the check of the helper image, or `docker info` of the host test), it reads the versions from the error of the engine. When they do not fit, the open fails with a message that names both versions and what to update; no worker starts after such an error. The check applies where the windows run this CLI: in the window of a devspace when its folder is in `PATH`, and in the other windows when the pin has a build for this computer, because they download it before their first call. Where a window runs the Docker CLI of this computer for a remote engine instead, the same check runs with the newest API version of that CLI, which `docker version` names. A Docker CLI does not name its oldest API version, so with that CLI only an engine whose minimum is too new is refused, and the message says to update the Docker CLI of this computer.
 
@@ -452,7 +450,7 @@ The JSON for a devspace on a remote host:
 ```
 
 - Dev Containers gives its Docker calls `DOCKER_CONTEXT` from `settings.context`, else `DOCKER_HOST` from `settings.host`. Devspaces relies on this behavior, which was checked with Dev Containers 0.470.0. Only `authority.ts` and `devContainers.ts` know these internal details.
-- A devspace on the local Docker has no `settings`, so Dev Containers uses the current Docker context.
+- A devspace on the local Docker, which only the tests of the engine make, has no `settings`, so Dev Containers uses the current Docker context.
 - A window that VS Code restores with the Docker context of an earlier version of Devspaces in its URI keeps it.
 - Devspaces activates on `onResolveRemoteAuthority:attached-container`, and relies on VS Code to wait for `activate()` before it resolves the window. So the Docker CLI, the Docker pipe, and the open flow are ready before the first Docker call of the Dev Containers extension.
 - Without `ssh` on this computer (for the WSL distribution: without `wsl.exe`), the window of a remote devspace does not open, and the message says what is missing.

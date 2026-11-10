@@ -146,8 +146,9 @@ describe('context keys', () => {
 
   it.each<[DockerSetupState, Record<string, boolean>]>([
     [state(false, false), { missing: true, installed: false, ready: false, wslReady: false, setupRequired: true }],
-    [state(true, false), { missing: false, installed: true, ready: false, wslReady: false, setupRequired: false }],
-    [state(true, true, true), { missing: false, installed: true, ready: true, wslReady: true, setupRequired: false }],
+    // A Docker of this computer never counts (R-ENG-001): without a Docker host of Devspaces, the setup shows.
+    [state(true, false), { missing: false, installed: true, ready: false, wslReady: false, setupRequired: true }],
+    [state(true, true, true), { missing: false, installed: true, ready: true, wslReady: true, setupRequired: true }],
     // Never ready without a CLI, also for an inconsistent state.
     [state(false, true), { missing: true, installed: false, ready: false, wslReady: false, setupRequired: true }],
   ])('values of %j', (value, expected) => {
@@ -161,7 +162,7 @@ describe('context keys', () => {
     }).toEqual(expected);
   });
 
-  it('does not require the setup without a CLI when a remote Docker host is configured', () => {
+  it('does not require the setup without a CLI when a Docker host of Devspaces is configured', () => {
     expect(dockerContextValues(state(false, false), true)[DockerContextKeys.setupRequired]).toBe(false);
     expect(dockerContextValues(state(false, false), true)[DockerContextKeys.missing]).toBe(true);
   });
@@ -179,7 +180,6 @@ describe('context keys', () => {
     expect(changedContextValues(values(state(false, false)), values(state(true, false)))).toEqual([
       [DockerContextKeys.missing, false],
       [DockerContextKeys.installed, true],
-      [DockerContextKeys.setupRequired, false],
     ]);
     expect(changedContextValues(values(state(true, false)), values(state(true, true)))).toEqual([[DockerContextKeys.ready, true]]);
   });
@@ -196,21 +196,13 @@ describe('context keys', () => {
 });
 
 describe('dockerSetupRequired', () => {
-  // When no remote Docker host is configured and local Docker is not available, the sidebar shows the Docker setup in
-  // place of the repositories.
-  it.each<[boolean, boolean, boolean]>([
-    // [no Docker CLI found, remote Docker host configured, setup required]
-    [true, false, true],
-    [true, true, false],
-    [false, false, false],
-    [false, true, false],
-  ])('dockerMissing %s, remote host %s: %s', (dockerMissing, remote, expected) => {
-    expect(dockerSetupRequired(dockerMissing, remote)).toBe(expected);
-  });
-
-  it('does not require the setup when Docker is installed but does not run (it is started when needed)', () => {
-    const installedNotRunning: DockerSetupState = { cliFound: true, engineRunning: false, wslReady: false };
-    expect(dockerContextValues(installedNotRunning, false)[DockerContextKeys.setupRequired]).toBe(false);
+  // Without a Docker host of Devspaces (its own VM, or another host of its list), the sidebar shows the Docker setup in
+  // place of the repositories, on every platform: Devspaces never uses the Docker of this computer (R-ENG-001).
+  it('requires the setup exactly while Devspaces has no Docker host', () => {
+    expect(dockerSetupRequired(false)).toBe(true);
+    expect(dockerSetupRequired(true)).toBe(false);
+    const dockerOfThisComputer: DockerSetupState = { cliFound: true, engineRunning: true, wslReady: true };
+    expect(dockerContextValues(dockerOfThisComputer, false)[DockerContextKeys.setupRequired]).toBe(true);
   });
 });
 

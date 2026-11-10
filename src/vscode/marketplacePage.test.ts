@@ -28,8 +28,8 @@ const SECURITY_LINK = 'https://github.com/nimblescape/devspaces-vscode/blob/main
 const read = (file: string) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 // What a start of VS Code does before the first devspace, and that a registry is asked without a login first.
 const FIRST_USE_AND_LOGINS = [
-  'Before your first devspace, Devspaces only reads its Docker host when VS Code starts, and on Windows, for the local Docker, the current Docker context.',
-  'On macOS and Linux, it never reads the Docker context of this computer',
+  'Before your first devspace, Devspaces only reads its Docker host when VS Code starts.',
+  'It never reads the Docker context of this computer',
   'first without a login',
 ];
 // The background container: where it keeps running (R-DS-003, no question), its end after 30 days, and the command that

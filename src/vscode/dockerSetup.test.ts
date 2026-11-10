@@ -135,8 +135,9 @@ describe('DockerSetup: context keys and CLI checks', () => {
     dockerSetup.dispose();
   });
 
-  // Windows: the Docker of the computer (Docker Desktop) counts until the test of R-VM-008 (R-ENG-001).
-  it('looks the CLI up every 10 seconds while it is missing, then stops and updates the sidebar', () => {
+  // The Docker CLI of the computer may run the calls on a remote host (R-ENG-004), but it never ends the Docker setup:
+  // Devspaces never uses the Docker of the computer (R-ENG-001).
+  it('looks the CLI up every 10 seconds while it is missing, then stops and updates the sidebar, which keeps the setup', () => {
     const { dockerSetup, docker, changed } = setup(false, { platform: 'win32' });
     dockerSetup.initialize();
     expect(docker.isInstalled).toHaveBeenCalledTimes(1);
@@ -151,23 +152,22 @@ describe('DockerSetup: context keys and CLI checks', () => {
     vi.advanceTimersByTime(10_000);
     expect(docker.isInstalled).toHaveBeenCalledTimes(3);
     expect(dockerSetup.dockerMissing).toBe(false);
-    // The sidebar renders again (onDidChangeInstalled) and shows the repositories instead of the setup.
-    expect(dockerSetup.setupRequired).toBe(false);
+    // The sidebar renders again (onDidChangeInstalled), and still shows the setup.
+    expect(dockerSetup.setupRequired).toBe(true);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(contextCalls()).toEqual([
       [DockerContextKeys.missing, false],
       [DockerContextKeys.installed, true],
-      [DockerContextKeys.setupRequired, false],
     ]);
     vi.advanceTimersByTime(60_000);
     expect(docker.isInstalled).toHaveBeenCalledTimes(3);
     dockerSetup.dispose();
   });
 
-  // macOS and Linux: Devspaces never uses the Docker of the computer (R-ENG-001); only a host of its list, also its VM,
-  // ends the setup.
-  it('shows the setup on macOS and Linux also with a Docker CLI, until Devspaces has a Docker host of its list', () => {
-    for (const platform of ['darwin', 'linux'] as const) {
+  // Devspaces never uses the Docker of the computer (R-ENG-001), also not Docker Desktop on Windows; only a host of its
+  // list, also its VM, ends the setup.
+  it('shows the setup on every platform also with a Docker CLI, until Devspaces has a Docker host of its list', () => {
+    for (const platform of ['win32', 'darwin', 'linux'] as const) {
       let remote = false;
       const { dockerSetup, changed } = setup(true, { platform, remoteDockerHost: () => remote });
       dockerSetup.initialize();
@@ -183,11 +183,6 @@ describe('DockerSetup: context keys and CLI checks', () => {
       dockerSetup.dispose();
       fakeVscode.commands.executeCommand.mockClear();
     }
-    // Windows: the Docker CLI of the computer is enough.
-    const windows = setup(true, { platform: 'win32' });
-    windows.dockerSetup.initialize();
-    expect(windows.dockerSetup.setupRequired).toBe(false);
-    windows.dockerSetup.dispose();
   });
 
   it('does not look up an installed CLI in the background', () => {
@@ -223,25 +218,25 @@ describe('DockerSetup: context keys and CLI checks', () => {
     expect(docker.isInstalled).toHaveBeenCalledTimes(1);
   });
 
-  it('Show Docker Setup (action Install Docker… of an error) looks for the CLI again, then shows the sidebar', async () => {
+  it('Show Docker Setup (action Set Up Docker… of an error) looks for the CLI again, then shows the sidebar', async () => {
     const { dockerSetup, docker, changed } = setup(true, { platform: 'win32' });
     dockerSetup.initialize();
-    expect(dockerSetup.setupRequired).toBe(false);
     fakeVscode.commands.executeCommand.mockClear();
     // The CLI is gone, and nothing has reported it yet.
     docker.isInstalled.mockReturnValue(false);
     await dockerSetup.show();
+    expect(dockerSetup.dockerMissing).toBe(true);
     expect(dockerSetup.setupRequired).toBe(true);
     expect(changed).toHaveBeenCalledTimes(1);
     const calls = fakeVscode.commands.executeCommand.mock.calls.map((call) => call[0] as string);
     expect(calls).toContain('devspaces.repositories.focus');
-    // The context key is set before the view is shown.
+    // The context keys are set before the view is shown.
     expect(calls.indexOf('setContext')).toBeLessThan(calls.indexOf('devspaces.repositories.focus'));
-    expect(contextCalls()).toContainEqual([DockerContextKeys.setupRequired, true]);
+    expect(contextCalls()).toContainEqual([DockerContextKeys.missing, true]);
     dockerSetup.dispose();
   });
 
-  it('shows the setup when the adapter reports a lost CLI (ENOENT of a CLI that was found before)', async () => {
+  it('updates the context keys when the adapter reports a lost CLI (ENOENT of a CLI that was found before)', async () => {
     let found: string | undefined = '/usr/local/bin/docker';
     const runner = {
       run: vi.fn(async () => {
@@ -267,12 +262,12 @@ describe('DockerSetup: context keys and CLI checks', () => {
       viewVisible: () => true,
     });
     dockerSetup.initialize();
-    expect(dockerSetup.setupRequired).toBe(false);
+    expect(dockerSetup.dockerMissing).toBe(false);
     found = undefined;
     await expect(docker.run(['ps'])).rejects.toMatchObject({ code: 'dockerNotInstalled' });
-    expect(dockerSetup.setupRequired).toBe(true);
+    expect(dockerSetup.dockerMissing).toBe(true);
     expect(changed).toHaveBeenCalledTimes(1);
-    expect(contextCalls()).toContainEqual([DockerContextKeys.setupRequired, true]);
+    expect(contextCalls()).toContainEqual([DockerContextKeys.missing, true]);
     dockerSetup.dispose();
   });
 
@@ -379,23 +374,28 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     dockerSetup.dispose();
   });
 
-  it('does not run wsl on other platforms, when Docker is installed, or with a remote Docker host, also when the view is shown', async () => {
+  it('does not run wsl on other platforms, or with a Docker host of Devspaces, also when the view is shown', async () => {
     const mac = setup(false, { platform: 'darwin' });
     mac.dockerSetup.initialize();
     mac.dockerSetup.onViewShown();
-    const installed = setup(true, { platform: 'win32' });
-    installed.dockerSetup.initialize();
-    installed.dockerSetup.onViewShown();
     const remote = setup(false, { platform: 'win32', remoteDockerHost: true });
     remote.dockerSetup.initialize();
     remote.dockerSetup.onViewShown();
     await flush();
     expect(mac.runner.run).not.toHaveBeenCalled();
-    expect(installed.runner.run).not.toHaveBeenCalled();
     expect(remote.runner.run).not.toHaveBeenCalled();
     mac.dockerSetup.dispose();
-    installed.dockerSetup.dispose();
     remote.dockerSetup.dispose();
+  });
+
+  // Docker Desktop on Windows does not count (R-ENG-001): the setup shows, with the state of WSL.
+  it('runs wsl --status also when a Docker CLI of this computer is installed', async () => {
+    const installed = setup(true, { platform: 'win32', wsl: () => status(0) });
+    installed.dockerSetup.initialize();
+    await flush();
+    expect(installed.runner.run).toHaveBeenCalledWith('wsl.exe', ['--status'], { timeoutMs: 15_000 });
+    expect(contextCalls()).toContainEqual([DockerContextKeys.wslReady, true]);
+    installed.dockerSetup.dispose();
   });
 
   it('Install WSL 2 waits for a first check: it runs one when none ran, or waits for the one that runs', async () => {
@@ -438,7 +438,7 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     dockerSetup.dispose();
   });
 
-  it('checks wsl --status when a CLI found at activation is lost', async () => {
+  it('checks wsl --status at activation also when a CLI is found, and Install WSL 2 then runs nothing', async () => {
     let found: string | undefined = 'C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe';
     const runner = {
       run: vi.fn(async (file: string, _args: readonly string[]): Promise<RunResult> => {
@@ -465,13 +465,14 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     });
     dockerSetup.initialize();
     await flush();
-    // The CLI was found at activation: no wsl --status yet.
-    expect(runner.run).not.toHaveBeenCalledWith('wsl.exe', expect.anything(), expect.anything());
+    // The CLI was found at activation, and the setup shows all the same: wsl --status at once.
+    expect(dockerSetup.setupRequired).toBe(true);
+    expect(runner.run).toHaveBeenCalledWith('wsl.exe', ['--status'], { timeoutMs: 15_000 });
+    // A CLI that is lost later asks WSL nothing more (WSL is ready).
     found = undefined;
     await expect(docker.run(['ps'])).rejects.toMatchObject({ code: 'dockerNotInstalled' });
     await flush();
-    expect(dockerSetup.setupRequired).toBe(true);
-    expect(runner.run).toHaveBeenCalledWith('wsl.exe', ['--status'], { timeoutMs: 15_000 });
+    expect(runner.run.mock.calls.filter(([file]) => file === 'wsl.exe')).toHaveLength(1);
     expect(contextCalls()).toContainEqual([DockerContextKeys.wslReady, true]);
     // WSL is installed: Install WSL 2 asks nothing and runs no wsl --install.
     confirmWith('Install');
@@ -510,7 +511,9 @@ describe('DockerSetup: WSL 2 (sidebar button Install WSL 2, Windows)', () => {
     // The installer puts the CLI in place; the check of a missing CLI finds it.
     files.add(cli);
     vi.advanceTimersByTime(10_000);
-    expect(dockerSetup.setupRequired).toBe(false);
+    // It is found for the calls on a remote host (R-ENG-004); the setup of the VM of Devspaces stays (R-ENG-001).
+    expect(dockerSetup.dockerMissing).toBe(false);
+    expect(dockerSetup.setupRequired).toBe(true);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(docker.dockerPath).toBe(cli);
     // The Docker calls find the credential helper of Docker Desktop next to the CLI.

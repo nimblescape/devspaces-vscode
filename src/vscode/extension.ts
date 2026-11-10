@@ -365,10 +365,10 @@ async function activateExtension(
       adapterOptions.onDaemonStatus?.(running);
     },
   });
-  // The Docker host of Devspaces (a host of its own list, or the local Docker, which the current Docker context names),
-  // read at the start of each operation.
+  // The Docker host of Devspaces (its own VM, or a host of its own list), read at the start of each operation. Devspaces
+  // never uses the Docker of this computer (R-ENG-001): without a host, the sidebar shows the Docker setup.
   const remoteState = new RemoteDockerState(paths.remoteDocker, logger);
-  const targets = new DockerTargets(docker, env, logger, platform, remoteState, usesComputerDocker(platform));
+  const targets = new DockerTargets(docker, env, logger, platform, remoteState, usesComputerDocker());
   // What this computer remembers about each Docker engine (docker-engines.json): the removal mark of "Remove Devspaces
   // from This Docker Engine…".
   const engineRecords = new DockerEngineRecords(paths.dockerEngines, { logger });
@@ -1039,12 +1039,12 @@ async function activateExtension(
   };
   // The HostSide of the account of each operation: the extension chooses that account, never the worker.
   const workerFlow = extensionFlow(channels, () => targets.current(), (account) => extensionHostSide(hostSideDeps, account), logger);
-  // The step "Docker start" of an operation (and of "Update All Images Now"): the local Docker is started when needed; a
-  // remote host is only checked (never a Docker Desktop start).
-  const startDocker: DockerStarter = async ({ onStarting, signal }) =>
+  // The step "Docker start" of an operation (and of "Update All Images Now"): the Docker host of Devspaces (its own VM,
+  // or a remote host) is only checked; Devspaces never starts a Docker of this computer (R-ENG-001).
+  const startDocker: DockerStarter = async ({ signal }) =>
     startDockerFor(
       await targets.current(),
-      () => ensureDockerRunning(docker, logger, { platform, env, onStarting, signal }),
+      () => ensureDockerRunning(docker, logger, { signal }),
       remoteDeps(),
       signal,
     );
@@ -1174,13 +1174,11 @@ async function activateExtension(
     previewRunner: new PreviewWorkerRunner(groupsWorkerScript),
   });
   context.subscriptions.push(repositoryGroupsEditor);
-  // "Use a Remote Docker Host…", "Use the Local Docker", the choice of the first row of the view, and the offer of the
-  // SSH host of a Docker context of the user.
+  // "Use a Remote Docker Host…" and the choice of the first row of the view.
   const remoteDocker = new RemoteDockerCommands({
     docker,
     runner,
     targets,
-    computerDocker: usesComputerDocker(platform),
     state: remoteState,
     logger,
     showLog: () => logger.show(),
@@ -1191,19 +1189,23 @@ async function activateExtension(
     shells,
     identityFor: (host) => sshKeys.identityFor(host),
     sshEnv: (host, callEnv) => sshKeys.dockerSshEnv(host, callEnv),
-    // The WSL distributions of this Windows user, for the WSL distribution of Devspaces in the choice of the host. Without
-    // WSL, or without a distribution, `wsl.exe` says so with an exit code that is not 0: then there is none.
-    wslDistributions: async () => {
-      const result = await runWslList();
-      if (result === undefined) return [];
-      if (result.timedOut) throw new Error(`wsl.exe ${WSL_LIST_ARGS.join(' ')} did not answer within ${WSL_LIST_TIMEOUT_MS / 1000} seconds`);
-      if (result.exitCode !== 0) {
-        logger.info(`wsl.exe ${WSL_LIST_ARGS.join(' ')} lists no distribution (exit code ${result.exitCode}): ${parseWslList(result.stderr || result.stdout).join(' ')}`);
-        return [];
-      }
-      return parseWslList(result.stdout);
-    },
-    // The Lima VM of Devspaces in the choice of the host when it exists (macOS and Linux).
+    // The WSL distributions of this Windows user, for the WSL distribution of Devspaces (or its setup) in the choice of the
+    // host; only on Windows. Without WSL, or without a distribution, `wsl.exe` says so with an exit code that is not 0:
+    // then there is none.
+    wslDistributions:
+      platform !== 'win32'
+        ? undefined
+        : async () => {
+            const result = await runWslList();
+            if (result === undefined) return [];
+            if (result.timedOut) throw new Error(`wsl.exe ${WSL_LIST_ARGS.join(' ')} did not answer within ${WSL_LIST_TIMEOUT_MS / 1000} seconds`);
+            if (result.exitCode !== 0) {
+              logger.info(`wsl.exe ${WSL_LIST_ARGS.join(' ')} lists no distribution (exit code ${result.exitCode}): ${parseWslList(result.stderr || result.stdout).join(' ')}`);
+              return [];
+            }
+            return parseWslList(result.stdout);
+          },
+    // The Lima VM of Devspaces (or its setup) in the choice of the host; only on macOS and Linux.
     limaVmExists: limaVm === undefined ? undefined : () => limaVm.exists(),
     devspaceCount: async (host) => devspacesOfHost(await registry.list(), host).length,
     onDidSwitch: async () => {
@@ -1330,13 +1332,6 @@ async function activateExtension(
     const { schedule, timeZone } = await monitorSettings.forOpen(LIMA_HOST);
     await vmTask.update({ config: { schedule, timeZone, limactl, limaHome: limaVm.paths.home }, electron: vscodeElectron(platform, vscode.env.appRoot, process.execPath) });
   };
-  // A Docker context or DOCKER_HOST of the user that reaches a host over SSH while Devspaces uses the local Docker: its
-  // host is offered once for the list (in the background; the read that found it goes on).
-  context.subscriptions.push({
-    dispose: targets.onDidResolve((target) => {
-      remoteDocker.offerDockerContextHost(target).catch((error: unknown) => logger.error('Could not offer the host of the Docker context.', error));
-    }),
-  });
   const controller = new Controller({
     logger,
     registry,

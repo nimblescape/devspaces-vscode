@@ -4,7 +4,9 @@
 
 // The Docker host of an operation: the Docker host of Devspaces (RemoteDockerState), read at the start of each operation
 // and never cached beyond it, so that a choice in another window takes effect for the next operation. A host of the
-// list of Devspaces is reached over SSH (remoteDockerTarget). The local Docker is the current Docker context
+// list of Devspaces is reached over SSH or wsl.exe (remoteDockerTarget); without one, the operation has no Docker host
+// (NO_DOCKER_HOST_TARGET), because Devspaces never uses the Docker of this computer. Only in the tests of the engine
+// (computerDocker), the local Docker is the current Docker context
 // (`docker context inspect`), or DOCKER_HOST; a context or DOCKER_HOST of the user that reaches a host over SSH is not
 // supported there (isDockerContextHostTarget), because Devspaces reaches remote hosts only through its own list. An
 // operation keeps the host it started with: its Docker calls get DOCKER_CONTEXT with the name of the local context that
@@ -18,8 +20,8 @@ import { envValue } from './dockerCli';
 import { LOCAL_DOCKER_TARGET, dockerTargetOf, parseContextInspect, remoteDockerTarget, type DockerTarget } from './dockerHost';
 
 /**
- * The target while Devspaces has no Docker host on macOS or Linux (isNoDockerHostTarget): there it never uses the
- * Docker of this computer (docs/requirements.md R-ENG-001), so it counts as not supported: every operation refuses it
+ * The target while Devspaces has no Docker host (isNoDockerHostTarget): it never uses the Docker of this computer
+ * (docs/requirements.md R-ENG-001), so it counts as not supported: every operation refuses it
  * with Messages.noDockerHost, its host matches no devspace, and the sidebar shows the Docker setup.
  */
 export const NO_DOCKER_HOST_TARGET: DockerTarget = { kind: 'unsupported', host: Messages.noDockerHostName, endpoint: '', noHost: true };
@@ -140,9 +142,9 @@ export class DockerTargets {
     /** Without it, Devspaces uses the local Docker. */
     private readonly choice?: DockerHostChoice,
     /**
-     * Whether Devspaces uses the Docker of this computer (usesComputerDocker of the platform; true for the tests of the
-     * engine). False on macOS and Linux: without a host of the list, the target is NO_DOCKER_HOST_TARGET, never the
-     * local Docker, and no Docker context of this computer is read.
+     * Whether Devspaces uses the Docker of this computer: never in the extension (usesComputerDocker), only in the tests
+     * of the engine. False: without a host of the list, the target is NO_DOCKER_HOST_TARGET, never the local Docker, and
+     * no Docker context of this computer is read.
      */
     private readonly computerDocker = true,
   ) {}
@@ -153,8 +155,8 @@ export class DockerTargets {
   }
 
   /**
-   * Reads the current target now: the host of the list of Devspaces that it uses, else its local Docker (readLocal; on
-   * macOS and Linux NO_DOCKER_HOST_TARGET). Without a Docker CLI for a remote engine (the Docker CLI of Devspaces or of
+   * Reads the current target now: the host of the list of Devspaces that it uses, else its local Docker (readLocal; in
+   * the extension NO_DOCKER_HOST_TARGET). Without a Docker CLI for a remote engine (the Docker CLI of Devspaces or of
    * this computer, canRunRemote), the local Docker, so that the Docker setup shows. Never throws.
    */
   async resolve(): Promise<DockerTarget> {

@@ -16,7 +16,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-GEN-003
 
-**Platforms.** Devspaces runs in VS Code 1.125 or later (the Microsoft build) on Windows, also Windows Home, on macOS and on Linux, with accounts on github.com. GitHub Enterprise Server and GHE.com are not supported. It works with Docker Engine in its own VM on every platform ([R-VM-001](#r-vm-001)), with Docker Engine on another computer over SSH ([R-ENG-002](#r-eng-002)), and with the Docker of the computer where [R-ENG-001](#r-eng-001) says so. Podman is not supported.
+**Platforms.** Devspaces runs in VS Code 1.125 or later (the Microsoft build) on Windows, also Windows Home, on macOS and on Linux, with accounts on github.com. GitHub Enterprise Server and GHE.com are not supported. It works with Docker Engine in its own VM on every platform ([R-VM-001](#r-vm-001)) and with Docker Engine on another computer over SSH ([R-ENG-002](#r-eng-002)), never with the Docker of the computer ([R-ENG-001](#r-eng-001)). Podman is not supported.
 
 ### R-GEN-004
 
@@ -94,7 +94,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-ENG-001
 
-**The Docker of the computer.** Devspaces runs its devspaces in its own VM ([R-VM-001](#r-vm-001)), and uses the Docker of the computer only in one case: Docker Desktop on Windows (also the installation for one user in `%LOCALAPPDATA%`) until the test of [R-VM-008](#r-vm-008) passed. Otherwise Docker Desktop and Docker Engine stay installed for the own work of the user, and Devspaces does not use them; devspaces that an older version made there are not moved. A computer that cannot run the VM does not meet the precondition of Devspaces, and Devspaces then never uses the Docker of the computer instead, because the devspaces need the isolation of the VM and the same processes on every platform: on a Linux without `/dev/kvm` (no virtualization of the processor), as on a Windows where WSL 2 cannot start its virtual machine ([R-ENG-005](#r-eng-005)), the view says why the computer cannot run devspaces and offers a remote host ([R-ENG-002](#r-eng-002)).
+**The Docker of the computer.** Devspaces runs its devspaces in its own VM ([R-VM-001](#r-vm-001)) or on another computer ([R-ENG-002](#r-eng-002)), and never uses the Docker of the computer, on every platform: Docker Desktop and Docker Engine stay installed for the own work of the user, and Devspaces does not use or start them; devspaces that an older version made there are not moved. The choice of the Docker host has no entry for the Docker of the computer; it offers the VM of Devspaces, or its setup while the VM does not exist. A computer that cannot run the VM does not meet the precondition of Devspaces, and Devspaces then never uses the Docker of the computer instead, because the devspaces need the isolation of the VM and the same processes on every platform: on a Linux without `/dev/kvm` (no virtualization of the processor), as on a Windows where WSL 2 cannot start its virtual machine ([R-ENG-005](#r-eng-005)), the view says why the computer cannot run devspaces and offers a remote host ([R-ENG-002](#r-eng-002)).
 
 ### R-ENG-002
 
@@ -110,11 +110,11 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-ENG-005
 
-**Windows: the WSL distribution of Devspaces.** On Windows, the VM of Devspaces ([R-VM-001](#r-vm-001)) is its own WSL 2 distribution `devspaces`; on a Windows with Docker Desktop only after the test of [R-VM-008](#r-vm-008). The Docker setup of the view and a link ([R-LINK-001](#r-link-001)) check WSL and install WSL 2 first when it is missing, without a question of Devspaces (Windows asks for administrator permission); after the restart of Windows, the first window goes on with the setup, and with the link, by itself. Then Devspaces sets up the distribution, without a question and without administrator rights, from the `.wsl` file of its own image ([R-VM-002](#r-vm-002)) for the architecture of Windows, and uses it as a host through `wsl.exe`, without SSH, with the Docker CLI of Devspaces ([R-ENG-004](#r-eng-004)). The setup shows its progress, also of the download, and says before the download when WSL 2 cannot start its virtual machine (no restart after the installation of WSL, or no virtualization); a download that WSL could not register stays for the next setup. Devspaces starts the distribution again when WSL runs out of time to start it, which happens in a slow virtual machine. A link uses a distribution that Devspaces set up before as it is, and a distribution of an older version is not converted. The distribution is never the default distribution of WSL, and a distribution with that name that the user made is never changed or removed. Devspaces never writes `.wslconfig`, and removes the distribution only after a question.
+**Windows: the WSL distribution of Devspaces.** On Windows, the VM of Devspaces ([R-VM-001](#r-vm-001)) is its own WSL 2 distribution `devspaces`, also on a Windows with Docker Desktop ([R-VM-008](#r-vm-008)). The Docker setup of the view and a link ([R-LINK-001](#r-link-001)) check WSL and install WSL 2 first when it is missing, without a question of Devspaces (Windows asks for administrator permission); after the restart of Windows, the first window goes on with the setup, and with the link, by itself. Then Devspaces sets up the distribution, without a question and without administrator rights, from the `.wsl` file of its own image ([R-VM-002](#r-vm-002)) for the architecture of Windows, and uses it as a host through `wsl.exe`, without SSH, with the Docker CLI of Devspaces ([R-ENG-004](#r-eng-004)). The setup shows its progress, also of the download, and says before the download when WSL 2 cannot start its virtual machine (no restart after the installation of WSL, or no virtualization); a download that WSL could not register stays for the next setup. Devspaces starts the distribution again when WSL runs out of time to start it, which happens in a slow virtual machine. A link uses a distribution that Devspaces set up before as it is, and a distribution of an older version is not converted. The distribution is never the default distribution of WSL, and a distribution with that name that the user made is never changed or removed. Devspaces never writes `.wslconfig`, and removes the distribution only after a question.
 
 ### R-ENG-006
 
-**The same processes on every engine.** Once a Linux system with Docker Engine is there, Devspaces runs the same processes on every engine: the local Docker, its WSL distribution ([R-ENG-005](#r-eng-005)), and a remote host over SSH ([R-ENG-002](#r-eng-002)). Only the transport to the engine differs: the SSH of Lima to its VM (with the key that Lima made, as root, without a login of the user), `wsl.exe`, the Docker context of the computer, or the SSH login. No engine gets a build, a check or a tool of its own. The management of the VM of Devspaces ([R-VM-001](#r-vm-001)) is the one exception. So the helper image is built in a container on the engine with buildx (BuildKit) from a build image that Devspaces pins by its digest, whatever Docker CLI sends the calls.
+**The same processes on every engine.** Once a Linux system with Docker Engine is there, Devspaces runs the same processes on every engine: its Lima VM, its WSL distribution ([R-ENG-005](#r-eng-005)), and a remote host over SSH ([R-ENG-002](#r-eng-002)). Only the transport to the engine differs: the SSH of Lima to its VM (with the key that Lima made, as root, without a login of the user), `wsl.exe`, or the SSH login. No engine gets a build, a check or a tool of its own. The management of the VM of Devspaces ([R-VM-001](#r-vm-001)) is the one exception. So the helper image is built in a container on the engine with buildx (BuildKit) from a build image that Devspaces pins by its digest, whatever Docker CLI sends the calls.
 
 ### R-ENG-007
 
@@ -152,7 +152,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-VM-008
 
-**Windows with Docker Desktop.** WSL runs the distribution of Devspaces and that of Docker Desktop in one VM with one network stack. Devspaces uses its own distribution on a Windows with Docker Desktop only after a test on such a computer showed that both run side by side (no clash of ports or Docker sockets). Until then it uses Docker Desktop there.
+**Windows with Docker Desktop.** WSL runs the distribution of Devspaces and that of Docker Desktop in one VM with one network stack. Devspaces uses its own distribution also on a Windows with Docker Desktop, and never Docker Desktop. A manual test on such a computer ([manual-tests.md](manual-tests.md)) checks that both run side by side, without a clash of ports or Docker sockets.
 
 ### R-VM-009
 
@@ -174,7 +174,7 @@ This document lists what nimblescape Devspaces 2 must do. It is the normative te
 
 ### R-SEC-004
 
-**Quiet and private.** Before the first devspace, Devspaces does no Docker work and creates no VM: it only reads its Docker host and the current Docker context. Devspaces collects no telemetry. In Restricted Mode, and for the settings that the guide marks *user only*, only the user settings count.
+**Quiet and private.** Before the first devspace, Devspaces does no Docker work and creates no VM: it only reads its Docker host. Devspaces collects no telemetry. In Restricted Mode, and for the settings that the guide marks *user only*, only the user settings count.
 
 ## Devspaces images
 
