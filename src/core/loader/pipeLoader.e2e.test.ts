@@ -10,7 +10,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { LOADER_BUNDLE_TIMEOUT_MS, LOADER_EXIT_CODE, MAX_BUNDLE_LINE_LENGTH, bundleHash, encodeBundle, loaderCommand, readableStderr } from './pipeLoader';
+import {
+  LOADER_BUNDLE_TIMEOUT_MS,
+  LOADER_EXIT_CODE,
+  MAX_BUNDLE_LINE_LENGTH,
+  PIPE_LOADER,
+  bundleHash,
+  encodeBundle,
+  loaderCommand,
+  pipeLoaderSource,
+  readableStderr,
+} from './pipeLoader';
 
 interface Ended {
   code: number | null;
@@ -24,9 +34,13 @@ interface Running {
   ended: Promise<Ended>;
 }
 
-/** Starts the loader with `node` of this computer. */
-function startLoader(file: string, hash: string, entry: string): Running {
+/**
+ * Starts the loader with `node` of this computer. `timeoutMs`: the same program with another time for the first line
+ * (pipeLoaderSource) instead of PIPE_LOADER.
+ */
+function startLoader(file: string, hash: string, entry: string, timeoutMs?: number): Running {
   const [, ...args] = loaderCommand({ path: file, hash, entry });
+  if (timeoutMs !== undefined) args[args.indexOf(PIPE_LOADER)] = pipeLoaderSource(timeoutMs);
   const child = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   let stdout = '';
   let stderr = '';
@@ -299,14 +313,18 @@ describe('the pipe loader in a Node.js process', () => {
     }
   });
 
-  it('exits 3 when no bundle comes within 60 s while the input stays open', { timeout: 90_000 }, async () => {
+  // The program of the container waits LOADER_BUNDLE_TIMEOUT_MS (60 s) for the first line. The process runs the same
+  // program with 2 s, so that the test does not wait a minute.
+  it('exits 3 when no bundle comes within its time while the input stays open', { timeout: 30_000 }, async () => {
+    expect(PIPE_LOADER).toBe(pipeLoaderSource(LOADER_BUNDLE_TIMEOUT_MS));
+    expect(PIPE_LOADER).toContain("setTimeout(()=>x('no bundle within 60 s'),60000)");
     const startedAt = Date.now();
-    const running = startLoader(newPath(), bundleHash('x'), 'start');
+    const running = startLoader(newPath(), bundleHash('x'), 'start', 2_000);
     const ended = await running.ended;
     running.end();
     expect(ended.code).toBe(LOADER_EXIT_CODE);
-    expect(ended.stderr).toBe('devspace loader: no bundle within 60 s\n');
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(59_000);
+    expect(ended.stderr).toBe('devspace loader: no bundle within 2 s\n');
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_900);
   });
 
   it('a first line of exactly MAX_BUNDLE_LINE_LENGTH loads, also with its line feed later; one more is refused', { timeout: 60_000 }, async () => {

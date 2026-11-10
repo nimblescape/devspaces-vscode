@@ -707,10 +707,11 @@ describe('open: first open', () => {
     expect(env?.additionalVolumes).toEqual(['api-data']);
   });
 
-  it('reports the Docker start as a step', async () => {
+  it('makes sure that Docker answers before the first step, without a step of its own', async () => {
     h.dockerStopped = true;
     await h.service.open(TARGET, options());
-    expect(h.progress.steps[0]).toBe('startingDocker');
+    expect(h.dockerStarts).toBe(1);
+    expect(h.progress.steps[0]).toBe('downloadingRepository');
   });
 
   it('does not create anything when Docker cannot be started', async () => {
@@ -3990,11 +3991,12 @@ describe('safetyCheck', () => {
     expect(h.docker.volumes.size).toBe(0);
   });
 
-  it('starts Docker when needed', async () => {
+  it('makes sure that Docker answers, without a step', async () => {
     await seedDevspace(h);
     h.dockerStopped = true;
     await h.service.safetyCheck(ENV_ID, options());
-    expect(h.progress.steps).toEqual(['startingDocker']);
+    expect(h.dockerStarts).toBe(1);
+    expect(h.progress.steps).toEqual([]);
   });
 });
 

@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe('RemoteDockerState: the list of hosts and the Docker host of Devspaces', () => {
-  it('starts with the local Docker and an empty list', async () => {
+  it('starts without a Docker host and with an empty list', async () => {
     expect(await state.dockerHost()).toBeUndefined();
     expect(await state.remoteHosts()).toEqual([]);
     expect(fs.existsSync(state.file)).toBe(false);
@@ -38,7 +38,7 @@ describe('RemoteDockerState: the list of hosts and the Docker host of Devspaces'
     expect(await state.remoteHosts()).toEqual(['build-box', 'me@192.0.2.10:2222']);
   });
 
-  it('removes a host from the list, and the local Docker takes the place of the Docker host', async () => {
+  it('removes a host from the list, and Devspaces has no Docker host when it was that host', async () => {
     await state.setDockerHost('a');
     await state.setDockerHost('b');
     await state.setRootlessSocket('b', '/run/user/1000/docker.sock');
@@ -53,31 +53,12 @@ describe('RemoteDockerState: the list of hosts and the Docker host of Devspaces'
     await expect(state.removeHost('b')).resolves.toEqual({ removed: false, wasDockerHost: false });
   });
 
-  it('claims the offer of a host once, and never for a host of the list', async () => {
-    await expect(state.claimOffer('build-box')).resolves.toBe(true);
-    await expect(state.claimOffer('build-box')).resolves.toBe(false);
-    expect((await state.read()).offered).toEqual(['build-box']);
-    await state.setDockerHost('listed');
-    await expect(state.claimOffer('listed')).resolves.toBe(false);
-    expect((await state.read()).offered).toEqual(['build-box']);
-  });
-
-  // Several windows start at the same time: only one of them asks, and no change of another window is lost.
-  it('gives the offer to one of several windows at the same time, and loses no change', async () => {
-    const windows = Array.from({ length: 5 }, () => new RemoteDockerState(state.file));
-    const claims = await Promise.all([...windows.map((window) => window.claimOffer('me@box')), windows[0].setDockerHost('a'), windows[1].setRootlessSocket('a', '/run/user/1000/docker.sock')]);
-    expect(claims.slice(0, 5).filter((claimed) => claimed === true)).toHaveLength(1);
-    expect(await state.read()).toEqual({ dockerHost: 'a', remoteHosts: ['a'], offered: ['me@box'], hosts: [{ host: 'a', rootlessSocket: '/run/user/1000/docker.sock' }] });
-    expect(fs.existsSync(state.lockDir)).toBe(false);
-  });
-
-  // Most calls change nothing (the rootful engine at each Docker start, a host that was offered): they take no lock.
+  // Most calls change nothing (the rootful engine at each Docker start, a host that is not in the list): they take no lock.
   it('takes the lock only for a change', async () => {
     await state.setDockerHost('a');
     fs.mkdirSync(state.lockDir);
     await state.setDockerHost('a');
     await state.setRootlessSocket('a', undefined);
-    await expect(state.claimOffer('a')).resolves.toBe(false);
     await expect(state.removeHost('b')).resolves.toEqual({ removed: false, wasDockerHost: false });
     fs.rmdirSync(state.lockDir);
   });
@@ -98,7 +79,6 @@ describe('RemoteDockerState: the list of hosts and the Docker host of Devspaces'
 
   it.each([
     ['the list of hosts', '{"remoteHosts": "a"}'],
-    ['the offered hosts', '{"offered": "a"}'],
     ['the rootless sockets', '{"hosts": {"a": {"rootlessSocket": "/run/user/1000/docker.sock"}}}'],
   ])('keeps a copy of a file whose field of %s is not a list', async (_name, text) => {
     fs.writeFileSync(state.file, text);
@@ -122,8 +102,8 @@ describe('RemoteDockerState: the list of hosts and the Docker host of Devspaces'
       JSON.stringify({ other: 'x', dockerHost: 'c', remoteHosts: ['a', 'a', '', 3], offered: [1], hosts: [{ host: 'a', rootlessSocket: '/s1' }, { host: 'a', rootlessSocket: '/s2' }, 'b'] }),
     );
     expect(await state.read()).toEqual({ dockerHost: 'c', remoteHosts: ['a', 'c'], hosts: [{ host: 'a', rootlessSocket: '/s1' }] });
-    await state.claimOffer('x');
-    expect(JSON.parse(fs.readFileSync(state.file, 'utf8'))).toEqual({ dockerHost: 'c', remoteHosts: ['a', 'c'], offered: ['x'], hosts: [{ host: 'a', rootlessSocket: '/s1' }] });
+    await state.setRootlessSocket('x', '/s3');
+    expect(JSON.parse(fs.readFileSync(state.file, 'utf8'))).toEqual({ dockerHost: 'c', remoteHosts: ['a', 'c'], hosts: [{ host: 'a', rootlessSocket: '/s1' }, { host: 'x', rootlessSocket: '/s3' }] });
     // The fields are lists, so no copy is kept.
     expect(fs.readdirSync(dir).filter((name) => name.startsWith('remote-docker.json.backup-'))).toHaveLength(0);
   });

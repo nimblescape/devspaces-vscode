@@ -46,13 +46,12 @@ export const Commands = {
   // Close and Keep Running: closes the window of a devspace; its container keeps running this time. Only in a
   // window connected to a devspace (context key devspaces.connected) and in its row.
   closeAndKeepRunning: 'devspaces.closeAndKeepRunning',
-  // The button Install WSL 2 of the Docker setup in the sidebar (welcome view), and Show Docker Setup, the action Install
-  // Docker… of the error "Docker Desktop is not installed." (both hidden in the Command Palette).
+  // The button Install WSL 2 of the Docker setup in the sidebar (welcome view), and Show Docker Setup, the action Show
+  // Docker Setup… of the error dockerNotInstalled (both hidden in the Command Palette).
   dockerSetupInstallWsl: 'devspaces.dockerSetup.installWsl',
   dockerSetupShow: 'devspaces.dockerSetup.show',
   // Docker on another computer over SSH (a host of the list of Devspaces), and back.
   useRemoteDockerHost: 'devspaces.useRemoteDockerHost',
-  useLocalDocker: 'devspaces.useLocalDocker',
   // The choice of the Docker host, the command of the first row of the view (hidden in the Command Palette): another
   // remote host, or the local Docker.
   chooseDockerHost: 'devspaces.chooseDockerHost',

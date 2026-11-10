@@ -163,8 +163,12 @@ export type DevspaceSessionFiles = Pick<
   'writePending' | 'removePending' | 'removeOperation' | 'removeDisconnectRequest' | 'removeReopenOf' | 'readPendings'
 >;
 
-/** Starts Docker when it does not run and waits until it is ready. */
-export type DockerStarter = (options: { onStarting: () => void; signal?: AbortSignal }) => Promise<void>;
+/**
+ * Makes sure that the engine of the Docker host of the operation answers (startDockerFor): a host of the list is
+ * checked, and the WSL distribution or the Lima VM of Devspaces starts with its login. Devspaces starts no Docker of
+ * this computer.
+ */
+export type DockerStarter = (options: { signal?: AbortSignal }) => Promise<void>;
 
 export interface RepositoryTarget {
   /** `owner/name`. */
@@ -480,7 +484,7 @@ export abstract class OperationBase {
     const target = await this.dockerTarget();
     if (target.kind !== 'unsupported') return target.host;
     const reason = `${unsupportedTargetReason(target)} Its containers and volumes are not read.`;
-    // No Docker host on macOS and Linux: the sidebar shows the Docker setup instead of a message.
+    // No Docker host of Devspaces: the sidebar shows the Docker setup instead of a message.
     if (isUnreadableDockerTarget(target) || isNoDockerHostTarget(target)) {
       this.logger.info(reason);
       return undefined;
@@ -511,9 +515,9 @@ export abstract class OperationBase {
     throw new UserFacingError('otherDockerHost', Messages.otherDockerHost(devspace.repository, devspaceHost, host));
   }
 
-  protected async startDocker(steps: StepReporter, signal: AbortSignal | undefined): Promise<void> {
+  protected async startDocker(signal: AbortSignal | undefined): Promise<void> {
     this.throwIfCancelled(signal);
-    await this.startDockerFn({ onStarting: () => steps.step('startingDocker'), signal });
+    await this.startDockerFn({ signal });
   }
 
   /**

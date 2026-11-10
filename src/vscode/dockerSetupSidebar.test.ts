@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The Docker setup lives only in the sidebar (welcome view): no walkthrough, no command that opens it, and no message
-// "Docker Desktop is not installed." at activation.
+// "Devspaces found no Docker CLI" at activation.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -13,8 +13,8 @@ vi.mock('vscode', async () => {
   const { fakeVscode } = await import('./testing/fakeVscode');
   return { ...fakeVscode, ExtensionMode: { Production: 1, Development: 2, Test: 3 } };
 });
-// The activation tests use the Docker of this computer, which Devspaces uses only on Windows (docs/requirements.md
-// R-ENG-001): they run on every platform as there.
+// The activation tests use the Docker of this computer, which Devspaces never uses (docs/requirements.md R-ENG-001):
+// they turn it on, so that the activation finds a fake Docker CLI there.
 vi.mock('../core/docker/dockerHost', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../core/docker/dockerHost')>();
   return { ...actual, usesComputerDocker: () => true };
@@ -262,13 +262,13 @@ describe('no message at activation when Docker is missing', () => {
     }
   });
 
-  it('has no check of the view that shows "Docker Desktop is not installed." once', () => {
+  it('has no check of the view that shows "Devspaces found no Docker CLI" once', () => {
     expect('onViewVisible' in Controller.prototype).toBe(false);
     const extension = fs.readFileSync(path.join(ROOT, 'src', 'vscode', 'extension.ts'), 'utf8');
     expect(extension).not.toContain('onViewVisible');
   });
 
-  it('uses "Docker Desktop is not installed." only as the error of an operation that needs Docker', () => {
+  it('uses "Devspaces found no Docker CLI" only as the error of an operation that needs Docker', () => {
     const uses: string[] = [];
     for (const file of sourceFiles(path.join(ROOT, 'src'))) {
       const lines = fs.readFileSync(file, 'utf8').split('\n');
@@ -278,7 +278,8 @@ describe('no message at activation when Docker is missing', () => {
     }
     expect(uses.length).toBeGreaterThan(0);
     for (const use of uses) expect(use).toMatch(/UserFacingError\('dockerNotInstalled', Messages\.dockerNotInstalled/);
-    expect(Messages.dockerNotInstalled).toBe('Docker Desktop is not installed.');
+    // Devspaces never asks for Docker Desktop (R-ENG-001).
+    expect(Messages.dockerNotInstalled).toBe('Devspaces found no Docker CLI for its Docker host.');
   });
 });
 
@@ -605,17 +606,12 @@ describe('the Docker setup in the sidebar welcome view', () => {
       expect(view.contents).not.toContain('Setup Guide');
     }
     const after = welcome.filter((view) => view.contents.startsWith('Your repositories appear here once'));
-    // Devspaces starts its VM on every platform when needed; on macOS and Linux it never uses the Docker of the computer.
+    // Devspaces starts its VM on every platform when needed, and never uses the Docker of the computer (R-ENG-001).
     expect(after).toEqual([
       {
         view: 'devspaces.repositories',
-        contents: 'Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.',
-        when: `${DockerContextKeys.setupRequired} && isWindows`,
-      },
-      {
-        view: 'devspaces.repositories',
         contents: 'Your repositories appear here once the VM is set up. Devspaces starts the VM when needed, and the VM powers itself off when nothing runs there.',
-        when: `${DockerContextKeys.setupRequired} && !isWindows`,
+        when: DockerContextKeys.setupRequired,
       },
     ]);
   });

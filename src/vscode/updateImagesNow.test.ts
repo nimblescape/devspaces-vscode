@@ -20,7 +20,7 @@ import { UNREADABLE_DOCKER_TARGET, podmanDockerTarget } from '../core/docker/doc
 import { UserFacingError } from '../core/errors';
 import { startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
 import { OP_MONITOR_RUN_NOW } from '../core/helperChannel/protocol';
-import { Actions, Messages, Steps } from '../core/messages';
+import { Actions, Messages } from '../core/messages';
 import { MONITOR_ENSURE_FLOW_TIMEOUT_MS, MONITOR_RUN_NOW_FLOW_TIMEOUT_MS, type DockerStarter } from '../core/pipeline/operationBase';
 import { abortError, silentLogger, type ProcessRunner, type RunResult } from '../core/ports';
 import { Commands } from './commands';
@@ -72,16 +72,6 @@ function registeredCommand(controller: Controller, id: string): (argument?: unkn
   return handler;
 }
 
-/** Records in `events` the step that each message of the progress names (progressMessage), or 'no step'. */
-function recordProgressSteps(events: string[]): void {
-  fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (progress: unknown, token: unknown) => Promise<unknown>) =>
-    task(
-      { report: (value: { message: string }) => void events.push(Object.values(Steps).find((text) => value.message.includes(`${text}.`)) ?? 'no step') },
-      { onCancellationRequested: () => ({ dispose: () => {} }) },
-    ),
-  );
-}
-
 describe('the command Update All Images Now', () => {
   it('asks the Monitor of the engine of the operation, with a progress, then says that it updates now', async () => {
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => {});
@@ -101,58 +91,24 @@ describe('the command Update All Images Now', () => {
     expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('The Monitor on the local Docker updates the images now.');
   });
 
-  it('runs the step "Docker start" of Start in the progress, then names the next step and asks the Monitor', async () => {
+  // The order of Start: in the progress the Docker check, then the request, with the signal of the progress. The
+  // message of the progress ends with the link Show details (progress.ts), which opens the log and hides the progress,
+  // which stays in the notification center with its Cancel button. It names no step.
+  it('runs the Docker check before the request; the progress has the link Show details and no step', async () => {
     const events: string[] = [];
-    recordProgressSteps(events);
-    // A local Docker that does not run: the step starts it, and the progress says so.
-    const startDocker = vi.fn<DockerStarter>(async ({ onStarting }) => {
-      events.push('start');
-      onStarting();
-    });
-    const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => void events.push('update'));
-    const { controller } = controllerWith(LOCAL, update, startDocker);
-    await controller.updateImagesNow();
-    // The progress does not say "Starting Docker" while the worker starts and asks the Monitor.
-    expect(events).toEqual(['no step', 'start', Steps.startingDocker, Steps.sendingRequest, 'update']);
-    expect(startDocker.mock.calls[0][0].signal).toBe(update.mock.calls[0][1]);
-    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('The Monitor on the local Docker updates the images now.');
-  });
-
-  // The order of Start: in the progress the step "Docker start", then the request. Each message of the progress ends
-  // with the link Show details (progress.ts), which opens the log and hides the progress, which stays in the
-  // notification center with its Cancel button.
-  it('runs the Docker start before the request; each step has the link Show details', async () => {
-    const order: string[] = [];
     const messages: string[] = [];
     fakeVscode.window.withProgress.mockImplementation(async (_options: unknown, task: (progress: unknown, token: unknown) => Promise<unknown>) =>
       task({ report: (value: { message: string }) => void messages.push(value.message) }, { onCancellationRequested: () => ({ dispose: () => {} }) }),
     );
-    const startDocker = vi.fn<DockerStarter>(async ({ onStarting }) => {
-      order.push('start');
-      onStarting();
-    });
-    const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => void order.push('update'));
-    await controllerWith(LOCAL, update, startDocker).controller.updateImagesNow();
-    expect(order).toEqual(['start', 'update']);
-    const title = ControllerTexts.requestingImageUpdate('the local Docker');
-    expect(messages).toEqual([
-      progressMessage(title, undefined, undefined),
-      progressMessage(title, 'startingDocker', undefined),
-      progressMessage(title, 'sendingRequest', undefined),
-    ]);
-    for (const message of messages) {
-      expect(message.endsWith(` [${Actions.showDetails}](command:${SHOW_LOG_COMMAND}?%5B%22progressNotification%22%5D)`), message).toBe(true);
-    }
-  });
-
-  it('shows no step when Docker runs already', async () => {
-    const events: string[] = [];
-    recordProgressSteps(events);
     const startDocker = vi.fn<DockerStarter>(async () => void events.push('start'));
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => void events.push('update'));
-    const { controller } = controllerWith(LOCAL, update, startDocker);
-    await controller.updateImagesNow();
-    expect(events).toEqual(['no step', 'start', 'update']);
+    await controllerWith(LOCAL, update, startDocker).controller.updateImagesNow();
+    expect(events).toEqual(['start', 'update']);
+    expect(startDocker.mock.calls[0][0].signal).toBe(update.mock.calls[0][1]);
+    const title = ControllerTexts.requestingImageUpdate('the local Docker');
+    expect(messages).toEqual([progressMessage(title, undefined, undefined)]);
+    expect(messages[0].endsWith(` [${Actions.showDetails}](command:${SHOW_LOG_COMMAND}?%5B%22progressNotification%22%5D)`)).toBe(true);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith('The Monitor on the local Docker updates the images now.');
   });
 
   it.each([
@@ -173,8 +129,7 @@ describe('the command Update All Images Now', () => {
           },
         ),
     );
-    const startDocker = vi.fn<DockerStarter>(async ({ onStarting, signal }) => {
-      onStarting();
+    const startDocker = vi.fn<DockerStarter>(async ({ signal }) => {
       if (signal) await starting(signal);
     });
     const update = vi.fn(async (_target: DockerTarget, _signal: AbortSignal) => {});
@@ -227,10 +182,10 @@ describe('the command Update All Images Now', () => {
     };
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', { fileIdentity: async () => 'docker 29.8.0' });
     // The step of the operations (extension.ts); a local target needs no remote dependency.
-    const startDocker: DockerStarter = async ({ onStarting, signal }) =>
+    const startDocker: DockerStarter = async ({ signal }) =>
       startDockerFor(
         LOCAL,
-        () => ensureDockerRunning(docker, silentLogger, { platform: 'linux', onStarting, signal }),
+        () => ensureDockerRunning(docker, silentLogger, { signal }),
         { logger: silentLogger } as RemoteReachabilityDeps,
         signal,
       );

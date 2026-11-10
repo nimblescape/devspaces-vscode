@@ -155,7 +155,6 @@ describe('the open in the worker, from the extension', () => {
     h.dockerStopped = true;
     await h.operations.openDevspaceInWorker(ENV_ID, { progress: h.progress });
     expect(h.dockerStarts).toBe(1);
-    expect(h.progress.steps[0]).toBe('startingDocker');
     h.token = undefined;
     expect(await rejection(h.operations.openDevspaceInWorker(ENV_ID, { progress: h.progress }))).toMatchObject({ code: 'signInRequired' });
     expect(sent).toHaveLength(1);

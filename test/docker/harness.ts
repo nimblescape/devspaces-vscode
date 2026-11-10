@@ -261,7 +261,6 @@ export class RecordingProgress implements ProgressReporter {
 
 /** The order of the progress steps of an operation. */
 const STEP_ORDER: ProgressStep[] = [
-  'startingDocker',
   'downloadingRepository',
   'checkingImage',
   'downloadingImage',

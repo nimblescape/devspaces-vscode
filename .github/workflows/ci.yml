@@ -73,7 +73,10 @@ env:
 jobs:
   test:
     if: ${{ !inputs.vscode-version }}
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: ubuntu-latest is Ubuntu 26.04, whose chown is that of uutils coreutils. The tests
+    # of the root steps of the batch helper need GNU coreutils and findutils, as in the helper image (Debian), and are
+    # skipped without them (src/helperChannel/batchHelper.gitUserRestore.test.ts), so the job "every test ran" fails.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out the source
@@ -144,8 +147,9 @@ jobs:
   test-root:
     name: test as root
     if: ${{ !inputs.vscode-version }}
-    # The runner itself, not a container: a container refuses mount --bind, which some tests need.
-    runs-on: ubuntu-latest
+    # The runner itself, not a container: a container refuses mount --bind, which some tests need. Ubuntu 24.04 for GNU
+    # coreutils, as in the job "test".
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out the source

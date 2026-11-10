@@ -255,10 +255,10 @@ describe('Docker on another computer over SSH, a host of the list of Devspaces',
       socketPath: async (target) => (target.kind === 'remote' ? ((await state.rootlessSocket(target.host)) ?? HELPER_DOCKER_SOCKET) : helperDockerSocket(env, process.platform, target.endpoint)),
       // As extension.ts: the worker behind the relay, with one SSH login (the wrapper `ssh`).
       relay: (target) => (sshPath === undefined || target.kind !== 'remote' ? undefined : sshHostTransport(target.host, sshPath, env)),
-      startDocker: async ({ onStarting, signal }) =>
+      startDocker: async ({ signal }) =>
         startDockerFor(
           await targets.current(),
-          () => ensureDockerRunning(docker, log, { platform: process.platform, env, onStarting, signal }),
+          () => ensureDockerRunning(docker, log, { signal }),
           { docker, runner, state, logger: log, sshPath, env },
           signal,
         ),
@@ -310,8 +310,6 @@ describe('Docker on another computer over SSH, a host of the list of Devspaces',
       () => progress.summary(),
     );
 
-    // No Docker Desktop start for a remote host: no step "Starting Docker".
-    expect(progress.steps).not.toContain('startingDocker');
     // The worker was started through SSH to the "remote computer", and talks to its engine there.
     expect(acceptedConnections() - beforeOpen).toBeGreaterThan(0);
     expect(sshLog).toContain('Starting session: command for root');

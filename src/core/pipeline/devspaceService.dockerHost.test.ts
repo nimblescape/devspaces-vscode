@@ -283,7 +283,7 @@ describe('a current Docker context that cannot be read is never used', () => {
 describe('on macOS and Linux, the Docker of this computer is never used', () => {
   let u: Harness;
   let cliCalls: string[][];
-  const NOT_READ = 'Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer. Its containers and volumes are not read.';
+  const NOT_READ = 'Devspaces has no Docker host yet: it never uses the Docker of this computer. Its containers and volumes are not read.';
 
   beforeEach(async () => {
     cliCalls = [];

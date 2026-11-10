@@ -126,17 +126,12 @@
     "viewsWelcome": [
       {
         "view": "devspaces.repositories",
-        "contents": "Devspaces needs Docker, which is not installed on this computer.",
-        "when": "devspaces.dockerSetupRequired && isWindows"
-      },
-      {
-        "view": "devspaces.repositories",
         "contents": "Devspaces runs your devspaces in its own VM with Docker Engine, which is not set up yet. It does not use Docker Desktop or Docker Engine of this computer.",
-        "when": "devspaces.dockerSetupRequired && !isWindows"
+        "when": "devspaces.dockerSetupRequired"
       },
       {
         "view": "devspaces.repositories",
-        "contents": "1. Install WSL 2, which Docker needs on Windows. Windows asks for administrator permission; restart Windows afterwards, and Devspaces goes on with step 2 by itself.\n[Install WSL 2](command:devspaces.dockerSetup.installWsl)",
+        "contents": "1. Install WSL 2, which the VM of Devspaces needs on Windows. Windows asks for administrator permission; restart Windows afterwards, and Devspaces goes on with step 2 by itself.\n[Install WSL 2](command:devspaces.dockerSetup.installWsl)",
         "when": "devspaces.dockerSetupRequired && isWindows && !devspaces.wslReady"
       },
       {
@@ -146,7 +141,7 @@
       },
       {
         "view": "devspaces.repositories",
-        "contents": "2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first, and goes on after the restart of Windows. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)",
+        "contents": "2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution (its VM) with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first, and goes on after the restart of Windows. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)",
         "when": "devspaces.dockerSetupRequired && isWindows"
       },
       {
@@ -161,13 +156,8 @@
       },
       {
         "view": "devspaces.repositories",
-        "contents": "Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.",
-        "when": "devspaces.dockerSetupRequired && isWindows"
-      },
-      {
-        "view": "devspaces.repositories",
         "contents": "Your repositories appear here once the VM is set up. Devspaces starts the VM when needed, and the VM powers itself off when nothing runs there.",
-        "when": "devspaces.dockerSetupRequired && !isWindows"
+        "when": "devspaces.dockerSetupRequired"
       },
       {
         "view": "devspaces.repositories",
@@ -369,11 +359,6 @@
         "category": "Devspaces"
       },
       {
-        "command": "devspaces.useLocalDocker",
-        "title": "Use the Local Docker",
-        "category": "Devspaces"
-      },
-      {
         "command": "devspaces.chooseDockerHost",
         "title": "Choose the Docker Host…",
         "category": "Devspaces"
@@ -503,10 +488,6 @@
         {
           "command": "devspaces.setUpLimaVm",
           "when": "isMac || isLinux"
-        },
-        {
-          "command": "devspaces.useLocalDocker",
-          "when": "isWindows"
         },
         {
           "command": "devspaces.resetWslDistribution",

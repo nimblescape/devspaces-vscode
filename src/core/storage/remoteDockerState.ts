@@ -3,9 +3,9 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // What Devspaces remembers about remote Docker hosts, in `remote-docker.json` of the global storage folder: its own list
-// of SSH hosts, the Docker host of Devspaces (one host of the list, or none for the local Docker), the hosts of Docker
-// contexts that it offered once, and per host the socket of a rootless engine there (the source of the helper's socket
-// mount on that computer) and whether its account has the SSH key of Devspaces (sshKey.ts). Devspaces creates and
+// of SSH hosts, the Docker host of Devspaces (one host of the list, or none before the setup), and per host the socket
+// of a rootless engine there (the source of the helper's socket mount on that computer) and whether its account has the
+// SSH key of Devspaces (sshKey.ts). Devspaces creates and
 // changes no Docker context (docs/architecture.md "Remote Docker hosts"). Every window of this computer changes the
 // file: each change reads and writes it under the lock folder `remote-docker.lock` (lockFolder.ts), so that a change of
 // another window between the read and the write is not lost.
@@ -30,12 +30,10 @@ export interface RemoteDockerHostRecord {
 }
 
 export interface RemoteDockerStateFile {
-  /** The Docker host of Devspaces: a host of `remoteHosts`. Absent: the local Docker. */
+  /** The Docker host of Devspaces: a host of `remoteHosts`. Absent: none yet (Devspaces never uses the Docker of this computer). */
   dockerHost?: string;
   /** The list of SSH hosts of Devspaces (an alias of the SSH config, or `user@host[:port]`), in the order they were added. */
   remoteHosts?: string[];
-  /** The hosts of a Docker context or of DOCKER_HOST that Devspaces offered once for the list (claimOffer). */
-  offered?: string[];
   hosts?: RemoteDockerHostRecord[];
 }
 
@@ -62,7 +60,7 @@ export class RemoteDockerState {
     return normalize(await readJsonTolerant(this.file));
   }
 
-  /** The Docker host of Devspaces: a host of the list, or undefined for the local Docker. */
+  /** The Docker host of Devspaces: a host of the list, or undefined when it has none. */
   async dockerHost(): Promise<string | undefined> {
     return (await this.read()).dockerHost;
   }
@@ -74,7 +72,7 @@ export class RemoteDockerState {
 
   /**
    * Makes `host` the Docker host of Devspaces (added to the end of the list when it is not in it), or with `undefined`
-   * the local Docker. Writes only when something changes.
+   * none. Writes only when something changes.
    */
   async setDockerHost(host: string | undefined): Promise<void> {
     await this.change((state) => {
@@ -89,7 +87,7 @@ export class RemoteDockerState {
   }
 
   /**
-   * Removes `host` from the list; when it is the Docker host of Devspaces, the local Docker takes its place. Its rootless
+   * Removes `host` from the list; when it is the Docker host of Devspaces, Devspaces has none afterwards. Its rootless
    * socket, an installed SSH key and the devspaces on it stay; a `declined` SSH key is forgotten (also for a host that
    * is not in the list), so the key is offered again after the host is added again.
    * `removed`: it was in the list; `wasDockerHost`: it was the Docker host of Devspaces (both as found under the lock).
@@ -110,22 +108,6 @@ export class RemoteDockerState {
       return true;
     });
     return result;
-  }
-
-  /**
-   * The offer of `host` of a Docker context or of DOCKER_HOST (offerDockerContextHost), once on this computer: true, and
-   * `host` is remembered, when it is neither in the list nor offered before; false otherwise. The check and the write
-   * run under the lock, so that of several windows that start at the same time only one asks.
-   */
-  async claimOffer(host: string): Promise<boolean> {
-    let claimed = false;
-    await this.change((state) => {
-      claimed = !(state.remoteHosts ?? []).includes(host) && !(state.offered ?? []).includes(host);
-      if (!claimed) return false;
-      state.offered = [...(state.offered ?? []), host];
-      return true;
-    });
-    return claimed;
   }
 
   /** The socket of the rootless engine on `host`, or undefined for a rootful engine (the default socket). */
@@ -242,8 +224,8 @@ export class RemoteDockerState {
  */
 function isStateFile(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const { dockerHost, remoteHosts, offered, hosts } = value as Record<string, unknown>;
-  return (dockerHost === undefined || typeof dockerHost === 'string') && [remoteHosts, offered, hosts].every((list) => list === undefined || Array.isArray(list));
+  const { dockerHost, remoteHosts, hosts } = value as Record<string, unknown>;
+  return (dockerHost === undefined || typeof dockerHost === 'string') && [remoteHosts, hosts].every((list) => list === undefined || Array.isArray(list));
 }
 
 /** A list of host names without repeats or empty entries; undefined when none is left. */
@@ -285,8 +267,6 @@ function normalize(value: unknown): RemoteDockerStateFile {
   } else if (remoteHosts !== undefined) {
     result.remoteHosts = remoteHosts;
   }
-  const offered = hostNames(record.offered);
-  if (offered !== undefined) result.offered = offered;
   if (Array.isArray(record.hosts)) {
     // One record per host: the first one, which rootlessSocket reads.
     const seen = new Set<string>();

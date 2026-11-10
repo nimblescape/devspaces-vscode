@@ -1084,7 +1084,7 @@ export class DevspaceService extends OperationBase {
     const identity = this.identityOf(session);
     // Started now too, so a download of the VS Code server runs while the repository is cloned and the image is built.
     const vscodeServer = this.startVscodeServer(options);
-    await this.startDocker(steps, signal);
+    await this.startDocker(signal);
     // Registry lost: a labeled volume of this repository and account that the registry lacks holds the work of the
     // user. It becomes the devspace again; a second devspace would hide it. Docker runs now, so the volumes are
     // read also when the registry was lost while Docker was stopped, or when registry.json is invalid.
@@ -1224,7 +1224,7 @@ export class DevspaceService extends OperationBase {
     let ctx: PipelineContext | undefined;
     let succeeded = false;
     try {
-      await this.startDocker(steps, signal);
+      await this.startDocker(signal);
       const env = await this.waitForOtherOperation(owned, signal);
       // Start, Rebuild and Clone again run under the lock of the devspace on the Docker host,
       // from here through `finish` (in runPipeline): the check of the volume, Clone again (recoverMissingFiles, with
@@ -6241,10 +6241,9 @@ export class DevspaceService extends OperationBase {
     const env = await this.deps.registry.get(devspaceId);
     if (!env) return undefined;
     await this.requireCurrentHost(env);
-    const steps = new StepReporter(options.progress, this.logger);
     try {
       await this.requireOwnAccount(env, true);
-      await this.startDocker(steps, options.signal);
+      await this.startDocker(options.signal);
       if (!(await this.deps.docker.volumeExists(env.volumeName))) return undefined;
       const refreshed = await this.gitSummaryBeforeDelete(env, options.signal);
       this.throwIfCancelled(options.signal);
@@ -6363,8 +6362,7 @@ export class DevspaceService extends OperationBase {
     options: OperationOptions & { additionalVolumesToRemove: readonly string[] },
   ): Promise<void> {
     const { docker } = this.deps;
-    const steps = new StepReporter(options.progress, this.logger);
-    await this.startDocker(steps, options.signal);
+    await this.startDocker(options.signal);
     this.throwIfCancelled(options.signal);
     this.logger.info(`Deleting the devspace of ${devspace.repository} (${devspace.id}).`);
     // The wait for the operation of another window and the mark in one (markBusyWaiting).
@@ -6454,10 +6452,9 @@ export class DevspaceService extends OperationBase {
     const env = await this.deps.registry.get(devspaceId);
     if (!env) return [];
     await this.requireCurrentHost(env);
-    const steps = new StepReporter(options.progress, this.logger);
     try {
       await this.requireOwnAccount(env, true);
-      await this.startDocker(steps, options.signal);
+      await this.startDocker(options.signal);
       await this.requireVolume(env);
       // The listing runs as the step listConfigs of the batch helper of the volume (as the owner of the repository)
       // under the lock of the devspace, released before the answer (refused when either cannot be had; busy after 10

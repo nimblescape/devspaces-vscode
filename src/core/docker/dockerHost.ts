@@ -19,7 +19,8 @@ export const DEFAULT_CONTEXT_NAME = 'default';
 /**
  * Where Docker runs:
  * - `local`: the Docker of this computer, as the current Docker context (or DOCKER_HOST) says (Docker Desktop, the
- *   default Unix socket, a named pipe, a rootless socket of this user, or TCP to this computer's loopback).
+ *   default Unix socket, a named pipe, a rootless socket of this user, or TCP to this computer's loopback). Only the
+ *   tests of the engine use it (usesComputerDocker): Devspaces never uses the Docker of this computer.
  * - `remote`: a host of the list of Devspaces (remoteDockerTarget): the Docker of another computer, reached through SSH,
  *   or of the WSL distribution of Devspaces, reached through `wsl.exe` (hostAccessOf).
  * - `unsupported`: any other endpoint of the current context (TCP to another computer, an unknown scheme, or an SSH
@@ -55,23 +56,24 @@ export interface DockerTarget {
   podman?: string;
   /**
    * Only for a current Docker context, or DOCKER_HOST, of the user that reaches a host over SSH while Devspaces uses the
-   * local Docker (isDockerContextHostTarget): that host, which Devspaces offers once for its list.
+   * local Docker (isDockerContextHostTarget): that host.
    */
   sshHost?: string;
   /**
-   * Only for the target while Devspaces has no Docker host on macOS or Linux, where it never uses the Docker of this
-   * computer (usesComputerDocker, isNoDockerHostTarget): the sidebar shows the Docker setup.
+   * Only for the target while Devspaces has no Docker host; it never uses the Docker of this computer
+   * (usesComputerDocker, isNoDockerHostTarget): the sidebar shows the Docker setup.
    */
   noHost?: true;
 }
 
 /**
- * Whether Devspaces uses the Docker of this computer on `platform` (docs/requirements.md R-ENG-001): only on Windows
- * (Docker Desktop, until the test of R-VM-008 passed). On macOS and Linux, the devspaces run only in the VM of Devspaces
- * (LIMA_HOST) or on another host of its list, never on Docker Desktop or Docker Engine of this computer.
+ * Whether Devspaces uses the Docker of this computer: never (docs/requirements.md R-ENG-001). On every platform, the
+ * devspaces run only in the VM of Devspaces (WSL_HOST on Windows, LIMA_HOST on macOS and Linux) or on another host of
+ * its list, never on Docker Desktop or Docker Engine of this computer. The activation tests turn it on, because they
+ * run the extension on a fake Docker CLI of this computer.
  */
-export function usesComputerDocker(platform: NodeJS.Platform): boolean {
-  return platform === 'win32';
+export function usesComputerDocker(): boolean {
+  return false;
 }
 
 /** The Docker of this computer, when nothing else is known (for example without a Docker CLI). */
@@ -132,9 +134,9 @@ export function isUnreadableDockerTarget(target: Pick<DockerTarget, 'kind' | 'en
 }
 
 /**
- * True for the target while Devspaces has no Docker host on macOS or Linux (dockerTargets.ts, NO_DOCKER_HOST_TARGET):
- * there it never uses the Docker of this computer (usesComputerDocker), so every operation is refused until the VM of
- * Devspaces is set up or a host of its list is chosen, and the sidebar shows the Docker setup.
+ * True for the target while Devspaces has no Docker host (dockerTargets.ts, NO_DOCKER_HOST_TARGET): it never uses the
+ * Docker of this computer (usesComputerDocker), so every operation is refused until the VM of Devspaces is set up or a
+ * host of its list is chosen, and the sidebar shows the Docker setup.
  */
 export function isNoDockerHostTarget(target: Pick<DockerTarget, 'kind' | 'noHost'>): boolean {
   return target.kind === 'unsupported' && target.noHost === true;
@@ -152,8 +154,7 @@ export function isPodmanDockerTarget(target: Pick<DockerTarget, 'kind' | 'podman
 /**
  * True for the target of a current Docker context, or of DOCKER_HOST, that reaches a host over SSH while Devspaces uses
  * the local Docker (DockerTargets): Devspaces reaches a remote host only through its own list, and such a context is not
- * the Docker of this computer. It is refused like an endpoint that is not supported, and its host is offered once for
- * the list.
+ * the Docker of this computer. It is refused like an endpoint that is not supported.
  */
 export function isDockerContextHostTarget(target: Pick<DockerTarget, 'kind' | 'sshHost'>): target is DockerTarget & { sshHost: string } {
   return target.kind === 'unsupported' && target.sshHost !== undefined;
@@ -161,7 +162,7 @@ export function isDockerContextHostTarget(target: Pick<DockerTarget, 'kind' | 's
 
 /** Why a target that is not supported is refused, for the log (one sentence). */
 export function unsupportedTargetReason(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context' | 'noHost'>): string {
-  if (isNoDockerHostTarget(target)) return 'Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer.';
+  if (isNoDockerHostTarget(target)) return 'Devspaces has no Docker host yet: it never uses the Docker of this computer.';
   if (isPodmanDockerTarget(target)) return 'The docker command uses Podman, which Devspaces does not support.';
   if (isDockerContextHostTarget(target)) {
     return `${target.context === undefined ? 'DOCKER_HOST' : `The current Docker context ${target.context}`} reaches ${target.sshHost} over SSH, which is not a host of the list of Devspaces.`;

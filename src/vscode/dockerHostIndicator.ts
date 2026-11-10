@@ -50,8 +50,8 @@ export class DockerHostIndicator {
 
   /**
    * Shows `target`: the local Docker, a remote host, or an endpoint that is not supported. `installed` false (no Docker
-   * CLI found; the target then reads as the local Docker), and no Docker host on macOS and Linux (isNoDockerHostTarget):
-   * no Docker host at all (the header would otherwise name a Docker host above the Docker setup).
+   * CLI found; the target then reads as the local Docker), and no Docker host of Devspaces (isNoDockerHostTarget): no
+   * Docker host at all (the header would otherwise name a Docker host above the Docker setup).
    */
   update(target: DockerTarget, installed = true): void {
     if (isNoDockerHostTarget(target)) installed = false;

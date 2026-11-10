@@ -101,16 +101,15 @@ describe('classifyDockerEndpoint (SSH only for another computer)', () => {
     expect(isDockerContextHostTarget(dockerTargetOf('unix:///var/run/docker.sock', 'default'))).toBe(false);
   });
 
-  // docs/requirements.md R-ENG-001: the Docker of this computer only on Windows; on macOS and Linux, no host until the VM or a host of the list.
-  it('uses the Docker of this computer only on Windows, and names the target without a Docker host on macOS and Linux', () => {
-    expect(usesComputerDocker('win32')).toBe(true);
-    for (const platform of ['darwin', 'linux'] as const) expect(usesComputerDocker(platform), platform).toBe(false);
+  // docs/requirements.md R-ENG-001: never the Docker of this computer; no host until the VM or a host of the list.
+  it('never uses the Docker of this computer, and names the target without a Docker host', () => {
+    expect(usesComputerDocker()).toBe(false);
     const noHost = { kind: 'unsupported', host: 'no Docker host of Devspaces', endpoint: '', noHost: true } as const;
     expect(isNoDockerHostTarget(noHost)).toBe(true);
     // Its endpoint is empty, but it is not a Docker context that could not be read.
     expect(isUnreadableDockerTarget(noHost)).toBe(false);
     expect(isUnreadableDockerTarget({ kind: 'unsupported', endpoint: '' })).toBe(true);
-    expect(unsupportedTargetReason(noHost)).toBe('Devspaces has no Docker host yet: on macOS and Linux, it never uses the Docker of this computer.');
+    expect(unsupportedTargetReason(noHost)).toBe('Devspaces has no Docker host yet: it never uses the Docker of this computer.');
     expect(isNoDockerHostTarget({ kind: 'local' })).toBe(false);
     expect(isNoDockerHostTarget({ kind: 'unsupported' })).toBe(false);
   });

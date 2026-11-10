@@ -328,9 +328,9 @@ describe('the deps of the pipeline in the worker', () => {
     const { all, calls } = deps();
     expect(await all.dockerTarget!()).toEqual({ kind: 'remote', host: 'build-box', endpoint: '' });
     expect(await deps({ dockerHost: '' }).all.dockerTarget!()).toEqual({ kind: 'local', host: '', endpoint: '' });
-    await all.startDocker!({ onStarting: () => {} });
+    await all.startDocker!({});
     const down = deps({ engine: { ...unusedEngine(), version: async () => Promise.reject(new Error('connect ENOENT')) } }).all;
-    await expect(down.startDocker!({ onStarting: () => {} })).rejects.toMatchObject({ code: 'dockerEngineNotRunning' });
+    await expect(down.startDocker!({})).rejects.toMatchObject({ code: 'dockerEngineNotRunning' });
     // The worker never answers synchronously whether a process of the computer runs; the pipeline asks the extension
     // (processAlive).
     expect(() => all.isProcessAlive!(1)).toThrow('synchronously');

@@ -145,12 +145,12 @@ describe('DockerHostIndicator', () => {
   });
 
   // The user guide and the change log quote these texts as the view shows them, like the texts of the state rows.
-  it('the user guide and the change log quote the texts for a context that cannot be read and for Podman as the view shows them', () => {
-    for (const file of ['docs/guide.md', 'CHANGELOG.md']) {
-      const text = fs.readFileSync(path.join(__dirname, '..', '..', file), 'utf8');
-      for (const label of [Messages.dockerContextUnreadableLabel, Messages.podmanNotSupportedLabel]) {
-        expect(text, `${file}: ${label}`).toContain(`shows "${label}"`);
-      }
+  // Devspaces no longer reads the Docker context of the computer (R-ENG-001), so only the tests of the engine see these
+  // texts; the change log of the versions that showed them quotes them as the view showed them.
+  it('the change log quotes the texts for a context that cannot be read and for Podman as the view showed them', () => {
+    const text = fs.readFileSync(path.join(__dirname, '..', '..', 'CHANGELOG.md'), 'utf8');
+    for (const label of [Messages.dockerContextUnreadableLabel, Messages.podmanNotSupportedLabel]) {
+      expect(text, label).toContain(`shows "${label}"`);
     }
   });
 });

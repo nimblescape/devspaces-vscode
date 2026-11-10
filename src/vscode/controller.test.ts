@@ -696,17 +696,18 @@ function shownWelcome(context: Record<string, boolean>): string[] {
 describe('Controller commands', () => {
   it('registers exactly the commands of package.json', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
-      contributes: { commands: Array<{ command: string }> };
+      contributes: { commands: Array<{ command: string; title: string }> };
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 40 commands, among them hidden ones: Show Docker Setup (the action Install Docker… of an error: it looks for the
+    // 39 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), and the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces. The last one that was added
     // is the setup of the Lima VM of Devspaces (macOS and Linux); the last ones that were removed are the installation
-    // and the start of Docker Desktop or Docker Engine (R-ENG-001).
-    expect(declared).toHaveLength(40);
+    // and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
+    expect(declared).toHaveLength(39);
+    expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
     expect(declared).toEqual(
       expect.arrayContaining([
         Commands.removeFromDockerEngine,
@@ -779,9 +780,7 @@ describe('Controller commands', () => {
   // with its button, then the sign-in while not signed in.
   describe('Docker setup in the sidebar (package.json viewsWelcome)', () => {
     const setup = { [DockerContextKeys.missing]: true, [DockerContextKeys.setupRequired]: true };
-    const intro = 'Devspaces needs Docker, which is not installed on this computer.';
-    const after = 'Your repositories appear here once Docker is installed. Devspaces starts Docker when needed.';
-    // macOS and Linux: Devspaces never uses the Docker of the computer (R-ENG-001), so the setup is the VM of Devspaces.
+    // Devspaces never uses the Docker of the computer (R-ENG-001), so on every platform the setup is the VM of Devspaces.
     const introVm = 'Devspaces runs your devspaces in its own VM with Docker Engine, which is not set up yet. It does not use Docker Desktop or Docker Engine of this computer.';
     const afterVm = 'Your repositories appear here once the VM is set up. Devspaces starts the VM when needed, and the VM powers itself off when nothing runs there.';
     const signIn =
@@ -791,15 +790,14 @@ describe('Controller commands', () => {
     const githubEnterprise =
       'Your VS Code is set up for GitHub Enterprise Server or GHE.com. Devspaces cannot use an account there. Sign in with an account on github.com.';
     const installWsl =
-      '1. Install WSL 2, which Docker needs on Windows. Windows asks for administrator permission; restart Windows afterwards, and Devspaces goes on with step 2 by itself.\n[Install WSL 2](command:devspaces.dockerSetup.installWsl)';
+      '1. Install WSL 2, which the VM of Devspaces needs on Windows. Windows asks for administrator permission; restart Windows afterwards, and Devspaces goes on with step 2 by itself.\n[Install WSL 2](command:devspaces.dockerSetup.installWsl)';
     const wslInstalled = '1. ✓ WSL 2 is installed.';
     // On macOS and Linux, the Lima VM of Devspaces (R-VM-001): no installation of Docker Desktop or Docker Engine.
     const setUpMac =
       'Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without Docker Desktop and without administrator permission. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)';
-    // The WSL distribution of Devspaces, without Docker Desktop.
-    // On Windows, the only setup of Docker (R-ENG-005): no installation of Docker Desktop.
+    // On Windows, the VM of Devspaces is its WSL distribution (R-ENG-005): no installation of Docker Desktop.
     const setUpWsl =
-      '2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first, and goes on after the restart of Windows. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)';
+      '2. Set up Docker for Devspaces: Devspaces creates its own WSL distribution (its VM) with Docker Engine, downloads its Docker CLI and connects to the distribution, without Docker Desktop and without administrator permission. When WSL 2 is missing, it installs WSL 2 first, and goes on after the restart of Windows. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpWslDistribution)';
     const setUpLinux =
       'Set up Docker for Devspaces: Devspaces downloads Lima and the disk of its own VM with Docker Engine, creates the VM, downloads its Docker CLI and connects to the VM, without administrator permission. Without QEMU, Devspaces first installs it in a terminal, where sudo asks for your password. The log names the downloads and the folder.\n[Set Up Docker for Devspaces](command:devspaces.setUpLimaVm)';
     // The last step on every platform: Docker on another computer, without Docker on this one.
@@ -811,8 +809,8 @@ describe('Controller commands', () => {
     });
 
     it('shows the steps of Windows with WSL 2 first, and a check mark instead of its button once WSL 2 is ready', () => {
-      expect(shownWelcome({ ...setup, isWindows: true })).toEqual([intro, installWsl, setUpWsl, after, remote, signIn]);
-      expect(shownWelcome({ ...setup, isWindows: true, [DockerContextKeys.wslReady]: true })).toEqual([intro, wslInstalled, setUpWsl, after, remote, signIn]);
+      expect(shownWelcome({ ...setup, isWindows: true })).toEqual([introVm, installWsl, setUpWsl, afterVm, remote, signIn]);
+      expect(shownWelcome({ ...setup, isWindows: true, [DockerContextKeys.wslReady]: true })).toEqual([introVm, wslInstalled, setUpWsl, afterVm, remote, signIn]);
     });
 
     it('offers no installation of Docker Desktop or Docker Engine on any platform', () => {
@@ -4821,7 +4819,7 @@ describe('Connection of this window', () => {
     expect(h.repositoryGroupsEditor.open).toHaveBeenCalledTimes(1);
   });
 
-  it('runs the buttons of the Docker setup in the sidebar, and Show Docker Setup of the action Install Docker…', async () => {
+  it('runs the buttons of the Docker setup in the sidebar, and Show Docker Setup of the action Show Docker Setup…', async () => {
     await run('dockerSetupInstallWsl');
     await run('dockerSetupShow');
     expect(h.dockerSetup.installWsl).toHaveBeenCalledTimes(1);
@@ -6152,7 +6150,6 @@ describe('the Docker host of Devspaces', () => {
   let sharedTargets: ControllerDeps['dockerTargets'];
   let remote: {
     useRemoteHost: Mock<RemoteDockerCommands['useRemoteHost']>;
-    useLocalDocker: Mock<RemoteDockerCommands['useLocalDocker']>;
     chooseDockerHost: Mock<RemoteDockerCommands['chooseDockerHost']>;
   };
 
@@ -6171,7 +6168,6 @@ describe('the Docker host of Devspaces', () => {
     depth = 0;
     remote = {
       useRemoteHost: vi.fn(async () => {}),
-      useLocalDocker: vi.fn(async () => {}),
       chooseDockerHost: vi.fn(async () => {}),
     };
     const dockerTargets = {
@@ -6211,9 +6207,9 @@ describe('the Docker host of Devspaces', () => {
 
   it('registers both commands and runs them without an operation of their own', async () => {
     await run('useRemoteDockerHost');
-    await run('useLocalDocker');
+    await run('chooseDockerHost');
     expect(remote.useRemoteHost).toHaveBeenCalledTimes(1);
-    expect(remote.useLocalDocker).toHaveBeenCalledTimes(1);
+    expect(remote.chooseDockerHost).toHaveBeenCalledTimes(1);
     expect(operations).toEqual([]);
   });
 

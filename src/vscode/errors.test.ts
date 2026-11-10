@@ -41,14 +41,14 @@ describe('showError', () => {
     return { severity: error ? 'error' : 'warning', message, actions };
   }
 
-  it('offers Install Docker… (the Docker setup in the sidebar) when Docker is not installed', async () => {
+  it('offers Show Docker Setup… (the Docker setup in the sidebar) when no Docker CLI is found', async () => {
     const { logger } = recordingLogger();
     window.showErrorMessage.mockResolvedValue(Actions.installDocker);
     showError(new UserFacingError('dockerNotInstalled', Messages.dockerNotInstalled), { logger, showLog: vi.fn() });
     expect(shown()).toEqual({
       severity: 'error',
-      message: 'Docker Desktop is not installed.',
-      actions: ['Install Docker…'],
+      message: 'Devspaces found no Docker CLI for its Docker host.',
+      actions: ['Show Docker Setup…'],
     });
     await flush();
     expect(fakeVscode.commands.executeCommand).toHaveBeenCalledTimes(1);
@@ -75,8 +75,8 @@ describe('showError', () => {
     expect(showLog).not.toHaveBeenCalled();
   });
 
-  // A remote Docker host that cannot be reached gets its own message, never Install Docker….
-  it('offers Show details and Try again, not Install Docker…, for an unreachable remote host', async () => {
+  // A remote Docker host that cannot be reached gets its own message, never Show Docker Setup….
+  it('offers Show details and Try again, not Show Docker Setup…, for an unreachable remote host', async () => {
     const { logger } = recordingLogger();
     const retry = vi.fn();
     window.showErrorMessage.mockResolvedValue(Actions.tryAgain);

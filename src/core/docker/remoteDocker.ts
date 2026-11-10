@@ -467,8 +467,8 @@ export function dockerHostUnreachable(host: string, problem: DockerHostProblem, 
 /**
  * The message of a target that is not supported: an endpoint that is neither local nor SSH, a context or DOCKER_HOST of
  * the user that reaches a host over SSH (isDockerContextHostTarget), a current Docker context that could not be read
- * (isUnreadableDockerTarget), a docker command that is Podman (isPodmanDockerTarget), or no Docker host on macOS and
- * Linux (isNoDockerHostTarget).
+ * (isUnreadableDockerTarget), a docker command that is Podman (isPodmanDockerTarget), or no Docker host of Devspaces
+ * (isNoDockerHostTarget).
  */
 export function unsupportedTargetMessage(target: Pick<DockerTarget, 'kind' | 'endpoint' | 'podman' | 'sshHost' | 'context' | 'noHost'>): string {
   if (isNoDockerHostTarget(target)) return Messages.noDockerHost;
@@ -509,7 +509,7 @@ export interface RemoteReachabilityDeps {
 
 /**
  * The step "Docker start" for a remote host: the SSH check (checkSshLogin), then one `docker info` of the host (with the
- * time limit engineInfoTimeoutOf; no Docker Desktop start, no setup, no "Starting Docker" step). Throws UserFacingError('dockerHostUnreachable') with the plain reason. A rootless
+ * time limit engineInfoTimeoutOf; no setup, and no step of the progress). Throws UserFacingError('dockerHostUnreachable') with the plain reason. A rootless
  * engine gets its socket recorded (read once with ssh), a rootful one has it forgotten, so the helper mounts the right
  * socket of that computer.
  */
@@ -618,9 +618,9 @@ export async function sshHostsOfContexts(docker: RemoteDockerCli): Promise<Array
 }
 
 /**
- * The step "Docker start" of an operation on `target`: the local Docker (`startLocal`, which starts Docker Desktop or
- * offers the setup); a remote host only gets the reachability check (never a Docker Desktop start); a target that is
- * not supported is refused with its message (unsupportedTargetMessage).
+ * The step "Docker start" of an operation on `target`: the check of a local Docker (`startLocal`; only the engine of
+ * the tests, Devspaces starts no Docker of this computer); a remote host, also the own VM of Devspaces, only gets the
+ * reachability check; a target that is not supported is refused with its message (unsupportedTargetMessage).
  */
 export async function startDockerFor(
   target: DockerTarget,

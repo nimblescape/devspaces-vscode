@@ -264,7 +264,7 @@ export class DevspaceOperations extends OperationBase {
     // A devspace of another account is never sent.
     if (entry) this.availableEntry(entry, session.account);
     const steps = new StepReporter(options.progress, this.logger);
-    await this.startDocker(steps, signal);
+    await this.startDocker(signal);
     this.throwIfCancelled(signal);
     const dockerHost = await this.currentDockerHost();
     const monitor = await this.deps.openMonitor?.(dockerHost);
