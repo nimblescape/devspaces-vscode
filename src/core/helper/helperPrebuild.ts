@@ -6,8 +6,10 @@
 // extension update the helper tag is new; the prebuild builds it right after the activation, in the background, so the
 // first open after the update does not wait for it and does not fail when the network goes away later. The activation
 // starts it only after the first use of Devspaces (src/vscode/extension.ts); before that, the first open builds the
-// image. Without a previous helper image, an open that finds no usable helper image and cannot build one fails with
-// helperFailed. It runs on the Docker engine of the current Docker context, local or remote alike. With the setting
+// image. A switch to another Docker host starts it there too (the setup of the VM of Devspaces ends with one), so that
+// the first open on that host does not wait for the build either. Without a previous helper image, an open that finds
+// no usable helper image and cannot build one fails with helperFailed. It runs on the Docker engine of the current
+// Docker host, local or remote alike. With the setting
 // updateImagesOnConnect on, it also runs when the refresh of the helper image is due (the rebuild that a check asked
 // for, the weekly check of the base image), and its maintaining ensure then also runs the daily cleanup when that is due;
 // the cleanup alone never makes it run. On an SSH host it waits for the connection of the relay of this window to the host,
@@ -142,9 +144,28 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
   }
 }
 
+/** One prebuild of HelperPrebuild, on the Docker host of `target`. */
+interface PrebuildRun {
+  target: DockerTarget;
+  /** Aborted by `stop` (a removal of Devspaces from that host). */
+  stop: AbortController;
+  /** Aborted at the time limit of its work (HELPER_PREBUILD_TIMEOUT_MS). */
+  limit: AbortController;
+  /**
+   * On an SSH host (HelperPrebuildDeps.connection): aborted when a Docker call of the prebuild would log in to the host,
+   * because the connection of this window to it ended (BootstrapDocker, runWithDockerTarget with `withoutLogin`).
+   */
+  withoutLogin: AbortController;
+  /** True until it ended. */
+  running: boolean;
+  /** Its outcome; never rejects. */
+  done: Promise<HelperPrebuildOutcome>;
+}
+
 /**
- * The background prebuild. `start` runs it once (never rejects, never blocks: the caller does not await it); `dispose`
- * cancels it (the build of the Docker CLI is ended), and so does `stop` for the engine of a removal of Devspaces.
+ * The background prebuild. `start` runs it once per Docker host (never rejects, never blocks: the caller does not await
+ * it): at the activation, and after a switch to another host; `dispose` cancels every one (the build of the Docker CLI
+ * is ended), and `stop` the one on the engine of a removal of Devspaces.
  *
  * It runs when the helper state file of the engine has no record of the current helper tag (after an update that
  * changed the tag, a first installation, or a tag that the cleanup removed), or, with the setting
@@ -170,36 +191,35 @@ export async function dockerEngineAnswers(target: DockerTarget, deps: DockerEngi
  * until the daily cleanup removes them); windows that start later find the record and no refresh due, and do nothing.
  */
 export class HelperPrebuild {
-  private readonly controller = new AbortController();
-  private readonly limit = new AbortController();
-  /**
-   * On an SSH host (HelperPrebuildDeps.connection): aborted when a Docker call of the prebuild would log in to the host,
-   * because the connection of this window to it ended (BootstrapDocker, runWithDockerTarget with `withoutLogin`).
-   */
-  private readonly withoutLogin = new AbortController();
-  private run: Promise<HelperPrebuildOutcome> | undefined;
-  /** The target of the prebuild that `start` began, while it runs. */
-  private running: DockerTarget | undefined;
+  /** Ends every prebuild (dispose). */
+  private readonly disposal = new AbortController();
+  /** Docker host → the prebuild that `start` began there, also after its end (once per host in this window). */
+  private readonly runs = new Map<string, PrebuildRun>();
 
   constructor(private readonly deps: HelperPrebuildDeps) {}
 
   /**
-   * Starts the prebuild once, as an operation on `target` (the local Docker by default); later calls return the same
-   * promise. Never rejects.
+   * Starts the prebuild as an operation on `target` (the local Docker by default), once per Docker host in this window:
+   * at the activation on the current host, and after a switch to another host (src/vscode/extension.ts, onDidSwitch),
+   * so that the first open there does not wait for the build. A later call for the same host returns the promise of its
+   * first call; the prebuild of another host goes on. Never rejects.
    */
   start(target: DockerTarget = LOCAL_DOCKER_TARGET): Promise<HelperPrebuildOutcome> {
-    if (this.run !== undefined) return this.run;
-    this.running = target;
+    const known = this.runs.get(target.host);
+    if (known !== undefined) return known.done;
+    // `done` is set below: the prebuild needs the run first.
+    const run: PrebuildRun = { target, stop: new AbortController(), limit: new AbortController(), withoutLogin: new AbortController(), running: true, done: Promise.resolve('cancelled') };
     // An SSH host: only through the connection of this window to it (HelperPrebuildDeps.connection).
     const throughConnection = this.deps.connection !== undefined && target.kind === 'remote' && hostAccessOf(target.host)?.kind === 'ssh';
-    this.run = runWithDockerTarget(target, () => this.prebuild(target, throughConnection), throughConnection ? { withoutLogin: this.withoutLogin } : {})
+    run.done = runWithDockerTarget(target, () => this.prebuild(run, throughConnection), throughConnection ? { withoutLogin: run.withoutLogin } : {})
       .catch((error: unknown) => {
-        if (this.limit.signal.aborted && !this.controller.signal.aborted) {
+        const ended = this.disposal.signal.aborted || run.stop.signal.aborted;
+        if (run.limit.signal.aborted && !ended) {
           this.deps.logger.warn('The workspace helper image was not ready within the time limit of the background preparation; the next open prepares it.');
           return 'failed' as const;
         }
-        if (this.controller.signal.aborted) return 'cancelled' as const;
-        if (this.withoutLogin.signal.aborted) {
+        if (ended) return 'cancelled' as const;
+        if (run.withoutLogin.signal.aborted) {
           this.deps.logger.info(
             `The background preparation of the workspace helper image on ${target.host} stopped: the connection of this window to the host ended, and the work in the background does not log in itself. The next open prepares the image.`,
           );
@@ -210,47 +230,51 @@ export class HelperPrebuild {
         return 'failed' as const;
       })
       .finally(() => {
-        this.running = undefined;
+        run.running = false;
       });
-    return this.run;
+    this.runs.set(target.host, run);
+    return run.done;
   }
 
-  /** Cancels a prebuild that runs (on deactivation). */
+  /** Cancels every prebuild that runs (on deactivation). */
   dispose(): void {
-    this.controller.abort();
+    this.disposal.abort();
   }
 
   /**
-   * "Remove Devspaces from This Docker Engine…" on the Docker host of `target`: a prebuild that runs there is cancelled
-   * (as by dispose), and the call waits for its end, so that it does not build the helper image again after its
-   * removal. Nothing when the prebuild runs on another host or did not start.
+   * "Remove Devspaces from This Docker Engine…" on the Docker host of `target`: the prebuild that runs there is
+   * cancelled, and the call waits for its end, so that it does not build the helper image again after its removal. The
+   * prebuild of another host goes on. Nothing when no prebuild runs on that host.
    */
   async stop(target: Pick<DockerTarget, 'host'>): Promise<void> {
-    if (this.run === undefined || this.running?.host !== target.host) return;
+    const run = this.runs.get(target.host);
+    if (run === undefined || !run.running) return;
     this.deps.logger.info(`The background preparation of the workspace helper image on ${describeDockerHost(target.host)} stops: Devspaces is being removed from there.`);
-    this.controller.abort();
-    await this.run;
+    run.stop.abort();
+    await run.done;
   }
 
   /**
    * `throughConnection` (an SSH host with HelperPrebuildDeps.connection): when the prebuild is due, it first waits for
    * the connection of this window to the host, without a time limit; the time limit starts after it.
    */
-  private async prebuild(target: DockerTarget, throughConnection: boolean): Promise<HelperPrebuildOutcome> {
+  private async prebuild(run: PrebuildRun, throughConnection: boolean): Promise<HelperPrebuildOutcome> {
     const { deps } = this;
+    const { target } = run;
+    const ended = AbortSignal.any([this.disposal.signal, run.stop.signal]);
     if (throughConnection && deps.connection !== undefined) {
-      const waiting = this.controller.signal;
+      const waiting = ended;
       if (!(await this.isDue(waiting))) return waiting.aborted ? 'cancelled' : 'notDue';
       deps.logger.info(`The workspace helper image on ${target.host} is prepared in the background through the connection of this window to the host, when that connection is open.`);
       await deps.connection(target.host, waiting);
     }
     // A time limit, not a cancel, so a rebuild that it ends counts as a failed one.
     const timer = setTimeout(
-      () => this.limit.abort(helperTimeLimit('The time limit of the background preparation of the workspace helper image ended.')),
+      () => run.limit.abort(helperTimeLimit('The time limit of the background preparation of the workspace helper image ended.')),
       deps.timeoutMs ?? HELPER_PREBUILD_TIMEOUT_MS,
     );
     try {
-      return await this.prebuildWithin(target, AbortSignal.any([this.controller.signal, this.limit.signal, this.withoutLogin.signal]), throughConnection);
+      return await this.prebuildWithin(target, AbortSignal.any([ended, run.limit.signal, run.withoutLogin.signal]), throughConnection);
     } finally {
       clearTimeout(timer);
     }

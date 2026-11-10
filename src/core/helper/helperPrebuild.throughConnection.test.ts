@@ -308,6 +308,54 @@ describe('HelperPrebuild on an SSH host: only through the connection of this win
   });
 });
 
+// A switch to another Docker host starts the prebuild there (src/vscode/extension.ts, prebuildAfterSwitch): one prebuild
+// per host in a window, each with its own stop.
+describe('HelperPrebuild once per Docker host', () => {
+  const VM_HOST = remoteDockerTarget('lima:devspaces');
+
+  it('runs on a second host while the first one waits for its connection, and a second start of a host returns its first run', async () => {
+    writeState({ images: {} }, 'build-box');
+    const { connection, waits } = connectionOf();
+    const dockerRunning = vi.fn(async () => true);
+    const background = prebuild(images(), { connection, dockerRunning });
+    const first = background.start(SSH_HOST);
+    await vi.waitFor(() => expect(waits).toEqual(['build-box']));
+    // The setup of the VM, a switch to it: its prebuild runs at once, without the connection of an SSH host.
+    const second = background.start(VM_HOST);
+    expect(await second).toBe('built');
+    expect(dockerRunning).toHaveBeenCalledTimes(1);
+    expect(docker.builds).toHaveLength(1);
+    expect(background.start(VM_HOST)).toBe(second);
+    expect(background.start(SSH_HOST)).toBe(first);
+    expect(dockerRunning).toHaveBeenCalledTimes(1);
+    expect(logger.lines).toContain('info The workspace helper image is built in the background.');
+    // The removal of Devspaces from the first host stops only its prebuild; dispose ends the rest.
+    await background.stop(SSH_HOST);
+    expect(await first).toBe('cancelled');
+    expect(waits).toEqual(['build-box']);
+  });
+
+  it('stops only the prebuild of the host of a removal, and dispose stops every one', async () => {
+    writeState({ images: { [TAG]: REBUILD_ASKED } }, 'build-box');
+    const other = remoteDockerTarget('other-box');
+    writeState({ images: { [TAG]: REBUILD_ASKED } }, 'other-box');
+    const { connection, waits } = connectionOf();
+    const background = prebuild(images(), { connection });
+    const first = background.start(SSH_HOST);
+    const second = background.start(other);
+    await vi.waitFor(() => expect(waits).toEqual(['build-box', 'other-box']));
+    await background.stop(other);
+    expect(await second).toBe('cancelled');
+    let firstEnded = false;
+    void first.then(() => (firstEnded = true));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(firstEnded).toBe(false);
+    background.dispose();
+    expect(await first).toBe('cancelled');
+    expect(docker.calls).toEqual([]);
+  });
+});
+
 describe('dockerEngineAnswers with `connected` (the build of a missing image that a refresh asks for)', () => {
   const deps = (connected: boolean, daemonStatus = vi.fn(async () => ({ running: true }))) => ({
     daemonStatus,

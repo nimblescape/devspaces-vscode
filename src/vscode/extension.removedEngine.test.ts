@@ -33,6 +33,16 @@ describe('the gates of extension.ts on an engine with the removal mark', () => {
     expect(source).toMatch(/const heartbeats = heartbeatWiring\(\{[^}]*\n\s*engineRemoved,\n/);
   });
 
+  // A switch to another Docker host (also the end of the setup of the VM of Devspaces) starts the background prebuild of
+  // the helper image there, never on an engine with the removal mark. Mutation: without the check, the prebuild builds
+  // there; without the call in onDidSwitch, the first Start on the new host waits for the build.
+  it('a switch to another host starts the background prebuild there, but not without a host or on an engine with the removal mark', () => {
+    expect(source).toMatch(
+      /const prebuildAfterSwitch = async \(\): Promise<void> => \{\s*const prebuild = backgroundPrebuild;\s*if \(prebuild === undefined\) return;\s*const target = await targets\.current\(\);\s*if \(target\.kind !== 'remote' \|\| \(await engineRemoved\(target\)\)\) return;\s*await prebuild\.start\(target\);\s*\};/,
+    );
+    expect(source).toMatch(/onDidSwitch: async \(\) => \{[^}]*background\(prebuildAfterSwitch\(\), 'prepare the workspace helper image in the background'\);/);
+  });
+
   // The removal stops both background builds of the helper image on its engine before it removes the images
   // (HelperPrebuild.stop and MissingHelperBuild.stop, tested in src/core/helper).
   it('the removal stops the background prebuild and the build of a missing helper image on its engine', () => {
