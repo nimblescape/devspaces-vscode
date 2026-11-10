@@ -34,15 +34,17 @@ export interface DockerHostRow {
 }
 
 /**
- * The Docker host of the first row: the local Docker, a remote host of the list of Devspaces, an endpoint that is not
- * supported, a docker command that uses Podman (podmanDockerTarget), or a Docker context or DOCKER_HOST of the user
- * that reaches a host over SSH (`sshContext`, isDockerContextHostTarget).
+ * The Docker host of the first row: the local Docker, the own VM of Devspaces on this computer (`vm`, isVmHost: its WSL
+ * distribution or its Lima VM, which Devspaces reaches as a host of its list but which is local), a remote host of the
+ * list of Devspaces, an endpoint that is not supported, a docker command that uses Podman (podmanDockerTarget), or a
+ * Docker context or DOCKER_HOST of the user that reaches a host over SSH (`sshContext`, isDockerContextHostTarget).
  */
 export interface ShownDockerHost {
-  kind: 'local' | 'remote' | 'unsupported' | 'podman' | 'sshContext';
+  kind: 'local' | 'vm' | 'remote' | 'unsupported' | 'podman' | 'sshContext';
   /**
-   * The remote host, the SSH host of the Docker context of the user, or the endpoint that is not supported; empty for
-   * the local Docker, for a current Docker context that could not be read (kind `unsupported`), and for Podman.
+   * The host of the own VM, the remote host, the SSH host of the Docker context of the user, or the endpoint that is not
+   * supported; empty for the local Docker, for a current Docker context that could not be read (kind `unsupported`), and
+   * for Podman.
    */
   host: string;
   /** Kind `sshContext`: the Docker context of the user; undefined when DOCKER_HOST decides. */
@@ -52,36 +54,42 @@ export interface ShownDockerHost {
 export const DOCKER_HOST_ROW_ID = 'dockerHost';
 
 export const DockerHostRowTexts = {
+  // The own VM of Devspaces runs on this computer, so its row names it as the local Docker host.
   label: (shown: ShownDockerHost) =>
     shown.kind === 'local'
       ? 'Local Docker'
-      : shown.kind === 'remote'
-        ? `Remote Docker host: ${shown.host}`
-        : shown.kind === 'podman'
-          ? Messages.podmanNotSupportedLabel
-          : shown.kind === 'sshContext'
-            ? `Docker is set to ${shown.host} over SSH`
-            : shown.host === ''
-              ? Messages.dockerContextUnreadableLabel
-              : `Docker endpoint not supported: ${shown.host}`,
+      : shown.kind === 'vm'
+        ? 'Local Docker host: VM of Devspaces'
+        : shown.kind === 'remote'
+          ? `Remote Docker host: ${shown.host}`
+          : shown.kind === 'podman'
+            ? Messages.podmanNotSupportedLabel
+            : shown.kind === 'sshContext'
+              ? `Docker is set to ${shown.host} over SSH`
+              : shown.host === ''
+                ? Messages.dockerContextUnreadableLabel
+                : `Docker endpoint not supported: ${shown.host}`,
   tooltip: (shown: ShownDockerHost) =>
     shown.kind === 'local'
       ? 'Docker runs on this computer. Click to use a remote Docker host.'
-      : shown.kind === 'remote'
-        ? `Devspaces uses Docker on ${shown.host}. Click to choose another host.`
-        : shown.kind === 'podman'
-          ? Messages.podmanNotSupportedTooltip
-          : shown.kind === 'sshContext'
-            ? `${shown.context === undefined ? 'DOCKER_HOST' : `The Docker context ${shown.context}`} of this computer reaches ${shown.host} over SSH. Devspaces uses a remote host only from its own list, so it does nothing with Docker now. Click to choose the Docker host.`
-            : shown.host === ''
-              ? Messages.dockerContextUnreadableTooltip
-              : 'Docker is set to an endpoint that Devspaces does not support. Click to choose the Docker host.',
+      : shown.kind === 'vm'
+        ? `Devspaces uses Docker Engine in its own VM on this computer (${shown.host}). Click to choose another host.`
+        : shown.kind === 'remote'
+          ? `Devspaces uses Docker on ${shown.host}. Click to choose another host.`
+          : shown.kind === 'podman'
+            ? Messages.podmanNotSupportedTooltip
+            : shown.kind === 'sshContext'
+              ? `${shown.context === undefined ? 'DOCKER_HOST' : `The Docker context ${shown.context}`} of this computer reaches ${shown.host} over SSH. Devspaces uses a remote host only from its own list, so it does nothing with Docker now. Click to choose the Docker host.`
+              : shown.host === ''
+                ? Messages.dockerContextUnreadableTooltip
+                : 'Docker is set to an endpoint that Devspaces does not support. Click to choose the Docker host.',
 } as const;
 
-// The monitors of the rows, switched off, with the connection sign for a remote host and the warning sign for an
-// endpoint that is not supported and for Podman.
+// The monitors of the rows, switched off (also for the own VM of Devspaces, which is local), with the connection sign for
+// a remote host and the warning sign for an endpoint that is not supported and for Podman.
 const DOCKER_HOST_ICONS: Record<ShownDockerHost['kind'], string> = {
   local: MonitorIcons.off,
+  vm: MonitorIcons.off,
   remote: MonitorIcons.remote,
   unsupported: MonitorIcons.warning,
   podman: MonitorIcons.warning,

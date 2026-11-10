@@ -7,7 +7,7 @@ import { Messages } from '../messages';
 import { silentLogger, type ProcessRunner, type RunOptions, type RunResult } from '../ports';
 // The Docker CLI of the extension (BootstrapDocker).
 import { BootstrapDocker } from './bootstrapDocker';
-import { LIMA_HOST, dockerTargetOf, isDockerContextHostTarget, isNoDockerHostTarget, isOnDockerHost, isPodmanDockerTarget, isUnreadableDockerTarget, remoteDockerTarget } from './dockerHost';
+import { LIMA_HOST, WSL_HOST, dockerTargetOf, isDockerContextHostTarget, isNoDockerHostTarget, isOnDockerHost, isPodmanDockerTarget, isUnreadableDockerTarget, remoteDockerTarget } from './dockerHost';
 import { ensureDockerRunning } from './dockerStart';
 import {
   CONTEXT_INSPECT_TIMEOUT_MS,
@@ -17,6 +17,7 @@ import {
   operationDockerTarget,
   podmanDockerTarget,
   runWithDockerTarget,
+  withoutMissingVm,
 } from './dockerTargets';
 import { startDockerFor } from './remoteDocker';
 
@@ -100,6 +101,64 @@ describe('DockerTargets without the Docker of this computer (macOS and Linux)', 
     await expect(targets.resolve()).resolves.toEqual(remoteDockerTarget('me@box'));
     await expect(targets.ofHost('me@box')).resolves.toEqual(remoteDockerTarget('me@box'));
     expect(cli.calls).toEqual([]);
+  });
+});
+
+// R-ENG-001: while Devspaces uses its own VM and that VM does not exist, Devspaces has no Docker host, so the sidebar
+// shows the setup of the VM instead of a Start that fails.
+describe('withoutMissingVm (the own VM of Devspaces does not exist)', () => {
+  function withVm(exists: (host: string) => Promise<boolean>) {
+    const env = { PATH: '/usr/bin' };
+    const choice = new FakeChoice();
+    const docker = new BootstrapDocker(new FakeDockerCli(), DOCKER, env, silentLogger, 'darwin');
+    const logs: string[] = [];
+    const logger = { ...silentLogger, info: (message: string) => logs.push(message), warn: (message: string) => logs.push(message) };
+    const checked: string[] = [];
+    const vmExists = vi.fn(async (host: string) => {
+      checked.push(host);
+      return exists(host);
+    });
+    const targets = new DockerTargets(docker, env, silentLogger, 'darwin', withoutMissingVm(choice, vmExists, logger), false);
+    return { choice, targets, logs, checked };
+  }
+
+  it('gives NO_DOCKER_HOST_TARGET while the chosen VM does not exist, and the VM again once it exists', async () => {
+    let exists = false;
+    const { choice, targets, logs } = withVm(async () => exists);
+    choice.host = LIMA_HOST;
+    await expect(targets.resolve()).resolves.toBe(NO_DOCKER_HOST_TARGET);
+    await expect(targets.resolve()).resolves.toBe(NO_DOCKER_HOST_TARGET);
+    // The log names the missing VM once, not at each read.
+    expect(logs).toEqual([expect.stringContaining('the VM is not set up')]);
+    exists = true;
+    await expect(targets.resolve()).resolves.toEqual(remoteDockerTarget(LIMA_HOST));
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toContain('exists again');
+  });
+
+  it('checks the WSL distribution of Devspaces in the same way', async () => {
+    const { choice, targets, checked } = withVm(async () => false);
+    choice.host = WSL_HOST;
+    await expect(targets.resolve()).resolves.toBe(NO_DOCKER_HOST_TARGET);
+    expect(checked).toEqual([WSL_HOST]);
+  });
+
+  it('never checks an SSH host, and keeps no host as it is', async () => {
+    const { choice, targets, checked } = withVm(async () => false);
+    choice.host = 'me@box';
+    await expect(targets.resolve()).resolves.toEqual(remoteDockerTarget('me@box'));
+    choice.host = undefined;
+    await expect(targets.resolve()).resolves.toBe(NO_DOCKER_HOST_TARGET);
+    expect(checked).toEqual([]);
+  });
+
+  it('uses the VM when the check fails (logged)', async () => {
+    const { choice, targets, logs } = withVm(async () => {
+      throw new Error('no access');
+    });
+    choice.host = LIMA_HOST;
+    await expect(targets.resolve()).resolves.toEqual(remoteDockerTarget(LIMA_HOST));
+    expect(logs).toEqual([expect.stringContaining('no access')]);
   });
 });
 

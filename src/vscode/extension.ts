@@ -39,7 +39,7 @@ import {
 } from '../core/docker/dockerHost';
 import { RemovedEngineError, removedEngineImageNote, removedEngineNote } from '../core/docker/engineRemoval';
 import { ensureDockerRunning, launchDetachedProcess } from '../core/docker/dockerStart';
-import { DockerTargets, operationDockerTarget, outsideOperation, runWithDockerTarget } from '../core/docker/dockerTargets';
+import { DockerTargets, operationDockerTarget, outsideOperation, runWithDockerTarget, withoutMissingVm } from '../core/docker/dockerTargets';
 import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
 import { RelayConnectionError } from '../core/relay/connection';
 import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
@@ -368,7 +368,10 @@ async function activateExtension(
   // The Docker host of Devspaces (its own VM, or a host of its own list), read at the start of each operation. Devspaces
   // never uses the Docker of this computer (R-ENG-001): without a host, the sidebar shows the Docker setup.
   const remoteState = new RemoteDockerState(paths.remoteDocker, logger);
-  const targets = new DockerTargets(docker, env, logger, platform, remoteState, usesComputerDocker());
+  // Whether the own VM of Devspaces exists (withoutMissingVm): while the chosen VM does not exist, Devspaces has no Docker
+  // host, and the sidebar shows the setup of the VM. Set below with the VM; until then, it exists.
+  let ownVmExists = async (_host: string): Promise<boolean> => true;
+  const targets = new DockerTargets(docker, env, logger, platform, withoutMissingVm(remoteState, (host) => ownVmExists(host), logger), usesComputerDocker());
   // What this computer remembers about each Docker engine (docker-engines.json): the removal mark of "Remove Devspaces
   // from This Docker Engine…".
   const engineRecords = new DockerEngineRecords(paths.dockerEngines, { logger });
@@ -432,6 +435,7 @@ async function activateExtension(
       logger.info(`Whether the WSL distribution of Devspaces exists could not be read, so the Docker context devspaces waits: ${errorMessage(error)}`);
       return undefined;
     });
+    if (registration !== undefined) wslDistributionKnown(registration !== 'none');
     return registration === 'own' ? contextPipe.address.dockerHost : undefined;
   };
   // The Docker context `devspaces` of the VM of Devspaces (R-ENG-007): created while the setting createDockerContext is
@@ -908,6 +912,23 @@ async function activateExtension(
     wslFolder === undefined
       ? undefined
       : new WslSetup({ runner, wslPath, env, arch: () => readWindowsArch(runner, env, process.arch, logger), folder: wslFolder, logger });
+  // Whether the own VM of Devspaces exists, for the Docker host of Devspaces (withoutMissingVm): the Lima VM from the file
+  // of its instance at each read (no process). The registration of the WSL distribution needs wsl.exe and the registry,
+  // so its answer comes from the reads that run anyway (the scheduled task at the start of the window, after the setup or
+  // the removal and after a change of the schedule; the Docker context of the setting createDockerContext), and a read
+  // in between takes the last answer (before the first one: it exists). A changed answer reads the Docker host again.
+  let wslDistributionExists: boolean | undefined;
+  const wslDistributionKnown = (exists: boolean): void => {
+    const before = wslDistributionExists !== false;
+    wslDistributionExists = exists;
+    // DockerTargets.resolve never throws.
+    if (before !== exists) void targets.resolve();
+  };
+  ownVmExists = async (host) => {
+    if (host === LIMA_HOST) return limaVm === undefined || (await limaVm.exists());
+    if (host === WSL_HOST) return wslDistributionExists !== false;
+    return true;
+  };
   // The record of the installation of WSL (Windows): after the restart of Windows, the first window goes on with the setup
   // of Docker for Devspaces, and with the link that needed it (Controller.goOnAfterWslInstall).
   const wslAfterInstall = platform === 'win32' ? new WslAfterInstall({ files: sessionFiles, logger }) : undefined;
@@ -1220,8 +1241,9 @@ async function activateExtension(
     limaVmExists: limaVm === undefined ? undefined : () => limaVm.exists(),
     devspaceCount: async (host) => devspacesOfHost(await registry.list(), host).length,
     onDidSwitch: async () => {
-      // The helper image on the new host in the background (HelperPrebuild, once per host in this window), also after
-      // the setup of the VM of Devspaces, so that the first Start there does not wait for its build.
+      // The helper image on the new host in the background (HelperPrebuild, once per host in this window, and again where
+      // the first try found Docker not running), also after the setup of the VM of Devspaces, so that the first Start
+      // there does not wait for its build.
       background(prebuildAfterSwitch(), 'prepare the workspace helper image in the background');
       await sidebar.render();
       if (view.visible) await sidebar.refreshStates();
@@ -1244,8 +1266,10 @@ async function activateExtension(
     restartPending: async () => (await wslAfterInstall?.restartPending()) === true,
     wslInstallDone: async () => wslAfterInstall?.forget(),
     // After the setup, the Docker context of the setting createDockerContext, which waited for the distribution, and the
-    // scheduled task of the distribution.
+    // scheduled task of the distribution. The setup registered the distribution, so the Docker host is the distribution
+    // again (ownVmExists).
     useHost: async (host) => {
+      wslDistributionExists = true;
       const used = await remoteDocker.useHost(host);
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
       background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
@@ -1326,13 +1350,17 @@ async function activateExtension(
   const updateWslTask = async (): Promise<void> => {
     if (wslTask === undefined || wslSetupCore === undefined) return;
     // Without WSL, no call of wsl.exe: only a task that this computer registered goes (WslTask.remove).
-    if (wslPath() === undefined) return wslTask.remove();
+    if (wslPath() === undefined) {
+      wslDistributionKnown(false);
+      return wslTask.remove();
+    }
     // When the registry cannot be read, the task stays as it is until a later window can tell.
     const registration = await wslSetupCore.registration().catch((error: unknown) => {
       logger.info(`Whether the WSL distribution of Devspaces exists could not be read, so its scheduled task stays as it is: ${errorMessage(error)}`);
       return undefined;
     });
     if (registration === undefined) return;
+    wslDistributionKnown(registration !== 'none');
     if (registration !== 'own') return wslTask.remove();
     const { schedule, timeZone } = await monitorSettings.forOpen(WSL_HOST);
     await wslTask.update({ schedule, timeZone });
@@ -1646,7 +1674,8 @@ async function activateExtension(
   // as an operation on it (the state file and engine key of an open there); the WSL distribution gets the start of its
   // shell before its `docker info` (dockerEngineAnswers), and an SSH host is prepared only through the connection of
   // this window to it, when that connection is open (`connection`). A switch to another host starts the prebuild there
-  // (prebuildAfterSwitch), once per host in this window.
+  // (prebuildAfterSwitch), once per host in this window, and again on a host where the first try found Docker not running
+  // (the VM of Devspaces before its setup).
   const helperPrebuild = new HelperPrebuild({
     helper,
     dockerRunning: (target, signal) =>

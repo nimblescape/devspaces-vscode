@@ -13,6 +13,8 @@ takes the section of a version as the notes of its GitHub release.
 
 **Back to the VM from a remote host:** while the VM of Devspaces does not exist, the choice of the Docker host (the first row of the view, and **Use a Remote Docker Host…**) offers its setup, which creates the VM and uses it: **Set Up Docker for Devspaces in WSL…** on Windows, **Set Up Docker for Devspaces in Its VM…** on macOS and Linux. Once the VM exists, the choice lists it as `wsl:devspaces` or `lima:devspaces`.
 
+**The VM as the local Docker host:** the first row of the view now names the VM of Devspaces **Local Docker host: VM of Devspaces**, and the title of the view **Local VM of Devspaces**, not a remote host, because the VM runs on your computer. When Devspaces uses its VM and the VM no longer exists, for example after its removal outside of Devspaces, the view shows **Set Up Docker for Devspaces** again instead of the repositories, and a link sets the VM up again without a question.
+
 **The helper image after a change of the Docker host:** after the setup of the VM of Devspaces, and after the choice of another Docker host, Devspaces builds its helper image on that host in the background, so that the first Start there does not wait for it. The log says when it starts and when it is ready.
 
 **No installation or start of Docker on the computer:** Devspaces no longer has commands that install Docker Desktop or Docker Engine on your computer, or that start them (**Start Docker**), and it starts no Docker of the computer by itself. When the Docker host of Devspaces does not answer, the message offers **Try again**.

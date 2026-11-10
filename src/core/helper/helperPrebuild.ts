@@ -160,6 +160,8 @@ interface PrebuildRun {
   running: boolean;
   /** Its outcome; never rejects. */
   done: Promise<HelperPrebuildOutcome>;
+  /** Its outcome once it ended. */
+  outcome?: HelperPrebuildOutcome;
 }
 
 /**
@@ -202,11 +204,12 @@ export class HelperPrebuild {
    * Starts the prebuild as an operation on `target` (the local Docker by default), once per Docker host in this window:
    * at the activation on the current host, and after a switch to another host (src/vscode/extension.ts, onDidSwitch),
    * so that the first open there does not wait for the build. A later call for the same host returns the promise of its
-   * first call; the prebuild of another host goes on. Never rejects.
+   * first call, except after a first call that found the engine not running (`dockerNotRunning`, for example the VM of
+   * Devspaces before its setup): that host gets a new prebuild. The prebuild of another host goes on. Never rejects.
    */
   start(target: DockerTarget = LOCAL_DOCKER_TARGET): Promise<HelperPrebuildOutcome> {
     const known = this.runs.get(target.host);
-    if (known !== undefined) return known.done;
+    if (known !== undefined && (known.running || known.outcome !== 'dockerNotRunning')) return known.done;
     // `done` is set below: the prebuild needs the run first.
     const run: PrebuildRun = { target, stop: new AbortController(), limit: new AbortController(), withoutLogin: new AbortController(), running: true, done: Promise.resolve('cancelled') };
     // An SSH host: only through the connection of this window to it (HelperPrebuildDeps.connection).
@@ -228,6 +231,10 @@ export class HelperPrebuild {
         if (isAbortError(error)) return 'cancelled' as const;
         this.deps.logger.warn(`The workspace helper image could not be prepared in the background: ${errorMessage(error)}`);
         return 'failed' as const;
+      })
+      .then((outcome) => {
+        run.outcome = outcome;
+        return outcome;
       })
       .finally(() => {
         run.running = false;

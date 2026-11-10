@@ -17,7 +17,7 @@ import { errorMessage } from '../errors';
 import { Messages } from '../messages';
 import type { Logger, RunOptions, RunResult } from '../ports';
 import { envValue } from './dockerCli';
-import { LOCAL_DOCKER_TARGET, dockerTargetOf, parseContextInspect, remoteDockerTarget, type DockerTarget } from './dockerHost';
+import { LOCAL_DOCKER_TARGET, dockerTargetOf, isVmHost, parseContextInspect, remoteDockerTarget, type DockerTarget } from './dockerHost';
 
 /**
  * The target while Devspaces has no Docker host (isNoDockerHostTarget): it never uses the Docker of this computer
@@ -121,6 +121,38 @@ export interface ContextReader {
 /** The Docker host of Devspaces (RemoteDockerState.dockerHost): a host of its list, or undefined for the local Docker. */
 export interface DockerHostChoice {
   dockerHost(): Promise<string | undefined>;
+}
+
+/**
+ * The Docker host of Devspaces of `choice`, but none while that host is the own VM of Devspaces (isVmHost) and the VM
+ * does not exist (`vmExists`), for example after its removal outside of Devspaces: Devspaces has no Docker host then, so
+ * the sidebar shows the setup of the VM, as before its first setup, and a link sets the VM up without a question
+ * (docs/requirements.md R-ENG-001). The choice itself stays, so the VM is the Docker host again once it exists. A check
+ * that fails counts as an existing VM (logged). The log names each change of the answer once.
+ */
+export function withoutMissingVm(choice: DockerHostChoice, vmExists: (host: string) => Promise<boolean>, logger: Logger): DockerHostChoice {
+  // The VM host whose missing VM the log named last.
+  let missingLogged: string | undefined;
+  return {
+    async dockerHost(): Promise<string | undefined> {
+      const host = await choice.dockerHost();
+      if (host === undefined || !isVmHost(host)) return host;
+      let exists = true;
+      try {
+        exists = await vmExists(host);
+      } catch (error) {
+        logger.warn(`Whether the VM of Devspaces exists could not be read, so Devspaces uses ${host}: ${errorMessage(error)}`);
+      }
+      if (exists) {
+        if (missingLogged === host) logger.info(`The VM of Devspaces exists again: Devspaces uses ${host}.`);
+        missingLogged = undefined;
+        return host;
+      }
+      if (missingLogged !== host) logger.info(`Devspaces uses its VM (${host}), but the VM is not set up: Devspaces has no Docker host, and the view shows the setup of the VM.`);
+      missingLogged = host;
+      return undefined;
+    },
+  };
 }
 
 /** Reads the current Docker target, and runs operations with it. */

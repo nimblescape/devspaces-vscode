@@ -8,12 +8,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
-import { dockerTargetOf, LIMA_HOST, LOCAL_DOCKER_TARGET, remoteDockerTarget } from '../core/docker/dockerHost';
+import { dockerTargetOf, LIMA_HOST, LOCAL_DOCKER_TARGET, remoteDockerTarget, WSL_HOST } from '../core/docker/dockerHost';
 import { NO_DOCKER_HOST_TARGET, UNREADABLE_DOCKER_TARGET, podmanDockerTarget } from '../core/docker/dockerTargets';
 import { Messages } from '../core/messages';
 import { silentLogger } from '../core/ports';
 import { DockerHostIndicator, DockerHostTexts } from './dockerHostIndicator';
-import type { ShownDockerHost } from './treeView';
+import { DockerHostRowTexts, type ShownDockerHost } from './treeView';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
 
 // The sidebar indicates the Docker host, a remote host as well as the local Docker.
@@ -111,7 +111,21 @@ describe('DockerHostIndicator', () => {
     expect(view.title).toBe('Devspaces');
     expect(view.description).toBeUndefined();
     indicator.update(remoteDockerTarget(LIMA_HOST));
-    expect(rows).toEqual([undefined, { kind: 'remote', host: LIMA_HOST }]);
+    expect(rows).toEqual([undefined, { kind: 'vm', host: LIMA_HOST }]);
+  });
+
+  // The own VM of Devspaces runs on this computer: it is the local Docker host, not a remote one.
+  it('names the own VM of Devspaces as local, on every platform', () => {
+    for (const host of [LIMA_HOST, WSL_HOST]) {
+      const view: { description?: string; title?: string } = {};
+      const rows: Array<ShownDockerHost | undefined> = [];
+      new DockerHostIndicator(view, silentLogger, (shown) => rows.push(shown)).update(remoteDockerTarget(host));
+      expect(view.title).toBe('Local VM of Devspaces');
+      expect(view.description).toBeUndefined();
+      expect(rows).toEqual([{ kind: 'vm', host }]);
+      expect(DockerHostRowTexts.label({ kind: 'vm', host })).toBe('Local Docker host: VM of Devspaces');
+      expect(DockerHostRowTexts.tooltip({ kind: 'vm', host })).toContain(`its own VM on this computer (${host})`);
+    }
   });
 
   // The title bar has no icon for the Docker host, so no context key is set for one.

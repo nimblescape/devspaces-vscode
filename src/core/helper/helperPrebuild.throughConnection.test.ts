@@ -335,6 +335,24 @@ describe('HelperPrebuild once per Docker host', () => {
     expect(waits).toEqual(['build-box']);
   });
 
+  it('starts again on a host where the first start found Docker not running (the VM of Devspaces before its setup)', async () => {
+    let running = false;
+    const dockerRunning = vi.fn(async () => running);
+    const background = prebuild(images(), { dockerRunning });
+    const first = background.start(VM_HOST);
+    expect(await first).toBe('dockerNotRunning');
+    expect(docker.builds).toHaveLength(0);
+    // The setup of the VM, then the switch to it.
+    running = true;
+    const second = background.start(VM_HOST);
+    expect(second).not.toBe(first);
+    expect(await second).toBe('built');
+    expect(docker.builds).toHaveLength(1);
+    // A start while that run goes on, or after it built, returns that run.
+    expect(background.start(VM_HOST)).toBe(second);
+    expect(dockerRunning).toHaveBeenCalledTimes(2);
+  });
+
   it('stops only the prebuild of the host of a removal, and dispose stops every one', async () => {
     writeState({ images: { [TAG]: REBUILD_ASKED } }, 'build-box');
     const other = remoteDockerTarget('other-box');
