@@ -1174,6 +1174,17 @@ async function activateExtension(
     previewRunner: new PreviewWorkerRunner(groupsWorkerScript),
   });
   context.subscriptions.push(repositoryGroupsEditor);
+  // After the choice of another Docker host: the background prebuild of the helper image there, as at the start of a
+  // window, but also before the first use of Devspaces (the choice is a use), and never on an engine with the removal
+  // mark. Nothing without a Docker host (after the removal of the host that Devspaces used), and nothing before the
+  // activation created the prebuild: its start reads the current host.
+  const prebuildAfterSwitch = async (): Promise<void> => {
+    const prebuild = backgroundPrebuild;
+    if (prebuild === undefined) return;
+    const target = await targets.current();
+    if (target.kind !== 'remote' || (await engineRemoved(target))) return;
+    await prebuild.start(target);
+  };
   // "Use a Remote Docker Host…" and the choice of the first row of the view.
   const remoteDocker = new RemoteDockerCommands({
     docker,
@@ -1209,6 +1220,9 @@ async function activateExtension(
     limaVmExists: limaVm === undefined ? undefined : () => limaVm.exists(),
     devspaceCount: async (host) => devspacesOfHost(await registry.list(), host).length,
     onDidSwitch: async () => {
+      // The helper image on the new host in the background (HelperPrebuild, once per host in this window), also after
+      // the setup of the VM of Devspaces, so that the first Start there does not wait for its build.
+      background(prebuildAfterSwitch(), 'prepare the workspace helper image in the background');
       await sidebar.render();
       if (view.visible) await sidebar.refreshStates();
     },
@@ -1631,8 +1645,8 @@ async function activateExtension(
   // also runs the cleanup when that is due. On the Docker engine of the current Docker context, local or remote alike,
   // as an operation on it (the state file and engine key of an open there); the WSL distribution gets the start of its
   // shell before its `docker info` (dockerEngineAnswers), and an SSH host is prepared only through the connection of
-  // this window to it, when that connection is open (`connection`). A host switch starts no new prebuild: the next
-  // activation, or the first open on that host, builds its tag.
+  // this window to it, when that connection is open (`connection`). A switch to another host starts the prebuild there
+  // (prebuildAfterSwitch), once per host in this window.
   const helperPrebuild = new HelperPrebuild({
     helper,
     dockerRunning: (target, signal) =>
