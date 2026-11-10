@@ -13,16 +13,18 @@
 # this job reads Docker Hub, and it gets no write scope. When the pin changed,
 # the job "pull request" commits the new pin to the branch buildx-<version>,
 # opens a pull request for it, and starts the workflow "CI" on that branch,
-# because a pull request of a workflow starts no workflow: the checks of that
-# run appear on the pull request, also the Docker tests, which build the
-# helper image in a container of the new build image. A branch
-# buildx-<version> that has a pull request already, open, closed or merged,
-# gets nothing new. Opening the pull request needs the repository setting
-# "Allow GitHub Actions to create and approve pull requests" (Settings >
-# Actions > General); without it, the job fails after the push, and the next
-# run tries again. A pull request that changes this workflow, the script or
-# the pin runs the job "pin", which writes nothing there. The commit and the
-# pull request name the workflow of the run, "Daily checks" or "Buildx image".
+# because GitHub runs the workflows of a pull request that a workflow opened
+# only after an approval: scripts/drop-approval-runs.sh deletes those waiting
+# runs, which would end as failed runs. The checks of the started run appear
+# on the pull request, also the Docker tests, which build the helper image in
+# a container of the new build image. A branch buildx-<version> that has a
+# pull request already, open, closed or merged, gets nothing new. Opening the
+# pull request needs the repository setting "Allow GitHub Actions to create
+# and approve pull requests" (Settings > Actions > General); without it, the
+# job fails after the push, and the next run tries again. A pull request that
+# changes this workflow, the script or the pin runs the job "pin", which writes
+# nothing there. The commit and the pull request name the workflow of the run,
+# "Daily checks" or "Buildx image".
 
 name: Buildx image
 
@@ -109,7 +111,7 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
     steps:
       - name: Check out the source
@@ -150,7 +152,7 @@ jobs:
           cat > "$RUNNER_TEMP/body.md" <<EOF
           The workflow "$WORKFLOW" found buildx $VERSION as docker/buildx-bin on Docker Hub, with an image for linux/amd64 and linux/arm64. It wrote the version and the digest of its image index into \`src/core/docker/buildxPin.json\` ([run]($RUN_URL)). Every Docker engine pulls the build image of Devspaces by this digest and tags it \`devspaces-buildx:$VERSION\`.
 
-          The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. The Docker tests build the helper image in a container of this build image. Merge when CI passes. The next release of Devspaces uses this version.
+          The workflow started the workflow "CI" on this branch, because GitHub runs the workflows of a pull request that a workflow opened only after an approval (the workflow deletes those waiting runs); its checks appear on this pull request. The Docker tests build the helper image in a container of this build image. Merge when CI passes. The next release of Devspaces uses this version.
           EOF
           if ! gh pr create --base main --head "$branch" --title "Pin the build image to buildx $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
             echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
@@ -158,3 +160,4 @@ jobs:
           fi
           gh workflow run ci.yml --ref "$branch"
           echo "The pull request of buildx $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/drop-approval-runs.sh "$branch"

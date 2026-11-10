@@ -17,10 +17,12 @@
 # runner, without network and without the files of the runner. Only this job
 # downloads, and it gets no write scope. When the pin changed, the job "pull
 # request" commits the new pin to the branch docker-cli-<version>, opens a
-# pull request for it, and starts the workflow "CI" on that branch, because a
-# pull request of a workflow starts no workflow: the checks of that run appear
-# on the pull request, also the job "vscode attach remote", which downloads
-# the new version in the window of a devspace on a Docker engine over SSH. A
+# pull request for it, and starts the workflow "CI" on that branch, because
+# GitHub runs the workflows of a pull request that a workflow opened only
+# after an approval: scripts/drop-approval-runs.sh deletes those waiting runs,
+# which would end as failed runs. The checks of the started run appear on the
+# pull request, also the job "vscode attach remote", which downloads the new
+# version in the window of a devspace on a Docker engine over SSH. A
 # branch docker-cli-<version> that has a pull request already, open, closed or
 # merged, gets nothing new. Opening the pull request needs the repository
 # setting "Allow GitHub Actions to create and approve pull requests" (Settings
@@ -114,7 +116,7 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
     steps:
       - name: Check out the source
@@ -155,7 +157,7 @@ jobs:
           cat > "$RUNNER_TEMP/body.md" <<EOF
           The workflow "$WORKFLOW" found the Docker CLI $VERSION on download.docker.com for all platforms of the pin. It downloaded each file, computed its size and SHA-256, measured the Docker API versions that the CLI speaks, and wrote them into \`src/core/docker/dockerCliPin.json\` ([run]($RUN_URL)). Docker publishes no checksums for these files. Devspaces refuses an engine of a remote host whose API versions do not fit the API versions of the pin, before a window of a devspace there opens.
 
-          The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. The job "vscode attach remote" downloads this version in the window of a devspace on a Docker engine over SSH (Linux x86_64), checks it against the pin, and attaches through the Dev Containers extension with it. Merge when CI passes. The next release of Devspaces uses this version.
+          The workflow started the workflow "CI" on this branch, because GitHub runs the workflows of a pull request that a workflow opened only after an approval (the workflow deletes those waiting runs); its checks appear on this pull request. The job "vscode attach remote" downloads this version in the window of a devspace on a Docker engine over SSH (Linux x86_64), checks it against the pin, and attaches through the Dev Containers extension with it. Merge when CI passes. The next release of Devspaces uses this version.
           EOF
           if ! gh pr create --base main --head "$branch" --title "Pin the Docker CLI $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
             echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
@@ -163,3 +165,4 @@ jobs:
           fi
           gh workflow run ci.yml --ref "$branch"
           echo "The pull request of the Docker CLI $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/drop-approval-runs.sh "$branch"

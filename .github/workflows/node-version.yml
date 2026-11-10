@@ -12,8 +12,10 @@
 # change by hand. Only this job reads the list, and it gets no write scope.
 # When the release changed, the job "pull request" commits it to the branch
 # node-<version>, opens a pull request for it, and starts the workflow "CI" on
-# that branch, because a pull request of a workflow starts no workflow: the
-# checks of this run appear on the pull request. A branch node-<version> that
+# that branch, because GitHub runs the workflows of a pull request that a
+# workflow opened only after an approval: scripts/drop-approval-runs.sh
+# deletes those waiting runs, which would end as failed runs. The checks of
+# the started run appear on the pull request. A branch node-<version> that
 # has a pull request already, open, closed or merged, gets nothing new.
 # Opening the pull request needs the repository setting "Allow GitHub Actions
 # to create and approve pull requests" (Settings > Actions > General);
@@ -90,7 +92,7 @@ jobs:
       contents: write
       # The pull request of that branch.
       pull-requests: write
-      # The start of the workflow "CI" on that branch.
+      # The start of the workflow "CI" on that branch, and the deletion of the waiting runs of the pull request.
       actions: write
     steps:
       - name: Check out the source
@@ -127,7 +129,7 @@ jobs:
           cat > "$RUNNER_TEMP/body.md" <<EOF
           The workflow "$WORKFLOW" found Node.js $VERSION, the newest LTS release of the major version of \`.node-version\`, in the [list of the releases of Node.js](https://nodejs.org/dist/index.json), and wrote it into \`.node-version\` ([run]($RUN_URL)). The builds, the tests, CI and the release of Devspaces run on this release; the extension itself runs on the Node.js of VS Code.
 
-          Read the [release notes](https://nodejs.org/en/blog/release/v$VERSION) for changes that need a change of Devspaces. The workflow started the workflow "CI" on this branch, because a pull request of a workflow starts no workflow; its checks appear on this pull request. Merge when all checks pass.
+          Read the [release notes](https://nodejs.org/en/blog/release/v$VERSION) for changes that need a change of Devspaces. The workflow started the workflow "CI" on this branch, because GitHub runs the workflows of a pull request that a workflow opened only after an approval (the workflow deletes those waiting runs); its checks appear on this pull request. Merge when all checks pass.
           EOF
           if ! gh pr create --base main --head "$branch" --title "Use Node.js $VERSION" --body-file "$RUNNER_TEMP/body.md"; then
             echo "The pull request of $branch could not be opened. Turn on \"Allow GitHub Actions to create and approve pull requests\" in Settings > Actions > General; the next run opens it." >&2
@@ -135,3 +137,4 @@ jobs:
           fi
           gh workflow run ci.yml --ref "$branch"
           echo "The pull request of Node.js $VERSION is open, and CI runs on $branch." >> "$GITHUB_STEP_SUMMARY"
+          bash scripts/drop-approval-runs.sh "$branch"

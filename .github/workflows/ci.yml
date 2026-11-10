@@ -448,13 +448,17 @@ jobs:
           DEVSPACE_TEST_STOPPED: ${{ matrix.part }}
         run: xvfb-run -a npm run test:vscode:attach
 
+      # Each command runs also when one before failed: the engine host does not exist when the preparation failed
+      # before it.
       - name: Show the Docker objects
         if: ${{ failure() }}
         run: |
+          set +e
           docker logs --tail 200 attach-test-engine-host
           docker ps -a
           docker volume ls
           docker images
+          true
 
   vscode-attach-remote:
     # The attach test of a devspace on the Docker engine of another computer, reached over SSH.
@@ -603,10 +607,14 @@ jobs:
           name=$(node -p "require('./out/test/vscode/attach/seed.json').devspace.containerName")
           test "$(docker inspect --type container -f '{{.State.Running}}' "$name")" = true
 
+      # Each command runs also when one before failed: the engine host does not exist when the preparation failed
+      # before it.
       - name: Show the Docker objects
         if: ${{ failure() }}
         run: |
+          set +e
           docker logs --tail 200 attach-test-engine-host
           docker ps -a
           docker volume ls
           docker images
+          true

@@ -18,7 +18,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createVSIX } from '@vscode/vsce';
+import { allowSlowConnects } from './connectAttempts.mjs';
 
+// With an empty VSCODE_TEST_VERSION (stable), @vscode/test-electron asks update.code.visualstudio.com for the newest
+// version, also when prepare.ts downloaded it already: that connection gives each address more than 250 ms
+// (connectAttempts.mjs).
+allowSlowConnects();
 const root = fileURLToPath(new URL('..', import.meta.url));
 // @vscode/test-electron takes its folder .vscode-test from the current folder when it loads.
 process.chdir(root);
