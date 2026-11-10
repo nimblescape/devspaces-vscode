@@ -15,7 +15,7 @@ import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type ProcessRunner } from '../ports';
 import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
 import { downloadVmImage, vmImageFile, type DownloadVmImageOptions } from './vmImage';
-import { LimaInstance, limaConfig, limaEnv, limaResources, limaSshArgs, type LimaResources } from './limaInstance';
+import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, limaSshArgs, type LimaResources } from './limaInstance';
 import type { LimaVm } from './limaVm';
 
 /** Why the setup cannot run or failed. */
@@ -145,6 +145,48 @@ export class LimaSetup {
     await this.step(() => vm.ready(signal));
     onStep({ kind: 'docker' });
     await this.dockerAnswers(signal);
+  }
+
+  /**
+   * "Stop the VM…" (R-VM-010): `limactl stop`, a shutdown of the VM with the containers in it. Nothing when the VM does
+   * not exist or does not run. Throws a LimaSetupError, and an AbortError when the signal aborts.
+   */
+  async stop(signal?: AbortSignal): Promise<void> {
+    const { vm, logger } = this.deps;
+    const instance = await this.step(() => vm.lima(signal));
+    const status = await this.step(() => instance.status(signal));
+    if (status !== 'running') {
+      logger.info(`The Lima VM of Devspaces does not run (${status}), so it is not stopped.`);
+      return;
+    }
+    logger.info('Devspaces stops the Lima VM of Devspaces (limactl stop).');
+    await this.step(() => instance.stop(signal));
+    vm.forgetRunning();
+    logger.info('The Lima VM of Devspaces was stopped.');
+  }
+
+  /**
+   * "Remove the VM…" (R-VM-010): `limactl delete --force`, which deletes the VM with its disk and every devspace in it,
+   * under the lock of the setup for all windows, so that no window creates the VM meanwhile. False when the VM did not
+   * exist. Not cancelled once it runs: a half deleted VM would help nobody. Throws a LimaSetupError.
+   */
+  async remove(): Promise<boolean> {
+    const { vm, logger } = this.deps;
+    const instance = await this.step(() => vm.lima());
+    let removed = false;
+    await this.locked(async () => {
+      const status = await this.step(() => instance.status());
+      if (status === 'missing') {
+        logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
+        return;
+      }
+      logger.info(`Devspaces removes the Lima VM of Devspaces with its disk (${path.join(vm.paths.home, LIMA_INSTANCE)}).`);
+      await this.step(() => instance.delete());
+      vm.forgetRunning();
+      removed = true;
+      logger.info('The Lima VM of Devspaces was removed.');
+    });
+    return removed;
   }
 
   private async create(instance: LimaInstance, onStep: (step: LimaSetupStep) => void, signal: AbortSignal | undefined): Promise<void> {

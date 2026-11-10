@@ -25,8 +25,10 @@
 #                 check. Then the scheduled task of the user (R-VM-009) with
 #                 the systemd of the user of the runner: a time of the schedule
 #                 in the past starts the stopped VM and a stand-in of the
-#                 Monitor, and the VM powers itself off again. macOS (Apple
-#                 Virtualization) gets a manual test.
+#                 Monitor, and the VM powers itself off again. Last, the
+#                 row of the VM in the view "Docker Hosts" (R-VM-010): its
+#                 state without a start, Stop the VM and Remove the VM.
+#                 macOS (Apple Virtualization) gets a manual test.
 #   push          Only on the main branch, and only when build, kernel check,
 #                 start test and lima test passed: scripts/vm-image.mjs pushes
 #                 the files to ghcr.io/nimblescape/devspaces-vm, but only when

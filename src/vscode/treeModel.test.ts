@@ -313,8 +313,9 @@ describe('row actions and contextValue', () => {
       contributes: { menus: Record<string, Array<{ command?: string; submenu?: string; when?: string }>> };
     };
     const menus = manifest.contributes.menus;
+    // The rows of the repositories (the view "Docker Hosts" has its own rows and menus).
     const whenOf = (menu: string, command: string) =>
-      menus[menu].filter((item) => item.command === command).map((item) => item.when ?? '');
+      menus[menu].filter((item) => item.command === command && !(item.when ?? '').startsWith('view == devspaces.hosts')).map((item) => item.when ?? '');
     const matches = (when: string, value: string) => {
       const regex = /viewItem =~ \/(.+?)\//.exec(when);
       return regex ? new RegExp(regex[1]).test(value) : true;

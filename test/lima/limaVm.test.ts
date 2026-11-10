@@ -23,6 +23,9 @@ import { installLima, limaVersion } from '../../src/core/vm/lima';
 import { DOCKER_CONTEXT, dockerContextFile, syncDockerContext } from '../../src/core/vm/dockerContext';
 import { LimaInstance, limaConfig, limaDockerSocket, limaEnv, limaPaths, limaResources, limaSshArgs, type LimaPaths } from '../../src/core/vm/limaInstance';
 import { VM_TASK_UNIT, VM_TASK_WAIT_MS, VmTask, parseVmTaskStamp, vmTaskDefinitionFiles, vmTaskPaths, vmTaskStampText } from '../../src/core/vm/vmTask';
+import { LimaSetup } from '../../src/core/vm/limaSetup';
+import { LimaVm } from '../../src/core/vm/limaVm';
+import { limaVmState } from '../../src/core/vm/vmState';
 
 const logger: Logger = {
   info: (line) => console.log(line),
@@ -278,5 +281,30 @@ describe('the Lima VM of Devspaces', () => {
     for (const file of definitions) expect(fs.existsSync(file), file).toBe(false);
     expect(fs.existsSync(taskPaths.folder)).toBe(false);
     expect((await systemctl(['is-enabled', `${VM_TASK_UNIT}.timer`])).exitCode).not.toBe(0);
+  });
+
+  // The row of the VM in the view "Docker Hosts" (R-VM-010): its state without a start, and Stop the VM (`limactl stop`)
+  // and Remove the VM (`limactl delete`) of LimaSetup, as the menu of the row runs them.
+  it('reads the state of the VM without a start, and stops and removes the VM as its row in the view Docker Hosts does', async () => {
+    if (instance === undefined || limactl === undefined) throw new Error('The first test created no VM.');
+    const installed = limactl;
+    const created = instance;
+    const vm = new LimaVm({ runner, logger, platform: process.platform, arch: process.arch, paths, install: async () => installed });
+    const setup = new LimaSetup({ vm, runner, logger, platform: process.platform, arch: process.arch, env: process.env, machine: { totalMemory: os.totalmem(), cpus: os.availableParallelism() } });
+    const state = () => limaVmState({ exists: () => vm.exists(), limactl: () => installed, paths, runner, logger });
+    // The VM is stopped after the test before; its read starts nothing.
+    const stopped = await state();
+    expect(stopped).toMatchObject({ kind: 'stopped', memoryGiB: limaResources(os.totalmem(), os.availableParallelism()).memoryGiB, cpus: limaResources(os.totalmem(), os.availableParallelism()).cpus });
+    expect(stopped.diskBytes).toBeGreaterThan(100 * 2 ** 20);
+    expect(await created.status()).toBe('stopped');
+    await created.start(undefined, (line) => console.log(`limactl: ${line}`));
+    expect((await state()).kind).toBe('running');
+    await setup.stop();
+    expect((await state()).kind).toBe('stopped');
+    await expect(setup.remove()).resolves.toBe(true);
+    expect(await state()).toEqual({ kind: 'notSetUp' });
+    expect(await created.status()).toBe('missing');
+    // Nothing is left for afterAll to delete.
+    instance = undefined;
   });
 });

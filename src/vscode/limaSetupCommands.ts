@@ -16,7 +16,7 @@ import { isAbortError, type Logger } from '../core/ports';
 import type { LinkUri } from '../core/types';
 import { LimaSetupError, type LimaSetup, type LimaSetupProblem, type LimaSetupStep } from '../core/vm/limaSetup';
 import { qemuInstallPlan, type QemuInstallInput } from '../core/vm/qemuInstall';
-import { showErrorMessage, showInformationMessage } from './notifications';
+import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 
 /** The texts of the setup of the Lima VM. */
@@ -78,6 +78,23 @@ export const LimaSetupTexts = {
   },
   /** The installation of QEMU needs a terminal on this computer. */
   qemuLocalWindow: 'QEMU is installed only from a local window of VS Code. Open a local window and set up Docker for Devspaces there.',
+  /** "Remove the VM…" (R-VM-010). */
+  confirmRemove: 'Remove the VM of Devspaces?',
+  confirmRemoveDetail: (folder: string) =>
+    [
+      '"limactl delete" deletes the VM with everything in it: all your devspaces there with the changes that you did not push, their images and their volumes. This cannot be undone. The windows of these devspaces lose the connection.',
+      `The disk of the VM in this folder is removed too:\n${folder}`,
+    ].join('\n\n'),
+  remove: 'Remove',
+  removing: 'Removing the VM of Devspaces…',
+  /** `noHost`: Devspaces used it, and has no Docker host now. */
+  removed: (noHost: boolean) =>
+    `The VM of Devspaces was removed.${noHost ? ' Devspaces has no Docker host now: set up Docker for Devspaces again in the Devspaces view, or choose another host.' : ''}`,
+  notSetUp: 'The VM of Devspaces is not set up.',
+  removeFailed: 'The VM of Devspaces could not be removed. The details show why.',
+  removedStillListed: `The VM of Devspaces was removed, but Devspaces could not take "${LIMA_HOST}" out of its list of Docker hosts. Take it out with "Remove a Host from the List…".`,
+  /** The log before the setup of "Remove and Set Up the VM Again…". */
+  removedToSetUpAgain: 'The Lima VM of Devspaces was removed, and is set up again.',
   /** QEMU was not found within 30 minutes after the installation started. */
   qemuNotFound: 'QEMU was not found within 30 minutes after its installation started. Set up Docker for Devspaces again when it is installed.',
 } as const;
@@ -104,7 +121,7 @@ function barPosition(step: LimaSetupStep): number {
 
 export interface LimaSetupCommandsDeps {
   /** The setup of this computer; undefined where there is none (not macOS or Linux). */
-  setup: Pick<LimaSetup, 'precondition' | 'setUp' | 'linuxNeeds'> | undefined;
+  setup: Pick<LimaSetup, 'precondition' | 'setUp' | 'linuxNeeds' | 'remove'> | undefined;
   /** The folder of the VM (LimaPaths.root), for the log. */
   folder: string | undefined;
   logger: Logger;
@@ -113,6 +130,15 @@ export interface LimaSetupCommandsDeps {
   useRemoteHost: () => Promise<void>;
   /** Devspaces uses the host after its test (RemoteDockerCommands.useHost); true when it does. */
   useHost: (host: string) => Promise<boolean>;
+  /**
+   * The host leaves the list of Devspaces after the removal of the VM (RemoteDockerCommands.forgetHost): whether it was
+   * the Docker host, so that Devspaces has no Docker host now.
+   */
+  forgetHost?: (host: string) => Promise<boolean>;
+  /** Before the removal of the VM: the connections of this window to it end (its worker, the relay). */
+  beforeRemove?: () => void;
+  /** After the removal of the VM: the Docker context of the setting createDockerContext and the scheduled task follow. Never rejects. */
+  afterRemove?: () => Promise<void>;
   /**
    * Linux: the installation of QEMU and of the group kvm in a visible terminal: what the plan needs to know about this
    * computer, whether this window can run a terminal on this computer (not in a remote window), and the terminal.
@@ -156,6 +182,79 @@ export class LimaSetupCommands {
   async ensureDockerHost(_link?: LinkUri): Promise<'used' | 'notUsed' | 'unavailable'> {
     if (this.deps.setup === undefined) return 'unavailable';
     return (await this.run()) ? 'used' : 'notUsed';
+  }
+
+  /**
+   * "Remove the VM…" (R-VM-010): after a warning, `limactl delete --force`, which deletes the VM with its disk; the host
+   * leaves the list of Devspaces, and when Devspaces used it, Devspaces has no Docker host then. Never throws.
+   */
+  async remove(): Promise<void> {
+    const { setup, folder, logger } = this.deps;
+    if (setup === undefined) {
+      this.inform(LimaSetupTexts.notAvailable);
+      return;
+    }
+    if (this.running) {
+      this.inform(LimaSetupTexts.busy);
+      return;
+    }
+    const answer = await showWarningMessage(LimaSetupTexts.confirmRemove, { modal: true, detail: LimaSetupTexts.confirmRemoveDetail(folder ?? '') }, LimaSetupTexts.remove);
+    if (answer !== LimaSetupTexts.remove) return;
+    this.running = true;
+    try {
+      const removed = await withNotificationProgress({ title: LimaSetupTexts.removing }, async () => {
+        this.deps.beforeRemove?.();
+        return setup.remove();
+      });
+      // Also when the VM was gone already (removed by hand): the host leaves the list.
+      const forgotten = await (this.deps.forgetHost?.(LIMA_HOST) ?? Promise.resolve(false)).catch((error: unknown) => ({ error }));
+      await this.deps.afterRemove?.();
+      if (typeof forgotten === 'object') {
+        logger.error(`${LIMA_HOST} could not be removed from the list of Devspaces: ${errorMessage(forgotten.error)}`);
+        this.showError(LimaSetupTexts.removedStillListed, [Actions.showDetails]);
+        return;
+      }
+      this.inform(removed ? LimaSetupTexts.removed(forgotten) : LimaSetupTexts.notSetUp);
+    } catch (error) {
+      if (isAbortError(error)) return;
+      logger.error(LimaSetupTexts.removeFailed, error);
+      this.showError(LimaSetupTexts.removeFailed, [Actions.showDetails]);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * "Remove and Set Up the VM Again…" after its question (vmCommands.ts): the removal without another question, then the
+   * setup of a new VM, which Devspaces uses afterwards. The host stays in the list meanwhile. Never throws.
+   */
+  async removeAndSetUpAgain(): Promise<void> {
+    const { setup, logger } = this.deps;
+    if (setup === undefined) {
+      this.inform(LimaSetupTexts.notAvailable);
+      return;
+    }
+    if (this.running) {
+      this.inform(LimaSetupTexts.busy);
+      return;
+    }
+    this.running = true;
+    try {
+      await withNotificationProgress({ title: LimaSetupTexts.removing }, async () => {
+        this.deps.beforeRemove?.();
+        await setup.remove();
+      });
+      logger.info(LimaSetupTexts.removedToSetUpAgain);
+      await this.deps.afterRemove?.();
+    } catch (error) {
+      this.running = false;
+      if (isAbortError(error)) return;
+      logger.error(LimaSetupTexts.removeFailed, error);
+      this.showError(LimaSetupTexts.removeFailed, [Actions.showDetails]);
+      return;
+    }
+    this.running = false;
+    await this.run();
   }
 
   /** The setup and the use of the VM; true when Devspaces uses it afterwards. */

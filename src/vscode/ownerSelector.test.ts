@@ -219,7 +219,8 @@ describe('the filter icon of the view title bar', () => {
       icon: '$(filter)',
     });
     expect(command(Commands.selectOwnersFiltered)).toMatchObject({ title: 'Select Organizations…', icon: '$(filter-filled)' });
-    const title = manifest.contributes.menus['view/title'];
+    // The title bar of the repositories (the view "Docker Hosts" has its own).
+    const title = manifest.contributes.menus['view/title'].filter((entry) => entry.when.startsWith('view == devspaces.repositories'));
     expect(title.map((entry) => [entry.command, entry.group])).toEqual([
       [Commands.selectOwners, 'navigation@0'],
       [Commands.selectOwnersFiltered, 'navigation@0'],

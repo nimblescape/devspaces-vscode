@@ -30,6 +30,7 @@ import {
   hostAccessOf,
   isVmHost,
   parseWslList,
+  remoteDockerTarget,
   sshCommandArgs,
   transportProgramOf,
   usesComputerDocker,
@@ -47,6 +48,8 @@ import { deferredByteProcess } from '../core/relay/deferredProcess';
 import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
+import { limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
+import { baseImageReferences, knownDevspace, readHostInventory, removeHostObjects, runningDevspaces, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
@@ -110,6 +113,8 @@ import { Controller } from './controller';
 import { DisconnectRequests } from './disconnectRequests';
 import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
+import { DockerHostsView } from './dockerHostsView';
+import { DOCKER_HOSTS_VIEW_ID } from './dockerHostsModel';
 import { DockerSetup, currentUserName, readOsRelease } from './dockerSetup';
 import { installTerminalOptions, terminalLines } from '../core/docker/dockerSetup';
 import { OutputChannelLogger } from './logger';
@@ -126,6 +131,7 @@ import { PreviewWorkerRunner } from './groupsPreviewRunner';
 import { RemoteDockerCommands } from './remoteDockerCommands';
 import { WslSetupCommands } from './wslSetupCommands';
 import { LimaSetupCommands, LimaSetupTexts } from './limaSetupCommands';
+import { VmCommands } from './vmCommands';
 import { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import { SessionCoordinator } from './sessionCoordinator';
 import {
@@ -1206,6 +1212,8 @@ async function activateExtension(
     if (target.kind !== 'remote' || (await engineRemoved(target))) return;
     await prebuild.start(target);
   };
+  // The view "Docker Hosts" (R-ENG-008), made below: the changes of the list of Devspaces show there.
+  let hostsView: DockerHostsView | undefined;
   // "Use a Remote Docker Host…" and the choice of the first row of the view.
   const remoteDocker = new RemoteDockerCommands({
     docker,
@@ -1247,7 +1255,10 @@ async function activateExtension(
       background(prebuildAfterSwitch(), 'prepare the workspace helper image in the background');
       await sidebar.render();
       if (view.visible) await sidebar.refreshStates();
+      hostsView?.changed();
     },
+    // The list of Devspaces changed: the view "Docker Hosts" shows its hosts again.
+    onDidChangeList: () => hostsView?.changed(),
     // A computer without a Docker CLI: the Docker CLI of Devspaces for the remote host.
     installOwnCli: ownCliBuild
       ? () => installOwnDockerCliWithProgress({ folder: paths.dockerCliDir, platform, arch: process.arch, logger, fallback: undefined, failed: OwnDockerCliTexts.failedForRemoteHost })
@@ -1276,6 +1287,7 @@ async function activateExtension(
       return used;
     },
     forgetHost: (host) => remoteDocker.forgetHost(host),
+    beforeRemove: () => closeVmConnections(),
     // Without the distribution, the Docker context of the setting createDockerContext and the scheduled task go too.
     forgetDistribution: async () => {
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
@@ -1284,8 +1296,9 @@ async function activateExtension(
   });
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
   // Devspaces.
+  const limaSetupCore = limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: vmArch, env, resources: vmWish, machine });
   const limaSetup = new LimaSetupCommands({
-    setup: limaVm === undefined ? undefined : new LimaSetup({ vm: limaVm, runner, logger, platform, arch: vmArch, env, resources: vmWish, machine }),
+    setup: limaSetupCore,
     folder: limaVm?.paths.root,
     logger,
     showLog: () => logger.show(),
@@ -1297,6 +1310,14 @@ async function activateExtension(
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
       background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
       return used;
+    },
+    // "Remove the VM…" (R-VM-010): the connections of this window to the VM end first; the host leaves the list of
+    // Devspaces; without the VM, the Docker context of the setting createDockerContext and the scheduled task go too.
+    beforeRemove: () => closeVmConnections(),
+    forgetHost: (host) => remoteDocker.forgetHost(host),
+    afterRemove: async () => {
+      background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+      background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
     },
     // Linux: QEMU and the group kvm with one administrator prompt (sudo) in a visible terminal of this computer, with a
     // fixed shell, folder and environment, as the installation of Docker had.
@@ -1374,6 +1395,98 @@ async function activateExtension(
     const { schedule, timeZone } = await monitorSettings.forOpen(LIMA_HOST);
     await vmTask.update({ config: { schedule, timeZone, limactl, limaHome: limaVm.paths.home }, electron: vscodeElectron(platform, vscode.env.appRoot, process.execPath) });
   };
+  // The VM of Devspaces on this platform (R-VM-010): the Lima VM on macOS and Linux, the WSL distribution on Windows.
+  const vmHost = limaVm !== undefined ? LIMA_HOST : wslSetupCore !== undefined ? WSL_HOST : undefined;
+  // Its state without a start: no download, no `limactl start`, no `wsl.exe` in the distribution.
+  const readVmState = async (): Promise<VmState> => {
+    if (limaVm !== undefined) {
+      return limaVmState({ exists: () => limaVm.exists(), limactl: () => presentLima(limaVm.paths.lima, platform, vmArch), paths: limaVm.paths, runner, logger, env });
+    }
+    if (wslSetupCore !== undefined && wslFolder !== undefined) {
+      // The answer of the registry is also the answer whether the distribution exists, for the Docker host (ownVmExists).
+      const registration = async (): Promise<'own' | 'foreign' | 'none'> => {
+        const answer = await wslSetupCore.registration();
+        wslDistributionKnown(answer !== 'none');
+        return answer;
+      };
+      return wslVmState({ registration, running: () => lifetime.running(WSL_DISTRIBUTION), folder: wslFolder });
+    }
+    return { kind: 'notSetUp' };
+  };
+  // Before a stop or a removal of the VM: the worker channel and the relay connection of this window to it end.
+  const closeVmConnections = (): void => {
+    if (vmHost === undefined) return;
+    channels.close(remoteDockerTarget(vmHost));
+    relayConnections.close(vmHost, 'the VM of Devspaces stops');
+  };
+  // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with the containers,
+  // images and volumes of Devspaces there. A host is read only when the user opens its row or clicks Refresh.
+  const dockerHosts = new DockerHostsView({
+    logger,
+    showLog: () => logger.show(),
+    vmHost,
+    hostList: async () => {
+      const file = await remoteState.read();
+      return { hosts: file.remoteHosts ?? [], selected: file.dockerHost };
+    },
+    vmState: readVmState,
+    read: async (host, signal) => {
+      const here = devspacesOfHost(await registry.list(), host);
+      return runWithDockerTarget(remoteDockerTarget(host), () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
+    },
+    stopContainer: (host, object, signal) => runWithDockerTarget(remoteDockerTarget(host), () => stopHostContainer(docker, object, logger, signal)),
+    removeObjects: (host, objects, signal, onItem) => runWithDockerTarget(remoteDockerTarget(host), () => removeHostObjects(docker, objects, { logger, signal, onItem })),
+    select: (host) => remoteDocker.selectHost(host),
+    setUpVm: () => (platform === 'win32' ? wslSetup.setUp() : limaSetup.setUp()),
+    removeFromList: (host) => remoteDocker.removeFromList(host),
+  });
+  hostsView = dockerHosts;
+  let resolvedHost: string | undefined;
+  const hostsTree = vscode.window.createTreeView(DOCKER_HOSTS_VIEW_ID, { treeDataProvider: dockerHosts, canSelectMany: true, showCollapseAll: true });
+  context.subscriptions.push(
+    dockerHosts,
+    hostsTree,
+    // The check mark of the Docker host of Devspaces follows a change in another window too; each operation reads the
+    // Docker host, so only a change shows the hosts again.
+    {
+      dispose: targets.onDidResolve((target) => {
+        if (target.host === resolvedHost) return;
+        resolvedHost = target.host;
+        dockerHosts.changed();
+      }),
+    },
+    // The rows of the hosts (not their objects) are read again when the view shows again.
+    hostsTree.onDidChangeVisibility((event) => {
+      if (event.visible) dockerHosts.changed();
+    }),
+  );
+  // Start, Stop, Remove, Remove and Set Up Again, and the settings of the VM in its row (R-VM-010).
+  const vmCommands = new VmCommands({
+    logger,
+    showLog: () => logger.show(),
+    vmHost,
+    hasSettings: limaVm !== undefined,
+    state: readVmState,
+    // The test of the host with its progress, as a choice of the host has it: a Docker call there starts the VM.
+    start: (host) => remoteDocker.testHost(host),
+    runningDevspaces: async () => {
+      if (vmHost === undefined) return [];
+      const here = devspacesOfHost(await registry.list(), vmHost);
+      return runWithDockerTarget(remoteDockerTarget(vmHost), () => runningDevspaces(docker, here.map(knownDevspace)));
+    },
+    stop: async (signal) => {
+      if (limaSetupCore !== undefined) return limaSetupCore.stop(signal);
+      if (wslSetupCore !== undefined) return wslSetupCore.stop(signal);
+    },
+    closeConnections: closeVmConnections,
+    remove: () => (platform === 'win32' ? wslSetup.remove() : limaSetup.remove()),
+    removeAndSetUpAgain: () => (platform === 'win32' ? wslSetup.removeAndSetUpAgain() : limaSetup.removeAndSetUpAgain()),
+    setUp: () => (platform === 'win32' ? wslSetup.setUp() : limaSetup.setUp()),
+    onDidChange: (reread) => {
+      if (reread && vmHost !== undefined) dockerHosts.invalidate(vmHost);
+      dockerHosts.changed();
+    },
+  });
   const controller = new Controller({
     logger,
     registry,
@@ -1425,6 +1538,8 @@ async function activateExtension(
     wslSetup,
     limaSetup,
     wslAfterInstall,
+    dockerHosts,
+    vm: vmCommands,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.
     sessionMonitor: {

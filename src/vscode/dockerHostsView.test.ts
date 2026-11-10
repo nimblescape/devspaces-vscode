@@ -1,0 +1,256 @@
+// SPDX-License-Identifier: MIT
+// © 2026 Hannes Stauss (scalarion@nimblescape.com)
+// Licensed under the MIT License. See LICENSE in the repository root for details.
+
+// The view "Docker Hosts" (R-ENG-008): a host is read only when the user opens it or clicks Refresh, never a VM that does
+// not run; Remove… asks once and removes no object of a devspace of this computer and no running container.
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+
+vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
+
+import { LIMA_HOST } from '../core/docker/dockerHost';
+import type { HostInventory, HostObject, ObjectResult } from '../core/hosts/hostObjects';
+import { sshPromptsAllowed } from '../core/sshAskpass';
+import type { VmState } from '../core/vm/vmState';
+import type { GroupRow, HostRow, HostsNode, MessageRow, ObjectRow } from './dockerHostsModel';
+import { DockerHostsCommandTexts, DockerHostsView, type DockerHostsDeps } from './dockerHostsView';
+import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+
+const { window } = fakeVscode;
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
+
+const worker: HostObject = { kind: 'container', id: 'c-worker', name: 'devspaces-w1-worker1', purpose: 'worker', state: 'running' };
+const oldWorker: HostObject = { kind: 'container', id: 'c-old', name: 'devspaces-w2-worker1', purpose: 'worker', state: 'exited' };
+const devspaceVolume: HostObject = { kind: 'volume', id: 'v-ws', name: 'majikmate-web-curious-hopper', purpose: 'devspace', devspaceId: 'id-1', repository: 'majikmate/web' };
+const foreignVolume: HostObject = { kind: 'volume', id: 'v-other', name: 'majikmate-web-brave-otter', purpose: 'otherDevspace', devspaceId: 'id-9', repository: 'majikmate/web' };
+const inventory = (): HostInventory => ({ containers: [worker, oldWorker], images: [], volumes: [devspaceVolume, foreignVolume] });
+
+let vmState: VmState;
+let hosts: string[];
+let selected: string | undefined;
+let read: Mock<DockerHostsDeps['read']>;
+let removeObjects: Mock<DockerHostsDeps['removeObjects']>;
+let stopContainer: Mock<DockerHostsDeps['stopContainer']>;
+let select: Mock<DockerHostsDeps['select']>;
+let setUpVm: Mock<DockerHostsDeps['setUpVm']>;
+let removeFromList: Mock<DockerHostsDeps['removeFromList']>;
+let fired: Array<HostsNode | undefined>;
+
+function view(vmHost: string | undefined = LIMA_HOST): DockerHostsView {
+  const created = new DockerHostsView({
+    logger,
+    showLog: vi.fn(),
+    vmHost,
+    hostList: async () => ({ hosts, selected }),
+    vmState: async () => vmState,
+    read,
+    stopContainer,
+    removeObjects,
+    select,
+    setUpVm,
+    removeFromList,
+  });
+  created.onDidChangeTreeData((node) => fired.push(node));
+  return created;
+}
+
+async function hostRow(provider: DockerHostsView, host: string): Promise<HostRow> {
+  const rows = (await provider.getChildren()) as HostRow[];
+  const row = rows.find((candidate) => candidate.host === host);
+  if (row === undefined) throw new Error(`no row of ${host}`);
+  return row;
+}
+
+async function objectRowsOf(provider: DockerHostsView, host: string): Promise<ObjectRow[]> {
+  const groups = (await provider.getChildren(await hostRow(provider, host))) as GroupRow[];
+  return (await Promise.all(groups.map((group) => provider.getChildren(group)))).flat() as ObjectRow[];
+}
+
+const rowOf = (rows: readonly ObjectRow[], object: HostObject): ObjectRow => {
+  const row = rows.find((candidate) => candidate.object.id === object.id);
+  if (row === undefined) throw new Error(`no row of ${object.name}`);
+  return row;
+};
+
+const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+beforeEach(() => {
+  resetFakeVscode();
+  vi.clearAllMocks();
+  vmState = { kind: 'running', memoryGiB: 4, cpus: 2 };
+  hosts = [LIMA_HOST, 'lab'];
+  selected = LIMA_HOST;
+  fired = [];
+  read = vi.fn(async () => inventory());
+  removeObjects = vi.fn(async (_host: string, objects: readonly HostObject[]): Promise<ObjectResult[]> => objects.map((object) => ({ object, outcome: 'removed' })));
+  stopContainer = vi.fn(async (_host: string, object: HostObject): Promise<ObjectResult> => ({ object, outcome: 'stopped' }));
+  select = vi.fn(async () => undefined);
+  setUpVm = vi.fn(async () => undefined);
+  removeFromList = vi.fn(async () => undefined);
+  window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
+    task({ report: () => undefined }, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }),
+  );
+});
+
+describe('DockerHostsView: the rows of the hosts', () => {
+  it('shows the VM first with its state, then the remote hosts, and reads no host for it', async () => {
+    const rows = (await view().getChildren()) as HostRow[];
+    expect(rows.map((row) => [row.host, row.vm, row.selected, row.vmState?.kind])).toEqual([
+      [LIMA_HOST, true, true, 'running'],
+      ['lab', false, false, undefined],
+    ]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('gives each row an ID that is new in each window, so that VS Code does not open (and read) the hosts of the last window', () => {
+    const row: HostRow = { hostsNode: 'host', host: 'lab', vm: false, selected: false };
+    const first = view().getTreeItem(row).id;
+    const second = view().getTreeItem(row).id;
+    expect(first).toMatch(/:host:lab$/);
+    expect(first).not.toBe(second);
+  });
+});
+
+describe('DockerHostsView: the read of a host', () => {
+  it('reads a host when the user opens it, as a flow of the user, and only once until Refresh', async () => {
+    let prompts: boolean | undefined;
+    read.mockImplementation(async () => {
+      prompts = sshPromptsAllowed();
+      return inventory();
+    });
+    const provider = view();
+    const groups = (await provider.getChildren(await hostRow(provider, 'lab'))) as GroupRow[];
+    expect(groups.map((group) => [group.group, group.objects.length])).toEqual([
+      ['container', 2],
+      ['image', 0],
+      ['volume', 2],
+    ]);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read.mock.calls[0][0]).toBe('lab');
+    // A password login may ask: the user opened the host.
+    expect(prompts).toBe(true);
+    // A change of the view (another Docker host, a new state of the VM) reads no host again.
+    provider.changed();
+    await provider.getChildren(await hostRow(provider, 'lab'));
+    expect(read).toHaveBeenCalledTimes(1);
+    // Refresh of the row reads it again when the view shows it.
+    provider.refresh({ hostsNode: 'host', host: 'lab' });
+    await provider.getChildren(await hostRow(provider, 'lab'));
+    expect(read).toHaveBeenCalledTimes(2);
+    // Refresh of the view title: every host.
+    provider.refresh();
+    await provider.getChildren(await hostRow(provider, 'lab'));
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it('never reads a VM that does not run: its row starts it', async () => {
+    vmState = { kind: 'stopped' };
+    const provider = view();
+    const children = (await provider.getChildren(await hostRow(provider, LIMA_HOST))) as MessageRow[];
+    expect(children.map((child) => child.message)).toEqual(['vmStopped']);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('follows the state of the VM without a read: a VM that stopped hides its objects, one that runs again offers its read', async () => {
+    const provider = view();
+    await provider.getChildren(await hostRow(provider, LIMA_HOST));
+    expect(read).toHaveBeenCalledTimes(1);
+    vmState = { kind: 'stopped' };
+    expect(((await provider.getChildren(await hostRow(provider, LIMA_HOST))) as MessageRow[]).map((child) => child.message)).toEqual(['vmStopped']);
+    vmState = { kind: 'running' };
+    expect(((await provider.getChildren(await hostRow(provider, LIMA_HOST))) as MessageRow[]).map((child) => child.message)).toEqual(['vmNotRead']);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a row with the reason when a host cannot be read', async () => {
+    read.mockRejectedValue(new Error('ssh: connect to host lab port 22: Connection refused\nmore'));
+    const provider = view();
+    const children = (await provider.getChildren(await hostRow(provider, 'lab'))) as MessageRow[];
+    expect(children).toEqual([{ hostsNode: 'message', host: 'lab', message: 'readFailed', detail: 'ssh: connect to host lab port 22: Connection refused' }]);
+  });
+
+  it('reads a host once while two rows ask at the same time', async () => {
+    const provider = view();
+    const row = await hostRow(provider, 'lab');
+    await Promise.all([provider.getChildren(row), provider.getChildren(row)]);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DockerHostsView: the commands of the rows', () => {
+  it('sets up the VM at a click on its row while it is not set up, and else makes the host the Docker host of Devspaces', async () => {
+    vmState = { kind: 'notSetUp' };
+    const provider = view();
+    await provider.select(await hostRow(provider, LIMA_HOST));
+    expect(setUpVm).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
+    await provider.select(await hostRow(provider, 'lab'));
+    expect(select).toHaveBeenCalledWith('lab');
+  });
+
+  it('removes a remote host from the list, never the VM', async () => {
+    const provider = view();
+    await provider.removeFromList({ hostsNode: 'host', host: LIMA_HOST });
+    await provider.removeFromList({ hostsNode: 'host', host: 'lab' });
+    expect(removeFromList.mock.calls).toEqual([['lab']]);
+  });
+
+  it('asks once for the selected rows, removes only what Remove… may remove, and reads the host again', async () => {
+    window.showWarningMessage.mockResolvedValue(DockerHostsCommandTexts.remove);
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    const selection = [rowOf(rows, oldWorker), rowOf(rows, foreignVolume), rowOf(rows, devspaceVolume), rowOf(rows, worker)];
+    await provider.removeObjects(rowOf(rows, oldWorker), selection);
+    expect(window.showWarningMessage).toHaveBeenCalledTimes(1);
+    const [question, options] = window.showWarningMessage.mock.calls[0] as [string, { modal: boolean; detail: string }];
+    expect(question).toBe('Remove 2 objects from lab?');
+    expect(options.modal).toBe(true);
+    expect(options.detail).toContain('container devspaces-w2-worker1, volume majikmate-web-brave-otter');
+    // A volume of a devspace that this computer does not know may hold changes that were not pushed: the question says so.
+    expect(options.detail).toContain('changes of that devspace that were not pushed');
+    expect(removeObjects.mock.calls[0][1]).toEqual([oldWorker, foreignVolume]);
+    await settle();
+    // The object of a devspace of this computer and the running container were skipped.
+    expect(window.showInformationMessage).toHaveBeenCalledWith('Removed 2 objects from lab. 2 selected objects were skipped: objects of a devspace of this computer, or running containers.');
+    await provider.getChildren(await hostRow(provider, 'lab'));
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes nothing without the answer Remove', async () => {
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.removeObjects(rowOf(rows, oldWorker));
+    expect(window.showWarningMessage).toHaveBeenCalledTimes(1);
+    expect(removeObjects).not.toHaveBeenCalled();
+  });
+
+  it('asks nothing when no selected row may be removed', async () => {
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.removeObjects(rowOf(rows, devspaceVolume), [rowOf(rows, devspaceVolume), rowOf(rows, worker)]);
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.nothingToRemove);
+    expect(removeObjects).not.toHaveBeenCalled();
+  });
+
+  it('names what is left and why in the log', async () => {
+    window.showWarningMessage.mockResolvedValueOnce(DockerHostsCommandTexts.remove);
+    removeObjects.mockImplementation(async (_host, objects) => objects.map((object) => ({ object, outcome: 'inUse', detail: 'volume is in use' })));
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.removeObjects(rowOf(rows, foreignVolume));
+    await settle();
+    expect(window.showWarningMessage).toHaveBeenLastCalledWith('Removed 0 of 1 objects from lab. Left: majikmate-web-brave-otter. The log says why.', 'Show details');
+  });
+
+  it('stops a running container that is no object of a devspace of this computer', async () => {
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.stopObject(rowOf(rows, worker));
+    expect(stopContainer).toHaveBeenCalledWith('lab', worker, expect.any(AbortSignal));
+    await provider.stopObject(rowOf(rows, oldWorker));
+    expect(stopContainer).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.stopped(worker.name));
+  });
+});
