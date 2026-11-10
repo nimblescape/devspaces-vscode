@@ -292,9 +292,10 @@ describe('the Lima VM of Devspaces', () => {
     const vm = new LimaVm({ runner, logger, platform: process.platform, arch: process.arch, paths, install: async () => installed });
     const setup = new LimaSetup({ vm, runner, logger, platform: process.platform, arch: process.arch, env: process.env, machine: { totalMemory: os.totalmem(), cpus: os.availableParallelism() } });
     const state = () => limaVmState({ exists: () => vm.exists(), limactl: () => installed, paths, runner, logger });
-    // The VM is stopped after the test before; its read starts nothing.
+    // The VM is stopped after the test before; its read starts nothing. Its memory and CPUs are the ones of the first
+    // test after its setResources (2 GiB, 1 CPU).
     const stopped = await state();
-    expect(stopped).toMatchObject({ kind: 'stopped', memoryGiB: limaResources(os.totalmem(), os.availableParallelism()).memoryGiB, cpus: limaResources(os.totalmem(), os.availableParallelism()).cpus });
+    expect(stopped).toMatchObject({ kind: 'stopped', memoryGiB: 2, cpus: 1 });
     expect(stopped.diskBytes).toBeGreaterThan(100 * 2 ** 20);
     expect(await created.status()).toBe('stopped');
     await created.start(undefined, (line) => console.log(`limactl: ${line}`));
