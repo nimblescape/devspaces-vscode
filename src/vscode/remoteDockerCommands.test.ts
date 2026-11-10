@@ -626,6 +626,45 @@ describe('on macOS and Linux, without the Docker of this computer', () => {
     expect((window.showQuickPick.mock.calls[1][1] as { title: string }).title).toBe('Docker host: build-box');
   });
 
+  // Mutation: a choice without the setup while the VM does not exist fails it: a user on a remote host has no way back
+  // to the VM of Devspaces, which takes the place of the local Docker there.
+  it('offers the setup of the VM of Devspaces while it does not exist, and starts it; once the VM exists, the VM instead', async () => {
+    const limaVmExists = vi.fn(async () => false);
+    commands = create({ computerDocker: false, limaVmExists });
+    await listed(['build-box'], 'build-box');
+    await commands.chooseDockerHost();
+    const setUp = `$(add) ${RemoteDockerTexts.setUpVm}`;
+    expect(shown().filter(([label]) => label === RemoteDockerTexts.limaGroup || label === setUp)).toEqual([
+      [RemoteDockerTexts.limaGroup, undefined],
+      [setUp, RemoteDockerTexts.setUpVmDetail],
+    ]);
+    pick(setUp);
+    await commands.chooseDockerHost();
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('devspaces.setUpLimaVm');
+    expect(await state.dockerHost()).toBe('build-box');
+    expect(onDidSwitch).not.toHaveBeenCalled();
+    // "Use a Remote Docker Host…" offers it too.
+    pick(setUp);
+    await commands.useRemoteHost();
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledTimes(2);
+    // The VM exists: it is offered as a host, without the setup.
+    limaVmExists.mockResolvedValue(true);
+    await commands.chooseDockerHost();
+    const labels = shown(3).map(([label]) => label);
+    expect(labels).toContain(LIMA_HOST);
+    expect(labels).not.toContain(setUp);
+    // A VM that cannot be checked gets no entry.
+    limaVmExists.mockRejectedValue(new Error('EACCES'));
+    await commands.chooseDockerHost();
+    expect(shown(4).some(([label]) => label === setUp || label === LIMA_HOST)).toBe(false);
+  });
+
+  it('offers no setup of the VM where Devspaces uses the Docker of this computer (Windows)', async () => {
+    commands = create({ limaVmExists: async () => false });
+    await commands.chooseDockerHost();
+    expect(shown().some(([label]) => label.includes(RemoteDockerTexts.setUpVm))).toBe(false);
+  });
+
   it('"Use the Local Docker" is in the Command Palette only on Windows; elsewhere it only says why, and changes nothing', async () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as { contributes: { menus: { commandPalette: Array<{ command: string; when?: string }> } } };
     expect(manifest.contributes.menus.commandPalette.filter((entry) => entry.command === 'devspaces.useLocalDocker')).toEqual([{ command: 'devspaces.useLocalDocker', when: 'isWindows' }]);

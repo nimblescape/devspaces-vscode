@@ -13,7 +13,8 @@
 // host first (ensureRemoteCli), so no Docker needs to be installed on it. On Windows, the WSL distribution of Devspaces
 // is offered as a host when it is registered (wslHosts): Devspaces reaches it with `wsl.exe`, without SSH. On macOS and
 // Linux, the Lima VM of Devspaces (LIMA_HOST) is offered when it exists (limaHosts): Devspaces reaches it over the SSH of
-// Lima, without a login of the user.
+// Lima, without a login of the user; while it does not exist, the choice offers its setup instead, because there the VM
+// takes the place of the local Docker.
 import * as vscode from 'vscode';
 import {
   LIMA_HOST,
@@ -62,6 +63,9 @@ export const RemoteDockerTexts = {
   /** The group and the description of the Lima VM of Devspaces in the choice (macOS and Linux). */
   limaGroup: 'Lima',
   limaVm: 'the VM of Devspaces (Lima)',
+  /** The entry of the choice on macOS and Linux while the VM of Devspaces does not exist: its setup (devspaces.setUpLimaVm). */
+  setUpVm: 'Set Up Docker for Devspaces in Its VM…',
+  setUpVmDetail: 'creates the VM of Devspaces on this computer and uses it',
   enterAddress: 'Enter an SSH address…',
   enterAddressDetail: 'user@host or user@host:port',
   addressPrompt: 'The SSH address of the computer with Docker, for example me@build-box or me@192.0.2.10:2222',
@@ -188,11 +192,15 @@ interface HostItem extends vscode.QuickPickItem {
   local?: boolean;
   /** The entry "Remove a Host from the List…". */
   remove?: boolean;
+  /** The entry "Set Up Docker for Devspaces in Its VM…" (macOS and Linux, while the VM does not exist). */
+  setUpVm?: boolean;
 }
 
 /** pickHost: the user chose the local Docker, or to remove a host from the list. */
 const LOCAL_CHOICE = Symbol('local Docker');
 const REMOVE_CHOICE = Symbol('remove a host');
+/** pickHost: the user chose the setup of the VM of Devspaces. */
+const SET_UP_VM_CHOICE = Symbol('set up the VM');
 
 export class RemoteDockerCommands {
   /** The offer that runs now (offerDockerContextHost): its host, and whether this window asks (claimOffer). */
@@ -211,6 +219,10 @@ export class RemoteDockerCommands {
       if (host === undefined || host === LOCAL_CHOICE) return;
       if (host === REMOVE_CHOICE) {
         await this.removeHost();
+        return;
+      }
+      if (host === SET_UP_VM_CHOICE) {
+        await this.setUpVm();
         return;
       }
       // The host of the list without a Docker CLI for it (DockerTargets.resolve gave the local Docker): as a new choice.
@@ -253,6 +265,10 @@ export class RemoteDockerCommands {
         await this.removeHost();
         return;
       }
+      if (picked === SET_UP_VM_CHOICE) {
+        await this.setUpVm();
+        return;
+      }
       if (picked === current && this.remoteCliReady()) {
         this.inform(RemoteDockerTexts.alreadyHost(picked));
         return;
@@ -262,6 +278,12 @@ export class RemoteDockerCommands {
     } catch (error) {
       this.showFailure(error);
     }
+  }
+
+  /** The setup of the VM of Devspaces, which makes the VM the Docker host of Devspaces (LimaSetupCommands). */
+  private async setUpVm(): Promise<void> {
+    this.deps.logger.info('The choice of the Docker host starts the setup of the VM of Devspaces.');
+    await vscode.commands.executeCommand(Commands.setUpLimaVm);
   }
 
   /**
@@ -501,18 +523,21 @@ export class RemoteDockerCommands {
    * SSH hosts of the Docker contexts of the user, then the WSL distribution of Devspaces when it is registered and not in
    * the list (each host once); `currentHost` is marked. "Remove a Host from the
    * List…" when the list has a host. With `offerLocal` (the choice of the first row of the sidebar), the local Docker is
-   * the last entry (LOCAL_CHOICE), marked when no host is current and `localSupported` is not false.
+   * the last entry (LOCAL_CHOICE), marked when no host is current and `localSupported` is not false. Without the Docker
+   * of this computer (macOS and Linux), while the VM of Devspaces does not exist, the Lima group has its setup instead
+   * (SET_UP_VM_CHOICE).
    */
   private async pickHost(
     options: { title?: string; placeHolder?: string; currentHost?: string; offerLocal?: boolean; localSupported?: boolean },
-  ): Promise<string | typeof LOCAL_CHOICE | typeof REMOVE_CHOICE | undefined> {
+  ): Promise<string | typeof LOCAL_CHOICE | typeof REMOVE_CHOICE | typeof SET_UP_VM_CHOICE | undefined> {
     let entries: SshHostEntry[] = [];
     try {
       entries = this.deps.sshHosts();
     } catch (error) {
       this.deps.logger.warn(`The SSH config could not be read: ${errorMessage(error)}`);
     }
-    const [listed, contextHosts, wslHosts, limaHosts] = await Promise.all([this.deps.state.remoteHosts(), this.contextHosts(), this.wslHosts(), this.limaHosts()]);
+    const [listed, contextHosts, wslHosts, lima] = await Promise.all([this.deps.state.remoteHosts(), this.contextHosts(), this.wslHosts(), this.limaState()]);
+    const limaHosts = lima === 'exists' ? [LIMA_HOST] : [];
     const shown = new Set<string>();
     const item = (host: string, description: string | undefined): HostItem => {
       shown.add(host);
@@ -533,7 +558,13 @@ export class RemoteDockerCommands {
         items: contextHosts.filter((entry) => !shown.has(entry.host)).map((entry) => item(entry.host, RemoteDockerTexts.dockerContext(entry.context))),
       },
       { label: RemoteDockerTexts.wslGroup, items: wslHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))) },
-      { label: RemoteDockerTexts.limaGroup, items: limaHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))) },
+      {
+        label: RemoteDockerTexts.limaGroup,
+        items:
+          lima === 'missing' && this.deps.computerDocker === false
+            ? [{ label: `$(add) ${RemoteDockerTexts.setUpVm}`, description: RemoteDockerTexts.setUpVmDetail, setUpVm: true }]
+            : limaHosts.filter((host) => !shown.has(host)).map((host) => item(host, describe(host))),
+      },
     ];
     const items: HostItem[] = [];
     for (const group of groups) {
@@ -560,6 +591,7 @@ export class RemoteDockerCommands {
     if (!picked) return undefined;
     if (picked.local) return LOCAL_CHOICE;
     if (picked.remove) return REMOVE_CHOICE;
+    if (picked.setUpVm) return SET_UP_VM_CHOICE;
     if (picked.host !== undefined) return picked.host;
     const typed = await vscode.window.showInputBox({
       title: RemoteDockerTexts.pickTitle,
@@ -605,14 +637,17 @@ export class RemoteDockerCommands {
     }
   }
 
-  /** The Lima VM of Devspaces as a host (LIMA_HOST) when it exists; none when it cannot be checked (logged). */
-  private async limaHosts(): Promise<string[]> {
-    if (this.deps.limaVmExists === undefined) return [];
+  /**
+   * Whether the Lima VM of Devspaces exists, for the choice of the host: `none` without a Lima VM of Devspaces on this
+   * computer (Windows), `unknown` when it cannot be checked (logged).
+   */
+  private async limaState(): Promise<'exists' | 'missing' | 'unknown' | 'none'> {
+    if (this.deps.limaVmExists === undefined) return 'none';
     try {
-      return (await this.deps.limaVmExists()) ? [LIMA_HOST] : [];
+      return (await this.deps.limaVmExists()) ? 'exists' : 'missing';
     } catch (error) {
       this.deps.logger.warn(`The Lima VM of Devspaces could not be checked: ${errorMessage(error)}`);
-      return [];
+      return 'unknown';
     }
   }
 
