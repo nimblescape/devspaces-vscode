@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import { remoteDockerTarget, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
-import { DockerTargets, NO_DOCKER_HOST_TARGET, runWithDockerTarget, operationDockerTarget } from '../core/docker/dockerTargets';
+import { DockerTargets, NO_DOCKER_HOST_TARGET, runWithDockerTarget, operationDockerTarget, withoutMissingVm, type DockerHostChoice } from '../core/docker/dockerTargets';
 import { ENGINE_INFO_FORMAT } from '../core/docker/remoteDocker';
 import { Actions, Messages, dockerHostReason } from '../core/messages';
 import type { RunOptions, RunResult } from '../core/ports';
@@ -74,9 +74,9 @@ let commands: RemoteDockerCommands;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
 const { window } = fakeVscode;
 
-function create(extra: Partial<RemoteDockerDeps> = {}): RemoteDockerCommands {
+function create(extra: Partial<RemoteDockerDeps> = {}, choice: DockerHostChoice = state): RemoteDockerCommands {
   // As extension.ts: Devspaces never uses the Docker of this computer (R-ENG-001).
-  targets = new DockerTargets(cli, env, logger, 'linux', state, false);
+  targets = new DockerTargets(cli, env, logger, 'linux', choice, false);
   const created = new RemoteDockerCommands({
     docker: cli,
     runner,
@@ -630,6 +630,18 @@ describe('useHost and forgetHost (the WSL distribution of Devspaces after its se
     expect(window.showQuickPick).not.toHaveBeenCalled();
     expect(await state.dockerHost()).toBe(WSL_HOST);
     expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.nowRemote(WSL_HOST, false));
+    expect(onDidSwitch).toHaveBeenCalledTimes(1);
+  });
+
+  // R-ENG-001: the VM of Devspaces that Devspaces uses, but that does not exist (removed outside of Devspaces).
+  it('gives no Docker host while the chosen VM does not exist, and useHost after its setup makes it the Docker host again', async () => {
+    let exists = false;
+    commands = create({ shells: wslShells() }, withoutMissingVm(state, async () => exists, logger));
+    await state.setDockerHost(LIMA_HOST);
+    expect(await targets.resolve()).toBe(NO_DOCKER_HOST_TARGET);
+    exists = true;
+    await expect(commands.useHost(LIMA_HOST)).resolves.toBe(true);
+    expect(targets.last).toEqual(remoteDockerTarget(LIMA_HOST));
     expect(onDidSwitch).toHaveBeenCalledTimes(1);
   });
 

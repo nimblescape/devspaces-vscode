@@ -174,6 +174,19 @@ describe('RepositoriesTreeProvider', () => {
     provider.dispose();
   });
 
+  // The own VM of Devspaces runs on this computer: its row names it as the local Docker host, with the local monitor.
+  it('shows the own VM of Devspaces as the local Docker host', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(model(), { signedIn: true });
+    provider.setDockerHost({ kind: 'vm', host: 'lima:devspaces' });
+    const vmItem = provider.getTreeItem(provider.getChildren()[0]) as unknown as TreeItem;
+    expect(vmItem.label).toBe('Local Docker host: VM of Devspaces');
+    expect((vmItem.iconPath as ThemeIcon).id).toBe('devspaces-monitor-off');
+    expect(vmItem.tooltip).toBe('Devspaces uses Docker Engine in its own VM on this computer (lima:devspaces). Click to choose another host.');
+    expect(vmItem.command).toMatchObject({ command: 'devspaces.chooseDockerHost' });
+    provider.dispose();
+  });
+
   // The first row names the local Docker too, and opens the same choice of the Docker host.
   it('shows the local Docker and an endpoint that is not supported as the first row too', () => {
     const provider = new RepositoriesTreeProvider(silentLogger);

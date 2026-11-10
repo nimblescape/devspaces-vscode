@@ -113,7 +113,7 @@ A course link needs the GitHub sign-in, because only the sign-in tells Devspaces
 
 ## The sidebar
 
-The first row names the Docker engine that the view shows: **Remote Docker host: `<host>`**, also for the VM of Devspaces (`wsl:devspaces` on Windows, `lima:devspaces` on macOS and Linux; see [Remote Docker host](#remote-docker-host)). Select it to choose another engine. Below it, the repositories are grouped by owner.
+The first row names the Docker engine that the view shows: **Local Docker host: VM of Devspaces** for the VM of Devspaces on your computer (`wsl:devspaces` on Windows, `lima:devspaces` on macOS and Linux; its tooltip names it), or **Remote Docker host: `<host>`** for another computer (see [Remote Docker host](#remote-docker-host)). Select it to choose another engine. Below it, the repositories are grouped by owner. When Devspaces uses its VM and the VM does not exist, for example after you removed it with `limactl` or `wsl --unregister`, the view shows the setup of the VM instead of the repositories, as before the first setup (on Windows from the next start of VS Code).
 
 The title bar has **Select Organizations…** (limits the list and the scan to the organizations and accounts that you select; with several GitHub accounts, each organization names the accounts that are members), **Show Only Devspaces** (lists only the repositories that have a devspace, in any state; **Show All Repositories** lists all again), **Search**, **Refresh**, **Expand All** (opens every owner, group and repository with several sources), and VS Code's **Collapse All**. Its **…** menu has **Add GitHub Account…**, **Edit Repository Groups…**, **Update All Images Now**, and **Remove Devspaces from This Docker Engine…**.
 

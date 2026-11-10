@@ -3,14 +3,15 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The Docker host in the sidebar, for a remote host and for the local Docker. The view's title names the Docker host:
-// "<host> (remote)", "Local Docker", "<host> over SSH (not in the list)" for a Docker context of the user on an SSH host,
+// "<host> (remote)", "Local Docker", "Local VM of Devspaces" for the own VM of Devspaces on this computer (its WSL
+// distribution or its Lima VM, isVmHost), "<host> over SSH (not in the list)" for a Docker context of the user on an SSH host,
 // "<endpoint> (not supported)", that the current Docker context cannot be read, or that Podman is not supported
 // ("Devspaces", and no host row, while no Docker CLI is found); the sidebar has one view,
 // so VS Code merges its header with the sidebar title and shows "Devspaces:
 // <title>" (the description of a merged view is not shown; it is set too, for a layout with more views). The merged
 // header does not show it in every window, so the first row of the list names the host too (treeView.ts,
 // DockerHostRow); a click on it chooses the Docker host (the title bar has no icon for it).
-import { isDockerContextHostTarget, isNoDockerHostTarget, isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../core/docker/dockerHost';
+import { isDockerContextHostTarget, isNoDockerHostTarget, isPodmanDockerTarget, isUnreadableDockerTarget, isVmHost, type DockerTarget } from '../core/docker/dockerHost';
 import { Messages } from '../core/messages';
 import type { Logger } from '../core/ports';
 import type { ShownDockerHost } from './treeView';
@@ -22,6 +23,8 @@ export const DockerHostTexts = {
   remoteTitle: (host: string) => `${host} (remote)`,
   /** The view's title on the local Docker; in the merged header "Devspaces: Local Docker". */
   localTitle: 'Local Docker',
+  /** The view's title on the own VM of Devspaces, which runs on this computer; in the merged header "Devspaces: Local VM of Devspaces". */
+  vmTitle: 'Local VM of Devspaces',
   /** The view's title for an endpoint that is not supported ('': the current Docker context cannot be read). */
   unsupportedTitle: (endpoint: string) => (endpoint === '' ? Messages.dockerContextUnreadableLabel : `${endpoint} (not supported)`),
   /** The view's title while a Docker context or DOCKER_HOST of the user reaches a host over SSH. */
@@ -49,7 +52,8 @@ export class DockerHostIndicator {
   ) {}
 
   /**
-   * Shows `target`: the local Docker, a remote host, or an endpoint that is not supported. `installed` false (no Docker
+   * Shows `target`: the local Docker, the own VM of Devspaces (a host of its list that is local), a remote host, or an
+   * endpoint that is not supported. `installed` false (no Docker
    * CLI found; the target then reads as the local Docker), and no Docker host of Devspaces (isNoDockerHostTarget): no
    * Docker host at all (the header would otherwise name a Docker host above the Docker setup).
    */
@@ -61,7 +65,9 @@ export class DockerHostIndicator {
       ? { kind: 'podman', host: '' }
       : isDockerContextHostTarget(target)
         ? { kind: 'sshContext', host: target.sshHost, ...(target.context === undefined ? {} : { context: target.context }) }
-        : { kind: target.kind, host: target.kind === 'local' || isUnreadableDockerTarget(target) ? '' : target.host };
+        : target.kind === 'remote' && isVmHost(target.host)
+          ? { kind: 'vm', host: target.host }
+          : { kind: target.kind, host: target.kind === 'local' || isUnreadableDockerTarget(target) ? '' : target.host };
     const same = this.shown?.kind === shown.kind && this.shown.host === shown.host && this.shown.context === shown.context;
     if (same && this.shown?.installed === installed) return;
     this.shown = { ...shown, installed };
@@ -75,13 +81,15 @@ export class DockerHostIndicator {
     this.view.title =
       shown.kind === 'remote'
         ? DockerHostTexts.remoteTitle(shown.host)
-        : shown.kind === 'local'
-          ? DockerHostTexts.localTitle
-          : shown.kind === 'podman'
-            ? DockerHostTexts.podmanTitle
-            : shown.kind === 'sshContext'
-              ? DockerHostTexts.sshContextTitle(shown.host)
-              : DockerHostTexts.unsupportedTitle(shown.host);
+        : shown.kind === 'vm'
+          ? DockerHostTexts.vmTitle
+          : shown.kind === 'local'
+            ? DockerHostTexts.localTitle
+            : shown.kind === 'podman'
+              ? DockerHostTexts.podmanTitle
+              : shown.kind === 'sshContext'
+                ? DockerHostTexts.sshContextTitle(shown.host)
+                : DockerHostTexts.unsupportedTitle(shown.host);
     this.showHostRow(shown);
     this.logger.info(`Docker host of the sidebar: ${describeShown(shown)}.`);
   }
@@ -92,6 +100,8 @@ function describeShown(shown: ShownDockerHost): string {
   switch (shown.kind) {
     case 'local':
       return 'the local Docker';
+    case 'vm':
+      return `the VM of Devspaces on this computer (${shown.host})`;
     case 'remote':
       return shown.host;
     case 'podman':
