@@ -483,6 +483,22 @@ describeUnix('RemoteShells', () => {
     registry.dispose();
   });
 
+  it('logs in no more with relogin false for a call that waited on a shell that then closed', async () => {
+    const { registry, logins } = shells();
+    await registry.login('box');
+    const running = registry.run('box', 'sleep 30');
+    const waiting = registry.run('box', 'printf late', { relogin: false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    registry.close('box');
+    await running;
+    await expect(waiting).resolves.toBeUndefined();
+    expect(logins).toEqual(['box']);
+    // The next call without the option logs in anew.
+    await expect(registry.run('box', 'printf again')).resolves.toMatchObject({ stdout: 'again' });
+    expect(logins).toEqual(['box', 'box']);
+    registry.dispose();
+  });
+
   it('stops a login in progress of one host at once', async () => {
     const { registry, processes } = shells({ script: 'exec sleep 30' });
     const login = registry.login('box');

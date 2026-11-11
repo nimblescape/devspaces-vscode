@@ -255,6 +255,21 @@ describe('UsagePages', () => {
     expect(lastView(panel).containers.rows.map((row) => row.name)).toEqual(['name-0']);
   });
 
+  it('logs in to a running VM with no second login after a closed shell, and to a remote host with one', async () => {
+    await open(pages(), LIMA_HOST);
+    const optionsOf = (host: string) => shells.run.mock.calls.filter((call) => call[0] === host).map((call) => call[2]);
+    expect(optionsOf(LIMA_HOST)).toEqual([
+      { timeoutMs: 15_000, login: false },
+      { timeoutMs: 15_000, relogin: false },
+    ]);
+    await open(pages(), 'build-box');
+    expect(optionsOf('build-box')).toEqual([
+      { timeoutMs: 15_000, login: false },
+      { timeoutMs: 15_000, relogin: true },
+    ]);
+    expect(shells.logins.map((login) => login.host)).toEqual([LIMA_HOST, 'build-box']);
+  });
+
   it('never starts a stopped VM: no login, and Start the VM starts it and then the samples', async () => {
     vmState = { kind: 'stopped' };
     const made = pages();

@@ -177,13 +177,20 @@ export class RemoteShells {
    * its error output. Rejects with an AbortError when `options.signal` aborts. With `login: false`, only on a shell
    * that is open or logging in, never a new login: undefined also when there is none, or when it ended before the
    * command started (the utilization page, which must not start the VM of Devspaces with a login, R-VM-004, reads the
-   * state of the VM before it lets `run` log in).
+   * state of the VM before it lets `run` log in). With `relogin: false`, the shell that replaces a closed one is only a
+   * shell that is open or logging in, as with `login: false` (the page logs in to the VM of Devspaces only right after
+   * its check of the state of the VM, and a stop of the VM closes the shell).
    */
-  async run(host: string, command: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string; login?: boolean } = {}): Promise<RunResult | undefined> {
+  async run(
+    host: string,
+    command: string,
+    options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string; login?: boolean; relogin?: boolean } = {},
+  ): Promise<RunResult | undefined> {
     for (let attempt = 0; ; attempt++) {
       let shell: RemoteShell | undefined;
       try {
-        shell = options.login === false ? await this.current(host, options.signal) : await this.open(host, options.signal);
+        const login = attempt === 0 ? options.login !== false : options.login !== false && options.relogin !== false;
+        shell = login ? await this.open(host, options.signal) : await this.current(host, options.signal);
       } catch (error) {
         if (!(error instanceof RemoteShellError)) throw error;
         return { exitCode: error.timedOut ? null : 255, stdout: '', stderr: error.detail, timedOut: error.timedOut };

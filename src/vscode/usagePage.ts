@@ -325,7 +325,9 @@ class UsagePage {
       if (state.kind !== 'running') return { kind: 'notRun', reason: 'vmStopped' };
       checkedAt = this.timers.now();
     }
-    const login = () => shells.run(this.host, command, { timeoutMs });
+    // On the VM, no second login when the shell closed before the sample started on it (a stop of the VM, the end of
+    // the idle script of WSL): that login would start the VM without a check.
+    const login = () => shells.run(this.host, command, { timeoutMs, relogin: !this.vm });
     // A question of the login ends when the samples end (a pause, a hide, a stop of the VM, a close).
     const result = flow ? await withSshPrompts(login, signal) : await login();
     if (result === undefined) return { kind: 'notRun', reason: 'noTransport' };
