@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { HOST_SERIES, UsageHistory, cpuShare, usageOf, type HostUsage } from './usageRates';
-import type { CpuTimes, UsageBlock, UsageContainer } from './usageStream';
+import type { CpuTimes, UsageBlock, UsageContainer } from './usageSample';
 
 const ID_A = 'a'.repeat(64);
 

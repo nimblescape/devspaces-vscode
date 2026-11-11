@@ -347,6 +347,70 @@ describeUnix('RemoteShells', () => {
     registry.dispose();
   });
 
+  it('runs a command with login false only on a shell that is open or logging in, never with a new login', async () => {
+    const { registry, logins } = shells();
+    await expect(registry.run('box', 'printf one', { login: false })).resolves.toBeUndefined();
+    expect(logins).toEqual([]);
+    // A login in progress counts.
+    const login = registry.login('box');
+    await expect(registry.run('box', 'printf two', { login: false })).resolves.toMatchObject({ stdout: 'two' });
+    await login;
+    await expect(registry.run('box', 'printf three', { input: 'x', login: false })).resolves.toMatchObject({ stdout: 'three' });
+    // After the shell closed, nothing runs and nothing logs in.
+    registry.close('box');
+    await expect(registry.run('box', 'printf four', { login: false })).resolves.toBeUndefined();
+    expect(logins).toEqual(['box']);
+    registry.dispose();
+  });
+
+  it('holds a shell back from a connection of the relay in a flow of the user while the page samples on it, and gives it again after the last hold', async () => {
+    const { registry, logins } = shells();
+    await registry.login('box');
+    const takeOver = () => withSshPrompts(() => registry.takeOver('box'));
+    const first = registry.keep('box');
+    const second = registry.keep('box');
+    await expect(takeOver()).resolves.toBeUndefined();
+    first();
+    first();
+    await expect(takeOver()).resolves.toBeUndefined();
+    // The shell stays with the window meanwhile.
+    await expect(registry.run('box', 'printf still')).resolves.toMatchObject({ stdout: 'still' });
+    second();
+    // A hold that starts while the takeover waits for the command before it keeps the shell too.
+    const before = registry.run('box', 'sleep 0.3; printf before');
+    const waiting = takeOver();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const late = registry.keep('box');
+    await expect(waiting).resolves.toBeUndefined();
+    await expect(before).resolves.toMatchObject({ stdout: 'before' });
+    await expect(registry.run('box', 'printf kept')).resolves.toMatchObject({ stdout: 'kept' });
+    late();
+    const taken = await takeOver();
+    expect(taken).toBeDefined();
+    await expect(registry.run('box', 'true', { login: false })).resolves.toBeUndefined();
+    taken!.end();
+    expect(logins).toEqual(['box']);
+    registry.dispose();
+  });
+
+  it('gives a held shell of an SSH host to a connection of the relay in the background, but not one of the VM', async () => {
+    const { registry, logins } = shells();
+    await registry.login('box');
+    await registry.login(LIMA_HOST);
+    const releaseBox = registry.keep('box');
+    const releaseVm = registry.keep(LIMA_HOST);
+    // In the background, the relay cannot ask for a password: the window needs the shell more than the page.
+    const taken = await registry.takeOver('box');
+    expect(taken).toBeDefined();
+    taken!.end();
+    // A login to the VM asks nothing: the relay logs in itself.
+    await expect(registry.takeOver(LIMA_HOST)).resolves.toBeUndefined();
+    releaseBox();
+    releaseVm();
+    expect(logins).toEqual(['box', LIMA_HOST]);
+    registry.dispose();
+  });
+
   it('gives the relay a login that is still in progress, and nothing when there is none', async () => {
     const { registry } = shells();
     await expect(registry.takeOver('box')).resolves.toBeUndefined();

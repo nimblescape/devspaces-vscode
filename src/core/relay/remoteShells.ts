@@ -50,6 +50,8 @@ interface Entry {
 /** The shells before the relay of this window, by the Docker host (DockerTarget.host). */
 export class RemoteShells {
   private readonly entries = new Map<string, Entry>();
+  /** The hosts whose shell `keep` holds back from the relay, with the number of holds. */
+  private readonly kept = new Map<string, number>();
   private disposed = false;
 
   constructor(private readonly options: RemoteShellsOptions) {}
@@ -172,13 +174,15 @@ export class RemoteShells {
    * (RemoteShell.run). A shell that was closed or taken over before the command started is replaced by a new one, once.
    * Undefined when the host has no transport, and after `dispose`. A failed login gives the result of `ssh` (or
    * `wsl.exe`): exit code 255 (none after its time limit) and its error output. Rejects with an AbortError when
-   * `options.signal` aborts.
+   * `options.signal` aborts. With `login: false`, only on a shell that is open or logging in, never a new login:
+   * undefined also when there is none, or when it ended before the command started (the utilization page, which must
+   * not start the VM of Devspaces with a login, R-VM-004, reads the state of the VM before it lets `run` log in).
    */
-  async run(host: string, command: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string } = {}): Promise<RunResult | undefined> {
+  async run(host: string, command: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string; login?: boolean } = {}): Promise<RunResult | undefined> {
     for (let attempt = 0; ; attempt++) {
       let shell: RemoteShell | undefined;
       try {
-        shell = await this.open(host, options.signal);
+        shell = options.login === false ? await this.current(host, options.signal) : await this.open(host, options.signal);
       } catch (error) {
         if (!(error instanceof RemoteShellError)) throw error;
         return { exitCode: error.timedOut ? null : 255, stdout: '', stderr: error.detail, timedOut: error.timedOut };
@@ -201,15 +205,47 @@ export class RemoteShells {
     return command === undefined ? Promise.resolve(undefined) : this.run(host, command, options);
   }
 
+  /** The shell to `host` that is open or logging in, without a new login: undefined when there is none. */
+  private current(host: string, signal?: AbortSignal): Promise<RemoteShell | undefined> {
+    if (this.disposed) return Promise.resolve(undefined);
+    const entry = this.entries.get(host);
+    if (entry?.shell?.isOpen) return Promise.resolve(entry.shell);
+    if (entry?.opening) return untilAborted(entry.opening, signal);
+    return Promise.resolve(undefined);
+  }
+
+  /**
+   * Holds the shell to `host` back from the relay until the returned function runs (the utilization page of the host
+   * samples on it): takeOver gives nothing to a connection of the relay that opens in a flow of the user, which logs in
+   * itself and may ask, and nothing on the VM of Devspaces, whose login asks nothing. Without the hold, the next sample
+   * after a takeover would need a new login outside of a flow of the user, which cannot ask for a password. A
+   * connection of the relay in the background cannot ask either: it still takes the shell, because the window needs it
+   * more than the page, which logs in anew (or shows that it cannot).
+   */
+  keep(host: string): () => void {
+    this.kept.set(host, (this.kept.get(host) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (this.kept.get(host) ?? 1) - 1;
+      if (count > 0) this.kept.set(host, count);
+      else this.kept.delete(host);
+    };
+  }
+
   /**
    * The process of the shell to `host` for a connection of the relay (RemoteShell.takeOver), also of a login that is
    * in progress, after the step after its login; undefined when there is none or it failed. The shell is no longer one
    * of this window then. On an SSH host, the takeover waits for the commands before it, because a new login may ask
    * for the password again. A shell of the VM of Devspaces with a command on it (RemoteShell.busy, for example a long
    * removal of the view Docker Hosts) stays with its commands, and the relay logs in itself: a login to the VM asks
-   * nothing, and the open of a devspace does not wait for that command.
+   * nothing, and the open of a devspace does not wait for that command. A shell that `keep` holds stays too, except
+   * for a connection of the relay in the background on an SSH host.
    */
   async takeOver(host: string): Promise<StartedByteProcess | undefined> {
+    const inFlow = currentSshPromptFlow() !== undefined;
+    const held = () => this.kept.has(host) && (inFlow || isVmHost(host));
     const entry = this.entries.get(host);
     if (entry === undefined) return undefined;
     let shell: RemoteShell | undefined;
@@ -219,8 +255,9 @@ export class RemoteShells {
       return undefined;
     }
     await entry.afterLogin;
-    if (shell?.busy === true && isVmHost(host)) return undefined;
-    return shell?.takeOver();
+    if ((shell?.busy === true && isVmHost(host)) || held()) return undefined;
+    // A hold that started while the takeover waited for the commands before it counts too.
+    return shell?.takeOver(() => !held());
   }
 
   /**

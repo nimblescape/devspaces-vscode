@@ -2,12 +2,12 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The values of the utilization page from the blocks of the utilization stream (usageStream.ts), and their history
-// (docs/architecture.md "The utilization stream"). A rate (CPU, network, disk I/O) comes from two blocks in a row of
-// one stream: the difference of the counters, as BigInt, divided by the difference of the uptime of the host at the
-// start of each block. So a slow transport does not change a rate. No rate when a counter went down (a container
+// The values of the utilization page from the blocks of the utilization samples (usageSample.ts), and their history
+// (docs/architecture.md "The utilization samples"). A rate (CPU, network, disk I/O) comes from the blocks of two
+// samples in a row of one sampler and one start of the kernel: the difference of the counters, as BigInt, divided by
+// the difference of the uptime of the host at the start of each block. So a slow transport does not change a rate. No rate when a counter went down (a container
 // started again). No `vscode`.
-import type { CpuTimes, PressureKind, UsageBlock, UsageContainer, UsageNetwork } from './usageStream';
+import type { CpuTimes, PressureKind, UsageBlock, UsageContainer, UsageNetwork } from './usageSample';
 
 /** The share of CPU time in percent (0 to 100): busy (all but idle and iowait), iowait, and steal. */
 export interface CpuShare {
@@ -137,8 +137,8 @@ function containerUsage(current: UsageContainer, previous: UsageContainer | unde
 }
 
 /**
- * The values of `current`, with the rates from `previous` when it is the block before it in the same stream (its
- * `seq` is one less, and the uptime went up). Memory, load, disks and the counts come from `current` alone.
+ * The values of `current`, with the rates from `previous` when it is the block of the sample before it (its `seq` is
+ * one less, and the uptime went up; the sampler gives no `previous` of another start of the kernel). Memory, load, disks and the counts come from `current` alone.
  */
 export function usageOf(current: UsageBlock, previous?: UsageBlock): HostUsage {
   const intervalCs = previous !== undefined && previous.seq + 1 === current.seq && current.startCs > previous.startCs ? current.startCs - previous.startCs : undefined;
@@ -259,8 +259,8 @@ export interface UsageHistorySnapshot {
 
 /**
  * The history of the values of a host: a ring per series (USAGE_HISTORY_POINTS), and for the busiest containers
- * (MAX_CONTAINER_HISTORIES) a ring of CPU and of memory (CONTAINER_HISTORY_POINTS). `gap` marks a pause or a new
- * stream; `clear` forgets everything (a new start of the kernel).
+ * (MAX_CONTAINER_HISTORIES) a ring of CPU and of memory (CONTAINER_HISTORY_POINTS). `gap` marks a pause or new
+ * samples after an end; `clear` forgets everything (a new start of the kernel).
  */
 export class UsageHistory {
   private host = new Map<HostSeries, Ring>();
@@ -282,7 +282,7 @@ export class UsageHistory {
     this.diskFree = undefined;
   }
 
-  /** A gap in every series: the time between two streams, or a pause. */
+  /** A gap in every series: the time between an end of the samples and new samples, or a pause. */
   gap(): void {
     for (const ring of this.host.values()) ring.push(undefined);
     for (const rings of this.containers.values()) {
