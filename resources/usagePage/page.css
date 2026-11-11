@@ -1,0 +1,439 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * © 2026 Hannes Stauss (scalarion@nimblescape.com)
+ * Licensed under the MIT License. See LICENSE in the repository root for details.
+ */
+
+/* Style of the utilization page of a Docker host (src/vscode/usagePage.ts). Only the theme colors of VS Code, and the
+   colors of the view Docker Hosts (package.json contributes.colors) for the names. */
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+  padding: 0 24px 32px;
+}
+
+main {
+  max-width: 1600px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+h1 {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+h2 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--vscode-descriptionForeground);
+}
+
+.small {
+  font-size: 0.92em;
+}
+
+button {
+  padding: 4px 12px;
+  color: var(--vscode-button-foreground);
+  background-color: var(--vscode-button-background);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background-color: var(--vscode-button-secondaryBackground);
+}
+
+button.secondary:hover:not(:disabled) {
+  background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button:focus,
+summary:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* The header: the host, its description, the state and the buttons. */
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 16px;
+  padding-top: 20px;
+}
+
+.head-text {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background-color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+}
+
+.status.live .dot {
+  background-color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.status.starting .dot {
+  background-color: var(--vscode-charts-blue);
+}
+
+.status.paused .dot {
+  background-color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+.status.error .dot {
+  background-color: var(--vscode-errorForeground, var(--vscode-charts-red));
+}
+
+/* The note of the state, with its buttons. */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 16px;
+  padding: 10px 12px;
+  border-radius: 3px;
+  border-left: 3px solid var(--vscode-notificationsInfoIcon-foreground, var(--vscode-charts-blue));
+  background-color: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background));
+}
+
+.banner.warning {
+  border-left-color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-yellow));
+}
+
+.banner.error {
+  border-left-color: var(--vscode-notificationsErrorIcon-foreground, var(--vscode-charts-red));
+}
+
+.banner-text {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.banner-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* The values; dimmed while they are not live. */
+.values {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.values.stale .cards,
+.values.stale table.containers {
+  opacity: 0.55;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  background-color: var(--vscode-sideBar-background, var(--vscode-editorWidget-background));
+  min-width: 0;
+}
+
+.caption {
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+
+.big-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.big {
+  font-size: 1.9em;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.92em;
+}
+
+.line > span:last-child {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.track {
+  display: block;
+  flex: 1 1 auto;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: var(--vscode-input-background, var(--vscode-editorWidget-background));
+}
+
+.fill {
+  display: block;
+  height: 6px;
+  background-color: var(--vscode-charts-blue);
+}
+
+.fill.high {
+  background-color: var(--vscode-charts-yellow);
+}
+
+.fill.full {
+  background-color: var(--vscode-charts-red);
+}
+
+.spark {
+  width: 100%;
+  height: 40px;
+}
+
+.spark polyline {
+  fill: none;
+  stroke: var(--vscode-charts-blue);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.core {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.92em;
+}
+
+.core-label {
+  flex: none;
+  width: 4.5em;
+}
+
+.core-value {
+  flex: none;
+  width: 3.5em;
+  text-align: right;
+}
+
+.segments {
+  display: flex;
+  gap: 1px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  background-color: var(--vscode-input-background, var(--vscode-editorWidget-background));
+}
+
+.segment,
+.swatch {
+  display: inline-block;
+  background-color: var(--vscode-charts-blue);
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+}
+
+.swatch.containers,
+.segment.containers {
+  background-color: var(--vscode-charts-green);
+}
+
+.swatch.volumes,
+.segment.volumes {
+  background-color: var(--vscode-charts-yellow);
+}
+
+.swatch.buildCache,
+.segment.buildCache {
+  background-color: var(--vscode-charts-orange);
+}
+
+/* The tables. */
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 6px;
+}
+
+.table-box {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-align: left;
+  color: var(--vscode-descriptionForeground);
+}
+
+th,
+td {
+  padding: 5px 12px 5px 0;
+  border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  vertical-align: middle;
+}
+
+.number {
+  text-align: right;
+}
+
+.cell {
+  max-width: 26em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+td.cpu {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 9em;
+}
+
+.cpu-value {
+  flex: none;
+  width: 4em;
+}
+
+td.cpu .track {
+  max-width: 70px;
+}
+
+table.kinds th,
+table.kinds td {
+  border-bottom: none;
+  padding: 2px 8px 2px 0;
+}
+
+.tables {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.object-table {
+  min-width: 0;
+}
+
+details {
+  margin-top: 8px;
+}
+
+summary {
+  cursor: pointer;
+}
+
+ul.plain {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+/* The colors of the names, as in the view Docker Hosts. */
+.tone-inactive {
+  color: var(--vscode-devspaces-inactiveForeground, var(--vscode-disabledForeground));
+}
+
+.tone-notDevspaces {
+  color: var(--vscode-devspaces-hosts-notDevspacesForeground, var(--vscode-charts-purple));
+}
+
+.tone-notDevspacesInactive {
+  color: var(--vscode-devspaces-hosts-notDevspacesInactiveForeground, var(--vscode-charts-purple));
+}
+
+footer {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  padding-top: 10px;
+}

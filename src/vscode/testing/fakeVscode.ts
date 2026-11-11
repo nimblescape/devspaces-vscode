@@ -103,6 +103,8 @@ export interface FakeWebviewPanel {
    * a change, as VS Code does; a hidden panel is not active.
    */
   setVisible(visible: boolean): void;
+  /** Test helper: the page becomes active or not while it stays visible (for example a click into another group). */
+  setActive(active: boolean): void;
   /** Every message of `webview.postMessage`, in order. */
   posted: Array<{ type: string; [key: string]: unknown }>;
   disposed: boolean;
@@ -146,6 +148,7 @@ function fakeWebviewPanel(viewType: string, title: string, column: unknown, opti
     onDidChangeViewState: viewStates.event,
     receive: (message) => messages.fire(message),
     setVisible: (visible) => setView(visible, visible),
+    setActive: (active) => setView(panel.visible, active),
     posted: [],
     disposed: false,
   };

@@ -48,7 +48,7 @@ import { deferredByteProcess } from '../core/relay/deferredProcess';
 import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
-import { limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
+import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
 import { baseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
@@ -114,6 +114,7 @@ import { DisconnectRequests } from './disconnectRequests';
 import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerHostsView } from './dockerHostsView';
+import { UsagePages } from './usagePage';
 import { DOCKER_HOSTS_VIEW_ID } from './dockerHostsModel';
 import { DockerSetup, currentUserName, readOsRelease } from './dockerSetup';
 import { installTerminalOptions, terminalLines } from '../core/docker/dockerSetup';
@@ -1418,20 +1419,45 @@ async function activateExtension(
     }
     return { kind: 'notSetUp' };
   };
-  // Before a stop or a removal of the VM: the worker channel, the relay connection and the shell (the shared shell of
-  // the view Docker Hosts) of this window to it end.
+  // All Docker calls of the view Docker Hosts and of Read Sizes of the utilization page run on the one shared shell of
+  // the host (`onShell`), also the actions of the view and also on the VM, so they share one login of the host instead
+  // of one connection each; on an SSH host with an open connection of the relay, they go through its pipe, which shares
+  // the login of the relay.
+  const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
+  // The objects of a host with their sizes: for the view Docker Hosts and for Read Sizes of the utilization page.
+  const readInventory = async (host: string, signal: AbortSignal) => {
+    const here = devspacesOfHost(await registry.list(), host);
+    return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
+  };
+  // The utilization pages of the hosts (R-ENG-009): each sample is one command on the shared shell of the host, and the
+  // page never starts the VM of Devspaces (R-VM-004). The free space of this computer for the disk of the VM is that of
+  // the folder of its disk.
+  const vmDiskFolder = limaVm !== undefined ? limaVm.paths.home : wslFolder;
+  const usagePages = new UsagePages({
+    extensionUri: context.extensionUri,
+    logger,
+    showLog: () => logger.show(),
+    vmHost,
+    shells,
+    vmState: readVmState,
+    vmStopping: () => vmHost === WSL_HOST && keeper.stopping(WSL_DISTRIBUTION),
+    startVm: () => vmCommands.start(),
+    readSizes: readInventory,
+    ...(vmDiskFolder !== undefined ? { localDiskFree: () => freeSpace(vmDiskFolder) } : {}),
+  });
+  context.subscriptions.push(usagePages);
+  // Before a stop or a removal of the VM: its utilization page pauses, and the worker channel, the relay connection and
+  // the shell (the shared shell of the view Docker Hosts and of the page) of this window to it end.
   const closeVmConnections = (): void => {
     if (vmHost === undefined) return;
+    usagePages.vmClosing();
     channels.close(remoteDockerTarget(vmHost));
     relayConnections.close(vmHost, 'the VM of Devspaces stops');
     shells.close(vmHost);
   };
   // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with all containers,
   // networks, images and volumes there and its build cache. A host is read only when the user opens its row or clicks
-  // Refresh. All Docker calls of the view run on the one shared shell of the host (`onShell`), also its actions and also
-  // on the VM, so they share one login of the host instead of one connection each; on an SSH host with an open
-  // connection of the relay, they go through its pipe, which shares the login of the relay.
-  const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
+  // Refresh. All Docker calls of the view run on the one shared shell of the host (`onHostShell` above).
   const dockerHosts = new DockerHostsView({
     logger,
     showLog: () => logger.show(),
@@ -1441,10 +1467,7 @@ async function activateExtension(
       return { hosts: file.remoteHosts ?? [], selected: file.dockerHost };
     },
     vmState: readVmState,
-    read: async (host, signal) => {
-      const here = devspacesOfHost(await registry.list(), host);
-      return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
-    },
+    read: readInventory,
     stopContainer: (host, object, signal) => onHostShell(host, () => stopHostContainer(docker, object, logger, signal)),
     startContainer: (host, object, signal) => onHostShell(host, () => startHostContainer(docker, object, logger, signal)),
     pruneBuildCache: (host, signal) => onHostShell(host, () => pruneBuildCache(docker, logger, signal)),
@@ -1496,6 +1519,7 @@ async function activateExtension(
     onDidChange: (reread) => {
       if (reread && vmHost !== undefined) dockerHosts.invalidate(vmHost);
       dockerHosts.changed();
+      usagePages.vmChanged();
     },
   });
   const controller = new Controller({
@@ -1550,6 +1574,7 @@ async function activateExtension(
     limaSetup,
     wslAfterInstall,
     dockerHosts,
+    usagePages,
     vm: vmCommands,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.

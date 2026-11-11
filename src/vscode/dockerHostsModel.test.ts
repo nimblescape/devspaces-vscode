@@ -266,11 +266,11 @@ describe('the menus of the view (package.json)', () => {
 
   it('offers on each row exactly its actions', () => {
     const stoppedVm = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind: 'stopped' } }).contextValue;
-    expect(commandsOf(stoppedVm)).toEqual(['devspaces.startVm', 'devspaces.vmSettings', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeVm', 'devspaces.resetVm']);
+    expect(commandsOf(stoppedVm)).toEqual(['devspaces.startVm', 'devspaces.vmSettings', 'devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeVm', 'devspaces.resetVm']);
     const notSetUp = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'notSetUp' } }).contextValue;
     expect(commandsOf(notSetUp)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings']);
     const remote = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false }).contextValue;
-    expect(commandsOf(remote)).toEqual(['devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeDockerHostFromList']);
+    expect(commandsOf(remote)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeDockerHostFromList']);
     expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue)).toEqual(['devspaces.stop', 'devspaces.delete']);
     expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue)).toEqual(['devspaces.stopDockerObject']);
     expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue)).toEqual(['devspaces.removeDockerObjects']);
