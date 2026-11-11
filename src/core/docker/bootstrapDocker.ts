@@ -281,17 +281,21 @@ const SHARED_SHELL_CHANGES: Readonly<Record<string, readonly string[]>> = {
   image: ['rm'],
   volume: ['rm'],
   network: ['rm'],
-  builder: ['prune'],
 };
 
 /**
  * A call that may run on the shared shell of a host (runWithDockerTarget with `onShell`): one of isShellCall, or one of
- * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES).
+ * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES). On the VM of Devspaces (`vm`) also `docker builder
+ * prune` (Remove Unused Build Cache…): on another host, the Docker CLI there could send it to a buildx builder that its
+ * user chose (`docker buildx use --global`) instead of the engine, so it keeps the way of BootstrapDocker with
+ * BUILDX_BUILDER=default (REMOTE_BUILDX_BUILDER); the VM has no builder of a user.
  */
-export function isSharedShellCall(args: readonly string[]): boolean {
+export function isSharedShellCall(args: readonly string[], vm: boolean): boolean {
   if (isShellCall(args)) return true;
   const [command, subcommand] = dockerCommandWords(args);
-  return shellCarries(args) && command !== undefined && (SHARED_SHELL_CHANGES[command]?.includes(subcommand ?? '') ?? false);
+  if (!shellCarries(args) || command === undefined) return false;
+  if (vm && command === 'builder' && subcommand === 'prune') return true;
+  return SHARED_SHELL_CHANGES[command]?.includes(subcommand ?? '') ?? false;
 }
 
 /** A call that starts with its command (no global option of this computer), reaches the engine, and is no `docker version`. */
@@ -600,7 +604,7 @@ export class BootstrapDocker {
    * something never runs twice.
    */
   private async runOnShell(target: DockerTarget, args: readonly string[], options: RunOptions, shared: boolean): Promise<RunResult | undefined> {
-    if (this.remoteShell === undefined || !(shared ? isSharedShellCall(args) : isShellCall(args))) return undefined;
+    if (this.remoteShell === undefined || !(shared ? isSharedShellCall(args, isVmHost(target.host)) : isShellCall(args))) return undefined;
     if (options.input !== undefined || options.cwd !== undefined || options.onStdout !== undefined || options.onStderr !== undefined) return undefined;
     try {
       return await this.remoteShell(target, args, { timeoutMs: options.timeoutMs, signal: options.signal });

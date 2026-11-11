@@ -308,8 +308,8 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
     ['image', 'rm', 'node:22'],
     ['volume', 'rm', 'pgdata'],
     ['network', 'rm', 'shop_default'],
-    ['builder', 'prune', '--all', '--force'],
   ];
+  const PRUNE = ['builder', 'prune', '--all', '--force'];
 
   it('runs the reads and the actions of the view on the shell of an SSH host without the pipe, and logs in for no other call', async () => {
     const { runner, envs } = recorder();
@@ -322,8 +322,10 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
       async () => {
         await docker.run(['system', 'df', '--verbose', '--format', '{{json .}}']);
         for (const args of ACTIONS) await expect(docker.run(args)).resolves.toEqual(SHELL);
-        // A call that changes something and is no action of the view still logs in itself.
+        // A call that changes something and is no action of the view still logs in itself, and so does the removal of the
+        // build cache, which the Docker CLI of the host could send to a buildx builder of its user.
         await docker.run(['volume', 'create', 'x']);
+        await docker.run(PRUNE);
       },
       { onShell: true },
     );
@@ -331,11 +333,17 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
       ['build-box', ['system', 'df', '--verbose', '--format', '{{json .}}']],
       ...ACTIONS.map((args) => ['build-box', args]),
     ]);
-    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([SSH]);
-    expect(lines.filter((line) => line.endsWith('over SSH.'))).toEqual(['docker volume create x logs in to build-box over SSH.']);
+    expect(envs.map((env) => [env.DOCKER_HOST, env.BUILDX_BUILDER])).toEqual([
+      [SSH, 'default'],
+      [SSH, 'default'],
+    ]);
+    expect(lines.filter((line) => line.endsWith('over SSH.'))).toEqual([
+      'docker volume create x logs in to build-box over SSH.',
+      'docker builder prune --all --force logs in to build-box over SSH.',
+    ]);
     // Without `onShell`, an action logs in over SSH, as before.
     await runWithDockerTarget(REMOTE, () => docker.run(['container', 'stop', 'abc']));
-    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([SSH, SSH]);
+    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([SSH, SSH, SSH]);
     expect(remoteShell).toHaveBeenCalledTimes(1 + ACTIONS.length);
   });
 
@@ -361,6 +369,8 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
       async () => {
         await expect(docker.run(['image', 'ls', '--format', '{{json .}}'])).resolves.toEqual(SHELL);
         await expect(docker.run(['volume', 'rm', 'pgdata'])).resolves.toEqual(SHELL);
+        // The VM has no buildx builder of a user: the removal of the build cache runs on the shell too.
+        await expect(docker.run(PRUNE)).resolves.toEqual(SHELL);
         // Input, and a call that the shell cannot carry, go through the pipe.
         await expect(docker.run(['image', 'inspect', 'x'], { input: 'x' })).resolves.toEqual(OK);
         await expect(docker.run(['volume', 'create', 'x'])).resolves.toEqual(OK);
@@ -370,12 +380,12 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
       },
       { onShell: true },
     );
-    expect(remoteShell.mock.calls.map(([, args]) => args)).toEqual([['image', 'ls', '--format', '{{json .}}'], ['volume', 'rm', 'pgdata'], ['container', 'stop', 'abc']]);
+    expect(remoteShell.mock.calls.map(([, args]) => args)).toEqual([['image', 'ls', '--format', '{{json .}}'], ['volume', 'rm', 'pgdata'], PRUNE, ['container', 'stop', 'abc']]);
     expect(envs.map((env) => env.DOCKER_HOST)).toEqual([PIPE, PIPE, PIPE]);
     // Without `onShell`, every call there goes through the pipe, as before.
     await runWithDockerTarget(WSL, () => docker.run(['image', 'ls']));
     expect(envs).toHaveLength(4);
-    expect(remoteShell).toHaveBeenCalledTimes(3);
+    expect(remoteShell).toHaveBeenCalledTimes(4);
   });
 
   it('keeps `onShell` in an operation on the same host within it, not on another host', async () => {
@@ -404,21 +414,25 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
 
 describe('isSharedShellCall', () => {
   it('takes the calls of isShellCall and the actions of the view Docker Hosts, nothing else that changes something', () => {
-    expect(isSharedShellCall(['info'])).toBe(true);
-    expect(isSharedShellCall(['container', 'stop', 'x'])).toBe(true);
-    expect(isSharedShellCall(['container', 'start', 'x'])).toBe(true);
-    expect(isSharedShellCall(['container', 'rm', 'x'])).toBe(true);
-    expect(isSharedShellCall(['image', 'rm', 'x'])).toBe(true);
-    expect(isSharedShellCall(['volume', 'rm', 'x'])).toBe(true);
-    expect(isSharedShellCall(['network', 'rm', 'x'])).toBe(true);
-    expect(isSharedShellCall(['builder', 'prune', '--all', '--force'])).toBe(true);
-    expect(isSharedShellCall(['volume', 'create', 'x'])).toBe(false);
-    expect(isSharedShellCall(['run', 'x'])).toBe(false);
-    expect(isSharedShellCall(['container', 'exec', 'x', 'sh'])).toBe(false);
-    expect(isSharedShellCall(['system', 'prune', '--force'])).toBe(false);
-    expect(isSharedShellCall(['-H', 'ssh://box', 'container', 'stop', 'x'])).toBe(false);
-    expect(isSharedShellCall(['context', 'rm', 'x'])).toBe(false);
-    expect(isSharedShellCall([])).toBe(false);
+    for (const vm of [false, true]) {
+      expect(isSharedShellCall(['info'], vm)).toBe(true);
+      expect(isSharedShellCall(['container', 'stop', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['container', 'start', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['container', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['image', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['volume', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['network', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['volume', 'create', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall(['run', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall(['container', 'exec', 'x', 'sh'], vm)).toBe(false);
+      expect(isSharedShellCall(['system', 'prune', '--force'], vm)).toBe(false);
+      expect(isSharedShellCall(['-H', 'ssh://box', 'container', 'stop', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall(['context', 'rm', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall([], vm)).toBe(false);
+    }
+    // The removal of the build cache only on the VM: elsewhere the Docker CLI of the host could prune a builder of its user.
+    expect(isSharedShellCall(['builder', 'prune', '--all', '--force'], true)).toBe(true);
+    expect(isSharedShellCall(['builder', 'prune', '--all', '--force'], false)).toBe(false);
   });
 });
 
