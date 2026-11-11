@@ -13,6 +13,7 @@ import { Commands } from './commands';
 import {
   buildCacheRowLook,
   DOCKER_HOSTS_VIEW_ID,
+  DockerHostsTexts,
   groupRowLook,
   hostOfArgument,
   hostOfNode,
@@ -54,15 +55,25 @@ describe('hostRowLook', () => {
     expect(look.contextValue).toBe('hostsHost;vm;vmNotSetUp');
     expect(look.collapsible).toBe('none');
     expect(look.description).toBe('Local VM of Devspaces · Not set up');
+    expect(look.tooltip).toContain(DockerHostsTexts.setUpInMenu);
   });
 
-  it('offers Start for a stopped VM and Stop for a running one; the selected host has a check mark and no Select', () => {
-    expect(hostRowLook(vm('stopped')).contextValue).toBe('hostsHost;vm;vmSetUp;engine;vmCanStart;canSelect');
+  it('offers Start for a stopped VM and Stop for a running one; the selected host has a check mark', () => {
+    expect(hostRowLook(vm('stopped')).contextValue).toBe('hostsHost;vm;vmSetUp;engine;vmCanStart');
     expect(hostRowLook(vm('unknown')).contextValue).toContain(';vmCanStart');
     const running = hostRowLook(vm('running', true));
     expect(running.contextValue).toBe('hostsHost;vm;vmSetUp;engine;vmCanStop;selected');
     expect(running.icon).toBe('check');
-    expect(running.command).toEqual({ command: Commands.selectDockerHost, title: 'Select', arguments: [vm('running', true)] });
+    expect(running.tooltip).toContain(DockerHostsTexts.selected);
+  });
+
+  it('gives a host row no click command: the Docker host of Devspaces is chosen only in the repository view', () => {
+    for (const row of [vm('notSetUp'), vm('stopped'), vm('running', true), { hostsNode: 'host', host: 'lab', vm: false, selected: false } satisfies HostRow]) {
+      expect(hostRowLook(row).command).toBeUndefined();
+    }
+    const other = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false });
+    expect(other.tooltip).toContain(DockerHostsTexts.chooseInRepositoryView);
+    expect(other.tooltip).not.toContain(DockerHostsTexts.selected);
   });
 
   it('says the memory, the CPUs and the space of the disk of the VM in its tooltip', () => {
@@ -73,7 +84,7 @@ describe('hostRowLook', () => {
 
   it('gives a remote host the actions of its engine and Remove from the List', () => {
     const look = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false });
-    expect(look.contextValue).toBe('hostsHost;remote;engine;canSelect');
+    expect(look.contextValue).toBe('hostsHost;remote;engine');
     expect(look.collapsible).toBe('collapsed');
   });
 });
@@ -259,7 +270,7 @@ describe('the menus of the view (package.json)', () => {
     const notSetUp = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'notSetUp' } }).contextValue;
     expect(commandsOf(notSetUp)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings']);
     const remote = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false }).contextValue;
-    expect(commandsOf(remote)).toEqual(['devspaces.selectDockerHost', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeDockerHostFromList']);
+    expect(commandsOf(remote)).toEqual(['devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeDockerHostFromList']);
     expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue)).toEqual(['devspaces.stop', 'devspaces.delete']);
     expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue)).toEqual(['devspaces.stopDockerObject']);
     expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue)).toEqual(['devspaces.removeDockerObjects']);

@@ -706,16 +706,18 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 51 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
+    // 50 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, and the commands of the rows
     // of the view "Docker Hosts". The last ones that were added are Start of a container and Remove Unused Build Cache… of
     // the view "Docker Hosts" (R-ENG-008), before them the view itself and the management of the VM of Devspaces in it
-    // (R-VM-010); the last ones that were removed are the installation and the
-    // start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
-    expect(declared).toHaveLength(51);
+    // (R-VM-010). The last one that was removed is "Use as Docker Host" of a host row of the view "Docker Hosts": the
+    // Docker host of Devspaces is chosen only in the first row of the repository view (R-ENG-008); before it the
+    // installation and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
+    expect(declared).toHaveLength(50);
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
+    expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use as Docker Host');
     expect(declared).toEqual(
       expect.arrayContaining([
         Commands.removeFromDockerEngine,
@@ -6326,7 +6328,7 @@ describe('the Docker host of Devspaces', () => {
   // The view "Docker Hosts" (R-ENG-008): a host row names the host of the command; after a command with one of its rows,
   // the view reads that host again.
   it('runs Update All Images Now of a host row on that host, also its Try again, and the view reads the host again', async () => {
-    const dockerHosts = { refresh: vi.fn(), select: vi.fn(async () => {}), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
     const seen: string[] = [];
     const update = vi.fn(async (target: DockerTarget) => {
       seen.push(target.host);
@@ -6345,7 +6347,7 @@ describe('the Docker host of Devspaces', () => {
   });
 
   it('passes the selected rows of the view "Docker Hosts" to Remove…, and runs the commands of the VM without an operation', async () => {
-    const dockerHosts = { refresh: vi.fn(), select: vi.fn(async () => {}), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
     const vm = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), remove: vi.fn(async () => {}), reset: vi.fn(async () => {}), settings: vi.fn(async () => {}) };
     h.controller.dispose();
     fs.rmSync(h.root, { recursive: true, force: true });
@@ -6362,7 +6364,7 @@ describe('the Docker host of Devspaces', () => {
   });
 
   it('runs Stop of a devspace from its object row of the view "Docker Hosts" on the host of the devspace, and the view reads the host again', async () => {
-    const dockerHosts = { refresh: vi.fn(), select: vi.fn(async () => {}), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
     h.controller.dispose();
     fs.rmSync(h.root, { recursive: true, force: true });
     h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts });

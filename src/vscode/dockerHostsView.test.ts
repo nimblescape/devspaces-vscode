@@ -47,8 +47,6 @@ let removeObjects: Mock<DockerHostsDeps['removeObjects']>;
 let stopContainer: Mock<DockerHostsDeps['stopContainer']>;
 let startContainer: Mock<DockerHostsDeps['startContainer']>;
 let pruneBuildCache: Mock<DockerHostsDeps['pruneBuildCache']>;
-let select: Mock<DockerHostsDeps['select']>;
-let setUpVm: Mock<DockerHostsDeps['setUpVm']>;
 let removeFromList: Mock<DockerHostsDeps['removeFromList']>;
 let fired: Array<HostsNode | undefined>;
 
@@ -64,8 +62,6 @@ function view(vmHost: string | undefined = LIMA_HOST): DockerHostsView {
     startContainer,
     pruneBuildCache,
     removeObjects,
-    select,
-    setUpVm,
     removeFromList,
   });
   created.onDidChangeTreeData((node) => fired.push(node));
@@ -111,8 +107,6 @@ beforeEach(() => {
   stopContainer = vi.fn(async (_host: string, object: HostObject): Promise<ObjectResult> => ({ object, outcome: 'stopped' }));
   startContainer = vi.fn(async (_host: string, object: HostObject): Promise<ObjectResult> => ({ object, outcome: 'started' }));
   pruneBuildCache = vi.fn(async () => undefined);
-  select = vi.fn(async () => undefined);
-  setUpVm = vi.fn(async () => undefined);
   removeFromList = vi.fn(async () => undefined);
   window.withProgress.mockImplementation(async (_options: unknown, task: (...args: unknown[]) => Promise<unknown>) =>
     task({ report: () => undefined }, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) }),
@@ -207,16 +201,6 @@ describe('DockerHostsView: the read of a host', () => {
 });
 
 describe('DockerHostsView: the commands of the rows', () => {
-  it('sets up the VM at a click on its row while it is not set up, and else makes the host the Docker host of Devspaces', async () => {
-    vmState = { kind: 'notSetUp' };
-    const provider = view();
-    await provider.select(await hostRow(provider, LIMA_HOST));
-    expect(setUpVm).toHaveBeenCalledTimes(1);
-    expect(select).not.toHaveBeenCalled();
-    await provider.select(await hostRow(provider, 'lab'));
-    expect(select).toHaveBeenCalledWith('lab');
-  });
-
   it('removes a remote host from the list, never the VM', async () => {
     const provider = view();
     await provider.removeFromList({ hostsNode: 'host', host: LIMA_HOST });

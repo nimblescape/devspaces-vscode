@@ -192,11 +192,11 @@ export interface ControllerDeps {
   /** "Set Up Docker for Devspaces in Its VM…" (macOS and Linux), also for a link on a computer without Docker. */
   limaSetup?: Pick<LimaSetupCommands, 'setUp' | 'ensureDockerHost'>;
   /**
-   * The view "Docker Hosts" (R-ENG-008): Refresh, the click on a host row, Remove from the List, and Stop and Remove… of
-   * its objects. After a command with one of its rows (also Stop and Delete of a devspace, Update All Images Now and
-   * Remove Devspaces from This Docker Engine… of a host row), the view reads that host again when it is open.
+   * The view "Docker Hosts" (R-ENG-008): Refresh, Remove from the List, and Stop and Remove… of its objects. After a
+   * command with one of its rows (also Stop and Delete of a devspace, Update All Images Now and Remove Devspaces from
+   * This Docker Engine… of a host row), the view reads that host again when it is open.
    */
-  dockerHosts?: Pick<DockerHostsView, 'refresh' | 'select' | 'removeFromList' | 'stopObject' | 'startObject' | 'pruneBuildCache' | 'removeObjects' | 'invalidate'>;
+  dockerHosts?: Pick<DockerHostsView, 'refresh' | 'removeFromList' | 'stopObject' | 'startObject' | 'pruneBuildCache' | 'removeObjects' | 'invalidate'>;
   /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
   vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
   /**
@@ -548,7 +548,6 @@ export class Controller implements vscode.Disposable {
       rowActivated: (argument) => this.rowActivated(argument),
       rowEnter: () => this.rowEnter(),
       refreshDockerHosts: async (argument) => this.deps.dockerHosts?.refresh(argument),
-      selectDockerHost: async (argument) => this.deps.dockerHosts?.select(argument),
       removeDockerHostFromList: async (argument) => this.deps.dockerHosts?.removeFromList(argument),
       stopDockerObject: async (argument) => this.deps.dockerHosts?.stopObject(argument),
       startDockerObject: async (argument) => this.deps.dockerHosts?.startObject(argument),
@@ -578,7 +577,6 @@ export class Controller implements vscode.Disposable {
       'showLog',
       // The view "Docker Hosts" names the host of each of its commands, and the VM commands act on the VM.
       'refreshDockerHosts',
-      'selectDockerHost',
       'removeDockerHostFromList',
       'stopDockerObject',
       'startDockerObject',

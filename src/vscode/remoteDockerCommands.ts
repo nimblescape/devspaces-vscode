@@ -262,23 +262,6 @@ export class RemoteDockerCommands {
   }
 
   /**
-   * A click on a host row of the view "Docker Hosts" (R-ENG-008): Devspaces uses `host` after its test, as the choice
-   * in the first row of the repository view does. Nothing when Devspaces uses it already. Never throws.
-   */
-  async selectHost(host: string): Promise<void> {
-    try {
-      if (host === (await this.deps.state.dockerHost()) && this.remoteCliReady()) {
-        this.deps.logger.info(`Devspaces uses ${host} already.`);
-        return;
-      }
-      if (!(await this.ensureRemoteCli())) return;
-      await this.switchToRemote(host);
-    } catch (error) {
-      this.showFailure(error);
-    }
-  }
-
-  /**
    * "Start the VM" of the VM row of the view "Docker Hosts" (R-VM-010): the test of the host `host` with its progress,
    * which starts the VM of Devspaces (each Docker connection to it starts it), without a change of the Docker host of
    * Devspaces. True when Docker answers there; a failure is shown. Never throws.

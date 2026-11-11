@@ -78,11 +78,10 @@ export const Commands = {
   // volumes), and on request the devspaces of the signed-in account there (Command Palette, the "…" menu of the view).
   removeFromDockerEngine: 'devspaces.removeFromDockerEngine',
   // The view "Docker Hosts" (dockerHostsView.ts, R-ENG-008): Refresh of the view or of a host row (a host is read only
-  // when the user opens it or clicks Refresh), the click on a host row (hidden in the Command Palette: it makes the host
-  // the Docker host of Devspaces), Remove from the List of a remote host row, and Stop and Remove… of a container, an
-  // image or a volume that is no object of a devspace of this computer (hidden in the Command Palette: they take rows).
+  // when the user opens it or clicks Refresh), Remove from the List of a remote host row, and Stop and Remove… of a
+  // container, an image or a volume that is no object of a devspace of this computer (hidden in the Command Palette:
+  // they take rows). The Docker host of Devspaces is chosen only in the first row of the repository view.
   refreshDockerHosts: 'devspaces.refreshDockerHosts',
-  selectDockerHost: 'devspaces.selectDockerHost',
   removeDockerHostFromList: 'devspaces.removeDockerHostFromList',
   stopDockerObject: 'devspaces.stopDockerObject',
   startDockerObject: 'devspaces.startDockerObject',
