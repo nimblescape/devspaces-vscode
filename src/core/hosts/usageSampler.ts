@@ -56,8 +56,11 @@ export type UsageEnd =
   | { kind: 'failed'; detail: string }
   /** The host has no /proc: it is no Linux. */
   | { kind: 'notLinux' }
-  /** A sample did not end within its time limit (the shell stopped it). */
-  | { kind: 'noAnswer' }
+  /**
+   * A sample did not end within its time limit (the shell stopped it), or the login of the shell did not answer in
+   * time. With the end of the error output.
+   */
+  | { kind: 'noAnswer'; detail: string }
   /** The output broke a bound of usageSample.ts, or is not the output of the script. */
   | { kind: 'badOutput'; detail: string }
   /**
@@ -96,10 +99,15 @@ export interface UsageSamplerOptions {
   /** The idle check of the WSL distribution of Devspaces (lines `I`, and the end `vmIdle`). */
   wslIdle?: boolean;
   /**
-   * Runs `sh -s` with `script` as its input on the shared shell of the host, within `timeoutMs`: a sample
+   * Runs `script` on the shared shell of the host as one line, usageShellCommand(script), within `timeoutMs`: a sample
    * (usageScript), or a Docker call between two samples (usageDockerScript).
    */
   run(script: string, timeoutMs: number): Promise<UsageRun>;
+  /**
+   * Takes a hold that ends with the samples (the returned function runs once, at the end): RemoteShells.keep of the
+   * host, so that the relay does not take over the shell while the samples run on it.
+   */
+  hold?(): () => void;
   /** The line `#H` of the first sample, and again when the kernel of the host started anew. */
   onHeader?(header: UsageHeader): void;
   /**
@@ -136,12 +144,16 @@ export class UsageSampler {
   private dockerRoot: string | undefined;
   private nextRootAt: number | undefined;
   private idleSeen = false;
-  /** When the last sample started. */
+  /** When the last sample started, and when it ended (with its Docker call). */
   private lastStartedAt: number | undefined;
+  private lastEndedAt: number | undefined;
+  /** The end of the hold of `hold`. */
+  private release: (() => void) | undefined;
 
   private constructor(private readonly options: UsageSamplerOptions) {
     this.timers = options.timers ?? realTimers;
     this.interval = options.intervalMs;
+    this.release = options.hold?.();
     // After start returned, so that an end (for example of a `run` that throws at once) never comes before it.
     queueMicrotask(() => this.sample());
   }
@@ -179,8 +191,8 @@ export class UsageSampler {
       this.sample();
       return;
     }
-    // A sample was left out in the pause (none runs, and the next one was due).
-    if (!this.busy && this.timers.now() - this.lastStartedAt > this.interval) this.previous = undefined;
+    // A sample was left out in the pause: none runs, and more than an interval passed since the last one ended.
+    if (!this.busy && this.timers.now() - (this.lastEndedAt ?? this.lastStartedAt) > this.interval) this.previous = undefined;
     this.schedule(this.lastStartedAt);
   }
 
@@ -195,13 +207,13 @@ export class UsageSampler {
     const kind: UsageSampleKind = this.samples % USAGE_DISK_EVERY === 0 ? 'd' : 't';
     const seq = ++this.samples;
     const marker = newUsageMarker();
-    const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
     const timeoutMs = Math.max(3 * this.interval, MIN_USAGE_ANSWER_MS);
     const startedAt = this.timers.now();
     this.lastStartedAt = startedAt;
     this.busy = true;
     void (async () => {
       try {
+        const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
         const run = await this.options.run(script, timeoutMs);
         if (this.stage === 'running' && this.take(run, marker, seq, timeoutMs)) await this.between();
       } catch (error) {
@@ -210,6 +222,7 @@ export class UsageSampler {
         this.finish({ kind: 'failed', detail });
       } finally {
         this.busy = false;
+        this.lastEndedAt = this.timers.now();
         this.schedule(startedAt);
       }
     })();
@@ -224,8 +237,10 @@ export class UsageSampler {
     }
     const { result } = run;
     if (result.timedOut) {
-      logger.warn(`${name} did not answer the utilization sample within ${timeoutMs / 1000} seconds.`);
-      this.finish({ kind: 'noAnswer' });
+      // Also a login of the shell that did not answer in time: then its error output says so.
+      const detail = readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
+      logger.warn(`${name} did not answer the utilization sample in time (${timeoutMs / 1000} seconds for the sample)${detail ? `: ${detail}` : '.'}`);
+      this.finish({ kind: 'noAnswer', detail });
       return false;
     }
     if (result.exitCode !== 0) {
@@ -370,6 +385,8 @@ export class UsageSampler {
     if (this.stage === 'ended') return;
     this.stage = 'ended';
     this.clearNext();
+    this.release?.();
+    this.release = undefined;
     try {
       this.options.onEnd(end);
     } catch (error) {

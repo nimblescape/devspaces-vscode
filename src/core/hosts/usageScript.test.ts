@@ -2,12 +2,12 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-import { spawn, spawnSync } from 'child_process';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { USAGE_DOCKER_SECONDS, USAGE_SCRIPT, isUsableDockerRoot, newUsageMarker, usageDockerScript, usageScript, type UsageSampleValues } from './usageScript';
+import { USAGE_DOCKER_SECONDS, USAGE_SCRIPT, isUsableDockerRoot, newUsageMarker, usageDockerScript, usageScript, usageShellCommand, type UsageSampleValues } from './usageScript';
 import { readUsageSample, type UsageBlock, type UsageHeader } from './usageSample';
 
 const MARKER = '0123456789abcdef0123456789abcdef';
@@ -42,6 +42,13 @@ describe('usageScript', () => {
     expect(script.endsWith('\n}\n')).toBe(true);
     expect(script).toContain(`exec timeout ${USAGE_DOCKER_SECONDS} 'docker' 'ps' '--format' '{{.ID}} it'\\''s'`);
     expect(() => usageDockerScript(['ps', 'a\nb'])).toThrow(/line break/);
+  });
+
+  it('makes the line of the shell one printf into sh -s, with each backslash and line feed for %b', () => {
+    expect(usageShellCommand("a\\n'b\nc\n")).toBe("{ printf '%b' 'a\\\\n'\\''b\\nc\\n' | sh -s; }");
+    expect(usageShellCommand(usageScript({ marker: MARKER, seq: 1, kind: 'd', dockerRoot: '/data' }))).not.toMatch(/[\r\n]/);
+    expect(() => usageShellCommand('a\rb')).toThrow(/carriage return/);
+    expect(() => usageShellCommand('a\0b')).toThrow(/NUL/);
   });
 
   it('makes a new marker of 32 hexadecimal digits each time', () => {
@@ -99,10 +106,15 @@ function fakeCgroups(root: string): void {
 /** The shells of this computer to run the script in: sh (dash on Debian and Ubuntu), and bash and dash when present. */
 const SHELLS = [...new Map(['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/dash'].filter((shell) => fs.existsSync(shell)).map((shell) => [fs.realpathSync(shell), shell])).values()];
 
-/** Runs one sample in `shell` with the fake cgroups, as the shared shell does: `sh -s` with the script as its input. */
+/** Runs `script` in `shell` as the shared shell does: the line of usageShellCommand, with its input closed. */
+function runScript(shell: string, script: string, env: NodeJS.ProcessEnv): SpawnSyncReturns<string> {
+  return spawnSync(shell, ['-c', `${usageShellCommand(script)} </dev/null`], { env, encoding: 'utf8', timeout: 20_000 });
+}
+
+/** Runs one sample in `shell` with the fake cgroups, as the shared shell does. */
 function runSample(shell: string, root: string, values: Omit<UsageSampleValues, 'marker'>, env: Record<string, string> = {}): { header: UsageHeader; block: UsageBlock } {
   const script = usageScript({ marker: MARKER, ...values }).replace('C=/sys/fs/cgroup', `C=${root}`);
-  const result = spawnSync(shell, ['-s'], { input: script, env: { ...process.env, ...env, HOME: root }, encoding: 'utf8', timeout: 10_000 });
+  const result = runScript(shell, script, { ...process.env, ...env, HOME: root });
   expect(result.status).toBe(0);
   const output = readUsageSample(result.stdout, MARKER, values.seq);
   if (output.kind !== 'block') throw new Error('no block');
@@ -138,7 +150,7 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
     // Only where this computer has a `timeout` of that form, as the script checks it.
     if (spawnSync('/bin/sh', ['-c', 'timeout 1 true']).status !== 0) return;
     const started = Date.now();
-    const result = spawnSync('/bin/sh', ['-s'], { input: usageDockerScript(['ps']), env: { ...process.env, PATH: `${slowBin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 20_000 });
+    const result = runScript('/bin/sh', usageDockerScript(['ps']), { ...process.env, PATH: `${slowBin}:${process.env.PATH}` });
     expect(result.status).toBe(124);
     expect(Date.now() - started).toBeLessThan(USAGE_DOCKER_SECONDS * 1000 + 3000);
   }, 20_000);
@@ -183,7 +195,7 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
       });
 
       it('runs a Docker call of the samples with its arguments', () => {
-        const result = spawnSync(shell, ['-s'], { input: usageDockerScript(['ps', '--format', "{{.ID}} it's"]), env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 10_000 });
+        const result = runScript(shell, usageDockerScript(['ps', '--format', "{{.ID}} it's"]), { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` });
         expect(result.status).toBe(0);
         expect(result.stdout).toBe("ps\n--format\n{{.ID}} it's\n");
       });

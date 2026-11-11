@@ -349,6 +349,47 @@ describe('UsageSampler', () => {
     expect(blocks[1].usage.cpu).toBeDefined();
   });
 
+  it('keeps the rates after a short pause that follows a slow sample', async () => {
+    const host = new FakeHost();
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const run = async (script: string, timeoutMs: number): Promise<UsageRun> => {
+      if (host.sent.length === 1) await slow;
+      return host.run(script, timeoutMs);
+    };
+    const { sampler, timers, blocks } = await start({ host, run, docker: null });
+    // The second sample waits 10 s on the shell (for example behind a long command of the view), then ends.
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    await timers.advance(10_000);
+    release();
+    await flush();
+    expect(blocks).toHaveLength(2);
+    // The page is hidden before the third sample starts, and shown again 100 ms later: no sample was left out.
+    sampler.pause();
+    await timers.advance(100);
+    sampler.resume();
+    await timers.advance(0);
+    expect(host.sent).toHaveLength(3);
+    expect(blocks).toHaveLength(3);
+    expect(blocks[2].usage.cpu).toBeDefined();
+  });
+
+  it('takes its hold at the start and ends it once at the end', async () => {
+    let holds = 0;
+    let releases = 0;
+    const { sampler } = await start({
+      docker: null,
+      hold: () => {
+        holds++;
+        return () => releases++;
+      },
+    });
+    expect([holds, releases]).toEqual([1, 0]);
+    sampler.stop();
+    sampler.stop();
+    expect([holds, releases]).toEqual([1, 1]);
+  });
+
   it('logs a handler of the end that throws, and stays ended', async () => {
     const host = new FakeHost();
     // A run that rejects: its end comes from the catch of the sample, where a throw would be an unhandled rejection.
@@ -388,7 +429,8 @@ describe('UsageSampler', () => {
     const cases: Array<[string, UsageRun | Error, UsageEnd]> = [
       ['a VM that does not run', { kind: 'notRun', reason: 'vmStopped' }, { kind: 'vmStopped' }],
       ['a host without the program of its transport', { kind: 'notRun', reason: 'noTransport' }, { kind: 'noTransport' }],
-      ['a sample that did not end in time', { kind: 'ran', result: { exitCode: null, stdout: '', stderr: '', timedOut: true } }, { kind: 'noAnswer' }],
+      ['a sample that did not end in time', { kind: 'ran', result: { exitCode: null, stdout: '', stderr: '', timedOut: true } }, { kind: 'noAnswer', detail: '' }],
+      ['a login of the shell that did not answer in time', { kind: 'ran', result: { exitCode: null, stdout: '', stderr: 'ssh did not answer within 30 seconds.', timedOut: true } }, { kind: 'noAnswer', detail: 'ssh did not answer within 30 seconds.' }],
       ['a failed login of the shell', { kind: 'ran', result: { exitCode: 255, stdout: '', stderr: 'ssh: connect to host box port 22: Connection refused\n', timedOut: false } }, { kind: 'exited', exitCode: 255, detail: 'ssh: connect to host box port 22: Connection refused' }],
       ['output that is not of the script', { kind: 'ran', result: OK('hello\n') }, { kind: 'badOutput', detail: 'The host did not run the utilization sample.' }],
       ['a run that failed', new Error('broken'), { kind: 'failed', detail: 'broken' }],

@@ -10,6 +10,7 @@
 // (Debian), BusyBox ash (Alpine) and bash. The Docker calls of the samples are scripts of their own (usageDockerScript),
 // with a time limit on the host. No `vscode`.
 import { randomBytes } from 'crypto';
+import { dockerShellCommand } from '../relay/remoteShell';
 import { shellWord } from '../relay/startScript';
 
 /** The protocol of the script, the second field of its line `#H`. */
@@ -153,9 +154,22 @@ export const USAGE_DOCKER_SECONDS = 5;
  * a line break or a NUL.
  */
 export function usageDockerScript(args: readonly string[]): string {
-  if (args.some((arg) => /[\0\r\n]/.test(arg))) throw new Error('An argument of a Docker call of the utilization samples has a line break or a NUL.');
-  const command = ['docker', ...args].map(shellWord).join(' ');
+  const command = dockerShellCommand(args);
+  if (command === undefined) throw new Error('An argument of a Docker call of the utilization samples has a line break or a NUL.');
   return `{\nexec 0</dev/null\nif timeout 1 true 2>/dev/null; then exec timeout ${USAGE_DOCKER_SECONDS} ${command}; fi\nexec ${command}\n}\n`;
+}
+
+/**
+ * The line of the shared shell that runs `script` (usageScript, usageDockerScript): `sh -s` reads the script from a
+ * pipe of `printf '%b'` and not from a here-document, which bash before 5.1 (/bin/sh of RHEL 8, for example) writes to
+ * a temporary file, so that no sample writes a file on the host. For `%b`, each backslash of the script is `\\` and
+ * each line feed `\n`. In braces, so that the standard input that the shell gives a command (`</dev/null`) does not
+ * replace the pipe. Throws for a script with a carriage return or a NUL.
+ */
+export function usageShellCommand(script: string): string {
+  if (/[\0\r]/.test(script)) throw new Error('A script of the utilization samples has a carriage return or a NUL.');
+  const encoded = script.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
+  return `{ printf '%b' ${shellWord(encoded)} | sh -s; }`;
 }
 
 /** A new marker for USAGE_SCRIPT: 32 hexadecimal digits. */

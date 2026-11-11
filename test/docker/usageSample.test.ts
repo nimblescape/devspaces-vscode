@@ -4,10 +4,10 @@
 
 // The utilization samples of a host (docs/architecture.md "The utilization samples") with real shells and a real SSH
 // server: USAGE_SCRIPT through UsageSampler in a container of Alpine (BusyBox ash) and of the helper image (Debian,
-// dash), with `docker exec -i … sh -s`; and on the shared shell of a host (RemoteShells) over SSH to the SSH server of
-// the remote host tests (test/docker/sshd, Alpine with the Docker CLI and the socket of the engine), with the transport
-// of the extension (sshHostTransport). The samples must leave nothing on the host: no process once the shell closed,
-// and no change of the file system (`docker diff`).
+// dash), with `docker exec … sh -c` and the line of the shared shell (usageShellCommand); and on the shared shell of a
+// host (RemoteShells) over SSH to the SSH server of the remote host tests (test/docker/sshd, Alpine with the Docker CLI
+// and the socket of the engine), with the transport of the extension (sshHostTransport). The samples must leave nothing
+// on the host: no process once the shell closed, and no change of the file system (`docker diff`).
 import * as fs from 'fs';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -19,6 +19,7 @@ import { RemoteShells } from '../../src/core/relay/remoteShells';
 import { sshHostTransport } from '../../src/core/relay/transport';
 import { UsageSampler, type UsageEnd, type UsageRun, type UsageSamplerOptions } from '../../src/core/hosts/usageSampler';
 import type { UsageBlock, UsageHeader } from '../../src/core/hosts/usageSample';
+import { usageShellCommand } from '../../src/core/hosts/usageScript';
 import { TEST_BASE_IMAGE, TEST_RUN_LABEL, removeRunObjects } from './dockerRun';
 import { dockerTestContext, testHelperImage } from './harness';
 
@@ -123,7 +124,7 @@ describe('the utilization samples with real shells and a real SSH server', () =>
       try {
         const runSample = async (script: string, timeoutMs: number): Promise<UsageRun> => ({
           kind: 'ran',
-          result: await runner.run(run.dockerPath, ['exec', '-i', container, 'sh', '-s'], { env, input: script, timeoutMs }),
+          result: await runner.run(run.dockerPath, ['exec', container, 'sh', '-c', `${usageShellCommand(script)} </dev/null`], { env, timeoutMs }),
         });
         const test = samples(runSample);
         await test.blocksCame(6);
@@ -201,7 +202,7 @@ describe('the utilization samples with real shells and a real SSH server', () =>
       });
       try {
         const runSample = async (script: string, timeoutMs: number): Promise<UsageRun> => {
-          const result = await shells.run(ALIAS, 'sh -s', { input: script, timeoutMs });
+          const result = await shells.run(ALIAS, usageShellCommand(script), { timeoutMs });
           return result === undefined ? { kind: 'notRun', reason: 'noTransport' } : { kind: 'ran', result };
         };
         const test = samples(runSample);
