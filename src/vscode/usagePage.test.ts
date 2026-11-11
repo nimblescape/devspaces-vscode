@@ -427,6 +427,28 @@ describe('UsagePages', () => {
     expect(lastView(panel).status.tone).toBe('live');
   });
 
+  it('reads again at the next show when the VM it waits for started while the page was hidden', async () => {
+    vmState = { kind: 'stopped' };
+    const made = pages();
+    const panel = await open(made, LIMA_HOST);
+    panel.setVisible(false);
+    // A show without a change of the VM reads nothing.
+    panel.setVisible(true);
+    await flush();
+    expect(shells.samples).toHaveLength(0);
+    panel.setVisible(false);
+    vmState = { kind: 'running' };
+    shells.open.add(LIMA_HOST);
+    made.vmChanged();
+    await flush();
+    expect(shells.samples).toHaveLength(0);
+    panel.setVisible(true);
+    await flush();
+    expect(shells.samples).toHaveLength(1);
+    panel.receive({ type: 'ready' });
+    expect(lastView(panel).status.tone).toBe('live');
+  });
+
   it('reads the sizes on click in a flow, never on a stopped VM', async () => {
     shells.open.add(LIMA_HOST);
     const panel = await open(pages(), LIMA_HOST);

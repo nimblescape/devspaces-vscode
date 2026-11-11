@@ -19,9 +19,9 @@ import { errorMessage } from '../core/errors';
 import type { HostInventory } from '../core/hosts/hostObjects';
 import type { UsageHeader, UsageBlock } from '../core/hosts/usageSample';
 import { UsageHistory, type DiskValue, type HostUsage } from '../core/hosts/usageRates';
-import { SSH_USAGE_INTERVAL_MS, USAGE_DISK_EVERY, UsageSampler, VM_USAGE_INTERVAL_MS, type UsageEnd, type UsageRun, type UsageTimers } from '../core/hosts/usageSampler';
+import { SSH_USAGE_INTERVAL_MS, UsageSampler, VM_USAGE_INTERVAL_MS, realUsageTimers, usageSampleKind, type UsageEnd, type UsageRun, type UsageTimers } from '../core/hosts/usageSampler';
 import { usageShellCommand } from '../core/hosts/usageScript';
-import { isAbortError, systemClock, type Logger } from '../core/ports';
+import { isAbortError, type Logger } from '../core/ports';
 import type { RemoteShells } from '../core/relay/remoteShells';
 import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
@@ -37,12 +37,6 @@ export const HIDDEN_STOP_MS = 15_000;
 export const FOCUS_PAUSE_MS = 2 * 60_000;
 /** and after this long without a click or a key on it. */
 export const IDLE_PAUSE_MS = 30 * 60_000;
-
-const realTimers: UsageTimers = {
-  setTimeout: (callback, ms) => setTimeout(callback, ms),
-  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-  now: () => systemClock.now(),
-};
 
 export interface UsagePagesDeps {
   extensionUri: vscode.Uri;
@@ -142,6 +136,8 @@ class UsagePage {
   private loginCheckedAt: number | undefined;
   /** The samples ended 15 seconds after a hide: a show starts new ones. */
   private stoppedByHide = false;
+  /** The VM changed while the page waited for it hidden: the next show reads again (vmChanged). */
+  private vmChangedWhileHidden = false;
   private hiddenTimer: unknown;
   private focusTimer: unknown;
   private idleTimer: unknown;
@@ -152,7 +148,7 @@ class UsagePage {
     private readonly deps: UsagePagesDeps,
     private readonly onDisposed: () => void,
   ) {
-    this.timers = deps.timers ?? realTimers;
+    this.timers = deps.timers ?? realUsageTimers;
     this.vm = host === deps.vmHost;
     this.wsl = this.vm && host === WSL_HOST;
     this.intervalMs = this.vm ? VM_USAGE_INTERVAL_MS : SSH_USAGE_INTERVAL_MS;
@@ -216,8 +212,11 @@ class UsagePage {
   }
 
   vmChanged(): void {
-    // Only a page that waits for the VM: a page that Stop the VM… paused stays paused until Resume.
-    if (this.phase.kind === 'vm' && this.panel.visible && !this.startingVm) this.start(false);
+    // Only a page that waits for the VM: a page that Stop the VM… paused stays paused until Resume. A hidden page reads
+    // nothing: it reads again at its next show.
+    if (this.phase.kind !== 'vm' || this.startingVm) return;
+    if (this.panel.visible) this.start(false);
+    else this.vmChangedWhileHidden = true;
   }
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -230,6 +229,7 @@ class UsagePage {
   private start(flow: boolean): void {
     this.endSampler();
     this.stoppedByHide = false;
+    this.vmChangedWhileHidden = false;
     this.checkedState = undefined;
     this.loginCheckedAt = undefined;
     this.generation += 1;
@@ -310,7 +310,7 @@ class UsagePage {
     this.updatedAt = this.timers.now();
     this.names = names;
     // A sample `d` (the first one, then every USAGE_DISK_EVERY): without lines `D`, the disks could not be read.
-    if ((block.seq - 1) % USAGE_DISK_EVERY === 0) {
+    if (usageSampleKind(block.seq) === 'd') {
       this.disks = usage.disks ?? [];
       this.readLocalDisk();
     }
@@ -379,6 +379,8 @@ class UsagePage {
     if (this.reading()) {
       if (this.sampler !== undefined) this.sampler.resume();
       else if (this.stoppedByHide) this.start(false);
+    } else if (this.phase.kind === 'vm' && this.vmChangedWhileHidden && !this.startingVm) {
+      this.start(false);
     }
   }
 

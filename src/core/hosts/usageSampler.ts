@@ -99,11 +99,17 @@ export interface UsageTimers extends Clock {
   clearTimeout(handle: unknown): void;
 }
 
-const realTimers: UsageTimers = {
+/** The timers of Node.js. */
+export const realUsageTimers: UsageTimers = {
   setTimeout: (callback, ms) => setTimeout(callback, ms),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   now: () => systemClock.now(),
 };
+
+/** The kind of the sample number `seq` (from 1): the first one, then every USAGE_DISK_EVERY, is a `d`. */
+export function usageSampleKind(seq: number): UsageSampleKind {
+  return (seq - 1) % USAGE_DISK_EVERY === 0 ? 'd' : 't';
+}
 
 export interface UsageSamplerOptions {
   logger: Logger;
@@ -172,7 +178,7 @@ export class UsageSampler {
   private release: (() => void) | undefined;
 
   private constructor(private readonly options: UsageSamplerOptions) {
-    this.timers = options.timers ?? realTimers;
+    this.timers = options.timers ?? realUsageTimers;
     this.interval = options.intervalMs;
     this.release = options.hold?.();
     // After start returned, so that an end (for example of a `run` that throws at once) never comes before it.
@@ -224,8 +230,8 @@ export class UsageSampler {
   private sample(): void {
     if (this.stage !== 'running' || this.paused || this.busy) return;
     this.clearNext();
-    const kind: UsageSampleKind = this.samples % USAGE_DISK_EVERY === 0 ? 'd' : 't';
     const seq = ++this.samples;
+    const kind = usageSampleKind(seq);
     const marker = newUsageMarker();
     const timeoutMs = Math.max(3 * this.interval, MIN_USAGE_ANSWER_MS);
     const startedAt = this.timers.now();
