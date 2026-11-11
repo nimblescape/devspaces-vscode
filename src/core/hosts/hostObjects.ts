@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The objects on a Docker host, for the view "Docker Hosts" (docs/requirements.md R-ENG-008): all its containers,
-// networks, images and volumes with their purpose and size, and its build cache, read with the Docker CLI of Devspaces (BootstrapDocker.run, within an
+// networks, images and volumes with their purpose, size and activity, and its build cache, read with the Docker CLI of Devspaces (BootstrapDocker.run, within an
 // operation on that host: through the Docker pipe of the extension, as "Remove Devspaces from This Docker Engine…"
 // reads), their Start and Stop, and their removal. The objects of Devspaces get their purpose: those with a label
 // nimblescape.devspaces.*, the containers, images and volumes whose name starts with `devspaces-` (also the tags of the
@@ -104,6 +104,11 @@ export interface HostObject {
   image?: string;
   /** A container: the names of its networks. */
   networks?: string[];
+  /**
+   * Active: a container that runs (also paused or restarting: it holds its memory), or an image, a volume or a network
+   * that such a container uses. Only set when true. The view shows the other objects dimmed.
+   */
+  active?: boolean;
 }
 
 /** The build cache of the engine (BuildKit), as `docker system df` counts it. */
@@ -427,8 +432,19 @@ function buildCacheOf(items: readonly unknown[]): BuildCacheSummary {
   return { records, bytes, unusedBytes };
 }
 
-/** The image entries of `docker system df -v` (one per tag), merged by image ID. */
-function mergedImages(items: readonly unknown[]): Array<{ id: string; tags: string[]; item: Record<string, unknown> }> {
+/** `repository:tag` of an entry of `docker system df -v` or `docker image ls`; undefined for `<none>`. */
+function referenceOf(item: Record<string, unknown>): string | undefined {
+  const repository = text(item.Repository);
+  const tag = text(item.Tag);
+  return repository !== undefined && tag !== undefined && repository !== '<none>' && tag !== '<none>' ? `${repository}:${tag}` : undefined;
+}
+
+/**
+ * The image entries of `docker system df -v`, merged by image ID, with every tag of each from `tagRows` (IMAGE_TAGS_ARGS).
+ * The Docker CLI lists each image once in `docker system df -v`, with its first tag only, and `docker image ls` lists
+ * one line per tag (verified with Docker 29.9). The images are those of `docker system df -v`.
+ */
+function mergedImages(items: readonly unknown[], tagRows: readonly unknown[] = []): Array<{ id: string; tags: string[]; item: Record<string, unknown> }> {
   const images = new Map<string, { id: string; tags: string[]; item: Record<string, unknown> }>();
   for (const item of items) {
     if (!isRecord(item)) continue;
@@ -439,12 +455,14 @@ function mergedImages(items: readonly unknown[]): Array<{ id: string; tags: stri
       image = { id, tags: [], item };
       images.set(id, image);
     }
-    const repository = text(item.Repository);
-    const tag = text(item.Tag);
-    if (repository !== undefined && tag !== undefined && repository !== '<none>' && tag !== '<none>') {
-      const reference = `${repository}:${tag}`;
-      if (!image.tags.includes(reference)) image.tags.push(reference);
-    }
+    const reference = referenceOf(item);
+    if (reference !== undefined && !image.tags.includes(reference)) image.tags.push(reference);
+  }
+  for (const row of tagRows) {
+    if (!isRecord(row)) continue;
+    const image = images.get(text(row.ID) ?? '');
+    const reference = referenceOf(row);
+    if (image !== undefined && reference !== undefined && !image.tags.includes(reference)) image.tags.push(reference);
   }
   return [...images.values()];
 }
@@ -497,6 +515,13 @@ export interface InventoryInput {
   baseImages: ReadonlySet<string>;
   /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
   networks?: readonly unknown[];
+  /** The output of IMAGE_TAGS_ARGS, parsed: one entry per tag of an image, so that each image has all its tags. */
+  imageTags?: readonly unknown[];
+  /**
+   * The output of runningUsesArgs for the running containers, parsed: one entry per container with the ID of its image,
+   * its mounts and its networks. Undefined when it could not be read: then the fields of `docker system df -v` decide.
+   */
+  running?: readonly unknown[];
 }
 
 /**
@@ -508,10 +533,128 @@ export function buildInventory(input: InventoryInput): HostInventory {
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
   const containers = list(df.Containers).flatMap((item) => (isRecord(item) ? (classifyContainer(item, input.known) ?? []) : []));
   const volumes = list(df.Volumes).flatMap((item) => (isRecord(item) ? (classifyVolume(item, input.known) ?? []) : []));
-  const images = mergedImages(list(df.Images)).map((image) => classifyImage(image, input));
+  const images = mergedImages(list(df.Images), input.imageTags).map((image) => classifyImage(image, input));
   const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, list(df.Containers)) ?? []) : []));
+  const active = activeOf(list(df.Containers), input.running);
   const order = (a: HostObject, b: HostObject): number => Number(a.purpose === 'notDevspaces') - Number(b.purpose === 'notDevspaces') || a.name.localeCompare(b.name);
-  return { containers: containers.sort(order), networks: networks.sort(order), images: images.sort(order), volumes: volumes.sort(order), buildCache: buildCacheOf(list(df.BuildCache)) };
+  const marked = (objects: HostObject[]): HostObject[] => objects.map((object) => (active(object) ? { ...object, active: true } : object)).sort(order);
+  return { containers: marked(containers), networks: marked(networks), images: marked(images), volumes: marked(volumes), buildCache: buildCacheOf(list(df.BuildCache)) };
+}
+
+/** The states of a container that runs: it uses CPU or holds memory, which a Stop frees. */
+const ACTIVE_CONTAINER_STATES = new Set(['running', 'paused', 'restarting']);
+
+/** The containers of `docker system df -v` that run (ACTIVE_CONTAINER_STATES). */
+function runningContainers(containers: readonly unknown[]): Array<Record<string, unknown>> {
+  return containers.filter((item): item is Record<string, unknown> => isRecord(item) && ACTIVE_CONTAINER_STATES.has(text(item.State) ?? ''));
+}
+
+/** What the running containers use, from runningUsesArgs: the IDs of their images, the names of their volumes and networks. */
+interface RunningUses {
+  imageIds: string[];
+  volumes: Set<string>;
+  networks: Set<string>;
+}
+
+function runningUsesOf(entries: readonly unknown[]): RunningUses {
+  const uses: RunningUses = { imageIds: [], volumes: new Set(), networks: new Set() };
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const image = text(entry.image);
+    if (image !== undefined) uses.imageIds.push(image);
+    for (const mount of Array.isArray(entry.mounts) ? entry.mounts : []) {
+      if (isRecord(mount) && mount.Type === 'volume' && typeof mount.Name === 'string') uses.volumes.add(mount.Name);
+    }
+    if (isRecord(entry.networks)) for (const name of Object.keys(entry.networks)) uses.networks.add(name);
+  }
+  return uses;
+}
+
+/** Whether two image IDs (`sha256:<hex>`, or the hex only) name the same image; a short ID of 12 or more digits counts. */
+function sameImageId(a: string, b: string): boolean {
+  const left = a.replace(/^sha256:/, '');
+  const right = b.replace(/^sha256:/, '');
+  return left.length >= 12 && right.length >= 12 && (left.startsWith(right) || right.startsWith(left));
+}
+
+/**
+ * Whether an object is active (HostObject.active). A container by its state. An image, a volume or a network by what
+ * the running containers use: exactly, from `running` (runningUsesArgs: the ID of the image, the volumes of the mounts,
+ * the names of the networks). Without it (the read failed), by the fields of the running containers of `docker system df
+ * -v` (verified with Docker 29.9): an image by the field `Image`, as namesImage compares it (the reference that created
+ * the container, or the ID of its image once that reference names another image: Docker replaces it; with the classic
+ * image store a reference with a digest misses the container); a volume by the field
+ * `Mounts` (the names of the volumes and the paths of the bind mounts, joined with commas) when Docker counts a container
+ * of it (a path with a comma could name it); a network by the field `Networks`, as networkUsers counts it.
+ */
+function activeOf(containers: readonly unknown[], running: readonly unknown[] | undefined): (object: HostObject) => boolean {
+  const active = runningContainers(containers);
+  if (running !== undefined) {
+    const uses = runningUsesOf(running);
+    return (object) => {
+      switch (object.kind) {
+        case 'container':
+          return ACTIVE_CONTAINER_STATES.has(object.state ?? '');
+        case 'image':
+          return uses.imageIds.some((id) => sameImageId(id, object.id));
+        case 'volume':
+          return uses.volumes.has(object.name);
+        case 'network':
+          return uses.networks.has(object.name);
+      }
+    };
+  }
+  const images = active.flatMap((item) => text(item.Image) ?? []);
+  const mounts = new Set(active.flatMap((item) => (text(item.Mounts) ?? '').split(',').map((mount) => mount.trim())));
+  return (object) => {
+    switch (object.kind) {
+      case 'container':
+        return ACTIVE_CONTAINER_STATES.has(object.state ?? '');
+      case 'image':
+        return images.some((image) => namesImage(image, object));
+      case 'volume':
+        return (object.usedBy ?? 1) > 0 && mounts.has(object.name);
+      case 'network':
+        return networkUsers(active, object.name) > 0;
+    }
+  };
+}
+
+/**
+ * The format of runningUsesArgs: per container, one line of JSON with the ID of its image, its mounts (`Type`, `Name`,
+ * `Source`, …) and its networks (an object by network name), as `docker container inspect` writes them.
+ */
+const RUNNING_USES_FORMAT = '{"image":{{json .Image}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}';
+
+/** The containers that one `docker container inspect` of runningUsesArgs names at most, so that its command line stays short. */
+export const RUNNING_USES_BATCH = 100;
+
+/** The arguments of the read of what the running containers `ids` use (`docker container inspect`, GET /containers/<id>/json). */
+export function runningUsesArgs(ids: readonly string[]): string[] {
+  return ['container', 'inspect', '--format', RUNNING_USES_FORMAT, ...ids];
+}
+
+/** Each line of the standard error of a failed `docker container inspect` says that a container is gone. */
+const MISSING_CONTAINER_LINE = /^Error(?: response from daemon)?: No such container/i;
+
+/**
+ * Reads what the running containers `ids` use (runningUsesArgs), in batches of RUNNING_USES_BATCH. A container that is
+ * gone since `docker system df -v` is left out. Undefined when a read fails otherwise or does not end in time: then the
+ * colors come from the fields of `docker system df -v` (activeOf).
+ */
+async function readRunningUses(docker: Pick<BootstrapDocker, 'run'>, ids: readonly string[], signal: AbortSignal | undefined): Promise<unknown[] | undefined> {
+  const uses: unknown[] = [];
+  for (let start = 0; start < ids.length; start += RUNNING_USES_BATCH) {
+    const result = await docker.run(runningUsesArgs(ids.slice(start, start + RUNNING_USES_BATCH)), { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+    if (result.timedOut) return undefined;
+    const errors = result.stderr
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (result.exitCode !== 0 && !(errors.length > 0 && errors.every((line) => MISSING_CONTAINER_LINE.test(line)))) return undefined;
+    uses.push(...parseJsonLines(result.stdout));
+  }
+  return uses;
 }
 
 /** The arguments of the read of the networks of the engine. */
@@ -524,9 +667,17 @@ export const SYSTEM_DF_TIMEOUT_MS = 3 * 60_000;
 export const SYSTEM_DF_ARGS: readonly string[] = ['system', 'df', '--verbose', '--format', '{{json .}}'];
 
 /**
+ * The arguments of the read of every tag of every image (`docker image ls`, GET /images/json): one line per tag, because
+ * `docker system df -v` names the first tag of an image only, and a removal needs all of them (removeHostObjects).
+ */
+export const IMAGE_TAGS_ARGS: readonly string[] = ['image', 'ls', '--no-trunc', '--format', '{{json .}}'];
+
+/**
  * Reads the objects on the engine of the operation (runWithDockerTarget): one `docker system df -v`, the IDs of the
- * images with the labels of Devspaces, and `docker network ls`. Only calls that read. Throws CommandError when a call fails, and an
- * AbortError when `signal` aborts.
+ * images with the labels of Devspaces, `docker network ls`, every tag of every image (IMAGE_TAGS_ARGS), and, while
+ * containers run, what they use (`docker container inspect` of them in batches of RUNNING_USES_BATCH, for
+ * HostObject.active). Only calls that read. Throws CommandError when one of the reads before the inspect fails (a failed
+ * inspect only makes the colors less exact), and an AbortError when `signal` aborts.
  */
 export async function readHostInventory(
   docker: Pick<BootstrapDocker, 'run' | 'listImagesByLabel'>,
@@ -543,7 +694,20 @@ export async function readHostInventory(
   const helperImageIds = new Set((await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => image.id));
   const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr);
-  return buildInventory({ df, devspaceImageIds, helperImageIds, known: options.known, baseImages: options.baseImages, networks: parseJsonLines(networkList.stdout) });
+  const tagList = await docker.run(IMAGE_TAGS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+  if (tagList.exitCode !== 0 || tagList.timedOut) throw new CommandError(commandText(IMAGE_TAGS_ARGS), tagList.exitCode, tagList.stdout, tagList.stderr);
+  const runningIds = runningContainers(Array.isArray(df.Containers) ? df.Containers : []).flatMap((item) => text(item.ID) ?? []);
+  const running = runningIds.length > 0 ? await readRunningUses(docker, runningIds, signal) : [];
+  return buildInventory({
+    df,
+    devspaceImageIds,
+    helperImageIds,
+    known: options.known,
+    baseImages: options.baseImages,
+    networks: parseJsonLines(networkList.stdout),
+    imageTags: parseJsonLines(tagList.stdout),
+    ...(running !== undefined ? { running } : {}),
+  });
 }
 
 /** `docker ps` of the running dev containers and service containers of devspaces (label LABEL_DEVSPACE_ID). */
@@ -710,9 +874,9 @@ export async function startHostContainer(docker: Pick<BootstrapDocker, 'run'>, o
 
 /**
  * Removes `objects` on the engine of the operation, never with force: the containers first (by ID; a running one
- * stays), then the images (each tag, so that the last tag removes the image; an image without a tag by its ID), then
- * the volumes, so that an image or a volume that only a removed container used goes too. Every object is logged with its
- * outcome. Throws only an AbortError (cancel); the objects before it are removed.
+ * stays), then the networks, then the images (removeImage), then the volumes, so that a network, an image or a volume
+ * that only a removed container used goes too. Every object is logged with its outcome. Throws only an AbortError
+ * (cancel); the objects before it are removed.
  */
 export async function removeHostObjects(
   docker: Pick<BootstrapDocker, 'run'>,
@@ -724,9 +888,14 @@ export async function removeHostObjects(
   const results: ObjectResult[] = [];
   for (const object of [...objects].sort((a, b) => order[a.kind] - order[b.kind])) {
     options.onItem?.(objectText(object));
-    // An image that a container uses keeps all its tags: Docker would untag the first tags and refuse only the last one.
-    // A container of this removal does not count (it goes first).
-    // A network that a container uses stays too: Docker would remove it under a stopped container, which then cannot
+    if (object.kind === 'image') {
+      const removal = await removeImage(docker, object, options.signal);
+      const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, ...removal };
+      logResult(options.logger, entry);
+      results.push(entry);
+      continue;
+    }
+    // A network that a container uses stays: Docker would remove it under a stopped container, which then cannot
     // start. Its containers are read now, not taken from the read of the view: a container may use it since then.
     // Docker keeps its own networks.
     const network = object.kind === 'network' && object.builtIn !== true ? await networkUsersNow(docker, object, options.signal) : undefined;
@@ -736,7 +905,7 @@ export async function removeHostObjects(
       results.push(entry);
       continue;
     }
-    const users = object.kind === 'image' ? (object.usedBy ?? 0) - removedUsers(object, objects, results) : (network?.users ?? 0);
+    const users = network?.users ?? 0;
     if (users > 0 || object.builtIn === true) {
       const detail = object.builtIn === true ? 'Docker keeps its own networks.' : `${users === 1 ? 'A container uses' : `${users} containers use`} this ${object.kind}.`;
       const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome: 'inUse', detail };
@@ -744,14 +913,7 @@ export async function removeHostObjects(
       results.push(entry);
       continue;
     }
-    const references = object.kind === 'image' && (object.tags?.length ?? 0) > 0 ? (object.tags ?? []) : [object.id];
-    let last: { result?: RunResult; error?: unknown } = {};
-    for (const reference of references) {
-      const args = [object.kind, 'rm', reference];
-      last = await call(docker, args, object.kind === 'volume' ? VOLUME_REMOVE_TIMEOUT_MS : DOCKER_QUERY_TIMEOUT_MS, options.signal);
-      const step = outcomeOf(last.result, 'removed');
-      if (step !== 'removed' && step !== 'missing') break;
-    }
+    const last = await call(docker, [object.kind, 'rm', object.id], object.kind === 'volume' ? VOLUME_REMOVE_TIMEOUT_MS : DOCKER_QUERY_TIMEOUT_MS, options.signal);
     const outcome = outcomeOf(last.result, 'removed');
     const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome, ...(outcome === 'inUse' || outcome === 'failed' ? { detail: detailOf(last.result, last.error) } : {}) };
     logResult(options.logger, entry);
@@ -760,13 +922,104 @@ export async function removeHostObjects(
   return results;
 }
 
+/** What `docker image rm` writes for each image that it deletes; an untag writes only `Untagged: …`. */
+const IMAGE_DELETED_LINE = /^Deleted: /m;
+
+/** The read of the tags of the image `id` now (`docker image inspect`, GET /images/<id>/json), just before its removal. */
+export function imageTagsNowArgs(id: string): string[] {
+  return ['image', 'inspect', '--format', '{{json .RepoTags}}', id];
+}
+
 /**
- * The containers of `objects` that this removal removed and that used the image `used` (by the image of the container
- * in `docker system df`), so that an image whose only containers went is removed too.
+ * The read of the containers of the image `id` now (`docker container ls --all`, GET /containers/json), just before its
+ * removal. The filter `ancestor` also lists the containers of the images that have it as their parent (`docker commit`,
+ * the classic builder; not an image that BuildKit built FROM it): a count can be too high, never too low.
  */
-function removedUsers(used: HostObject, objects: readonly HostObject[], results: readonly ObjectResult[]): number {
-  const removed = new Set(results.filter((result) => result.object.kind === 'container' && (result.outcome === 'removed' || result.outcome === 'missing')).map((result) => result.object.name));
-  return objects.filter((object) => object.kind === 'container' && removed.has(object.name) && object.image !== undefined && namesImage(object.image, used)).length;
+export function imageUsersNowArgs(id: string): string[] {
+  return ['container', 'ls', '--all', '--no-trunc', '--filter', `ancestor=${id}`, '--format', '{{.ID}}'];
+}
+
+/** The references of the image `id` now (imageTagsNowArgs: RepoTags); `missing` when it is gone, `detail` when Docker could not say. Throws only an AbortError. */
+async function imageTagsNow(docker: Pick<BootstrapDocker, 'run'>, id: string, signal: AbortSignal | undefined): Promise<{ tags: string[] } | { missing: true } | { detail: string }> {
+  const { result, error } = await call(docker, imageTagsNowArgs(id), DOCKER_QUERY_TIMEOUT_MS, signal);
+  if (result !== undefined && result.exitCode !== 0 && !result.timedOut && MISSING_PATTERN.test(`${result.stderr}\n${result.stdout}`)) return { missing: true };
+  if (result === undefined || result.exitCode !== 0 || result.timedOut) return { detail: `The tags of this image could not be read: ${detailOf(result, error)}` };
+  let tags: unknown;
+  try {
+    tags = JSON.parse(result.stdout.trim() || 'null');
+  } catch {
+    return { detail: `The tags of this image could not be read: Docker wrote ${result.stdout.trim().slice(0, 100)}` };
+  }
+  return { tags: Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [] };
+}
+
+/** A reference with a digest (`repository@sha256:…`): the containerd image store lists it in RepoTags too. */
+function hasDigest(reference: string): boolean {
+  return reference.includes('@');
+}
+
+/**
+ * Removes the image `object`, never with force. Its references and its containers are read now, not taken from the read
+ * of the view, which can be old (the Monitor pulls images, the user tags and runs them):
+ * - An image that a container uses stays without a call (`inUse`): Docker would untag its first tags and refuse only the
+ *   last one. The containers of the same removal are gone by then.
+ * - An image with a tag that the read did not show stays (`failed`): the user did not see that tag.
+ * - Each tag of the read that still names the image is removed, then each reference with a digest that RepoTags lists
+ *   (the containerd image store lists a pull by digest there, and `docker image ls` shows no such tag; it names only this
+ *   image), so that the last one removes the image (Docker writes `Deleted:`). A tag that names another image since the
+ *   read stays. An image without a reference goes by its ID (by its ID Docker refuses an image of several repositories).
+ * - When Docker removed each reference but kept the image (no `Deleted:`), the image is read again: one with a tag again
+ *   stays (`failed`); otherwise its new references with a digest, else its ID, are removed.
+ * Throws only an AbortError.
+ */
+async function removeImage(docker: Pick<BootstrapDocker, 'run'>, object: HostObject, signal: AbortSignal | undefined): Promise<Pick<ObjectResult, 'outcome' | 'detail'>> {
+  /**
+   * Removes `references` in turn. It stops when Docker deleted the image (`deleted`: it wrote `Deleted:`), when the ID is
+   * gone (`gone`: the image is gone), or at any other refusal (`refused`, with that step); a tag that is gone goes on to
+   * the next reference. Else `{ deleted: false }`: each reference went, but Docker kept the image.
+   */
+  const removeReferences = async (references: readonly string[]): Promise<{ deleted: boolean; gone?: true; refused?: { result?: RunResult; error?: unknown } }> => {
+    for (const reference of references) {
+      const step = await call(docker, ['image', 'rm', reference], DOCKER_QUERY_TIMEOUT_MS, signal);
+      if (step.result !== undefined && step.result.exitCode === 0 && IMAGE_DELETED_LINE.test(step.result.stdout)) return { deleted: true };
+      const outcome = outcomeOf(step.result, 'removed');
+      // A tag that is gone may have moved: the read afterwards decides. The ID that is gone is the image.
+      if (outcome === 'missing' && reference === object.id) return { deleted: false, gone: true };
+      if (outcome !== 'removed' && outcome !== 'missing') return { deleted: false, refused: step };
+    }
+    return { deleted: false };
+  };
+  const refusal = (step: { result?: RunResult; error?: unknown }): Pick<ObjectResult, 'outcome' | 'detail'> => {
+    const outcome = outcomeOf(step.result, 'removed');
+    return outcome === 'inUse' || outcome === 'failed' ? { outcome, detail: detailOf(step.result, step.error) } : { outcome };
+  };
+  const now = await imageTagsNow(docker, object.id, signal);
+  if ('missing' in now) return { outcome: 'missing' };
+  if ('detail' in now) return { outcome: 'failed', detail: now.detail };
+  const shown = object.tags ?? [];
+  const unseen = now.tags.filter((reference) => !hasDigest(reference) && !shown.includes(reference));
+  if (unseen.length > 0) return { outcome: 'failed', detail: `The image has the tag ${unseen.join(', ')} now, which the view did not show. Click Refresh.` };
+  const usersNow = await call(docker, imageUsersNowArgs(object.id), DOCKER_QUERY_TIMEOUT_MS, signal);
+  if (usersNow.result === undefined || usersNow.result.exitCode !== 0 || usersNow.result.timedOut) {
+    return { outcome: 'failed', detail: `The containers of this image could not be read: ${detailOf(usersNow.result, usersNow.error)}` };
+  }
+  const users = usersNow.result.stdout.split('\n').filter((line) => line.trim() !== '').length;
+  if (users > 0) return { outcome: 'inUse', detail: `${users === 1 ? 'A container uses' : `${users} containers use`} this image.` };
+  const references = [...now.tags.filter((reference) => !hasDigest(reference)), ...now.tags.filter(hasDigest)];
+  const first = await removeReferences(references.length > 0 ? references : [object.id]);
+  if (first.deleted) return { outcome: 'removed' };
+  if (first.gone === true) return { outcome: 'missing' };
+  if (first.refused !== undefined) return refusal(first.refused);
+  const after = await imageTagsNow(docker, object.id, signal);
+  if ('missing' in after) return { outcome: 'removed' };
+  if ('detail' in after) return { outcome: 'failed', detail: after.detail };
+  const tagsAfter = after.tags.filter((reference) => !hasDigest(reference));
+  if (tagsAfter.length > 0) return { outcome: 'failed', detail: `Docker kept the image: it has the tag ${tagsAfter.join(', ')} now. Click Refresh.` };
+  const digestsAfter = after.tags.filter(hasDigest);
+  const second = await removeReferences(digestsAfter.length > 0 ? digestsAfter : [object.id]);
+  if (second.deleted || second.gone === true) return { outcome: 'removed' };
+  if (second.refused !== undefined) return refusal(second.refused);
+  return { outcome: 'failed', detail: 'Docker kept the image. Click Refresh.' };
 }
 
 /**
@@ -795,8 +1048,15 @@ async function networkUsersNow(docker: Pick<BootstrapDocker, 'run'>, network: Ho
   return { users };
 }
 
-/** Whether `name`, the image of a container as Docker names it (a tag, a full or short ID), is `image`. */
+/**
+ * Whether `name`, the image of a container as Docker names it (a tag, a full or short ID, a reference with a digest), is
+ * `image`. A reference with a digest (`repository@sha256:…`, also after a tag) names the image of its digest, never the
+ * image that its repository or tag names now: the digest is the ID of the image with the containerd image store; with
+ * the classic image store it is a digest of the registry, and the container is missed.
+ */
 function namesImage(name: string, image: HostObject): boolean {
+  const at = name.indexOf('@');
+  if (at !== -1) return sameImageId(name.slice(at + 1), image.id);
   const hex = image.id.replace(/^sha256:/, '');
   const bare = name.replace(/^sha256:/, '');
   return (image.tags ?? []).some((tag) => normalizedReference(tag) === normalizedReference(name)) || (bare.length >= 12 && hex.startsWith(bare));

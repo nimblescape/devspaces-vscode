@@ -20,6 +20,7 @@ import {
   hostRows,
   messageRowLook,
   objectActions,
+  objectColor,
   objectRowLook,
   objectRows,
   rowLook,
@@ -131,6 +132,47 @@ describe('objectRowLook', () => {
     expect(ingress.tooltip).toContain('on a node of Docker Swarm');
     expect(ingress.contextValue).toBe('hostsObject;network;notDevspaces');
     expect(bridge.contextValue).toBe('hostsObject;network;notDevspaces');
+  });
+});
+
+describe('the colors of the object rows', () => {
+  it('shows an object that is not of Devspaces in violet, dimmed when inactive, and an inactive object of Devspaces in gray', () => {
+    expect(objectColor(container('running', { purpose: 'notDevspaces', active: true }))).toBe('notDevspaces');
+    expect(objectColor(container('exited', { purpose: 'notDevspaces' }))).toBe('notDevspacesInactive');
+    expect(objectColor(container('running', { active: true }))).toBeUndefined();
+    expect(objectColor(container('exited'))).toBe('inactive');
+    // A devspace of another computer is of Devspaces too.
+    expect(objectColor({ kind: 'volume', id: 'v', name: 'devspaces-x', purpose: 'otherDevspace' })).toBe('inactive');
+    expect(objectColor({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true, active: true })).toBe('notDevspaces');
+  });
+
+  it('carries the color in the look of the row, and says in the tooltip why the row is active or not', () => {
+    const running = objectRowLook(objectRow(container('running', { name: 'my-postgres', purpose: 'notDevspaces', active: true })));
+    expect(running.color).toBe('notDevspaces');
+    expect(running.tooltip).toContain('Active: it runs.');
+    const own = objectRowLook(objectRow(container('running', { active: true })));
+    expect(own.color).toBeUndefined();
+    expect('color' in own).toBe(false);
+    const image = objectRowLook(objectRow({ kind: 'image', id: 'sha256:w', name: 'node:22', purpose: 'notDevspaces', usedBy: 1 }));
+    expect(image.color).toBe('notDevspacesInactive');
+    expect(image.tooltip).toContain('Inactive: no running container uses it.');
+    const volume = objectRowLook(objectRow({ kind: 'volume', id: 'devspaces-vscode', name: 'devspaces-vscode', purpose: 'sharedVolume', active: true }));
+    expect(volume.tooltip).toContain('Active: a running container uses it.');
+    expect(objectRowLook(objectRow(container('exited'))).tooltip).toContain('Inactive: it does not run.');
+  });
+
+  it('leaves the hosts, the groups and the row of the build cache in the colors of the theme', () => {
+    expect(hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false }).color).toBeUndefined();
+    expect(groupRowLook({ hostsNode: 'group', host: 'lab', group: 'container', objects: [container('exited')] }).color).toBeUndefined();
+    expect(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 10, unusedBytes: 10 } }).color).toBeUndefined();
+  });
+
+  it('contributes the three colors with a value for every kind of theme (package.json)', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+      contributes: { colors: Array<{ id: string; description: string; defaults: Record<string, string> }> };
+    };
+    expect(manifest.contributes.colors.map((color) => color.id).sort()).toEqual(['devspaces.hosts.notDevspacesForeground', 'devspaces.hosts.notDevspacesInactiveForeground', 'devspaces.inactiveForeground']);
+    for (const color of manifest.contributes.colors) expect(Object.keys(color.defaults).sort()).toEqual(['dark', 'highContrast', 'highContrastLight', 'light']);
   });
 });
 

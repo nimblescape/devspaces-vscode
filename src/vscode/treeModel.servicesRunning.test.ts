@@ -8,7 +8,7 @@
 // (src/vscode/treeModel.ts TreeTexts.servicesRunning set to 'Other services of Docker Compose run. Stop stops them.').
 import { describe, expect, it } from 'vitest';
 import type { Devspace } from '../core/types';
-import { buildTreeModel, repositoryRows, type DevspaceRuntime, type TreeInput } from './treeModel';
+import { buildTreeModel, isActiveRow, repositoryRows, type DevspaceRuntime, type TreeInput } from './treeModel';
 
 const T0 = Date.parse('2026-10-08T12:00:00.000Z');
 
@@ -49,5 +49,11 @@ describe('the sidebar names the other running containers of the devspace', () =>
     expect(row.description).toContain('Stopped · containers running');
     expect(row.tooltip).toContain('Other containers of the devspace run. Stop stops them.');
     expect(`${row.description}\n${row.tooltip}`).not.toMatch(/services of Docker Compose|services running/);
+    // Something of the devspace runs: the row is not gray.
+    expect(row.servicesRunning).toBe(true);
+    expect(isActiveRow(row)).toBe(true);
+    const stopped = rowOf({ container: 'stopped', volume: true });
+    expect('servicesRunning' in stopped).toBe(false);
+    expect(isActiveRow(stopped)).toBe(false);
   });
 });

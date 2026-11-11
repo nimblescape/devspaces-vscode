@@ -35,6 +35,7 @@ import {
 } from './dockerHostsModel';
 import { showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
+import { colorTreeItem } from './rowColors';
 
 /** User-visible texts of the commands of the view (plain language). */
 export const DockerHostsCommandTexts = {
@@ -79,6 +80,12 @@ export const DockerHostsCommandTexts = {
         ? 'The VM of Devspaces is not set up anymore, so Devspaces did not change its objects.'
         : `Devspaces cannot use the VM of Devspaces now (${state.kind === 'broken' ? 'it is broken' : 'its state is not known'}), so it did not change its objects.${state.detail !== undefined ? ` ${state.detail}` : ''}`,
 };
+
+/** The name of an object in the question of Remove…: an image with every tag that its removal removes. */
+function removalName(object: HostObject): string {
+  const others = object.kind === 'image' ? (object.tags ?? []).filter((tag) => tag !== object.name) : [];
+  return others.length > 0 ? `${object.kind} ${object.name} (also ${others.join(', ')})` : `${object.kind} ${object.name}`;
+}
 
 /** At most five names, then the number of the others. */
 function listed(names: readonly string[]): string {
@@ -152,7 +159,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     if (look.description !== undefined) item.description = look.description;
     item.tooltip = look.tooltip;
     item.contextValue = look.contextValue;
-    item.iconPath = new vscode.ThemeIcon(look.icon);
+    colorTreeItem(item, look.icon, look.color);
     if (look.command !== undefined) item.command = look.command;
     return item;
   }
@@ -295,7 +302,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     }
     const objects = removable.map((row) => row.object);
     const detail = DockerHostsCommandTexts.removeDetail(
-      objects.map((object) => `${object.kind} ${object.name}`),
+      objects.map(removalName),
       objects.some((object) => object.purpose === 'otherDevspace'),
       objects.some((object) => object.purpose === 'notDevspaces'),
     );

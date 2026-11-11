@@ -37,7 +37,7 @@ Devspaces lists the GitHub repositories that you can access and that contain a D
 - **Remote Docker.** Run your devspaces on a stronger machine over SSH. A remote host serves one user, or a group whose members trust each other.
 - **Guard rails.** Host access checks refuse configurations that reach into your computer (bind mounts, privileged mode, the Docker socket, …). The GitHub token stays in the memory of the container only.
 - **Docker setup.** Without Docker, the view walks you through installing it.
-- **Docker Hosts.** One view shows the VM of Devspaces and your remote hosts with all their containers, images, volumes and networks and the build cache, those of Devspaces first with their purpose, each with its size. Stop the other services of a host when your devspaces need its CPU and memory, remove what you do not need, also the helper containers and volumes and the unused build cache, and start, stop or remove the VM.
+- **Docker Hosts.** One view shows the VM of Devspaces and your remote hosts with all their containers, images, volumes and networks and the build cache, those of Devspaces first with their purpose, each with its size; the other services of the host are violet, and what does not run is dimmed. Stop the other services of a host when your devspaces need its CPU and memory, remove what you do not need, also the helper containers and volumes and the unused build cache, and start, stop or remove the VM.
 
 ## Requirements
 
