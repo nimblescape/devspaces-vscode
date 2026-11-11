@@ -2,7 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The view "Docker Hosts" (`devspaces.hosts`, docs/requirements.md R-ENG-008) above the repository view: the VM of
+// The view "Docker Hosts" (`devspaces.hosts`, docs/requirements.md R-ENG-008) below the repository view: the VM of
 // Devspaces first, then each remote host of the list, with the containers, images and volumes of Devspaces there and
 // their removal. A host is read only when the user opens it in the view, and again at Refresh, never in the background
 // (R-SEC-004): the rows of a host keep what its last read found, and a change of the view (another Docker host, a host

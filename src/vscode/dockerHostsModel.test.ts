@@ -151,8 +151,8 @@ describe('the menus of the view (package.json)', () => {
       })
       .map((item) => item.command ?? '');
 
-  it('shows the view "Docker Hosts" above the repositories', () => {
-    expect(manifest.contributes.views.devspaces.map((view) => view.id).slice(0, 2)).toEqual([DOCKER_HOSTS_VIEW_ID, 'devspaces.repositories']);
+  it('shows the view "Docker Hosts" below the repositories', () => {
+    expect(manifest.contributes.views.devspaces.map((view) => view.id)).toEqual(['devspaces.repositories', DOCKER_HOSTS_VIEW_ID]);
   });
 
   it('offers on each row exactly its actions', () => {

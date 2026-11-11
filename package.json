@@ -117,13 +117,13 @@
     "views": {
       "devspaces": [
         {
-          "id": "devspaces.hosts",
-          "name": "Docker Hosts",
+          "id": "devspaces.repositories",
+          "name": "Devspaces",
           "icon": "resources/icon.svg"
         },
         {
-          "id": "devspaces.repositories",
-          "name": "Devspaces",
+          "id": "devspaces.hosts",
+          "name": "Docker Hosts",
           "icon": "resources/icon.svg"
         }
       ]
