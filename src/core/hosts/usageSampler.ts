@@ -54,7 +54,7 @@ export type UsageRun = { kind: 'ran'; result: RunResult } | { kind: 'notRun'; re
 export type UsageEnd =
   /** stop() ended them. */
   | { kind: 'stopped' }
-  /** A handler of the page (onHeader, onBlock) threw, or `run` rejected. */
+  /** A handler of the page (onHeader, onBlock) threw, or `run` rejected (for a sample or a Docker call). */
   | { kind: 'failed'; detail: string }
   /** The host has no /proc: it is no Linux. */
   | { kind: 'notLinux' }
@@ -79,6 +79,11 @@ export type UsageEnd =
    * (RemoteShells.close), whose open `wsl.exe` would hold the distribution until the shell closes when not used.
    */
   | { kind: 'vmIdle' };
+
+/** The end of the error output of `result`, readable for the log. */
+function stderrTail(result: RunResult): string {
+  return readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
+}
 
 /** The timers of the samples (the tests give fake ones). */
 export interface UsageTimers extends Clock {
@@ -143,8 +148,12 @@ export class UsageSampler {
   private names: ReadonlyMap<string, string> | undefined;
   /** The IDs of the containers at the last `docker ps` that worked, and when the next one may run. */
   private namedIds: string | undefined;
-  /** The last `docker ps` did not list every container of its block (one was starting): it runs again later. */
+  /**
+   * The last `docker ps` did not list every container of its block (one was starting): it runs once more for the same
+   * set (`namesRetried`), not again and again for a container that it cannot list (of another user's rootless Docker).
+   */
   private namesIncomplete = false;
+  private namesRetried: string | undefined;
   private nextNamesAt = 0;
   /** The data folder of Docker: undefined until `docker info` ran, then the folder ('' for /var/lib/docker). */
   private dockerRoot: string | undefined;
@@ -179,31 +188,30 @@ export class UsageSampler {
   }
 
   /**
-   * No more samples (the page is hidden): the sample that runs still ends and is reported. The hold of the shell ends
-   * meanwhile, so that a connection of the relay may take over the shell.
+   * No more samples (the page is hidden): the sample that runs still ends and is reported, without a Docker call after
+   * it. The hold of the shell stays, so that the shell is there at the resume (the page stops the samples after a while).
    */
   pause(): void {
     if (this.paused) return;
     this.paused = true;
     this.clearNext();
-    this.endHold();
   }
 
   /**
    * Samples again: the next sample one interval after the start of the last one (at once after a longer pause), or after
-   * the one that runs. When the pause left out a sample, the next block has no rates: a rate over the whole pause would
-   * be no live value.
+   * the one that runs. When the pause delayed the next sample by more than an interval, its block has no rates: a rate
+   * over the whole pause would be no live value.
    */
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    if (this.stage === 'running') this.release ??= this.options.hold?.();
     if (this.lastStartedAt === undefined) {
       this.sample();
       return;
     }
-    // A sample was left out in the pause: none runs, and more than an interval passed since the last one ended.
-    if (!this.busy && this.timers.now() - (this.lastEndedAt ?? this.lastStartedAt) > this.interval) this.previous = undefined;
+    // When the next sample was due: an interval after the start of the last one, but not before that one ended.
+    const due = Math.max(this.lastStartedAt + this.interval, this.lastEndedAt ?? 0);
+    if (!this.busy && this.timers.now() - due > this.interval) this.previous = undefined;
     this.schedule(this.lastStartedAt);
   }
 
@@ -226,7 +234,7 @@ export class UsageSampler {
       try {
         const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
         const run = await this.options.run(script, timeoutMs);
-        // No Docker call after the page was hidden: the hold of the shell ended, and the relay may take it over.
+        // No Docker call after the page was hidden: no work for a page that nobody sees.
         if (this.stage === 'running' && this.take(run, marker, seq, timeoutMs) && !this.paused) await this.between();
       } catch (error) {
         const detail = errorMessage(error);
@@ -250,13 +258,13 @@ export class UsageSampler {
     const { result } = run;
     if (result.timedOut) {
       // Also a login of the shell that did not answer in time: then its error output says so.
-      const detail = readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
+      const detail = stderrTail(result);
       logger.warn(`${name} did not answer the utilization sample in time (${timeoutMs / 1000} seconds for the sample)${detail ? `: ${detail}` : '.'}`);
       this.finish({ kind: 'noAnswer', detail });
       return false;
     }
     if (result.exitCode !== 0) {
-      const detail = readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
+      const detail = stderrTail(result);
       logger.warn(`The utilization sample of ${name} ended with exit code ${result.exitCode ?? 'none'}${detail ? `: ${detail}` : '.'}`);
       this.finish({ kind: 'exited', exitCode: result.exitCode, detail });
       return false;
@@ -279,7 +287,13 @@ export class UsageSampler {
     // Only two boot IDs that were read: one that the host could not read once is no new start.
     const restarted = this.bootId !== undefined && header.bootId !== undefined && this.bootId !== header.bootId;
     this.bootId = header.bootId ?? this.bootId;
-    if (restarted) this.previous = undefined;
+    if (restarted) {
+      this.previous = undefined;
+      // Docker may have another data folder now (a new data-root needs a new start of the Engine): read again.
+      this.dockerRoot = undefined;
+      this.nextRootAt = undefined;
+      this.namedIds = undefined;
+    }
     const first = this.headerValue === undefined;
     this.headerValue = header;
     const usage = usageOf(block, this.previous);
@@ -320,6 +334,7 @@ export class UsageSampler {
     const ids = this.containerIds;
     if ((ids !== this.namedIds || this.namesIncomplete) && ids !== '' && now >= this.nextNamesAt) {
       this.nextNamesAt = now + USAGE_NAMES_EVERY_MS;
+      if (ids === this.namedIds) this.namesRetried = ids;
       const result = await this.dockerCall(USAGE_NAMES_ARGS);
       if (this.stage !== 'running') return;
       if (result === undefined) {
@@ -330,8 +345,7 @@ export class UsageSampler {
         const names = parseUsageNames(result.stdout);
         this.names = names;
         this.namedIds = ids;
-        this.namesIncomplete = ids.split(' ').some((id) => !names.has(id));
-        if (this.namesIncomplete) this.nextNamesAt = this.timers.now() + USAGE_NAMES_RETRY_MS;
+        this.namesIncomplete = this.namesRetried !== ids && ids.split(' ').some((id) => !names.has(id));
         this.nextRootAt ??= this.timers.now();
       } catch (error) {
         this.options.logger.warn(`The names of the containers of ${this.options.name} could not be read: ${errorMessage(error)}`);
@@ -353,26 +367,23 @@ export class UsageSampler {
 
   /**
    * `docker <args>` within USAGE_DOCKER_TIMEOUT_MS: its result when it worked, else undefined (logged). A call that could
-   * not run ends the samples (undefined too).
+   * not run ends the samples (undefined too), and a `run` that rejects rejects here.
    */
   private async dockerCall(args: readonly string[]): Promise<RunResult | undefined> {
     const { logger, name } = this.options;
-    try {
-      const run = await this.options.run(usageDockerScript(args), USAGE_DOCKER_TIMEOUT_MS);
-      if (this.stage !== 'running') return undefined;
-      if (run.kind === 'notRun') {
-        this.notRun(run.reason);
-        return undefined;
-      }
-      const { result } = run;
-      if (result.exitCode === 0 && !result.timedOut) return result;
-      // `timeout` on the host ended it: 124 (coreutils), or 143 (BusyBox, whose command gets TERM in its place).
-      const why = result.timedOut || result.exitCode === 124 || result.exitCode === 143 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
-      const detail = readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
-      logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why})${detail ? `: ${detail}` : ''}; the page goes on without it.`);
-    } catch (error) {
-      logger.info(`docker ${args[0]} for the utilization page of ${name} failed: ${errorMessage(error)}`);
+    // A `run` that rejects ends the samples, as for a sample (the catch of `sample`).
+    const run = await this.options.run(usageDockerScript(args), USAGE_DOCKER_TIMEOUT_MS);
+    if (this.stage !== 'running') return undefined;
+    if (run.kind === 'notRun') {
+      this.notRun(run.reason);
+      return undefined;
     }
+    const { result } = run;
+    if (result.exitCode === 0 && !result.timedOut) return result;
+    // `timeout` on the host ended it: 124 (coreutils), or 143 (BusyBox, whose command gets TERM in its place).
+    const why = result.timedOut || result.exitCode === 124 || result.exitCode === 143 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
+    const detail = stderrTail(result);
+    logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why})${detail ? `: ${detail}` : ''}; the page goes on without it.`);
     return undefined;
   }
 

@@ -282,23 +282,36 @@ describe('UsageSampler', () => {
     ]);
   });
 
-  it('runs docker ps again after a minute when it did not list a container of the block (one that was starting)', async () => {
+  it('runs docker ps once more after 10 s when it did not list a container of the block (one that was starting)', async () => {
     const host = new FakeHost();
     host.containers = [ID_A, ID_B];
     let listed = [ID_A];
     const { timers, blocks, dockerCalls } = await start({ host, docker: async (args) => ran(OK(args[0] === 'ps' ? listed.map((id) => `${id} n-${id[0]}`).join('\n') : '/var/lib/docker\n')) });
+    const ps = () => dockerCalls.filter((args) => args[0] === 'ps').length;
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(blocks[1].names).toEqual(new Map([[ID_A, 'n-a']]));
     listed = [ID_A, ID_B];
-    await timers.advance(USAGE_NAMES_RETRY_MS - 2 * VM_USAGE_INTERVAL_MS);
-    expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(1);
+    await timers.advance(USAGE_NAMES_EVERY_MS - 2 * VM_USAGE_INTERVAL_MS);
+    expect(ps()).toBe(1);
     await timers.advance(2 * VM_USAGE_INTERVAL_MS);
-    expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(2);
+    expect(ps()).toBe(2);
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(blocks[blocks.length - 1].names).toEqual(new Map([[ID_A, 'n-a'], [ID_B, 'n-b']]));
     // All named: no more docker ps for the same set.
     await timers.advance(3 * USAGE_NAMES_RETRY_MS);
+    expect(ps()).toBe(2);
+  });
+
+  it('asks only once more for a container that docker ps cannot list (of the rootless Docker of another user)', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A, ID_B];
+    const { timers, dockerCalls } = await start({ host, docker: async (args) => ran(OK(args[0] === 'ps' ? `${ID_A} web\n` : '/var/lib/docker\n')) });
+    await timers.advance(10 * USAGE_NAMES_RETRY_MS);
     expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(2);
+    // A new set: docker ps at once, and once more.
+    host.containers = [ID_B];
+    await timers.advance(10 * USAGE_NAMES_RETRY_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(4);
   });
 
   it('asks docker info again after 300 s when its answer was empty (an Engine that starts)', async () => {
@@ -315,6 +328,31 @@ describe('UsageSampler', () => {
     expect(dockerCalls.filter((args) => args[0] === 'info')).toHaveLength(2);
     await timers.advance(USAGE_DISK_EVERY * VM_USAGE_INTERVAL_MS);
     expect(host.sent[host.sent.length - 1].root).toBe('/data/docker');
+  });
+
+  it('ends with failed when run rejects for a Docker call, as for a sample', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    const { ends, timers } = await start({
+      host,
+      docker: async () => {
+        throw new Error('adapter broke');
+      },
+    });
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(ends).toEqual([{ kind: 'failed', detail: 'adapter broke' }]);
+  });
+
+  it('reads the data folder of Docker again after a new start of the kernel', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    const { timers, dockerCalls } = await start({ host });
+    await timers.advance(2 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'info')).toHaveLength(1);
+    host.boot = 'd979624d-e703-46d3-ae35-c4cb34a59e91';
+    // docker ps again at most 10 s after the last one, then docker info.
+    await timers.advance(USAGE_NAMES_EVERY_MS + 2 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.map((args) => args[0])).toEqual(['ps', 'info', 'ps', 'info']);
   });
 
   it('tries a failed docker ps again after a minute, and goes on with the samples', async () => {
@@ -470,14 +508,13 @@ describe('UsageSampler', () => {
       },
     });
     expect([holds, releases]).toEqual([1, 0]);
-    // No hold while paused: the relay may take over the shell meanwhile.
+    // The hold stays while paused, so that the shell is there at the resume.
     sampler.pause();
-    expect([holds, releases]).toEqual([1, 1]);
     sampler.resume();
-    expect([holds, releases]).toEqual([2, 1]);
+    expect([holds, releases]).toEqual([1, 0]);
     sampler.stop();
     sampler.stop();
-    expect([holds, releases]).toEqual([2, 2]);
+    expect([holds, releases]).toEqual([1, 1]);
   });
 
   it('logs a handler of the end that throws, and stays ended', async () => {
