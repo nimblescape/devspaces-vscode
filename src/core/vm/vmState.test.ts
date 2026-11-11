@@ -101,7 +101,7 @@ describe('freeSpace', () => {
     expect(await freeSpace(path.join(home, 'not', 'yet'))).toBeGreaterThan(0);
   });
 
-  it('does not go up for a path below a file', async () => {
+  it('goes up from a path below a file to the file system of that file', async () => {
     await fs.promises.writeFile(path.join(home, 'file'), 'x');
     // ENOTDIR: the folder can never exist, its parent is the file system of the file.
     expect(await freeSpace(path.join(home, 'file', 'below'))).toBeGreaterThan(0);

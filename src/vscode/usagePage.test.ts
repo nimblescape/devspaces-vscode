@@ -93,6 +93,8 @@ class FakeShells {
   idle = true;
   /** The boot ID of the line `#H`. */
   boot = BOOT;
+  /** How long a sample takes on the host, from `#T` to `#E` (1/100 s). */
+  sampleCs = 1;
   containers: string[] = [];
   /** The next answer to a sample, instead of the output of the script. */
   next: RunResult | undefined;
@@ -134,7 +136,7 @@ class FakeShells {
     if (kind === 'd') lines.push('D 801 4096 1000 500 400 100 90 /var/lib/docker');
     if (kind === 'd' && wi === '1') lines.push(`I ${this.idle ? 1 : 0}`);
     for (const id of this.containers) lines.push(`C ${id}`, 'm 10');
-    lines.push(`#E ${seq} ${time(start + 1)}`, '');
+    lines.push(`#E ${seq} ${time(start + this.sampleCs)}`, '');
     return OK(lines.join('\n'));
   });
 
@@ -361,6 +363,15 @@ describe('UsagePages', () => {
     expect(lastView(panel).sizes).toEqual({ label: 'Read Sizes', disabled: false });
   });
 
+  it('counts the time of the sample on the host for the age of the VM', async () => {
+    // The VM is 1 second old at the line `#H`, and the first sample (a `d`) takes 1.5 seconds on the host.
+    shells.loginMs = 3_000;
+    shells.sampleCs = 150;
+    shells.pid1AgeCs = 100 - Math.floor((timers.time + 3_000) / 10);
+    const panel = await open(pages(WSL_HOST), WSL_HOST);
+    expect(lastView(panel).status.tone).toBe('live');
+  });
+
   it('starts no login on a remote host for a sample that waited on the shell during a pause', async () => {
     let release: () => void = () => {};
     const run = shells.run.getMockImplementation()!;
@@ -578,15 +589,39 @@ describe('UsagePages', () => {
     expect(lastView(panel).status.tone).toBe('live');
   });
 
-  it('reads no sizes while the VM stops or is set up again', async () => {
+  it('reads no sizes while the VM stops or is set up again, also on a page that was paused already', async () => {
     shells.open.add(LIMA_HOST);
     const made = pages();
     const panel = await open(made, LIMA_HOST);
+    panel.receive({ type: 'pause' });
     made.vmClosing();
     expect(lastView(panel).sizes.disabled).toBe(true);
+    expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.vm);
     panel.receive({ type: 'readSizes' });
     await flush();
     expect(readSizes).not.toHaveBeenCalled();
+  });
+
+  it('ends a Read Sizes that runs when the VM stops', async () => {
+    shells.open.add(LIMA_HOST);
+    let aborted = false;
+    readSizes.mockImplementation(
+      (_host, signal) =>
+        new Promise<HostInventory>((_resolve, reject) =>
+          signal.addEventListener('abort', () => {
+            aborted = true;
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          }),
+        ),
+    );
+    const made = pages();
+    const panel = await open(made, LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    made.vmClosing();
+    await flush();
+    expect(aborted).toBe(true);
+    expect(lastView(panel).sizes).toEqual({ label: 'Read Sizes', disabled: true });
   });
 
   it('pauses 2 minutes after a start from a VM change in a window without the focus', async () => {

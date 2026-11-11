@@ -152,6 +152,8 @@ class UsagePage {
   private checkingVm = false;
   /** The visibility that visibilityChanged last saw. */
   private wasVisible = true;
+  /** Ends the Read Sizes that runs (vmClosing). */
+  private sizesAbort: AbortController | undefined;
   /** Raised at each new start of the host, so that a Read Sizes that ran across it keeps nothing. */
   private bootEpoch = 0;
   private focusTimer: unknown;
@@ -227,7 +229,10 @@ class UsagePage {
   }
 
   vmClosing(): void {
-    if (this.phase.kind !== 'paused') this.pause('vm');
+    // Also a page that was paused already: its Read Sizes is off until Resume, and a Read Sizes that runs ends, because
+    // its next Docker call would log in to the VM again.
+    this.sizesAbort?.abort();
+    this.pause('vm');
   }
 
   vmChanged(): void {
@@ -330,7 +335,10 @@ class UsagePage {
     // distribution). The VM is younger than the check. The page ends its samples, so that the VM can go to sleep again.
     // The shell stays for the view Docker Hosts, which may use it now: the idle script of the VM stops the VM also with
     // an open shell (Lima), and the end of the idle script of the keeper closes it (WSL).
-    if (checkedAt !== undefined && header?.pid1AgeCs !== undefined && header.pid1AgeCs * 10 + VM_AGE_MARGIN_MS < this.timers.now() - checkedAt) {
+    // The age is of the start of the sample: the time of the sample on the host (a sample `d` also reads the disks)
+    // counts for the VM too.
+    const ageMs = header?.pid1AgeCs !== undefined ? (header.pid1AgeCs + Number(block.endCs - block.startCs)) * 10 : undefined;
+    if (checkedAt !== undefined && ageMs !== undefined && ageMs + VM_AGE_MARGIN_MS < this.timers.now() - checkedAt) {
       this.deps.logger.info(`The VM of Devspaces started after the utilization page found it running: the page ends its samples there, so that the VM can go to sleep again.`);
       this.endSampler();
       this.setPhase({ kind: 'vm', state: { kind: 'stopped' }, idle: true });
@@ -535,7 +543,9 @@ class UsagePage {
           return;
         }
       }
-      const signal = this.abort.signal;
+      const controller = new AbortController();
+      this.sizesAbort = controller;
+      const signal = AbortSignal.any([this.abort.signal, controller.signal]);
       const inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
       // The host started again meanwhile: the objects are of before.
       if (epoch !== this.bootEpoch) return;
@@ -547,6 +557,7 @@ class UsagePage {
       this.deps.logger.warn(`The sizes of ${this.host} could not be read: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
     } finally {
+      this.sizesAbort = undefined;
       this.sizesReading = false;
       this.post();
     }
@@ -612,7 +623,7 @@ class UsagePage {
     }
     if (generation !== this.generation || this.disposed || this.phase.kind !== 'vm' || this.startingVm) return;
     if (state.kind === 'running') this.start(false);
-    else if (state.kind !== this.phase.state.kind) this.setPhase({ kind: 'vm', state });
+    else if (state.kind !== this.phase.state.kind || state.detail !== this.phase.state.detail) this.setPhase({ kind: 'vm', state });
     else this.scheduleVmCheck();
   }
 
