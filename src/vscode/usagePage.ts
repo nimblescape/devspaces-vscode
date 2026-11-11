@@ -150,6 +150,10 @@ class UsagePage {
   private hiddenTimer: unknown;
   private vmCheckTimer: unknown;
   private checkingVm = false;
+  /** The visibility that visibilityChanged last saw. */
+  private wasVisible = true;
+  /** Raised at each new start of the host, so that a Read Sizes that ran across it keeps nothing. */
+  private bootEpoch = 0;
   private focusTimer: unknown;
   private idleTimer: unknown;
   private disposed = false;
@@ -172,6 +176,7 @@ class UsagePage {
       // A hidden page reads nothing, so it keeps no page: a show starts it again, and it asks for the view (`ready`).
       retainContextWhenHidden: false,
     });
+    this.wasVisible = this.panel.visible;
     const webview = this.panel.webview;
     webview.html = usagePageHtml({
       cspSource: webview.cspSource,
@@ -198,7 +203,6 @@ class UsagePage {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.generation += 1;
     this.endSampler();
     for (const timer of [this.hiddenTimer, this.focusTimer, this.idleTimer, this.vmCheckTimer]) if (timer !== undefined) this.timers.clearTimeout(timer);
     this.abort.abort();
@@ -249,6 +253,8 @@ class UsagePage {
     this.setPhase({ kind: 'starting' });
     this.touch();
     this.flowPending = flow;
+    // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).
+    if (!vscode.window.state.focused) this.focusChanged(false);
     let first = flow;
     const sampler: UsageSampler = UsageSampler.start({
       logger: this.deps.logger,
@@ -281,12 +287,14 @@ class UsagePage {
     const command = usageShellCommand(script);
     const open = await shells.run(this.host, command, { timeoutMs, login: false });
     if (open !== undefined) return { kind: 'ran', result: open };
+    // The samples of an older start (a pause, a hide or a close came meanwhile): no login, and nothing of the page
+    // changes. Their sampler is gone and ignores the answer.
+    const stale: UsageRun = { kind: 'notRun', reason: 'vmStopped' };
+    if (generation !== this.generation) return stale;
     let checkedAt: number | undefined;
     if (this.vm) {
       const state = await this.vmStateNow();
-      // The samples of an older start (a pause, a hide or a close came meanwhile): no login, and nothing of the page
-      // changes, because its sampler is gone.
-      if (generation !== this.generation) return { kind: 'notRun', reason: 'vmStopped' };
+      if (generation !== this.generation) return stale;
       this.checkedState = state;
       if (state.kind !== 'running') return { kind: 'notRun', reason: 'vmStopped' };
       checkedAt = this.timers.now();
@@ -305,6 +313,7 @@ class UsagePage {
       this.history.clear();
       this.gapped = false;
       // The sizes are of the objects before the start: Read Sizes reads them again.
+      this.bootEpoch += 1;
       this.sizes = undefined;
       this.sizesError = undefined;
     }
@@ -318,12 +327,12 @@ class UsagePage {
     const checkedAt = this.loginCheckedAt;
     this.loginCheckedAt = undefined;
     // The login of the page started the VM: it stopped between the check and the login (wsl.exe starts a WSL
-    // distribution). The VM is younger than the check. The page ends its samples and its shell, so that the VM can go to
-    // sleep again.
+    // distribution). The VM is younger than the check. The page ends its samples, so that the VM can go to sleep again.
+    // The shell stays for the view Docker Hosts, which may use it now: the idle script of the VM stops the VM also with
+    // an open shell (Lima), and the end of the idle script of the keeper closes it (WSL).
     if (checkedAt !== undefined && header?.pid1AgeCs !== undefined && header.pid1AgeCs * 10 + VM_AGE_MARGIN_MS < this.timers.now() - checkedAt) {
-      this.deps.logger.info(`The VM of Devspaces started after the utilization page found it running: the page ends its samples and its shell there, so that the VM can go to sleep again.`);
+      this.deps.logger.info(`The VM of Devspaces started after the utilization page found it running: the page ends its samples there, so that the VM can go to sleep again.`);
       this.endSampler();
-      this.deps.shells.close(this.host);
       this.setPhase({ kind: 'vm', state: { kind: 'stopped' }, idle: true });
       return;
     }
@@ -391,7 +400,12 @@ class UsagePage {
   /** The tab was shown or hidden. */
   private visibilityChanged(): void {
     if (this.disposed) return;
-    if (!this.panel.visible) {
+    // VS Code also reports a move of the page into another group, or a change of the active editor: only a show or a
+    // hide counts.
+    const visible = this.panel.visible;
+    if (visible === this.wasVisible) return;
+    this.wasVisible = visible;
+    if (!visible) {
       this.hidden();
       return;
     }
@@ -439,7 +453,6 @@ class UsagePage {
     this.deps.logger.info(`The utilization page of ${this.host} pauses (${reason}).`);
     this.endSampler();
     this.stoppedByHide = false;
-    this.generation += 1;
     this.markGap();
     this.setPhase({ kind: 'paused', reason });
   }
@@ -509,7 +522,9 @@ class UsagePage {
 
   /** "Read Sizes": the objects of the host with their sizes; never on a VM that does not run. */
   private async readSizes(): Promise<void> {
-    if (this.sizesReading || this.disposed) return;
+    // Not while the VM stops or is set up again (Stop the VM…, Remove, Reset): a read would log in to it again.
+    if (this.sizesReading || this.disposed || (this.phase.kind === 'paused' && this.phase.reason === 'vm')) return;
+    const epoch = this.bootEpoch;
     this.sizesReading = true;
     this.post();
     try {
@@ -522,6 +537,8 @@ class UsagePage {
       }
       const signal = this.abort.signal;
       const inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
+      // The host started again meanwhile: the objects are of before.
+      if (epoch !== this.bootEpoch) return;
       this.sizes = { inventory, at: this.timers.now() };
       this.sizesError = undefined;
     } catch (error) {

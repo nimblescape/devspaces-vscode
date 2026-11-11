@@ -612,7 +612,8 @@ export function usagePageView(input: UsagePageInput): UsagePageView {
     ...statusAndBanner(input),
     sizes: {
       label: input.sizesReading ? T.readingSizes : input.sizes !== undefined ? T.refreshSizes : T.readSizes,
-      disabled: input.sizesReading,
+      // Not while the VM stops or is set up again: a read would log in to it again.
+      disabled: input.sizesReading || (input.phase.kind === 'paused' && input.phase.reason === 'vm'),
     },
     cpu: cpuPart(input),
     memory: memoryPart(input),

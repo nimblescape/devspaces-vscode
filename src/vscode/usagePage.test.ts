@@ -279,7 +279,7 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.vmStopped);
   });
 
-  it('logs in to a running VM, and ends its samples and its shell when the VM is younger than the check', async () => {
+  it('logs in to a running VM, and ends its samples when the VM is younger than the check', async () => {
     const made = pages(WSL_HOST);
     let panel = await open(made, WSL_HOST);
     expect(shells.logins).toEqual([{ host: WSL_HOST, flow: true }]);
@@ -290,7 +290,8 @@ describe('UsagePages', () => {
     shells.pid1AgeCs = -100_250;
     shells.loginMs = 3_000;
     panel = await open(made, WSL_HOST);
-    expect(shells.closed).toEqual([WSL_HOST]);
+    // The shell stays for the view Docker Hosts; the end of the idle script of the keeper closes it.
+    expect(shells.closed).toEqual([]);
     expect(shells.holds).toBe(0);
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.vmIdle);
     await timers.advance(VM_USAGE_INTERVAL_MS * 3);
@@ -344,6 +345,37 @@ describe('UsagePages', () => {
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(lastView(panel).sizes.label).toBe('Read Sizes');
+  });
+
+  it('keeps nothing of a Read Sizes that ran across a new start of the host', async () => {
+    shells.open.add(LIMA_HOST);
+    let release: (inventory: HostInventory) => void = () => {};
+    readSizes.mockImplementation(() => new Promise<HostInventory>((resolve) => (release = resolve)));
+    const panel = await open(pages(), LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    release(emptyInventory());
+    await flush();
+    expect(lastView(panel).sizes).toEqual({ label: 'Read Sizes', disabled: false });
+  });
+
+  it('starts no login on a remote host for a sample that waited on the shell during a pause', async () => {
+    let release: () => void = () => {};
+    const run = shells.run.getMockImplementation()!;
+    shells.run.mockImplementationOnce(async (host, command, options) => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return run(host, command, options);
+    });
+    const made = pages();
+    made.show(hostRow('build-box'));
+    await flush();
+    const panel = fakeVscode.webviewPanels.at(-1)!;
+    panel.receive({ type: 'pause' });
+    release();
+    await flush();
+    expect(shells.logins).toEqual([]);
   });
 
   it('starts no login for the samples of an older start', async () => {
@@ -544,6 +576,42 @@ describe('UsagePages', () => {
     expect(shells.samples).toHaveLength(1);
     panel.receive({ type: 'ready' });
     expect(lastView(panel).status.tone).toBe('live');
+  });
+
+  it('reads no sizes while the VM stops or is set up again', async () => {
+    shells.open.add(LIMA_HOST);
+    const made = pages();
+    const panel = await open(made, LIMA_HOST);
+    made.vmClosing();
+    expect(lastView(panel).sizes.disabled).toBe(true);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(readSizes).not.toHaveBeenCalled();
+  });
+
+  it('pauses 2 minutes after a start from a VM change in a window without the focus', async () => {
+    vmState = { kind: 'stopped' };
+    const made = pages();
+    const panel = await open(made, LIMA_HOST);
+    fakeVscode.fireWindowState(false);
+    await timers.advance(FOCUS_PAUSE_MS * 2);
+    vmState = { kind: 'running' };
+    shells.open.add(LIMA_HOST);
+    made.vmChanged();
+    await flush();
+    expect(lastView(panel).status.tone).toBe('live');
+    await timers.advance(FOCUS_PAUSE_MS);
+    expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.focus);
+  });
+
+  it('counts only a show as a step of the user, not a move of the page into another group', async () => {
+    shells.open.add(LIMA_HOST);
+    const panel = await open(pages(), LIMA_HOST);
+    await timers.advance(IDLE_PAUSE_MS - 60_000);
+    panel.setActive(false);
+    panel.setActive(true);
+    await timers.advance(60_000);
+    expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
   });
 
   it('reads the sizes on click in a flow, never on a stopped VM', async () => {
