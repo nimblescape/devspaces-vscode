@@ -6,7 +6,7 @@
 // CLI of Devspaces (BootstrapDocker), as the view does: every object, also those that are not of Devspaces, with the
 // networks of each container and the build cache as `docker system df` sums it; Stop and Start of a container that is
 // not of Devspaces; a network that a stopped container uses stays (Docker would remove it, and the container could not
-// start again), also one that a container joined after the read; a container and its network go in one removal, never
+// start again), also one that a container joined after the read, with a space and a comma in its name; a container and its network go in one removal, never
 // with force. Not the removal of the build cache:
 // it would remove the build cache of the developer who runs the tests.
 import * as crypto from 'crypto';
@@ -104,10 +104,12 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
     expect(after.networks.map((object) => object.name)).not.toContain(network);
   });
 
-  it('keeps a network with a comma in its name that a container joined after the read and never started', async () => {
-    const late = `late,${tag}`;
+  it('keeps a network with a space and a comma in its name that a container joined after the read and never started', async () => {
+    // The Docker CLI drops the spaces at the start and end of a name in a filter and in `network rm <name>`: the removal
+    // reads the names of the networks of all containers, and removes by ID.
+    const late = ` late,${tag}`;
     const lateWeb = `late-${tag}`;
-    cli.ok(['network', 'create', '--label', runLabel, late]);
+    const lateId = cli.lines(['network', 'create', '--label', runLabel, late])[0];
     try {
       const seen = find((await read()).networks, late);
       expect(seen.usedBy).toBe(0);
@@ -119,7 +121,7 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
       await expect(removeHostObjects(docker, [seen], { logger: log })).resolves.toMatchObject([{ outcome: 'removed' }]);
     } finally {
       cli.run(['rm', lateWeb]);
-      cli.run(['network', 'rm', late]);
+      cli.run(['network', 'rm', lateId]);
     }
   });
 });

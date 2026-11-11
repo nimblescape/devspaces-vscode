@@ -366,22 +366,20 @@ function isSwarmNetwork(name: string, driver: string | undefined): boolean {
 }
 
 /**
- * The number of the containers of `docker system df -v` whose networks (their field `Networks`: names joined with
- * commas) hold the network `name`. A network name may hold a comma itself, so the name is looked for in the joined
- * text: a container may count for a network that it does not use (a network `a` next to a network `a,b`), never the
- * other way around.
+ * Whether the networks of a container, joined with commas as Docker writes them (`Networks` of `docker system df -v`
+ * and of `docker container ls`), hold the network `name`. A network name may hold a comma, and a space at its start or
+ * end (Docker accepts both), so the name is looked for in the joined text as it is, and also with each part trimmed: a
+ * container may count for a network that it does not use (a network `a` next to a network `a,b`), never the other way
+ * around.
  */
+function holdsNetwork(joined: string, name: string): boolean {
+  const holds = (value: string): boolean => value === name || value.startsWith(`${name},`) || value.endsWith(`,${name}`) || value.includes(`,${name},`);
+  return holds(joined) || holds(joined.split(',').map((part) => part.trim()).join(','));
+}
+
+/** The number of the containers of `docker system df -v` on the network `name` (holdsNetwork). */
 function networkUsers(containers: readonly unknown[], name: string): number {
-  let users = 0;
-  for (const item of containers) {
-    if (!isRecord(item)) continue;
-    const joined = (text(item.Networks) ?? '')
-      .split(',')
-      .map((part) => part.trim())
-      .join(',');
-    if (joined === name || joined.startsWith(`${name},`) || joined.endsWith(`,${name}`) || joined.includes(`,${name},`)) users += 1;
-  }
-  return users;
+  return containers.filter((item) => isRecord(item) && holdsNetwork(text(item.Networks) ?? '', name)).length;
 }
 
 /** A network of `docker network ls --format '{{json .}}'`. */
@@ -772,19 +770,29 @@ function removedUsers(used: HostObject, objects: readonly HostObject[], results:
 }
 
 /**
- * `docker container ls --all` of the containers on the network `name` (running or not), by the name of the network:
- * Docker gives the network of a container that never ran no ID yet, so a filter by the ID of the network misses it
- * (verified with Docker 29.9). The name must be the whole name of the network (`a` does not find a container on `a,b`).
+ * `docker container ls --all` with the networks of each container (running or not), one JSON text per line, read just
+ * before the removal of a network. Without a filter `network=`: the Docker CLI drops the spaces at the start and end of
+ * its value, and Docker also matches it with the start of the ID of a network that a container ran on (verified with
+ * Docker 29.9). By name, because Docker gives the network of a container that never ran no ID yet.
  */
-export function networkUsersArgs(name: string): string[] {
-  return ['container', 'ls', '--all', '--quiet', '--no-trunc', '--filter', `network=${name}`];
-}
+export const NETWORK_USERS_ARGS: readonly string[] = ['container', 'ls', '--all', '--no-trunc', '--format', '{{json .Networks}}'];
 
-/** The number of the containers on `network` now; `detail` when Docker could not say. Throws only an AbortError. */
+/** The number of the containers on `network` now (holdsNetwork); `detail` when Docker could not say. Throws only an AbortError. */
 async function networkUsersNow(docker: Pick<BootstrapDocker, 'run'>, network: HostObject, signal: AbortSignal | undefined): Promise<{ users: number } | { detail: string }> {
-  const { result, error } = await call(docker, networkUsersArgs(network.name), DOCKER_QUERY_TIMEOUT_MS, signal);
+  const { result, error } = await call(docker, [...NETWORK_USERS_ARGS], DOCKER_QUERY_TIMEOUT_MS, signal);
   if (result === undefined || result.exitCode !== 0 || result.timedOut) return { detail: `The containers on this network could not be read: ${detailOf(result, error)}` };
-  return { users: result.stdout.split('\n').filter((line) => line.trim() !== '').length };
+  let users = 0;
+  for (const line of result.stdout.split('\n')) {
+    if (line.trim() === '') continue;
+    let joined: unknown;
+    try {
+      joined = JSON.parse(line);
+    } catch {
+      return { detail: `The containers on this network could not be read: Docker wrote ${line.slice(0, 100)}` };
+    }
+    if (typeof joined === 'string' && holdsNetwork(joined, network.name)) users += 1;
+  }
+  return { users };
 }
 
 /** Whether `name`, the image of a container as Docker names it (a tag, a full or short ID), is `image`. */

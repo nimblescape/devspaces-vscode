@@ -299,7 +299,7 @@ export function objectRowLook(row: ObjectRow): RowLook {
     if (object.driver !== undefined) parts.push(object.driver);
     if (object.usedBy !== undefined && object.usedBy > 0) parts.push(`${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
   }
-  const tooltip = [`${capitalized(object.kind)} ${object.name}`, object.builtIn === true ? 'A network that Docker creates itself on every engine and keeps.' : DockerHostsTexts.purposeTooltip(object.purpose)];
+  const tooltip = [`${capitalized(object.kind)} ${object.name}`, object.builtIn === true ? 'A network that Docker creates itself (bridge, host and none on every engine; ingress and docker_gwbridge on a node of Docker Swarm). Devspaces does not remove it.' : DockerHostsTexts.purposeTooltip(object.purpose)];
   if (object.status !== undefined) tooltip.push(`Status: ${object.status}`);
   if (object.kind === 'image' && (object.tags?.length ?? 0) > 1) tooltip.push(`Tags: ${(object.tags ?? []).join(', ')}`);
   if (object.sizeBytes !== undefined) tooltip.push(`Size: ${formatSize(object.sizeBytes)}${object.uniqueBytes !== undefined ? ` (${formatSize(object.uniqueBytes)} only for this image)` : ''}`);

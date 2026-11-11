@@ -366,7 +366,7 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     expect(removeObjects).not.toHaveBeenCalled();
     expect(pruneBuildCache).not.toHaveBeenCalled();
     await settle();
-    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.vmNotRunning);
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.vmNotRunning({ kind: 'stopped' }));
     // The whole view again: the VM row with its state of now, and the row that starts the VM.
     expect(fired).toContain(undefined);
     const children = (await provider.getChildren(await hostRow(provider, LIMA_HOST))) as MessageRow[];
@@ -376,6 +376,22 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     // A remote host does not depend on the state of the VM.
     await provider.startObject(rowOf(await objectRowsOf(provider, 'lab'), shopWeb));
     expect(startContainer).toHaveBeenCalledWith('lab', shopWeb, expect.any(AbortSignal));
+  });
+
+  it('says why it changed no object of the VM when the state of the VM is not known, broken or not set up', async () => {
+    const provider = view();
+    const rows = await objectRowsOf(provider, LIMA_HOST);
+    vmState = { kind: 'unknown', detail: 'limactl did not answer.' };
+    await provider.startObject(rowOf(rows, shopWeb));
+    vmState = { kind: 'notSetUp' };
+    await provider.startObject(rowOf(rows, shopWeb));
+    expect(startContainer).not.toHaveBeenCalled();
+    await settle();
+    const texts = window.showInformationMessage.mock.calls.map((call) => call[0] as string);
+    expect(texts[0]).toBe('Devspaces cannot use the VM of Devspaces now (its state is not known), so it did not change its objects. limactl did not answer.');
+    expect(texts[0]).not.toContain('does not run now');
+    expect(texts[1]).toBe('The VM of Devspaces is not set up anymore, so Devspaces did not change its objects.');
+    expect(DockerHostsCommandTexts.vmNotRunning({ kind: 'broken' })).toContain('(it is broken)');
   });
 
   it('says why the build cache could not be removed', async () => {

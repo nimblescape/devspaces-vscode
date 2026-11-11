@@ -16,7 +16,7 @@ import {
   formatSize,
   knownDevspace,
   NETWORK_LS_ARGS,
-  networkUsersArgs,
+  NETWORK_USERS_ARGS,
   normalizedReference,
   parseDockerSize,
   pruneBuildCache,
@@ -253,7 +253,14 @@ describe('buildInventory', () => {
   it('counts a container for every network whose name its joined networks hold, also a name with a comma (never too few)', () => {
     const result = buildInventory(
       input(
-        { Containers: [{ ID: 'c1', Names: 'web', State: 'exited', Networks: 'a,b' }, { ID: 'c2', Names: 'api', State: 'exited', Networks: 'x, a' }] },
+        {
+          Containers: [
+            { ID: 'c1', Names: 'web', State: 'exited', Networks: 'a,b' },
+            { ID: 'c2', Names: 'api', State: 'exited', Networks: 'x, a' },
+            // As Docker writes them: names with a space at their start, or with a comma and a space.
+            { ID: 'c3', Names: 'job', State: 'exited', Networks: ' sp,c, d' },
+          ],
+        },
         {
           networks: [
             { ID: 'n1', Name: 'a,b', Driver: 'bridge' },
@@ -261,6 +268,8 @@ describe('buildInventory', () => {
             { ID: 'n3', Name: 'b', Driver: 'bridge' },
             { ID: 'n4', Name: 'x', Driver: 'bridge' },
             { ID: 'n5', Name: 'ab', Driver: 'bridge' },
+            { ID: 'n6', Name: ' sp', Driver: 'bridge' },
+            { ID: 'n7', Name: 'c, d', Driver: 'bridge' },
           ],
         },
       ),
@@ -272,6 +281,8 @@ describe('buildInventory', () => {
     expect(shown.b.usedBy).toBe(1);
     expect(shown.x.usedBy).toBe(1);
     expect(shown.ab.usedBy).toBe(0);
+    expect(shown[' sp'].usedBy).toBe(1);
+    expect(shown['c, d'].usedBy).toBe(1);
   });
 
   it('marks the networks of Docker Swarm as networks of Docker', () => {
@@ -451,31 +462,40 @@ describe('stop and removal', () => {
     const docker = fakeDocker({});
     const results = await removeHostObjects(docker, [volume, image, network, { ...container, state: 'exited' }], { logger: silent });
     expect(docker.calls.map((args) => args.slice(0, 2).join(' '))).toEqual(['container rm', 'container ls', 'network rm', 'image rm', 'image rm', 'volume rm']);
-    // The containers on the network are read now, by its name (also those that never ran), and it is removed by its ID.
-    expect(docker.calls[1]).toEqual(networkUsersArgs('mynet'));
-    expect(networkUsersArgs('a,b')).toEqual(['container', 'ls', '--all', '--quiet', '--no-trunc', '--filter', 'network=a,b']);
+    // The containers on the network are read now, with the names of their networks (also those that never ran), and it
+    // is removed by its ID.
+    expect(docker.calls[1]).toEqual([...NETWORK_USERS_ARGS]);
+    expect(NETWORK_USERS_ARGS).toEqual(['container', 'ls', '--all', '--no-trunc', '--format', '{{json .Networks}}']);
     expect(docker.calls[2]).toEqual(['network', 'rm', 'n6']);
     expect(results.map((result) => result.outcome)).toEqual(['removed', 'removed', 'removed', 'removed']);
 
     // The read of now counts, not the one of the view: here two containers joined the network since the view read it.
     const bridge: HostObject = { kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true, usedBy: 0 };
-    const joined = fakeDocker({ 'container ls': ok('c1\nc2\n') });
+    const joined = fakeDocker({ 'container ls': ok('"mynet"\n"bridge,mynet"\n"bridge"\n""\n') });
     expect(await removeHostObjects(joined, [network, bridge], { logger: silent })).toEqual([
       { object: { kind: 'network', name: 'mynet' }, outcome: 'inUse', detail: '2 containers use this network.' },
       { object: { kind: 'network', name: 'bridge' }, outcome: 'inUse', detail: 'Docker keeps its own networks.' },
     ]);
-    expect(joined.calls).toEqual([networkUsersArgs('mynet')]);
+    expect(joined.calls).toEqual([[...NETWORK_USERS_ARGS]]);
 
     // A network whose containers cannot be read stays.
     const unread = await removeHostObjects(fakeDocker({ 'container ls': fail('Cannot connect to the Docker daemon') }), [network], { logger: silent });
     expect(unread).toEqual([{ object: { kind: 'network', name: 'mynet' }, outcome: 'failed', detail: 'The containers on this network could not be read: Cannot connect to the Docker daemon' }]);
+    const garbled = await removeHostObjects(fakeDocker({ 'container ls': ok('mynet\n') }), [network], { logger: silent });
+    expect(garbled).toMatchObject([{ outcome: 'failed', detail: expect.stringMatching(/could not be read: Docker wrote mynet/) }]);
+
+    // Only the whole name counts (a name like `238` is no part of another name or ID), also with spaces at its start.
+    const hex: HostObject = { ...network, id: 'n238', name: '238' };
+    expect(await removeHostObjects(fakeDocker({ 'container ls': ok('"rvw-other-net"\n"2380"\n') }), [hex], { logger: silent })).toMatchObject([{ outcome: 'removed' }]);
+    const spaced: HostObject = { ...network, id: 'nsp', name: ' sp' };
+    expect(await removeHostObjects(fakeDocker({ 'container ls': ok('" sp"\n') }), [spaced], { logger: silent })).toMatchObject([{ outcome: 'inUse' }]);
 
     // A network whose only container goes in the same removal goes too: the read after its removal finds no container.
     const quiet = fakeDocker({});
     const web: HostObject = { kind: 'container', id: 'c9', name: 'shop-web-1', purpose: 'notDevspaces', state: 'exited', networks: ['mynet'] };
     const both = await removeHostObjects(quiet, [{ ...network, usedBy: 1 }, web], { logger: silent });
     expect(both.map((result) => result.outcome)).toEqual(['removed', 'removed']);
-    expect(quiet.calls).toEqual([['container', 'rm', 'c9'], networkUsersArgs('mynet'), ['network', 'rm', 'n6']]);
+    expect(quiet.calls).toEqual([['container', 'rm', 'c9'], [...NETWORK_USERS_ARGS], ['network', 'rm', 'n6']]);
   });
 
   it('says what Docker says of a network: one with containers, and one that is gone', async () => {

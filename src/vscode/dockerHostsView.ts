@@ -72,7 +72,12 @@ export const DockerHostsCommandTexts = {
   removed: (removed: number, total: number, host: string) => (removed === total ? `Removed ${total === 1 ? '1 object' : `${total} objects`} from ${host}.` : `Removed ${removed} of ${total} objects from ${host}.`),
   left: (names: readonly string[]) => ` Left: ${listed(names)}. The log says why.`,
   readFailed: (host: string) => `The objects on ${host} could not be read.`,
-  vmNotRunning: 'The VM of Devspaces does not run now, so Devspaces did not change its objects. Start the VM to see them again.',
+  vmNotRunning: (state: VmState): string =>
+    state.kind === 'stopped'
+      ? 'The VM of Devspaces does not run now, so Devspaces did not change its objects. Start the VM to see them again.'
+      : state.kind === 'notSetUp'
+        ? 'The VM of Devspaces is not set up anymore, so Devspaces did not change its objects.'
+        : `Devspaces cannot use the VM of Devspaces now (${state.kind === 'broken' ? 'it is broken' : 'its state is not known'}), so it did not change its objects.${state.detail !== undefined ? ` ${state.detail}` : ''}`,
 };
 
 /** At most five names, then the number of the others. */
@@ -326,7 +331,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     const state = await this.deps.vmState();
     if (state.kind === 'running') return true;
     this.deps.logger.info(`The VM of Devspaces does not run now (${state.kind}); the action on its objects did not run.`);
-    this.inform(DockerHostsCommandTexts.vmNotRunning);
+    this.inform(DockerHostsCommandTexts.vmNotRunning(state));
     this.entries.delete(host);
     this.changed();
     return false;

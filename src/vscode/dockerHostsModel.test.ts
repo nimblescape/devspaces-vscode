@@ -125,7 +125,11 @@ describe('objectRowLook', () => {
     expect(look).toMatchObject({ label: 'shop_default', description: 'not of Devspaces · network of shop · bridge · 2 containers', icon: 'plug', contextValue: 'hostsObject;network;notDevspaces;canRemove' });
     const bridge = objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', role: 'network of Docker', builtIn: true, driver: 'bridge', usedBy: 0 }));
     expect(bridge.description).toBe('not of Devspaces · network of Docker · bridge');
-    expect(bridge.tooltip).toContain('Docker creates itself on every engine and keeps');
+    expect(bridge.tooltip).toContain('A network that Docker creates itself');
+    expect(bridge.tooltip).toContain('Devspaces does not remove it.');
+    const ingress = objectRowLook(objectRow({ kind: 'network', id: 'n9', name: 'ingress', purpose: 'notDevspaces', role: 'network of Docker', builtIn: true, driver: 'overlay' }));
+    expect(ingress.tooltip).toContain('on a node of Docker Swarm');
+    expect(ingress.contextValue).toBe('hostsObject;network;notDevspaces');
     expect(bridge.contextValue).toBe('hostsObject;network;notDevspaces');
   });
 });
