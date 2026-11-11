@@ -53,6 +53,8 @@ interface OperationScope {
   active: boolean;
   /** See runWithDockerTarget, `withoutLogin`. */
   withoutLogin?: AbortController;
+  /** See runWithDockerTarget, `onShell`. */
+  onShell?: boolean;
 }
 
 const operationTargets = new AsyncLocalStorage<OperationScope>();
@@ -78,16 +80,32 @@ export function operationWithoutLogin(): AbortController | undefined {
 }
 
 /**
+ * Whether the Docker calls of the operation that runs now go to the shared shell of its host (runWithDockerTarget,
+ * `onShell`).
+ */
+export function operationOnShell(): boolean {
+  const scope = operationTargets.getStore();
+  return scope?.active === true && scope.onShell === true;
+}
+
+/**
  * Runs `fn` as an operation on `target` (see the module comment). `withoutLogin`: the work in the background on an SSH
  * host (docs/requirements.md R-ENG-002), whose Docker calls go only through the connection of the relay of this window
  * to the host (the Docker pipe of the extension) and never log in themselves. BootstrapDocker refuses a call that would
  * log in (`ssh://<host>`, or the shell before the relay): it aborts this controller, whose signal the work passes on to
  * its calls, and throws an AbortError. An operation on the same host within such work stays without a login.
+ * `onShell`: the work of the view Docker Hosts (R-ENG-008), whose Docker calls run on the one shared shell of the host
+ * (the shell before the relay), also those that change something (isSharedShellCall) and also on the VM of Devspaces,
+ * so that they share one login of the host instead of one connection each. A call on an SSH host still goes through
+ * the Docker pipe while a connection of the relay to it is open: that pipe shares the login of the relay. An operation
+ * on the same host within it keeps `onShell`.
  */
-export async function runWithDockerTarget<T>(target: DockerTarget, fn: () => Promise<T>, options: { withoutLogin?: AbortController } = {}): Promise<T> {
+export async function runWithDockerTarget<T>(target: DockerTarget, fn: () => Promise<T>, options: { withoutLogin?: AbortController; onShell?: boolean } = {}): Promise<T> {
   const outer = operationTargets.getStore();
-  const withoutLogin = options.withoutLogin ?? (outer?.active === true && outer.target.host === target.host ? outer.withoutLogin : undefined);
-  const scope: OperationScope = { target, active: true, ...(withoutLogin !== undefined ? { withoutLogin } : {}) };
+  const sameHost = outer?.active === true && outer.target.host === target.host;
+  const withoutLogin = options.withoutLogin ?? (sameHost ? outer.withoutLogin : undefined);
+  const onShell = options.onShell ?? (sameHost ? outer.onShell : undefined);
+  const scope: OperationScope = { target, active: true, ...(withoutLogin !== undefined ? { withoutLogin } : {}), ...(onShell === true ? { onShell } : {}) };
   try {
     return await operationTargets.run(scope, fn);
   } finally {
