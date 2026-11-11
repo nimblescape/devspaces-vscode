@@ -246,7 +246,8 @@ export class RemoteShells {
     }
     await entry.afterLogin;
     if ((shell?.busy === true && isVmHost(host)) || this.kept.has(host)) return undefined;
-    return shell?.takeOver();
+    // A hold that started while the takeover waited for the commands before it counts too.
+    return shell?.takeOver(() => !this.kept.has(host));
   }
 
   /**

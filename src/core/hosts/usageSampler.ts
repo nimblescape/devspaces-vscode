@@ -7,8 +7,9 @@
 // so the page of a host makes no connection of its own and leaves nothing on the host. The first sample is a `d`, then
 // `t`, with a `d` every fifth sample. The next sample starts after the one before it ended, at the interval, or later
 // when the host needs long for a sample. The names of the containers come from `docker ps` on the same shell (`docker`),
-// at most every USAGE_NAMES_EVERY_MS while the set of containers changes, and the data folder of Docker once from
-// `docker info`, each between two samples. Nothing retries a failed sample: each end is reported once. No `vscode`.
+// at most every USAGE_NAMES_EVERY_MS while the set of running containers changes, and the data folder of Docker once
+// from `docker info`, each between two samples and only while a container runs. Nothing retries a failed sample: each end is reported once. No `vscode`.
+import { errorMessage } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';
 import type { Logger, RunResult } from '../ports';
 import { isUsableDockerRoot, newUsageMarker, usageScript, type UsageSampleKind } from './usageScript';
@@ -38,8 +39,9 @@ const USAGE_SLOW_FACTOR = 4;
 const STDERR_TAIL_LENGTH = 8 * 1024;
 
 /**
- * The run of a sample: its result, or why it could not run: `vmStopped`, the VM of Devspaces does not run and the page
- * does not start it (R-VM-004); `noTransport`, the program of the transport of the host is missing.
+ * The run of a command of the samples (a sample, or a Docker call between two): its result, or why it could not run:
+ * `vmStopped`, the VM of Devspaces does not run and the page does not start it (R-VM-004); `noTransport`, the program
+ * of the transport of the host is missing.
  */
 export type UsageRun = { kind: 'ran'; result: RunResult } | { kind: 'notRun'; reason: 'vmStopped' | 'noTransport' };
 
@@ -60,7 +62,7 @@ export type UsageEnd =
    * or the connection broke, or 127 without `sh`. With the end of its error output.
    */
   | { kind: 'exited'; exitCode: number | null; detail: string }
-  /** UsageRun `notRun`. */
+  /** UsageRun `notRun`, of a sample or of a Docker call. */
   | { kind: 'vmStopped' }
   | { kind: 'noTransport' }
   /**
@@ -92,8 +94,11 @@ export interface UsageSamplerOptions {
   wslIdle?: boolean;
   /** Runs `sh -s` with `script` as its input on the shared shell of the host, within `timeoutMs`. */
   run(script: string, timeoutMs: number): Promise<UsageRun>;
-  /** `docker <args>` on the host (BootstrapDocker on its shared shell); without it, no names and no data folder. */
-  docker?(args: readonly string[], timeoutMs: number): Promise<RunResult>;
+  /**
+   * `docker <args>` on the host (BootstrapDocker on its shared shell), with the same guard as `run`; without it, no
+   * names and no data folder.
+   */
+  docker?(args: readonly string[], timeoutMs: number): Promise<UsageRun>;
   /** The line `#H` of the first sample, and again when the kernel of the host started anew. */
   onHeader?(header: UsageHeader): void;
   /**
@@ -130,14 +135,17 @@ export class UsageSampler {
   private dockerRoot: string | undefined;
   private nextRootAt: number | undefined;
   private idleSeen = false;
+  /** When the last sample started. */
+  private lastStartedAt: number | undefined;
 
   private constructor(private readonly options: UsageSamplerOptions) {
     this.timers = options.timers ?? realTimers;
     this.interval = options.intervalMs;
-    this.sample();
+    // After start returned, so that an end (for example of a `run` that throws at once) never comes before it.
+    queueMicrotask(() => this.sample());
   }
 
-  /** Starts the samples: the first one at once. */
+  /** Starts the samples: the first one at once (after start returned). */
   static start(options: UsageSamplerOptions): UsageSampler {
     return new UsageSampler(options);
   }
@@ -158,11 +166,16 @@ export class UsageSampler {
     this.clearNext();
   }
 
-  /** Samples again, the next at once (or after the one that runs). */
+  /**
+   * Samples again: the next sample one interval after the start of the last one (at once after a longer pause), or after
+   * the one that runs. No rate from the block before the pause: it would be the mean of the whole pause.
+   */
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    if (this.stage === 'running' && !this.busy) this.sample();
+    this.previous = undefined;
+    if (this.lastStartedAt === undefined) this.sample();
+    else this.schedule(this.lastStartedAt);
   }
 
   /** Ends the samples. A sample that runs ends on the shell and is not reported (the shell must not stop for it). */
@@ -179,13 +192,14 @@ export class UsageSampler {
     const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
     const timeoutMs = Math.max(3 * this.interval, MIN_USAGE_ANSWER_MS);
     const startedAt = this.timers.now();
+    this.lastStartedAt = startedAt;
     this.busy = true;
     void (async () => {
       try {
         const run = await this.options.run(script, timeoutMs);
         if (this.stage === 'running' && this.take(run, marker, seq, timeoutMs)) await this.between();
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = errorMessage(error);
         this.options.logger.warn(`The utilization sample of ${this.options.name} failed: ${detail}`);
         this.finish({ kind: 'failed', detail });
       } finally {
@@ -199,8 +213,7 @@ export class UsageSampler {
   private take(run: UsageRun, marker: string, seq: number, timeoutMs: number): boolean {
     const { logger, name } = this.options;
     if (run.kind === 'notRun') {
-      logger.info(run.reason === 'vmStopped' ? `The VM of Devspaces does not run: the utilization page of ${name} does not start it.` : `The utilization page of ${name} found no program for its connection.`);
-      this.finish({ kind: run.reason });
+      this.notRun(run.reason);
       return false;
     }
     const { result } = run;
@@ -242,7 +255,7 @@ export class UsageSampler {
       if (first || restarted) this.options.onHeader?.(header);
       if (this.stage === 'running') this.options.onBlock(block, usage, this.names);
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = errorMessage(error);
       logger.warn(`The utilization page of ${name} failed: ${detail}`);
       this.finish({ kind: 'failed', detail });
       return false;
@@ -262,8 +275,10 @@ export class UsageSampler {
 
   /**
    * Between two samples, at most one Docker call: `docker ps` when the set of containers changed since the last one
-   * that worked (at most every USAGE_NAMES_EVERY_MS, while a container runs), else once `docker info` after the first
-   * names. A failure is logged and tried again later; the samples go on without it.
+   * that worked (at most every USAGE_NAMES_EVERY_MS), else once `docker info` after the first names. Both only while a
+   * container runs: then the Docker Engine runs, and a call cannot start one that systemd starts at its socket. A
+   * failure is logged and tried again later; the samples go on without it. A call that could not run (the VM stopped)
+   * ends the samples.
    */
   private async between(): Promise<void> {
     const docker = this.options.docker;
@@ -272,8 +287,9 @@ export class UsageSampler {
     const ids = this.containerIds;
     if (ids !== this.namedIds && ids !== '' && now >= this.nextNamesAt) {
       this.nextNamesAt = now + USAGE_NAMES_EVERY_MS;
-      const result = await this.dockerCall(USAGE_NAMES_ARGS);
-      if (this.stage !== 'running' || result === undefined) {
+      const result = await this.dockerCall(docker, USAGE_NAMES_ARGS);
+      if (this.stage !== 'running') return;
+      if (result === undefined) {
         this.nextNamesAt = this.timers.now() + USAGE_NAMES_RETRY_MS;
         return;
       }
@@ -282,31 +298,49 @@ export class UsageSampler {
         this.namedIds = ids;
         this.nextRootAt ??= this.timers.now();
       } catch (error) {
-        this.options.logger.warn(`The names of the containers of ${this.options.name} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+        this.options.logger.warn(`The names of the containers of ${this.options.name} could not be read: ${errorMessage(error)}`);
         this.nextNamesAt = this.timers.now() + USAGE_NAMES_RETRY_MS;
       }
       return;
     }
-    if (this.dockerRoot !== undefined || this.nextRootAt === undefined || now < this.nextRootAt) return;
-    const result = await this.dockerCall(USAGE_ROOT_ARGS);
+    if (ids === '' || this.dockerRoot !== undefined || this.nextRootAt === undefined || now < this.nextRootAt) return;
+    const result = await this.dockerCall(docker, USAGE_ROOT_ARGS);
+    if (this.stage !== 'running') return;
     if (result === undefined) {
       this.nextRootAt = this.timers.now() + USAGE_ROOT_RETRY_MS;
       return;
     }
-    const folder = result.stdout.trim();
-    this.dockerRoot = folder !== '/var/lib/docker' && !folder.includes('\n') && isUsableDockerRoot(folder) ? folder : '';
+    const folder = result.stdout.trim().replace(/(.)\/+$/, '$1');
+    this.dockerRoot = folder !== '/var/lib/docker' && isUsableDockerRoot(folder) ? folder : '';
   }
 
-  /** `docker <args>` within USAGE_DOCKER_TIMEOUT_MS: its result when it worked, else undefined (logged). */
-  private async dockerCall(args: readonly string[]): Promise<RunResult | undefined> {
+  /**
+   * `docker <args>` within USAGE_DOCKER_TIMEOUT_MS: its result when it worked, else undefined (logged). A call that could
+   * not run ends the samples (undefined too).
+   */
+  private async dockerCall(docker: NonNullable<UsageSamplerOptions['docker']>, args: readonly string[]): Promise<RunResult | undefined> {
+    const { logger, name } = this.options;
     try {
-      const result = await (this.options.docker as NonNullable<UsageSamplerOptions['docker']>)(args, USAGE_DOCKER_TIMEOUT_MS);
+      const run = await docker(args, USAGE_DOCKER_TIMEOUT_MS);
+      if (this.stage !== 'running') return undefined;
+      if (run.kind === 'notRun') {
+        this.notRun(run.reason);
+        return undefined;
+      }
+      const { result } = run;
       if (result.exitCode === 0 && !result.timedOut) return result;
-      this.options.logger.info(`docker ${args[0]} for the utilization page of ${this.options.name} failed (${result.timedOut ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`}); the page goes on without it.`);
+      logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${result.timedOut ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`}); the page goes on without it.`);
     } catch (error) {
-      this.options.logger.info(`docker ${args[0]} for the utilization page of ${this.options.name} failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.info(`docker ${args[0]} for the utilization page of ${name} failed: ${errorMessage(error)}`);
     }
     return undefined;
+  }
+
+  /** The end of a command that could not run. */
+  private notRun(reason: 'vmStopped' | 'noTransport'): void {
+    const { logger, name } = this.options;
+    logger.info(reason === 'vmStopped' ? `The VM of Devspaces does not run: the utilization page of ${name} does not start it.` : `The utilization page of ${name} found no program for its connection.`);
+    this.finish({ kind: reason });
   }
 
   /** The next sample at `startedAt` plus the interval, unless the samples ended, wait, or one runs. */

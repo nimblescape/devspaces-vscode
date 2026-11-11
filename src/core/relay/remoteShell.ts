@@ -328,11 +328,12 @@ export class RemoteShell {
   /**
    * The process of the shell for the connection of the relay (RelayConnection.open), after the commands before: from
    * now on, its output goes to the listeners of that connection, and the shell takes no command anymore. Undefined when
-   * the shell ended. Its `kill` and `killNow` stop the shell.
+   * the shell ended, or when `allowed` (asked after the commands before) says no; the shell stays then. Its `kill` and
+   * `killNow` stop the shell.
    */
-  takeOver(): Promise<StartedByteProcess | undefined> {
+  takeOver(allowed?: () => boolean): Promise<StartedByteProcess | undefined> {
     const taking = this.queue.then(() => {
-      if (this.stage !== 'ready') return undefined;
+      if (this.stage !== 'ready' || allowed?.() === false) return undefined;
       this.disarmIdle();
       this.stage = 'taken';
       this.options.onEnd?.();

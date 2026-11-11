@@ -149,6 +149,13 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         expect(t.block.containers).toHaveLength(3);
       });
 
+      it('reads a data folder of Docker that it reads anyway (rootless Docker) only once', () => {
+        const rootless = path.join(root, '.local', 'share', 'docker');
+        fs.mkdirSync(rootless, { recursive: true });
+        const paths = runSample(shell, root, { seq: 1, kind: 'd', dockerRoot: rootless }).block.disks?.map((disk) => disk.path) ?? [];
+        expect(paths.filter((folder) => folder === rootless)).toHaveLength(1);
+      });
+
       it('sees a running process "idle" in the idle check of a sample d, and leaves the check out without wslIdle', async () => {
         // A script named idle has the name idle, as the idle script of the WSL keeper.
         const idle = spawn(idleScript, [], { stdio: 'ignore' });

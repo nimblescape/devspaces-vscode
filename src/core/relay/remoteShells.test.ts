@@ -363,6 +363,15 @@ describeUnix('RemoteShells', () => {
     // The shell stays with the window meanwhile.
     await expect(registry.run('box', 'printf still')).resolves.toMatchObject({ stdout: 'still' });
     second();
+    // A hold that starts while the takeover waits for the command before it keeps the shell too.
+    const before = registry.run('box', 'sleep 0.3; printf before');
+    const waiting = registry.takeOver('box');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const late = registry.keep('box');
+    await expect(waiting).resolves.toBeUndefined();
+    await expect(before).resolves.toMatchObject({ stdout: 'before' });
+    await expect(registry.run('box', 'printf kept')).resolves.toMatchObject({ stdout: 'kept' });
+    late();
     const taken = await registry.takeOver('box');
     expect(taken).toBeDefined();
     expect(registry.hasShell('box')).toBe(false);

@@ -24,6 +24,7 @@ const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
 const ID_A = 'a'.repeat(64);
 const ID_B = 'b'.repeat(64);
 const OK = (stdout: string): RunResult => ({ exitCode: 0, stdout, stderr: '', timedOut: false });
+const ran = (result: RunResult): UsageRun => ({ kind: 'ran', result });
 
 /** Timers that run only when the test moves the clock. */
 class FakeTimers implements UsageTimers {
@@ -132,8 +133,8 @@ async function start(options: Omit<Partial<UsageSamplerOptions>, 'docker'> & { h
       : (options.docker ??
         (async (args) => {
           started.dockerCalls.push([...args]);
-          if (args[0] === 'ps') return OK(host.containers.map((id, index) => `${id} c${index}`).join('\n'));
-          return OK('/var/lib/docker\n');
+          if (args[0] === 'ps') return ran(OK(host.containers.map((id, index) => `${id} c${index}`).join('\n')));
+          return ran(OK('/var/lib/docker\n'));
         }));
   started.sampler = UsageSampler.start({
     logger: silentLogger,
@@ -217,7 +218,7 @@ describe('UsageSampler', () => {
   it('reads the disk of another data folder of Docker in each sample d after docker info', async () => {
     const host = new FakeHost();
     host.containers = [ID_A];
-    const { timers } = await start({ host, docker: async (args) => OK(args[0] === 'ps' ? `${ID_A} web\n` : '/data/docker\n') });
+    const { timers } = await start({ host, docker: async (args) => ran(OK(args[0] === 'ps' ? `${ID_A} web\n` : '/data/docker/\n')) });
     await timers.advance(5 * VM_USAGE_INTERVAL_MS);
     // docker ps between the first two samples, docker info between the next two: one Docker call between two samples.
     expect(host.sent.map((sent) => [sent.kind, sent.root])).toEqual([
@@ -238,7 +239,7 @@ describe('UsageSampler', () => {
       host,
       docker: async () => {
         calls++;
-        return { exitCode: 1, stdout: '', stderr: 'permission denied', timedOut: false };
+        return ran({ exitCode: 1, stdout: '', stderr: 'permission denied', timedOut: false });
       },
     });
     expect(calls).toBe(1);
@@ -250,13 +251,43 @@ describe('UsageSampler', () => {
     expect(blocks.every(({ names }) => names === undefined)).toBe(true);
   });
 
+  it('ends with vmStopped when a Docker call between two samples could not run, and runs no other sample', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    const { timers, ends, blocks } = await start({ host, docker: async () => ({ kind: 'notRun', reason: 'vmStopped' }) });
+    expect(blocks).toHaveLength(1);
+    expect(ends).toEqual([{ kind: 'vmStopped' }]);
+    await timers.advance(10 * VM_USAGE_INTERVAL_MS);
+    expect(host.sent).toHaveLength(1);
+  });
+
+  it('reports the end of a run that throws at once only after start returned', async () => {
+    const holder: { sampler?: UsageSampler } = {};
+    const seen: boolean[] = [];
+    holder.sampler = UsageSampler.start({
+      logger: silentLogger,
+      name: 'box',
+      intervalMs: VM_USAGE_INTERVAL_MS,
+      run: () => {
+        throw new Error('gone');
+      },
+      onBlock: () => undefined,
+      onEnd: (end) => seen.push(holder.sampler !== undefined && end.kind === 'failed'),
+      timers: new FakeTimers(),
+    });
+    expect(seen).toEqual([]);
+    await flush();
+    expect(seen).toEqual([true]);
+    expect(holder.sampler.ended).toBe(true);
+  });
+
   it('asks nothing of Docker while no container runs', async () => {
     const { timers, dockerCalls } = await start();
     await timers.advance(20 * VM_USAGE_INTERVAL_MS);
     expect(dockerCalls).toEqual([]);
   });
 
-  it('runs no sample while paused; the one that runs is still reported, and resume runs the next at once', async () => {
+  it('runs no sample while paused; the one that runs is still reported, and resume runs the next at once after a long pause', async () => {
     const host = new FakeHost();
     let release!: () => void;
     const slow = new Promise<void>((resolve) => (release = resolve));
@@ -277,8 +308,25 @@ describe('UsageSampler', () => {
     expect(host.sent).toHaveLength(2);
     expect(timers.waiting).toBe(0);
     sampler.resume();
-    await flush();
+    await timers.advance(0);
     expect(host.sent).toHaveLength(3);
+    // No rate from the block before the pause: it would be the mean of the whole pause.
+    expect(blocks[2].usage.cpu).toBeUndefined();
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(blocks[3].usage.cpu).toBeDefined();
+  });
+
+  it('keeps the interval when the page is hidden and shown again at once', async () => {
+    const { sampler, timers, host } = await start({ docker: null });
+    expect(host.sent).toHaveLength(1);
+    for (let i = 0; i < 5; i++) {
+      sampler.pause();
+      sampler.resume();
+      await timers.advance(100);
+    }
+    expect(host.sent).toHaveLength(1);
+    await timers.advance(VM_USAGE_INTERVAL_MS - 500);
+    expect(host.sent).toHaveLength(2);
   });
 
   it('reports a sample that runs after stop not, and runs no other', async () => {

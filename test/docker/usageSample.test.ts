@@ -198,7 +198,10 @@ describe('the utilization samples with real shells and a real SSH server', () =>
           const result = await shells.run(ALIAS, 'sh -s', { input: script, timeoutMs });
           return result === undefined ? { kind: 'notRun', reason: 'noTransport' } : { kind: 'ran', result };
         };
-        const docker = async (args: readonly string[], timeoutMs: number) => (await shells.docker(ALIAS, args, { timeoutMs })) ?? { exitCode: 127, stdout: '', stderr: '', timedOut: false };
+        const docker = async (args: readonly string[], timeoutMs: number): Promise<UsageRun> => {
+          const result = await shells.docker(ALIAS, args, { timeoutMs });
+          return result === undefined ? { kind: 'notRun', reason: 'noTransport' } : { kind: 'ran', result };
+        };
         const test = samples(runSample, docker);
         await test.blocksCame(6);
         expect(test.headers[0]).toMatchObject({ uid: 0 });
@@ -207,7 +210,7 @@ describe('the utilization samples with real shells and a real SSH server', () =>
         expect(logins).toBe(1);
         // The Docker CLI of the host on the same shell: the names of the containers of the engine.
         const names = await docker(['ps', '--no-trunc', '--format', '{{.ID}} {{.Names}}'], 10_000);
-        expect(names.stdout).toContain(sshdContainer);
+        expect(names.kind === 'ran' ? names.result.stdout : '').toContain(sshdContainer);
         test.sampler.stop();
         expect(test.ends).toEqual([{ kind: 'stopped' }]);
         // Between two samples, the host runs nothing of them.

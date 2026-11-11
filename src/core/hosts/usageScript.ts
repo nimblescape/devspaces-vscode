@@ -117,6 +117,7 @@ for r in cpu memory io; do
   while read -r l; do o="$o\${nl}P $r $l"; done 2>/dev/null </proc/pressure/$r
 done
 if [ $c = d ]; then
+  case $rd in /var/lib/docker|/var/lib/containerd|"$HOME/.local/share/docker") rd=;; esac
   l=$(stat -f -c 'D %i %S %b %f %a %c %d %n' /var/lib/docker /var/lib/containerd "$HOME/.local/share/docker" \${rd:+"$rd"} 2>/dev/null)
   [ -n "$l" ] && o="$o\${nl}$l"
   [ "$wi" = 1 ] && idlecheck

@@ -18,6 +18,8 @@ export const MAX_USAGE_BLOCK = 512 * 1024;
 export const MAX_USAGE_CONTAINERS = 500;
 /** The most CPUs (lines `cpuN`). */
 export const MAX_USAGE_CPUS = 1024;
+/** The most characters of the output of one sample: the marker line, the line `#H` and one block, with room. */
+const MAX_USAGE_OUTPUT = MAX_USAGE_BLOCK + 4 * (MAX_USAGE_LINE + 2);
 /** The most folders of the disks (lines `D`): the script names at most four. */
 const MAX_USAGE_DISKS = 8;
 
@@ -372,6 +374,8 @@ export type UsageSampleOutput = { kind: 'block'; header: UsageHeader; block: Usa
  * Throws UsageSampleError above a bound, for output that is not of the script, and for a block that is not complete.
  */
 export function readUsageSample(stdout: string, marker: string, seq: number): UsageSampleOutput {
+  // At most the marker line, the line `#H` and one block (the shell allows much more): checked before the split.
+  if (stdout.length > MAX_USAGE_OUTPUT) throw new UsageSampleError(`The host printed more than ${Math.round(MAX_USAGE_OUTPUT / 1024)} KiB for one utilization sample.`);
   const lines = stdout.split('\n');
   if (lines[lines.length - 1] === '') lines.pop();
   let stage: 'marker' | 'header' | 'between' | 'block' | 'done' = 'marker';

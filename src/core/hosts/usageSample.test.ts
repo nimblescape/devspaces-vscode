@@ -160,6 +160,9 @@ describe('readUsageSample', () => {
       ['more CPUs than the bound', () => `@${MARKER}\n${HEADER}\n#T 1 1.00\n${Array.from({ length: MAX_USAGE_CPUS + 1 }, (_, i) => `cpu${i} 1 1 1 1 1 1 1 1`).join('\n')}\n#E 1 1.00\n`],
       ['a block above its bound', () => `@${MARKER}\n${HEADER}\n#T 1 1.00\n${`q ${'x'.repeat(1000)}\n`.repeat(Math.ceil(MAX_USAGE_BLOCK / 1003) + 1)}#E 1 1.00\n`],
     ];
+    it('throws for an output above the bound of one sample before it reads its lines', () => {
+      expect(() => readUsageSample(`@${MARKER}\n${HEADER}\n${'x'.repeat(MAX_USAGE_BLOCK + 5 * MAX_USAGE_LINE)}`, MARKER, 1)).toThrow(/more than \d+ KiB for one utilization sample/);
+    });
     for (const [name, output] of cases) {
       it(`throws for ${name}`, () => {
         expect(() => readUsageSample(output(), MARKER, 1)).toThrow(UsageSampleError);
