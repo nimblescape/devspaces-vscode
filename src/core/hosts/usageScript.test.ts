@@ -193,6 +193,17 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         expect(t.block.containers).toHaveLength(3);
       });
 
+      it('takes an uptime below 1 second (no octal number in the age of process 1)', () => {
+        const uptime = path.join(dir, 'uptime');
+        fs.writeFileSync(uptime, '0.08 0.10\n');
+        const script = usageScript({ marker: MARKER, seq: 1, kind: 't' }).split('</proc/uptime').join(`<${uptime}`).replace('C=/sys/fs/cgroup', `C=${root}`);
+        const result = runScript(shell, script, { ...process.env, HOME: root });
+        expect(result.status, result.stderr).toBe(0);
+        const output = readUsageSample(result.stdout, MARKER, 1);
+        expect(output.kind === 'block' ? output.block.startCs : undefined).toBe(8n);
+        expect(output.kind === 'block' ? output.header.pid1AgeCs : undefined).toBeTypeOf('number');
+      });
+
       it('reads a data folder of Docker that it reads anyway (rootless Docker) only once', () => {
         const rootless = path.join(root, '.local', 'share', 'docker');
         fs.mkdirSync(rootless, { recursive: true });

@@ -40,6 +40,8 @@ export const USAGE_ROOT_ARGS: readonly string[] = ['info', '--format', '{{.Docke
 const USAGE_SLOW_FACTOR = 4;
 /** but at most this long (the uptime of the host is not trusted: it jumps, for example, after a suspend). */
 export const MAX_USAGE_INTERVAL_MS = 60_000;
+/** A rate only from two blocks at most this many intervals apart, by the uptime of the host. */
+const USAGE_RATE_GAP_FACTOR = 3;
 /** The end of the error output that is kept for the reason of an end. */
 const STDERR_TAIL_LENGTH = 8 * 1024;
 
@@ -159,9 +161,8 @@ export class UsageSampler {
   private dockerRoot: string | undefined;
   private nextRootAt: number | undefined;
   private idleSeen = false;
-  /** When the last sample started, and when it ended (with its Docker call). */
+  /** When the last sample started. */
   private lastStartedAt: number | undefined;
-  private lastEndedAt: number | undefined;
   /** The end of the hold of `hold`. */
   private release: (() => void) | undefined;
 
@@ -189,7 +190,8 @@ export class UsageSampler {
 
   /**
    * No more samples (the page is hidden): the sample that runs still ends and is reported, without a Docker call after
-   * it. The hold of the shell stays, so that the shell is there at the resume (the page stops the samples after a while).
+   * it. The hold of the shell stays, so that the relay does not take the shell for a short hide (the page stops the
+   * samples 15 s after it is hidden; the shell itself still closes 2 minutes after its last command).
    */
   pause(): void {
     if (this.paused) return;
@@ -199,20 +201,13 @@ export class UsageSampler {
 
   /**
    * Samples again: the next sample one interval after the start of the last one (at once after a longer pause), or after
-   * the one that runs. When the pause delayed the next sample by more than an interval, its block has no rates: a rate
-   * over the whole pause would be no live value.
+   * the one that runs. After a long pause, its block has no rates (take).
    */
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    if (this.lastStartedAt === undefined) {
-      this.sample();
-      return;
-    }
-    // When the next sample was due: an interval after the start of the last one, but not before that one ended.
-    const due = Math.max(this.lastStartedAt + this.interval, this.lastEndedAt ?? 0);
-    if (!this.busy && this.timers.now() - due > this.interval) this.previous = undefined;
-    this.schedule(this.lastStartedAt);
+    if (this.lastStartedAt === undefined) this.sample();
+    else this.schedule(this.lastStartedAt);
   }
 
   /** Ends the samples. A sample that runs ends on the shell and is not reported (the shell must not stop for it). */
@@ -242,7 +237,6 @@ export class UsageSampler {
         this.finish({ kind: 'failed', detail });
       } finally {
         this.busy = false;
-        this.lastEndedAt = this.timers.now();
         this.schedule(startedAt);
       }
     })();
@@ -296,7 +290,10 @@ export class UsageSampler {
     }
     const first = this.headerValue === undefined;
     this.headerValue = header;
-    const usage = usageOf(block, this.previous);
+    // No rate over a long gap (a pause, a sample that waited long on the shell, a suspend of the host): it would be the
+    // mean of the whole gap, no live value.
+    const gapMs = this.previous === undefined ? 0 : Number(block.startCs - this.previous.startCs) * 10;
+    const usage = usageOf(block, gapMs <= USAGE_RATE_GAP_FACTOR * this.interval ? this.previous : undefined);
     this.previous = block;
     // A host that needs long for a sample gets more time between the samples, so they cost it little.
     this.interval = Math.max(this.options.intervalMs, Math.min(MAX_USAGE_INTERVAL_MS, USAGE_SLOW_FACTOR * Number(block.endCs - block.startCs) * 10));

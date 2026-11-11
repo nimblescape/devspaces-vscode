@@ -94,6 +94,8 @@ class FakeHost {
   idle = true;
   durationCs = 1;
   uptimeCs = 100_000;
+  /** The clock of the test (start sets it): the uptime of the host goes on with it. */
+  clock: () => number = () => 0;
   /** When set, the next run gives this instead of the output of the script. */
   next: UsageRun | Error | undefined;
 
@@ -106,13 +108,13 @@ class FakeHost {
     this.next = undefined;
     if (next instanceof Error) throw next;
     if (next !== undefined) return next;
-    const start = this.uptimeCs;
-    this.uptimeCs += this.durationCs;
+    const start = this.uptimeCs + Math.floor(this.clock() / 10);
+    const end = start + this.durationCs;
     const time = (cs: number) => `${Math.floor(cs / 100)}.${String(cs % 100).padStart(2, '0')}`;
     const lines = [`@${marker}`, `#H 2 2 0 ${this.boot} 5000 -`, `#T ${seq} ${time(start)}`, `cpu  ${100 * Number(seq)} 0 0 ${900 * Number(seq)} 0 0 0 0`, 'M MemTotal: 1000', 'M MemAvailable: 400'];
     if (kind === 'd' && wi === '1') lines.push(`I ${this.idle ? 1 : 0}`);
     for (const id of this.containers) lines.push(`C ${id}`, 'm 10');
-    lines.push(`#E ${seq} ${time(this.uptimeCs)}`, '');
+    lines.push(`#E ${seq} ${time(end)}`, '');
     return { kind: 'ran', result: OK(lines.join('\n')) };
   };
 }
@@ -141,6 +143,7 @@ async function start(options: Partial<UsageSamplerOptions> & { host?: FakeHost; 
   const { host: givenHost, docker: givenDocker, run: givenRun, ...rest } = options;
   const timers = new FakeTimers();
   const host = givenHost ?? new FakeHost();
+  host.clock = () => timers.now();
   const started: Started = { timers, host, blocks: [], headers: [], ends: [], dockerCalls: [] } as unknown as Started;
   const docker: FakeDocker | undefined =
     givenDocker === null
@@ -455,7 +458,7 @@ describe('UsageSampler', () => {
     expect(blocks[1].usage.cpu).toBeDefined();
   });
 
-  it('keeps the rates after a short pause that follows a slow sample', async () => {
+  it('gives no rate after a sample that waited long on the shell, and keeps the rates after a short pause', async () => {
     const host = new FakeHost();
     let release!: () => void;
     const slow = new Promise<void>((resolve) => (release = resolve));
@@ -470,6 +473,8 @@ describe('UsageSampler', () => {
     release();
     await flush();
     expect(blocks).toHaveLength(2);
+    // A sample that waited long on the shell has no rate: it would be the mean of 12 s.
+    expect(blocks[1].usage.cpu).toBeUndefined();
     // The page is hidden before the third sample starts, and shown again 100 ms later: no sample was left out.
     sampler.pause();
     await timers.advance(100);

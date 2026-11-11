@@ -25,7 +25,8 @@ export type UsageSampleKind = 't' | 'd';
  * empty). The whole text is one compound command in braces, so the shell reads all of it before it runs any part.
  * Notes on the parts that look odd:
  * - The age of process 1 (`#H` field 6), not /proc/uptime: all distributions of WSL share one kernel, so its uptime is
- *   not the start of the distribution.
+ *   not the start of the distribution. The hundredths are `1<digits> - 100`, so that an uptime below 1 s (`0.08`) gives
+ *   no number with a leading zero, which the shell would read as octal.
  * - The first process of a container is also searched one cgroup below its own (docker-in-docker moves its processes).
  */
 export const USAGE_SCRIPT = `{
@@ -51,7 +52,7 @@ uid=; while read -r k x _; do case $k in Uid:) uid=$x; break;; esac; done 2>/dev
 ia=-; l=; read -r l 2>/dev/null </proc/1/stat
 if [ -n "$l" ]; then
   l=\${l##*) }; set -f; set -- $l; set +f
-  case \${20} in *[!0-9]*|'') ;; *) ia=$(( \${up%.*}\${up#*.} - \${20} ));; esac
+  case \${20} in *[!0-9]*|'') ;; *) ia=$(( \${up%.*} * 100 + 1\${up#*.} - 100 - \${20} ));; esac
 fi
 printf '@%s\\n#H 2 %s %s %s %s %s\\n' "$mk" "$v" "\${uid:--}" "\${boot:--}" "$ia" "\${rel:--}" || exit 0
 
