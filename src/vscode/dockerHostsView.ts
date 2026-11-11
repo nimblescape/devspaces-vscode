@@ -7,7 +7,9 @@
 // Devspaces with their purpose) and their management. A host is read only when the user opens it in the view, and again at Refresh, never in the background
 // (R-SEC-004): the rows of a host keep what its last read found, and a change of the view (another Docker host, a host
 // that leaves the list, the state of the VM) reads no host again. A read never starts the VM: a stopped VM shows a row
-// that starts it. Opening a remote host is a flow of the user, so a password login may ask there (R-ENG-003). A check
+// that starts it. Opening a remote host and each action (with its progress notification) are flows of the user, so a
+// password login may ask there (R-ENG-003). All Docker calls of the view run on the one shared shell of the host (extension.ts, `onShell`): one login
+// per host for the reads and the actions, not one connection per call. A check
 // mark shows the Docker host of Devspaces; a click on a host row only opens or closes it, because the Docker host of
 // Devspaces is chosen only in the first row of the repository view. The objects of a devspace of this computer get the
 // commands of the devspace (Stop, Delete…); every other object gets Stop (a running container), Start (a stopped

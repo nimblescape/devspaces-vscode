@@ -9,9 +9,9 @@
 // for the local Docker, the calls go as before.
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
-import { BootstrapDocker, isShellCall } from './bootstrapDocker';
+import { BootstrapDocker, isSharedShellCall, isShellCall } from './bootstrapDocker';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from './dockerHost';
-import { runWithDockerTarget } from './dockerTargets';
+import { operationOnShell, runWithDockerTarget } from './dockerTargets';
 
 const OK: RunResult = { exitCode: 0, stdout: '', stderr: '', timedOut: false };
 const PIPE = 'unix:///run/user/1000/devspaces-0123456789abcdef/docker.sock';
@@ -295,6 +295,144 @@ describe('BootstrapDocker: the shell before the relay', () => {
     remoteShell.mockRejectedValueOnce(Object.assign(new Error('aborted'), { name: 'AbortError' }));
     await expect(runWithDockerTarget(REMOTE, () => docker.run(['image', 'inspect', 'x']))).rejects.toMatchObject({ name: 'AbortError' });
     expect(envs).toHaveLength(1);
+  });
+});
+
+describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', () => {
+  const SHELL: RunResult = { exitCode: 0, stdout: 'from the shell', stderr: '', timedOut: false };
+  const WSL = remoteDockerTarget(WSL_HOST);
+  const ACTIONS = [
+    ['container', 'stop', 'abc'],
+    ['container', 'start', 'abc'],
+    ['container', 'rm', 'abc'],
+    ['image', 'rm', 'node:22'],
+    ['volume', 'rm', 'pgdata'],
+    ['network', 'rm', 'shop_default'],
+  ];
+  const PRUNE = ['builder', 'prune', '--all', '--force'];
+
+  it('runs the reads and the actions of the view on the shell of an SSH host without the pipe, and logs in for no other call', async () => {
+    const { runner, envs } = recorder();
+    const lines: string[] = [];
+    const logger: Logger = { ...silentLogger, info: (message) => lines.push(message) };
+    const remoteShell = vi.fn(async (_target: DockerTarget, _args: readonly string[]): Promise<RunResult | undefined> => SHELL);
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', { dockerPipe: () => undefined, remoteShell });
+    await runWithDockerTarget(
+      REMOTE,
+      async () => {
+        await docker.run(['system', 'df', '--verbose', '--format', '{{json .}}']);
+        for (const args of ACTIONS) await expect(docker.run(args)).resolves.toEqual(SHELL);
+        // A call that changes something and is no action of the view still logs in itself, and so does the removal of the
+        // build cache, which the Docker CLI of the host could send to a buildx builder of its user.
+        await docker.run(['volume', 'create', 'x']);
+        await docker.run(PRUNE);
+      },
+      { onShell: true },
+    );
+    expect(remoteShell.mock.calls.map(([target, args]) => [target.host, args])).toEqual([
+      ['build-box', ['system', 'df', '--verbose', '--format', '{{json .}}']],
+      ...ACTIONS.map((args) => ['build-box', args]),
+    ]);
+    expect(envs.map((env) => [env.DOCKER_HOST, env.BUILDX_BUILDER])).toEqual([
+      [SSH, 'default'],
+      [SSH, 'default'],
+    ]);
+    expect(lines.filter((line) => line.endsWith('over SSH.'))).toEqual([
+      'docker volume create x logs in to build-box over SSH.',
+      'docker builder prune --all --force logs in to build-box over SSH.',
+    ]);
+    // Without `onShell`, an action logs in over SSH, as before.
+    await runWithDockerTarget(REMOTE, () => docker.run(['container', 'stop', 'abc']));
+    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([SSH, SSH, SSH]);
+    expect(remoteShell).toHaveBeenCalledTimes(1 + ACTIONS.length);
+  });
+
+  it('goes through the pipe of an SSH host while a connection of the relay is open: it shares the login of the relay', async () => {
+    const { runner, envs } = recorder();
+    const remoteShell = vi.fn(async (_target: DockerTarget, _args: readonly string[]): Promise<RunResult | undefined> => SHELL);
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', { dockerPipe: () => PIPE, remoteShell });
+    await runWithDockerTarget(REMOTE, () => docker.run(['container', 'stop', 'abc']), { onShell: true });
+    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([PIPE]);
+    expect(remoteShell).not.toHaveBeenCalled();
+  });
+
+  it('runs the calls on the shell of the VM of Devspaces instead of its pipe, and through the pipe only what the shell does not take', async () => {
+    const { runner, envs } = recorder();
+    const remoteShell = vi.fn(async (_target: DockerTarget, _args: readonly string[]): Promise<RunResult | undefined> => SHELL);
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'win32', {
+      dockerPipe: (target) => (target.host === WSL_HOST ? PIPE : undefined),
+      servePipe: async () => undefined,
+      remoteShell,
+    });
+    await runWithDockerTarget(
+      WSL,
+      async () => {
+        await expect(docker.run(['image', 'ls', '--format', '{{json .}}'])).resolves.toEqual(SHELL);
+        await expect(docker.run(['volume', 'rm', 'pgdata'])).resolves.toEqual(SHELL);
+        // The VM has no buildx builder of a user: the removal of the build cache runs on the shell too.
+        await expect(docker.run(PRUNE)).resolves.toEqual(SHELL);
+        // Input, and a call that the shell cannot carry, go through the pipe.
+        await expect(docker.run(['image', 'inspect', 'x'], { input: 'x' })).resolves.toEqual(OK);
+        await expect(docker.run(['volume', 'create', 'x'])).resolves.toEqual(OK);
+        // No shell for the host: the pipe.
+        remoteShell.mockResolvedValueOnce(undefined);
+        await expect(docker.run(['container', 'stop', 'abc'])).resolves.toEqual(OK);
+      },
+      { onShell: true },
+    );
+    expect(remoteShell.mock.calls.map(([, args]) => args)).toEqual([['image', 'ls', '--format', '{{json .}}'], ['volume', 'rm', 'pgdata'], PRUNE, ['container', 'stop', 'abc']]);
+    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([PIPE, PIPE, PIPE]);
+    // Without `onShell`, every call there goes through the pipe, as before.
+    await runWithDockerTarget(WSL, () => docker.run(['image', 'ls']));
+    expect(envs).toHaveLength(4);
+    expect(remoteShell).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps `onShell` in an operation on the same host within it, not on another host', async () => {
+    const seen: Array<[string, boolean]> = [];
+    const note = (name: string) => seen.push([name, operationOnShell()]);
+    await runWithDockerTarget(
+      REMOTE,
+      async () => {
+        note('outer');
+        await runWithDockerTarget(REMOTE, async () => note('same host'));
+        await runWithDockerTarget(WSL, async () => note('other host'));
+        await runWithDockerTarget(REMOTE, async () => note('same host, off'), { onShell: false });
+      },
+      { onShell: true },
+    );
+    note('outside');
+    expect(seen).toEqual([
+      ['outer', true],
+      ['same host', true],
+      ['other host', false],
+      ['same host, off', false],
+      ['outside', false],
+    ]);
+  });
+});
+
+describe('isSharedShellCall', () => {
+  it('takes the calls of isShellCall and the actions of the view Docker Hosts, nothing else that changes something', () => {
+    for (const vm of [false, true]) {
+      expect(isSharedShellCall(['info'], vm)).toBe(true);
+      expect(isSharedShellCall(['container', 'stop', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['container', 'start', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['container', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['image', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['volume', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['network', 'rm', 'x'], vm)).toBe(true);
+      expect(isSharedShellCall(['volume', 'create', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall(['run', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall(['container', 'exec', 'x', 'sh'], vm)).toBe(false);
+      expect(isSharedShellCall(['system', 'prune', '--force'], vm)).toBe(false);
+      expect(isSharedShellCall(['-H', 'ssh://box', 'container', 'stop', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall(['context', 'rm', 'x'], vm)).toBe(false);
+      expect(isSharedShellCall([], vm)).toBe(false);
+    }
+    // The removal of the build cache only on the VM: elsewhere the Docker CLI of the host could prune a builder of its user.
+    expect(isSharedShellCall(['builder', 'prune', '--all', '--force'], true)).toBe(true);
+    expect(isSharedShellCall(['builder', 'prune', '--all', '--force'], false)).toBe(false);
   });
 });
 

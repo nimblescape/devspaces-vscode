@@ -6,7 +6,7 @@
 // host (an SSH host, or the WSL distribution of Devspaces), opened by the first check or Docker call before a connection
 // of the relay to the host, used by the calls after it, and taken over by the next connection of the relay to the host
 // (takeOver). No `vscode`.
-import { WSL_START_ATTEMPTS, hostAccessOf, transportProgramOf, wslStartTimedOut } from '../docker/dockerHost';
+import { WSL_START_ATTEMPTS, hostAccessOf, isVmHost, transportProgramOf, wslStartTimedOut } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
 import { isAbortError, untilAborted, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
 import { currentSshPromptFlow, type SshLoginPrompts } from '../sshAskpass';
@@ -204,7 +204,10 @@ export class RemoteShells {
   /**
    * The process of the shell to `host` for a connection of the relay (RemoteShell.takeOver), also of a login that is
    * in progress, after the step after its login; undefined when there is none or it failed. The shell is no longer one
-   * of this window then.
+   * of this window then. On an SSH host, the takeover waits for the commands before it, because a new login may ask
+   * for the password again. A shell of the VM of Devspaces with a command on it (RemoteShell.busy, for example a long
+   * removal of the view Docker Hosts) stays with its commands, and the relay logs in itself: a login to the VM asks
+   * nothing, and the open of a devspace does not wait for that command.
    */
   async takeOver(host: string): Promise<StartedByteProcess | undefined> {
     const entry = this.entries.get(host);
@@ -216,7 +219,22 @@ export class RemoteShells {
       return undefined;
     }
     await entry.afterLogin;
+    if (shell?.busy === true && isVmHost(host)) return undefined;
     return shell?.takeOver();
+  }
+
+  /**
+   * Stops the shell to `host` at once, also a login in progress (a stop or a removal of the VM of Devspaces, R-VM-010):
+   * a command on it ends with it (RemoteShell.run), and the next call logs in anew. A shell that the relay took over is
+   * no longer one of this window and stays.
+   */
+  close(host: string): void {
+    const entry = this.entries.get(host);
+    if (entry === undefined) return;
+    this.entries.delete(host);
+    if (entry.shell) entry.shell.killNow();
+    else if (entry.process.killNow) entry.process.killNow();
+    else entry.process.kill();
   }
 
   /** Stops every shell at once (the window closes), also a login in progress. */

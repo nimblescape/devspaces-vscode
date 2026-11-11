@@ -60,7 +60,7 @@ export interface VmCommandsDeps {
   runningDevspaces: () => Promise<string[]>;
   /** Stops the VM: `limactl stop`, or `wsl --terminate devspaces`. */
   stop: (signal: AbortSignal) => Promise<void>;
-  /** The connections of this window to the VM end (its worker, the relay), before a stop or a removal. */
+  /** The connections of this window to the VM end (its worker, the relay, its shell), before a stop or a removal. */
   closeConnections: () => void;
   /** "Remove the VM…" of the platform, with its own question (LimaSetupCommands.remove, WslSetupCommands.remove). */
   remove: () => Promise<void>;

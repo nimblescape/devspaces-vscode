@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { silentLogger, type Logger, type StartedByteProcess } from '../ports';
 import { NodeProcessRunner } from '../process';
 import { sshPromptSignal, sshPromptsAllowed, withSshPrompts } from '../sshAskpass';
+import { LIMA_HOST } from '../docker/dockerHost';
 import { RemoteShells } from './remoteShells';
 
 const describeUnix = process.platform === 'win32' ? describe.skip : describe;
@@ -325,6 +326,27 @@ describeUnix('RemoteShells', () => {
     registry.dispose();
   });
 
+  it('leaves a busy shell of the VM to its commands, so that the relay logs in itself, and waits for them on an SSH host', async () => {
+    const { registry, logins } = shells();
+    await registry.login(LIMA_HOST);
+    const running = registry.run(LIMA_HOST, 'sleep 0.3; printf done');
+    await expect(registry.takeOver(LIMA_HOST)).resolves.toBeUndefined();
+    await expect(running).resolves.toMatchObject({ stdout: 'done' });
+    // Without a command on it, the relay takes it over.
+    const taken = await registry.takeOver(LIMA_HOST);
+    expect(taken).toBeDefined();
+    taken!.end();
+    // On an SSH host, the takeover waits for the command before it.
+    await registry.login('box');
+    const before = registry.run('box', 'sleep 0.3; printf before');
+    const takenBox = await registry.takeOver('box');
+    await expect(before).resolves.toMatchObject({ stdout: 'before' });
+    expect(takenBox).toBeDefined();
+    takenBox!.end();
+    expect(logins).toEqual([LIMA_HOST, 'box']);
+    registry.dispose();
+  });
+
   it('gives the relay a login that is still in progress, and nothing when there is none', async () => {
     const { registry } = shells();
     await expect(registry.takeOver('box')).resolves.toBeUndefined();
@@ -361,5 +383,33 @@ describeUnix('RemoteShells', () => {
     // It ends long before its 30 seconds (and the time limit of the login).
     await processes[0].exited;
     await expect(login).resolves.toMatchObject({ ok: false, timedOut: false });
+  });
+
+  it('stops the shell of one host at once (a stop of the VM), with the command on it, and logs in anew for the next call', async () => {
+    const { registry, processes, logins } = shells();
+    await registry.login('box');
+    await registry.login('other');
+    const running = registry.run('box', 'sleep 30');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    registry.close('box');
+    // The command ends with the shell, long before its 30 seconds (the time limit of the test is 5 seconds), as a failure.
+    expect((await running)?.exitCode).not.toBe(0);
+    await expect(processes[0].exited).resolves.toMatchObject({ exitCode: null });
+    // The shell of the other host stays; the next call to the host logs in anew.
+    await expect(registry.run('other', 'printf still')).resolves.toMatchObject({ stdout: 'still' });
+    await expect(registry.run('box', 'printf again')).resolves.toMatchObject({ stdout: 'again' });
+    expect(logins).toEqual(['box', 'other', 'box']);
+    // Nothing to stop: no error.
+    registry.close('none');
+    registry.dispose();
+  });
+
+  it('stops a login in progress of one host at once', async () => {
+    const { registry, processes } = shells({ script: 'exec sleep 30' });
+    const login = registry.login('box');
+    registry.close('box');
+    await processes[0].exited;
+    await expect(login).resolves.toMatchObject({ ok: false, timedOut: false });
+    registry.dispose();
   });
 });

@@ -12,7 +12,9 @@
 // of an operation on an SSH host goes through the Docker pipe of the extension for the host while a connection of the
 // relay to it is open (BootstrapDockerOptions.dockerPipe), without an SSH login of its own, else with
 // DOCKER_HOST=ssh://<host>; before that connection, a call that only reads runs on the shell before the relay (BootstrapDockerOptions.remoteShell, isShellCall), whose
-// login the connection then takes over. The work in the background on an SSH host never logs in itself
+// login the connection then takes over. The work of the view Docker Hosts runs all its calls on that shell, also those
+// that change something and also on the VM of Devspaces (runWithDockerTarget with `onShell`, isSharedShellCall), so they
+// share one login of the host. The work in the background on an SSH host never logs in itself
 // (runWithDockerTarget with `withoutLogin`, dockerTargets.ts): without that connection, its call is refused. A call of
 // an operation on the WSL distribution of Devspaces always goes through
 // the Docker pipe of the extension for it (BootstrapDockerOptions.servePipe), which needs no connection of the relay; it
@@ -36,7 +38,7 @@ import { hostEndpoint, isVmHost, isSshClosedBeforeLogin, type DockerTarget } fro
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 import { extractBaseImages } from '../imageCheck/dockerfile';
-import { operationDockerTarget, operationWithoutLogin, outsideOperation } from './dockerTargets';
+import { operationDockerTarget, operationOnShell, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
 
 /** Result of `docker info`. */
@@ -191,8 +193,9 @@ export interface BootstrapDockerOptions {
   /**
    * `docker <args>` on the computer of the remote engine `target`, on the shell before the relay of its host
    * (RemoteShells.docker): for a call of an operation there that only reads (isShellCall) while the host has no Docker
-   * pipe of the extension, so that the checks before a connection of the relay need no SSH login of their own.
-   * Undefined when the host has no shell (the call logs in with `ssh://<host>`).
+   * pipe of the extension, so that the checks before a connection of the relay need no SSH login of their own; and for
+   * each call of the work of the view Docker Hosts (isSharedShellCall, runWithDockerTarget with `onShell`), also on the
+   * VM of Devspaces. Undefined when the host has no shell (the call logs in with `ssh://<host>`).
    */
   remoteShell?: (target: DockerTarget, args: readonly string[], options: Pick<RunOptions, 'timeoutMs' | 'signal'>) => Promise<RunResult | undefined>;
   /**
@@ -266,9 +269,40 @@ function reachesEngine(args: readonly string[]): boolean {
  * an endpoint of this computer), and is no `docker version`, whose client part is that of the CLI that runs it.
  */
 export function isShellCall(args: readonly string[]): boolean {
+  return shellCarries(args) && isReadOnlyDockerCall(args);
+}
+
+/**
+ * The calls that change something and that the shared shell of a host runs too (runWithDockerTarget with `onShell`):
+ * the actions of the view Docker Hosts, which name their objects by ID or reference and need nothing of this computer.
+ */
+const SHARED_SHELL_CHANGES: Readonly<Record<string, readonly string[]>> = {
+  container: ['stop', 'start', 'rm'],
+  image: ['rm'],
+  volume: ['rm'],
+  network: ['rm'],
+};
+
+/**
+ * A call that may run on the shared shell of a host (runWithDockerTarget with `onShell`): one of isShellCall, or one of
+ * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES). On the VM of Devspaces (`vm`) also `docker builder
+ * prune` (Remove Unused Build Cache…): on another host, the Docker CLI there could send it to a buildx builder that its
+ * user chose (`docker buildx use --global`) instead of the engine, so it keeps the way of BootstrapDocker with
+ * BUILDX_BUILDER=default (REMOTE_BUILDX_BUILDER); the VM has no builder of a user.
+ */
+export function isSharedShellCall(args: readonly string[], vm: boolean): boolean {
+  if (isShellCall(args)) return true;
+  const [command, subcommand] = dockerCommandWords(args);
+  if (!shellCarries(args) || command === undefined) return false;
+  if (vm && command === 'builder' && subcommand === 'prune') return true;
+  return SHARED_SHELL_CHANGES[command]?.includes(subcommand ?? '') ?? false;
+}
+
+/** A call that starts with its command (no global option of this computer), reaches the engine, and is no `docker version`. */
+function shellCarries(args: readonly string[]): boolean {
   const [command] = dockerCommandWords(args);
   if (args.length === 0 || args[0].startsWith('-') || command === 'version') return false;
-  return reachesEngine(args) && isReadOnlyDockerCall(args);
+  return reachesEngine(args);
 }
 
 /**
@@ -471,7 +505,7 @@ export class BootstrapDocker {
         withoutLogin.abort(abortError());
         throw abortError();
       }
-      const onShell = call.shellTarget === undefined ? undefined : await this.runOnShell(call.shellTarget, args, options);
+      const onShell = call.shellTarget === undefined ? undefined : await this.runOnShell(call.shellTarget, args, options, call.shared === true);
       if (onShell !== undefined) return onShell;
       if (call.noEndpoint !== undefined) {
         throw new UserFacingError(
@@ -532,24 +566,27 @@ export class BootstrapDocker {
    * operationEnv, and the SSH host that a call with it logs in to with `ssh://<host>`: the remote target of the operation
    * without the pipe (also `shellTarget`, for runOnShell).
    */
-  private callEnv(viaPipe: boolean): { env: NodeJS.ProcessEnv; login?: string; shellTarget?: DockerTarget; noEndpoint?: string } {
+  private callEnv(viaPipe: boolean): { env: NodeJS.ProcessEnv; login?: string; shellTarget?: DockerTarget; noEndpoint?: string; shared?: boolean } {
     const target = operationDockerTarget();
     if (target === undefined) return { env: this.env };
     if (target.kind === 'remote') {
       // The pipe for the VM of Devspaces never depends on a connection of the relay, so `viaPipe` does not matter.
       const vm = isVmHost(target.host);
       const pipe = viaPipe || vm ? this.pipeOf(target) : undefined;
+      const shared = operationOnShell();
       const env: NodeJS.ProcessEnv = { ...this.env };
       for (const name of REMOTE_CLEARED_VARIABLES) deleteEnv(env, name);
       env.BUILDX_BUILDER = REMOTE_BUILDX_BUILDER;
       // For the VM of Devspaces without its pipe: `wsl://<distribution>` or `lima://devspaces` (hostEndpoint). No call runs
       // with it (`noEndpoint` below, and `start` starts nothing there); should one run anyway, the Docker CLI refuses it.
       env.DOCKER_HOST = pipe ?? hostEndpoint(target.host);
-      if (pipe !== undefined) return { env };
+      // The pipe of an SSH host shares the login of the relay. The pipe of the VM makes a connection of its own for each
+      // call, so the work on the shared shell goes to the shell there, and through the pipe only what the shell cannot carry.
+      if (pipe !== undefined) return shared && vm ? { env, shellTarget: target, shared } : { env };
       // No `ssh://` for it: a call that only reads runs on the shell before the relay, any other one fails.
-      if (vm) return { env, shellTarget: target, noEndpoint: target.host };
+      if (vm) return { env, shellTarget: target, noEndpoint: target.host, shared };
       this.sshEnv?.(target.host, env);
-      return { env, login: target.host, shellTarget: target };
+      return { env, login: target.host, shellTarget: target, shared };
     }
     if (target.context === undefined) return { env: this.env };
     const env: NodeJS.ProcessEnv = { ...this.env };
@@ -560,11 +597,14 @@ export class BootstrapDocker {
 
   /**
    * `docker <args>` on the shell before the relay of the SSH host of `target` (remoteShell), for a call that only reads
-   * (isShellCall) without input, folder or output listeners; undefined when it cannot go there, and the call logs in
-   * with `ssh://<host>` then. A failure of the shell itself is logged and gives undefined too.
+   * (isShellCall), or with `shared` (the shared shell, runWithDockerTarget with `onShell`) for one of isSharedShellCall,
+   * without input, folder or output listeners; undefined when it cannot go there, and the call logs in with
+   * `ssh://<host>` then (on the VM of Devspaces: through its pipe). A failure of the shell itself is logged and gives
+   * undefined too. A shell that ends during the command gives its result (exit code 255), so a call that changes
+   * something never runs twice.
    */
-  private async runOnShell(target: DockerTarget, args: readonly string[], options: RunOptions): Promise<RunResult | undefined> {
-    if (this.remoteShell === undefined || !isShellCall(args)) return undefined;
+  private async runOnShell(target: DockerTarget, args: readonly string[], options: RunOptions, shared: boolean): Promise<RunResult | undefined> {
+    if (this.remoteShell === undefined || !(shared ? isSharedShellCall(args, isVmHost(target.host)) : isShellCall(args))) return undefined;
     if (options.input !== undefined || options.cwd !== undefined || options.onStdout !== undefined || options.onStderr !== undefined) return undefined;
     try {
       return await this.remoteShell(target, args, { timeoutMs: options.timeoutMs, signal: options.signal });

@@ -910,6 +910,9 @@ async function activateExtension(
     env,
     launch: (file, args, onExit) => launchDetachedProcess(file, args, onExit, { windowsHide: true }),
     logger,
+    // Nothing runs in the distribution anymore: the shell of this window there (the shared shell of the view Docker
+    // Hosts) ends, so that it does not hold the distribution for up to 2 more minutes (R-VM-004).
+    onIdleEnded: () => shells.close(WSL_HOST),
   });
   context.subscriptions.push({ dispose: () => keeper.dispose() });
   // The setup of the WSL distribution of Devspaces (Windows): the `.wsl` file of the image of the VM of Devspaces, with
@@ -1415,15 +1418,20 @@ async function activateExtension(
     }
     return { kind: 'notSetUp' };
   };
-  // Before a stop or a removal of the VM: the worker channel and the relay connection of this window to it end.
+  // Before a stop or a removal of the VM: the worker channel, the relay connection and the shell (the shared shell of
+  // the view Docker Hosts) of this window to it end.
   const closeVmConnections = (): void => {
     if (vmHost === undefined) return;
     channels.close(remoteDockerTarget(vmHost));
     relayConnections.close(vmHost, 'the VM of Devspaces stops');
+    shells.close(vmHost);
   };
   // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with all containers,
   // networks, images and volumes there and its build cache. A host is read only when the user opens its row or clicks
-  // Refresh.
+  // Refresh. All Docker calls of the view run on the one shared shell of the host (`onShell`), also its actions and also
+  // on the VM, so they share one login of the host instead of one connection each; on an SSH host with an open
+  // connection of the relay, they go through its pipe, which shares the login of the relay.
+  const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
   const dockerHosts = new DockerHostsView({
     logger,
     showLog: () => logger.show(),
@@ -1435,12 +1443,12 @@ async function activateExtension(
     vmState: readVmState,
     read: async (host, signal) => {
       const here = devspacesOfHost(await registry.list(), host);
-      return runWithDockerTarget(remoteDockerTarget(host), () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
+      return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
     },
-    stopContainer: (host, object, signal) => runWithDockerTarget(remoteDockerTarget(host), () => stopHostContainer(docker, object, logger, signal)),
-    startContainer: (host, object, signal) => runWithDockerTarget(remoteDockerTarget(host), () => startHostContainer(docker, object, logger, signal)),
-    pruneBuildCache: (host, signal) => runWithDockerTarget(remoteDockerTarget(host), () => pruneBuildCache(docker, logger, signal)),
-    removeObjects: (host, objects, signal, onItem) => runWithDockerTarget(remoteDockerTarget(host), () => removeHostObjects(docker, objects, { logger, signal, onItem })),
+    stopContainer: (host, object, signal) => onHostShell(host, () => stopHostContainer(docker, object, logger, signal)),
+    startContainer: (host, object, signal) => onHostShell(host, () => startHostContainer(docker, object, logger, signal)),
+    pruneBuildCache: (host, signal) => onHostShell(host, () => pruneBuildCache(docker, logger, signal)),
+    removeObjects: (host, objects, signal, onItem) => onHostShell(host, () => removeHostObjects(docker, objects, { logger, signal, onItem })),
     removeFromList: (host) => remoteDocker.removeFromList(host),
   });
   hostsView = dockerHosts;
@@ -1475,7 +1483,7 @@ async function activateExtension(
     runningDevspaces: async () => {
       if (vmHost === undefined) return [];
       const here = devspacesOfHost(await registry.list(), vmHost);
-      return runWithDockerTarget(remoteDockerTarget(vmHost), () => runningDevspaces(docker, here.map(knownDevspace)));
+      return onHostShell(vmHost, () => runningDevspaces(docker, here.map(knownDevspace)));
     },
     stop: async (signal) => {
       if (limaSetupCore !== undefined) return limaSetupCore.stop(signal);

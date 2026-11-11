@@ -132,6 +132,8 @@ export class RemoteShell {
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   /** The calls of keepOpenDuring that did not end yet: the shell is not closed for a time without use meanwhile. */
   private holds = 0;
+  /** The commands of `run` that did not end yet (running or waiting for the ones before them). */
+  private pending = 0;
   /** After the takeover: the listeners of the connection of the relay, and what came before they listened. */
   private taken: {
     stdout?: (chunk: Buffer) => void;
@@ -275,9 +277,15 @@ export class RemoteShell {
     } catch (error) {
       return Promise.reject(error);
     }
-    const call = this.queue.then(() => this.runNow(line, marker, options));
+    this.pending++;
+    const call = this.queue.then(() => this.runNow(line, marker, options)).finally(() => this.pending--);
     this.queue = call.catch(() => undefined);
     return call;
+  }
+
+  /** Whether a command of `run` runs or waits on the shell now. */
+  get busy(): boolean {
+    return this.pending > 0;
   }
 
   private runNow(line: string, marker: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'>): Promise<RunResult> {

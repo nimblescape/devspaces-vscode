@@ -325,6 +325,30 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it('runs each action as a flow of the user, so that a password login of the shared shell of the host may ask', async () => {
+    const asked: Array<[string, boolean]> = [];
+    stopContainer.mockImplementation(async (_host, object) => (asked.push(['stop', sshPromptsAllowed()]), { object, outcome: 'stopped' }));
+    startContainer.mockImplementation(async (_host, object) => (asked.push(['start', sshPromptsAllowed()]), { object, outcome: 'started' }));
+    pruneBuildCache.mockImplementation(async () => void asked.push(['prune', sshPromptsAllowed()]));
+    removeObjects.mockImplementation(async (_host, objects) => (asked.push(['remove', sshPromptsAllowed()]), objects.map((object) => ({ object, outcome: 'removed' as const }))));
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.stopObject(rowOf(rows, worker));
+    await provider.startObject(rowOf(rows, shopWeb));
+    window.showWarningMessage.mockResolvedValueOnce(DockerHostsCommandTexts.prune);
+    await provider.pruneBuildCache(await buildCacheRowOf(provider, 'lab'));
+    window.showWarningMessage.mockResolvedValueOnce(DockerHostsCommandTexts.remove);
+    await provider.removeObjects(rowOf(await objectRowsOf(provider, 'lab'), pgdata));
+    expect(asked).toEqual([
+      ['stop', true],
+      ['start', true],
+      ['prune', true],
+      ['remove', true],
+    ]);
+    // Outside of an action, no login may ask.
+    expect(sshPromptsAllowed()).toBe(false);
+  });
+
   it('removes no build cache without the answer, and asks nothing when no build cache is unused', async () => {
     const provider = view();
     const row = await buildCacheRowOf(provider, 'lab');
