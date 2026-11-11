@@ -2,7 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The rows of the view "Docker Hosts" (docs/requirements.md R-ENG-008, R-VM-010), above the repository view: the VM of
+// The rows of the view "Docker Hosts" (docs/requirements.md R-ENG-008, R-VM-010), below the repository view: the VM of
 // Devspaces first, then each remote host of the list of Devspaces; under each host its containers, images and volumes
 // of Devspaces (src/core/hosts/hostObjects.ts) with their purpose and size. The texts, icons, context values and
 // commands of each row, without `vscode` (dockerHostsView.ts renders them).
