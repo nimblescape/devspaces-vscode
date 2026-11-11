@@ -105,6 +105,38 @@
         "default": { "fontPath": "./resources/icons/devspace-icons.woff", "fontCharacter": "\\E008" }
       }
     },
+    "colors": [
+      {
+        "id": "devspaces.inactiveForeground",
+        "description": "Devspaces: the name and the icon of a row without an active devspace (view Devspaces) and of an object of Devspaces that is not active (view Docker Hosts).",
+        "defaults": {
+          "dark": "#8C8C8C",
+          "light": "#8E8E90",
+          "highContrast": "#A7A8A9",
+          "highContrastLight": "#8E8E90"
+        }
+      },
+      {
+        "id": "devspaces.hosts.notDevspacesForeground",
+        "description": "Devspaces: the name and the icon of an active object that is not of Devspaces in the view Docker Hosts (a running container, or an image, a volume or a network that a running container uses).",
+        "defaults": {
+          "dark": "charts.purple",
+          "light": "charts.purple",
+          "highContrast": "charts.purple",
+          "highContrastLight": "charts.purple"
+        }
+      },
+      {
+        "id": "devspaces.hosts.notDevspacesInactiveForeground",
+        "description": "Devspaces: the name and the icon of an inactive object that is not of Devspaces in the view Docker Hosts.",
+        "defaults": {
+          "dark": "#83619E",
+          "light": "#A788BF",
+          "highContrast": "charts.purple",
+          "highContrastLight": "charts.purple"
+        }
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

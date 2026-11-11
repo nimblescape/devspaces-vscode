@@ -11,6 +11,7 @@ import { describeDockerHost, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHo
 import { formatSize, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
 import type { VmState } from '../core/vm/vmState';
 import { Commands } from './commands';
+import type { RowColor } from './rowColors';
 import { MonitorIcons } from './treeModel';
 
 export const DOCKER_HOSTS_VIEW_ID = 'devspaces.hosts';
@@ -70,6 +71,8 @@ export interface RowLook {
   contextValue: string;
   /** A codicon or an icon of Devspaces (MonitorIcons). */
   icon: string;
+  /** The color of the name and of the icon (rowColors.ts); undefined: the colors of the theme. */
+  color?: RowColor;
   collapsible: 'none' | 'collapsed' | 'expanded';
   command?: { command: string; title: string; arguments?: unknown[] };
 }
@@ -137,6 +140,15 @@ export const DockerHostsTexts = {
     }
   },
   purposeTooltip: (purpose: HostObjectPurpose): string => PURPOSE_TOOLTIPS[purpose],
+  /** Why the row has its color: the view shows an inactive object dimmed. */
+  activeTooltip: (object: HostObject): string =>
+    object.kind === 'container'
+      ? object.active === true
+        ? 'Active: it runs.'
+        : 'Inactive: it does not run.'
+      : object.active === true
+        ? 'Active: a running container uses it.'
+        : 'Inactive: no running container uses it.',
   containerState: (state: string | undefined): string | undefined =>
     state === undefined ? undefined : state === 'running' ? 'Running' : state === 'exited' || state === 'created' ? 'Stopped' : capitalized(state),
 } as const;
@@ -305,6 +317,8 @@ export function objectRowLook(row: ObjectRow): RowLook {
   if (object.sizeBytes !== undefined) tooltip.push(`Size: ${formatSize(object.sizeBytes)}${object.uniqueBytes !== undefined ? ` (${formatSize(object.uniqueBytes)} only for this image)` : ''}`);
   if (object.usedBy !== undefined && object.kind !== 'container') tooltip.push(`Used by ${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
   if (object.kind !== 'volume') tooltip.push(`ID: ${object.id}`);
+  tooltip.push(DockerHostsTexts.activeTooltip(object));
+  const color = objectColor(object);
   return {
     id: `object:${row.host}:${object.kind}:${object.id}`,
     label: object.name,
@@ -312,8 +326,19 @@ export function objectRowLook(row: ObjectRow): RowLook {
     tooltip: tooltip.join('\n'),
     contextValue: flags.join(';'),
     icon: object.kind === 'container' ? (isRunningContainer(object) ? 'vm-running' : 'vm-outline') : object.kind === 'image' ? 'file-binary' : object.kind === 'network' ? 'plug' : 'database',
+    ...(color !== undefined ? { color } : {}),
     collapsible: 'none',
   };
+}
+
+/**
+ * The color of an object row: violet for an object that is not of Devspaces, dimmed when it is not active; gray for an
+ * object of Devspaces that is not active; the colors of the theme for an active object of Devspaces.
+ */
+export function objectColor(object: HostObject): RowColor | undefined {
+  const active = object.active === true;
+  if (object.purpose === 'notDevspaces') return active ? 'notDevspaces' : 'notDevspacesInactive';
+  return active ? undefined : 'inactive';
 }
 
 /** The row of a note. */

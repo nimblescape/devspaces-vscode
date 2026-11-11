@@ -7,7 +7,10 @@ import * as vscode from 'vscode';
 import { Actions, Messages } from '../core/messages';
 import type { Logger } from '../core/ports';
 import { Commands } from './commands';
+import { coloredIcon, colorLabel, colorTreeItem, type RowColor } from './rowColors';
 import {
+  holdsActiveRow,
+  isActiveRow,
   MonitorIcons,
   REPOSITORY_NODE_CONTEXT,
   rootNodes,
@@ -231,10 +234,19 @@ export async function revealRow(
   if (row) await view.reveal(row, { select: false, focus: false });
 }
 
+/**
+ * The color of a level of the tree (an owner, a group, a repository with several sources): gray while no row below it
+ * has an active devspace. Its icon is blank, so that its name can have a color (rowColors.ts) and all levels align.
+ */
+function levelColor(node: OwnerGroup | GroupNode | RepositoryNode): RowColor | undefined {
+  return holdsActiveRow(node) ? undefined : 'inactive';
+}
+
 function ownerItem(group: OwnerGroup): vscode.TreeItem {
   const item = new vscode.TreeItem(group.owner, vscode.TreeItemCollapsibleState.Expanded);
   item.id = group.id;
   item.contextValue = 'owner';
+  colorTreeItem(item, 'blank', levelColor(group));
   return item;
 }
 
@@ -247,6 +259,7 @@ function groupItem(node: GroupNode): vscode.TreeItem {
   item.id = node.id;
   item.contextValue = 'group';
   if (node.tooltip !== undefined) item.tooltip = node.tooltip;
+  colorTreeItem(item, 'blank', levelColor(node));
   return item;
 }
 
@@ -263,7 +276,7 @@ function repositoryNodeItem(node: RepositoryNode): vscode.TreeItem {
   item.id = node.id;
   item.tooltip = node.tooltip;
   item.contextValue = REPOSITORY_NODE_CONTEXT;
-  item.iconPath = new vscode.ThemeIcon('blank');
+  colorTreeItem(item, 'blank', levelColor(node));
   item.accessibilityInformation = { label: node.repository };
   item.command = { command: Commands.rowActivated, title: 'Start', arguments: [node] };
   return item;
@@ -275,13 +288,17 @@ function repositoryItem(row: RepositoryRow): vscode.TreeItem {
   item.description = row.description;
   item.tooltip = row.tooltip;
   item.contextValue = row.contextValue;
+  // A row without an active devspace is gray (rowColors.ts); the warning of Files missing keeps its color, because it
+  // asks for an action.
+  const color: RowColor | undefined = isActiveRow(row) ? undefined : 'inactive';
   if (row.state) {
     const icon = stateIcon(row.state);
-    item.iconPath = new vscode.ThemeIcon(icon.id, icon.color ? new vscode.ThemeColor(icon.color) : undefined);
+    item.iconPath = icon.color ? new vscode.ThemeIcon(icon.id, new vscode.ThemeColor(icon.color)) : coloredIcon(icon.id, color);
   } else {
     // A repository without devspace has no symbol; the blank icon keeps the names aligned.
     item.iconPath = new vscode.ThemeIcon('blank');
   }
+  colorLabel(item, color);
   item.accessibilityInformation = { label: [row.child ? `${row.repository} ${row.label}` : row.repository, row.description].filter((text) => text !== '').join(', ') };
   // VS Code runs this command on each click (or only on a double-click, per workbench.list.openMode); the controller
   // runs Start on a double-click (rowActivation.ts).

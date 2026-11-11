@@ -190,7 +190,7 @@ describe('buildInventory', () => {
     expect(containers['devspaces-batch-1'].purpose).toBe('batchHelper');
     expect(containers['devspaces-build-1'].purpose).toBe('buildContainer');
     expect(containers['devspaces-other-repo-default-brave-curie']).toMatchObject({ purpose: 'otherDevspace', devspaceId: OTHER_ID, repository: 'someone/repo' });
-    expect(containers['my-postgres']).toEqual({ kind: 'container', id: 'c8', name: 'my-postgres', purpose: 'notDevspaces', state: 'running', networks: ['bridge'] });
+    expect(containers['my-postgres']).toEqual({ kind: 'container', id: 'c8', name: 'my-postgres', purpose: 'notDevspaces', state: 'running', networks: ['bridge'], active: true });
     // A service of Docker Compose names its project and its service.
     expect(containers['shop-web-1']).toMatchObject({ purpose: 'notDevspaces', role: 'service web of shop', image: 'node:22', networks: ['shop_default', 'bridge'] });
     expect(inventory.containers.slice(-2).map((object) => object.name)).toEqual(['my-postgres', 'shop-web-1']);
@@ -283,6 +283,46 @@ describe('buildInventory', () => {
     expect(shown.ab.usedBy).toBe(0);
     expect(shown[' sp'].usedBy).toBe(1);
     expect(shown['c, d'].usedBy).toBe(1);
+  });
+
+  it('marks the active objects: a running container, and the images, volumes and networks that a running container uses', () => {
+    const result = buildInventory(
+      input(
+        {
+          Containers: [
+            { ID: 'c1', Names: 'db', State: 'running', Image: 'postgres:17', Mounts: 'pgdata,/srv/backup', Networks: 'shop_default' },
+            { ID: 'c2', Names: 'cache', State: 'paused', Image: 'sha256:0123456789abcdef', Mounts: '', Networks: 'bridge' },
+            { ID: 'c3', Names: 'web', State: 'exited', Image: 'node', Mounts: 'webdata', Networks: 'web_default, bridge' },
+            { ID: 'c4', Names: 'job', State: 'created', Image: 'busybox', Networks: 'none' },
+          ],
+          Images: [
+            { ID: 'sha256:aaa', Repository: 'postgres', Tag: '17' },
+            { ID: 'sha256:0123456789abcdef', Repository: 'redis', Tag: '8' },
+            { ID: 'sha256:ccc', Repository: 'node', Tag: 'latest' },
+            { ID: 'sha256:ddd', Repository: 'busybox', Tag: 'latest' },
+          ],
+          Volumes: [{ Name: 'pgdata' }, { Name: 'webdata' }, { Name: 'backup' }],
+        },
+        {
+          networks: [
+            { ID: 'n1', Name: 'shop_default', Driver: 'bridge' },
+            { ID: 'n2', Name: 'bridge', Driver: 'bridge' },
+            { ID: 'n3', Name: 'web_default', Driver: 'bridge' },
+            { ID: 'n4', Name: 'none', Driver: 'null' },
+          ],
+        },
+      ),
+    );
+    const activeNames = (objects: readonly HostObject[]): string[] => objects.filter((object) => object.active === true).map((object) => object.name);
+    // Paused holds its memory: it counts as running.
+    expect(activeNames(result.containers)).toEqual(['cache', 'db']);
+    // By tag (also without `:latest`) or by the ID that Docker names when a tag moved.
+    expect(activeNames(result.images)).toEqual(['postgres:17', 'redis:8']);
+    // A bind mount (`/srv/backup`) names no volume.
+    expect(activeNames(result.volumes)).toEqual(['pgdata']);
+    expect(activeNames(result.networks)).toEqual(['bridge', 'shop_default']);
+    // `active` is only set when true.
+    expect(Object.keys(result.volumes.find((volume) => volume.name === 'backup') ?? {})).not.toContain('active');
   });
 
   it('marks the networks of Docker Swarm as networks of Docker', () => {

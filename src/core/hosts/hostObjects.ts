@@ -104,6 +104,11 @@ export interface HostObject {
   image?: string;
   /** A container: the names of its networks. */
   networks?: string[];
+  /**
+   * Active: a container that runs (also paused or restarting: it holds its memory), or an image, a volume or a network
+   * that such a container uses. Only set when true. The view shows the other objects dimmed.
+   */
+  active?: boolean;
 }
 
 /** The build cache of the engine (BuildKit), as `docker system df` counts it. */
@@ -510,8 +515,37 @@ export function buildInventory(input: InventoryInput): HostInventory {
   const volumes = list(df.Volumes).flatMap((item) => (isRecord(item) ? (classifyVolume(item, input.known) ?? []) : []));
   const images = mergedImages(list(df.Images)).map((image) => classifyImage(image, input));
   const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, list(df.Containers)) ?? []) : []));
+  const active = activeOf(list(df.Containers));
   const order = (a: HostObject, b: HostObject): number => Number(a.purpose === 'notDevspaces') - Number(b.purpose === 'notDevspaces') || a.name.localeCompare(b.name);
-  return { containers: containers.sort(order), networks: networks.sort(order), images: images.sort(order), volumes: volumes.sort(order), buildCache: buildCacheOf(list(df.BuildCache)) };
+  const marked = (objects: HostObject[]): HostObject[] => objects.map((object) => (active(object) ? { ...object, active: true } : object)).sort(order);
+  return { containers: marked(containers), networks: marked(networks), images: marked(images), volumes: marked(volumes), buildCache: buildCacheOf(list(df.BuildCache)) };
+}
+
+/** The states of a container that runs: it uses CPU or holds memory, which a Stop frees. */
+const ACTIVE_CONTAINER_STATES = new Set(['running', 'paused', 'restarting']);
+
+/**
+ * Whether an object is active (HostObject.active), by the containers of `docker system df -v` (verified with Docker
+ * 29.9): a container by its state; an image by the field `Image` of a running container (a tag or an ID); a volume by
+ * its field `Mounts` (the names of its volumes and the paths of its bind mounts, joined with commas; a volume name has no
+ * comma); a network by its field `Networks`, as networkUsers counts it.
+ */
+function activeOf(containers: readonly unknown[]): (object: HostObject) => boolean {
+  const running = containers.filter((item): item is Record<string, unknown> => isRecord(item) && ACTIVE_CONTAINER_STATES.has(text(item.State) ?? ''));
+  const images = running.flatMap((item) => text(item.Image) ?? []);
+  const mounts = new Set(running.flatMap((item) => (text(item.Mounts) ?? '').split(',').map((mount) => mount.trim())));
+  return (object) => {
+    switch (object.kind) {
+      case 'container':
+        return ACTIVE_CONTAINER_STATES.has(object.state ?? '');
+      case 'image':
+        return images.some((image) => namesImage(image, object));
+      case 'volume':
+        return mounts.has(object.name);
+      case 'network':
+        return networkUsers(running, object.name) > 0;
+    }
+  };
 }
 
 /** The arguments of the read of the networks of the engine. */

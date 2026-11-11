@@ -222,6 +222,11 @@ export interface RepositoryRow {
    * `State unknown`, and `state` is the state that its actions are made from.
    */
   stateUnknown?: true;
+  /**
+   * The dev container does not run, but another container of the devspace runs (a service of Docker Compose): the row
+   * shows `· containers running`, and it counts as active (isActiveRow).
+   */
+  servicesRunning?: true;
   /** Branch shown in the row, if known. */
   branch?: string;
   /** The row has a devspace, and GitHub does not list its repository. */
@@ -348,6 +353,35 @@ export interface GroupNode {
   expanded: boolean;
   /** In the order of the patterns that put them here, then group nodes before rows, then alphabetically (groupRows). */
   children: Array<GroupNode | RepositoryEntry>;
+}
+
+/** The states of an active devspace: its container runs, also while a window uses it or while it is updated. */
+const ACTIVE_STATES: ReadonlySet<DevspaceState> = new Set<DevspaceState>(['connected', 'connectedOtherWindow', 'running', 'updating']);
+
+/**
+ * Whether a repository row has an active devspace: its container runs, or another container of it runs
+ * (`· containers running`). A row whose state Devspaces could not read (`State unknown`) counts as active: the view
+ * shows a row dimmed only when Devspaces knows that nothing of its devspace runs.
+ */
+export function isActiveRow(row: RepositoryRow): boolean {
+  return row.stateUnknown === true || row.servicesRunning === true || (row.state !== undefined && ACTIVE_STATES.has(row.state));
+}
+
+/**
+ * Whether a level of the tree (an owner, a group, a repository with several sources) holds a row with an active
+ * devspace; the view shows it dimmed when not. A row of a hint (Authorize) is never active.
+ */
+export function holdsActiveRow(node: OwnerGroup | GroupNode | RepositoryNode): boolean {
+  return node.children.some((child) => {
+    switch (child.kind) {
+      case 'repository':
+        return isActiveRow(child);
+      case 'hint':
+        return false;
+      default:
+        return holdsActiveRow(child);
+    }
+  });
 }
 
 /**
@@ -955,6 +989,7 @@ function devspaceRow(
     devspace,
     state,
     ...(unknown !== undefined ? { stateUnknown: true as const } : {}),
+    ...(servicesRunning ? { servicesRunning: true as const } : {}),
     branch,
     notOnGitHub,
     hostAccessChecks: checks,

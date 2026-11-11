@@ -129,6 +129,7 @@ import { SshKeyOffer, vscodeSshKeyDialogs } from './sshKeyOffer';
 import { GroupMatchWorkerRunner } from './groupMatcher';
 import { PreviewWorkerRunner } from './groupsPreviewRunner';
 import { RemoteDockerCommands } from './remoteDockerCommands';
+import { RowColorDecorations } from './rowColors';
 import { WslSetupCommands } from './wslSetupCommands';
 import { LimaSetupCommands, LimaSetupTexts } from './limaSetupCommands';
 import { VmCommands } from './vmCommands';
@@ -1137,7 +1138,8 @@ async function activateExtension(
     showCollapseAll: true,
   });
   const statusBar = new DevspaceStatusBar();
-  context.subscriptions.push(tree, view, statusBar);
+  // The colors of the names of the rows of the views Devspaces and Docker Hosts (gray, violet; rowColors.ts).
+  context.subscriptions.push(tree, view, statusBar, vscode.window.registerFileDecorationProvider(new RowColorDecorations()));
   // The view's title and its first row name the Docker host (also the local Docker).
   const dockerHostIndicator = new DockerHostIndicator(view, logger, (host) => tree.setDockerHost(host));
   // A remote host needs a Docker CLI for remote engines (the one of Devspaces or of this computer), the local Docker the

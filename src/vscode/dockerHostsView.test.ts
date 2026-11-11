@@ -15,7 +15,7 @@ import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import type { BuildCacheRow, GroupRow, HostRow, HostsNode, MessageRow, ObjectRow } from './dockerHostsModel';
 import { DockerHostsCommandTexts, DockerHostsView, type DockerHostsDeps } from './dockerHostsView';
-import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+import { fakeVscode, resetFakeVscode, type ThemeIcon, type TreeItem } from './testing/fakeVscode';
 
 const { window } = fakeVscode;
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
@@ -392,6 +392,25 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     expect(texts[0]).not.toContain('does not run now');
     expect(texts[1]).toBe('The VM of Devspaces is not set up anymore, so Devspaces did not change its objects.');
     expect(DockerHostsCommandTexts.vmNotRunning({ kind: 'broken' })).toContain('(it is broken)');
+  });
+
+  it('colors the name and the icon of an object row (violet, dimmed violet, gray), and leaves the hosts and groups as they are', async () => {
+    read.mockImplementation(async () => ({ ...fullInventory(), containers: [{ ...worker, active: true }, oldWorker, shopWeb, { ...shopWeb, id: 'c-pg', name: 'my-postgres', state: 'running', active: true }] }));
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    const itemOf = (id: string): TreeItem => provider.getTreeItem(rows.find((row) => row.object.id === id) as ObjectRow) as unknown as TreeItem;
+    const colorOf = (item: TreeItem): { label?: string; icon?: string } => ({
+      label: (item.resourceUri as { path: string } | undefined)?.path,
+      icon: (item.iconPath as ThemeIcon).color?.id,
+    });
+    expect(colorOf(itemOf('c-worker'))).toEqual({ label: undefined, icon: undefined });
+    expect(colorOf(itemOf(oldWorker.id))).toEqual({ label: '/inactive', icon: 'devspaces.inactiveForeground' });
+    expect(colorOf(itemOf('c-shop'))).toEqual({ label: '/notDevspacesInactive', icon: 'devspaces.hosts.notDevspacesInactiveForeground' });
+    expect(colorOf(itemOf('c-pg'))).toEqual({ label: '/notDevspaces', icon: 'devspaces.hosts.notDevspacesForeground' });
+    const hostItem = provider.getTreeItem(await hostRow(provider, 'lab')) as unknown as TreeItem;
+    expect(hostItem.resourceUri).toBeUndefined();
+    const groups = (await provider.getChildren(await hostRow(provider, 'lab'))) as Array<GroupRow | BuildCacheRow>;
+    for (const group of groups) expect((provider.getTreeItem(group) as unknown as TreeItem).resourceUri).toBeUndefined();
   });
 
   it('says why the build cache could not be removed', async () => {

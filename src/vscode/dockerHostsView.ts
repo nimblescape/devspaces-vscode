@@ -35,6 +35,7 @@ import {
 } from './dockerHostsModel';
 import { showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
+import { colorTreeItem } from './rowColors';
 
 /** User-visible texts of the commands of the view (plain language). */
 export const DockerHostsCommandTexts = {
@@ -152,7 +153,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     if (look.description !== undefined) item.description = look.description;
     item.tooltip = look.tooltip;
     item.contextValue = look.contextValue;
-    item.iconPath = new vscode.ThemeIcon(look.icon);
+    colorTreeItem(item, look.icon, look.color);
     if (look.command !== undefined) item.command = look.command;
     return item;
   }

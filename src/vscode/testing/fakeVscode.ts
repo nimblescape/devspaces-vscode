@@ -40,6 +40,7 @@ export class TreeItem {
   tooltip?: string;
   contextValue?: string;
   iconPath?: unknown;
+  resourceUri?: unknown;
   command?: unknown;
   accessibilityInformation?: unknown;
 
@@ -49,7 +50,16 @@ export class TreeItem {
   ) {}
 }
 
+export class FileDecoration {
+  constructor(
+    readonly badge?: string,
+    readonly tooltip?: string,
+    readonly color?: ThemeColor,
+  ) {}
+}
+
 export const Uri = {
+  from: (parts: { scheme: string; path?: string }) => ({ scheme: parts.scheme, path: parts.path ?? '', toString: () => `${parts.scheme}:${parts.path ?? ''}` }),
   parse: (value: string) => ({ scheme: value.split(':')[0], toString: () => value }),
   file: (fsPath: string) => ({ scheme: 'file', fsPath, toString: () => `file://${fsPath}` }),
 };
@@ -105,6 +115,7 @@ export const fakeVscode = {
   ThemeColor,
   ThemeIcon,
   TreeItem,
+  FileDecoration,
   Uri,
   ProgressLocation,
   StatusBarAlignment,
@@ -123,6 +134,7 @@ export const fakeVscode = {
     withProgress: vi.fn(),
     createTerminal: vi.fn(),
     registerUriHandler: vi.fn(),
+    registerFileDecorationProvider: vi.fn(() => ({ dispose: () => undefined })),
     /** `window.state`: resetFakeVscode gives the window the focus. */
     state: { focused: true },
   },
@@ -186,6 +198,7 @@ export function resetFakeVscode(): void {
   window.showQuickPick.mockResolvedValue(undefined);
   window.showInputBox.mockResolvedValue(undefined);
   window.registerUriHandler.mockReturnValue({ dispose() {} });
+  window.registerFileDecorationProvider.mockReturnValue({ dispose: () => undefined });
   fakeVscode.env.openExternal.mockResolvedValue(true);
   fakeVscode.commands.executeCommand.mockResolvedValue(undefined);
   fakeVscode.commands.registerCommand.mockImplementation(() => ({ dispose() {} }));

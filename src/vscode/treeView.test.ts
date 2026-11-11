@@ -509,3 +509,89 @@ describe('hint row of an owner that GitHub does not return', () => {
     expect(item.command).toMatchObject({ command: 'vscode.open', title: 'Open' });
   });
 });
+
+describe('RepositoriesTreeProvider: rows without an active devspace in gray', () => {
+  beforeEach(() => resetFakeVscode());
+
+  type Runtime = Map<string, { container: 'running' | 'stopped' | 'missing'; volume: boolean }>;
+  function modelWith(runtime: Runtime, currentDevspaceId?: string): OwnerGroup[] {
+    return buildTreeModel({
+      discovery: {
+        version: 1,
+        fetchedAt: '',
+        viewerLogin: 'me',
+        organizations: ['acme'],
+        repositories: [repo('acme/api'), repo('acme/web')],
+        hints: [{ organization: 'acme', kind: 'saml', url: 'https://github.com/orgs/acme/sso' }],
+        scope: [],
+        withoutConfiguration: [],
+      },
+      settings: { owners: [], includeArchived: false, includeForks: true },
+      devspaces: [env],
+      runtime,
+      ...(currentDevspaceId !== undefined ? { currentDevspaceId } : {}),
+      otherWindowDevspaceIds: new Set(),
+      busyDevspaceIds: new Set(),
+      liveBranches: new Map([['e1', 'main']]),
+      signedIn: true,
+    } as Parameters<typeof buildTreeModel>[0]);
+  }
+  const uriPath = (item: TreeItem): string | undefined => (item.resourceUri as { scheme: string; path: string } | undefined)?.path;
+  const iconColor = (item: TreeItem): string | undefined => (item.iconPath as ThemeIcon).color?.id;
+
+  it('keeps the colors of the theme for a running devspace and its owner, and grays a repository without a devspace', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(model());
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const groupItem = provider.getTreeItem(group) as unknown as TreeItem;
+    expect(groupItem.resourceUri).toBeUndefined();
+    // A blank icon, so that every level can have a color and the levels align.
+    expect((groupItem.iconPath as ThemeIcon).id).toBe('blank');
+    const [hint, api, web] = provider.getChildren(group) as [HintRow, RepositoryRow, RepositoryRow];
+    const apiItem = provider.getTreeItem(api) as unknown as TreeItem;
+    expect(apiItem.resourceUri).toBeUndefined();
+    expect(iconColor(apiItem)).toBeUndefined();
+    const webItem = provider.getTreeItem(web) as unknown as TreeItem;
+    expect(webItem.resourceUri).toMatchObject({ scheme: 'devspaces-row-color', path: '/inactive' });
+    // The hint asks for an action: it keeps its colors.
+    expect((provider.getTreeItem(hint) as unknown as TreeItem).resourceUri).toBeUndefined();
+  });
+
+  it('grays a stopped devspace with its icon, and the owner when no row below it is active', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelWith(new Map([['e1', { container: 'stopped', volume: true }]])));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const groupItem = provider.getTreeItem(group) as unknown as TreeItem;
+    expect(uriPath(groupItem)).toBe('/inactive');
+    expect(iconColor(groupItem)).toBe('devspaces.inactiveForeground');
+    // A row with a color by its URI keeps a hover: its label.
+    expect(groupItem.tooltip).toBe('acme');
+    const [, api] = provider.getChildren(group) as [HintRow, RepositoryRow];
+    const apiItem = provider.getTreeItem(api) as unknown as TreeItem;
+    expect(api.state).toBe('stopped');
+    expect(uriPath(apiItem)).toBe('/inactive');
+    expect(iconColor(apiItem)).toBe('devspaces.inactiveForeground');
+    expect((apiItem.iconPath as ThemeIcon).id).toBe('devspaces-monitor-off');
+  });
+
+  it('keeps the orange warning icon of Files missing, with its name in gray', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelWith(new Map([['e1', { container: 'stopped', volume: false }]])));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const [, api] = provider.getChildren(group) as [HintRow, RepositoryRow];
+    const apiItem = provider.getTreeItem(api) as unknown as TreeItem;
+    expect(api.state).toBe('filesMissing');
+    expect(uriPath(apiItem)).toBe('/inactive');
+    expect(iconColor(apiItem)).toBe('list.warningForeground');
+  });
+
+  it('keeps a devspace that runs without a window in the colors of the theme', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelWith(new Map([['e1', { container: 'running', volume: true }]])));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const [, api] = provider.getChildren(group) as [HintRow, RepositoryRow];
+    expect(api.state).toBe('running');
+    expect((provider.getTreeItem(api) as unknown as TreeItem).resourceUri).toBeUndefined();
+    expect((provider.getTreeItem(group) as unknown as TreeItem).resourceUri).toBeUndefined();
+  });
+});
