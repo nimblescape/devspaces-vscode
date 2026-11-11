@@ -406,13 +406,13 @@ describe('UsageSampler', () => {
       host,
       timers,
       docker: async (args) => {
-        // 7 s for docker ps (a host without `timeout`): the next block is 7 s after the one before it, more than 3
-        // intervals.
-        if (args[0] === 'ps') await new Promise<void>((resolve) => timers.setTimeout(resolve, 7_000));
+        // 9 s for docker ps (a host without `timeout`): the next block is 9 s after the one before it, more than 3
+        // intervals, but within the time limit of the call.
+        if (args[0] === 'ps') await new Promise<void>((resolve) => timers.setTimeout(resolve, 9_000));
         return ran(OK(args[0] === 'ps' ? `${ID_A} web\n` : '/var/lib/docker\n'));
       },
     });
-    await timers.advance(7_000);
+    await timers.advance(9_000);
     expect(blocks).toHaveLength(2);
     expect(blocks[1].usage.cpu).toBeDefined();
   });
@@ -519,13 +519,13 @@ describe('UsageSampler', () => {
       return host.run(script, timeoutMs);
     };
     const { sampler, timers, blocks } = await start({ host, run, docker: null });
-    // The second sample waits 10 s on the shell (for example behind a long command of the view), then ends.
+    // The second sample waits 20 s on the shell (for example behind a long command of the view), then ends.
     await timers.advance(VM_USAGE_INTERVAL_MS);
-    await timers.advance(10_000);
+    await timers.advance(20_000);
     release();
     await flush();
     expect(blocks).toHaveLength(2);
-    // A sample that waited long on the shell has no rate: it would be the mean of 12 s.
+    // A sample that waited long on the shell has no rate: it would be the mean of 22 s.
     expect(blocks[1].usage.cpu).toBeUndefined();
     // The page is hidden before the third sample starts, and shown again 100 ms later: no sample was left out.
     sampler.pause();

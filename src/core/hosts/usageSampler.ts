@@ -43,7 +43,10 @@ const USAGE_ROOT_SCRIPT = usageDockerScript(USAGE_ROOT_ARGS);
 const USAGE_SLOW_FACTOR = 4;
 /** but at most this long (the uptime of the host is not trusted: it jumps, for example, after a suspend). */
 export const MAX_USAGE_INTERVAL_MS = 60_000;
-/** A rate only from two blocks at most this many intervals apart, by the uptime of the host. */
+/**
+ * A rate only from two blocks at most this many intervals apart, by the uptime of the host, and at least
+ * MIN_USAGE_ANSWER_MS: longer than a slow sample `d` or a Docker call between two samples (USAGE_DOCKER_TIMEOUT_MS).
+ */
 const USAGE_RATE_GAP_FACTOR = 3;
 /** The end of the error output that is kept for the reason of an end. */
 const STDERR_TAIL_LENGTH = 8 * 1024;
@@ -154,11 +157,10 @@ export class UsageSampler {
   /** The IDs of the containers at the last `docker ps` that worked, and when the next one may run. */
   private namedIds: string | undefined;
   /**
-   * The last `docker ps` did not list every container of its block (one was starting): it runs once more for the same
-   * set (`namesRetried`), not again and again for a container that it cannot list (of another user's rootless Docker).
+   * The set of containers whose last `docker ps` did not list each of them (one was starting): it runs once more for
+   * this set, not again and again for a container that it cannot list (of the rootless Docker of another user).
    */
-  private namesIncomplete = false;
-  private namesRetried: string | undefined;
+  private namesRetryFor: string | undefined;
   private nextNamesAt = 0;
   /** The data folder of Docker: undefined until `docker info` ran, then the folder ('' for /var/lib/docker). */
   private dockerRoot: string | undefined;
@@ -166,8 +168,6 @@ export class UsageSampler {
   private idleSeen = false;
   /** When the last sample started. */
   private lastStartedAt: number | undefined;
-  /** How long the Docker call after the last sample took (0 without one): it may lengthen the gap to the next block. */
-  private betweenMs = 0;
   /** The end of the hold of `hold`. */
   private release: (() => void) | undefined;
 
@@ -236,11 +236,7 @@ export class UsageSampler {
         const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
         const run = await this.options.run(script, timeoutMs);
         // No Docker call after the page was hidden: no work for a page that nobody sees.
-        if (this.stage === 'running' && this.take(run, marker, seq, kind, timeoutMs) && !this.paused) {
-          const before = this.timers.now();
-          await this.between();
-          this.betweenMs = this.timers.now() - before;
-        } else this.betweenMs = 0;
+        if (this.stage === 'running' && this.take(run, marker, seq, kind, timeoutMs) && !this.paused) await this.between();
       } catch (error) {
         const detail = errorMessage(error);
         this.options.logger.warn(`The utilization sample of ${this.options.name} failed: ${detail}`);
@@ -298,8 +294,7 @@ export class UsageSampler {
       this.nextRootAt = undefined;
       this.names = undefined;
       this.namedIds = undefined;
-      this.namesIncomplete = false;
-      this.namesRetried = undefined;
+      this.namesRetryFor = undefined;
       this.nextNamesAt = 0;
     }
     const first = this.headerValue === undefined;
@@ -307,7 +302,7 @@ export class UsageSampler {
     // No rate over a long gap (a pause, a sample that waited long on the shell, a suspend of the host): it would be the
     // mean of the whole gap, no live value.
     const gapMs = this.previous === undefined ? 0 : Number(block.startCs - this.previous.startCs) * 10;
-    const usage = usageOf(block, gapMs <= USAGE_RATE_GAP_FACTOR * this.interval + this.betweenMs ? this.previous : undefined);
+    const usage = usageOf(block, gapMs <= Math.max(USAGE_RATE_GAP_FACTOR * this.interval, MIN_USAGE_ANSWER_MS) ? this.previous : undefined);
     this.previous = block;
     // A host that needs long for a sample gets more time between the samples, so they cost it little. Only by a sample
     // `t`: a `d` also reads the disks, which may be slow alone.
@@ -344,9 +339,9 @@ export class UsageSampler {
   private async between(): Promise<void> {
     const now = this.timers.now();
     const ids = this.containerIds;
-    if ((ids !== this.namedIds || this.namesIncomplete) && ids !== '' && now >= this.nextNamesAt) {
+    if ((ids !== this.namedIds || this.namesRetryFor === ids) && ids !== '' && now >= this.nextNamesAt) {
       this.nextNamesAt = now + USAGE_NAMES_EVERY_MS;
-      this.namesRetried = ids === this.namedIds ? ids : undefined;
+      const retry = ids === this.namedIds;
       const result = await this.dockerCall('ps', USAGE_NAMES_SCRIPT);
       if (this.stage !== 'running') return;
       if (result === undefined) {
@@ -357,7 +352,7 @@ export class UsageSampler {
         const names = parseUsageNames(result.stdout);
         this.names = names;
         this.namedIds = ids;
-        this.namesIncomplete = this.namesRetried !== ids && ids.split(' ').some((id) => !names.has(id));
+        this.namesRetryFor = !retry && ids.split(' ').some((id) => !names.has(id)) ? ids : undefined;
         this.nextRootAt ??= this.timers.now();
       } catch (error) {
         this.options.logger.warn(`The names of the containers of ${this.options.name} could not be read: ${errorMessage(error)}`);
