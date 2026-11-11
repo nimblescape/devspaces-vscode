@@ -15,6 +15,8 @@ import {
   buildInventory,
   formatSize,
   IMAGE_TAGS_ARGS,
+  imageTagsNowArgs,
+  imageUsersNowArgs,
   knownDevspace,
   NETWORK_LS_ARGS,
   NETWORK_USERS_ARGS,
@@ -683,14 +685,19 @@ describe('stop and removal', () => {
   });
 
   it('removes containers first, then each tag of an image, then volumes, never with force', async () => {
-    const docker = fakeDocker({});
+    const docker = fakeDocker({ 'image inspect': ok('["devspaces-monitor:abc","devspaces-worker:1"]\n'), 'image rm': ok('Untagged: devspaces-monitor:abc\nDeleted: sha256:w\n') });
     const results = await removeHostObjects(docker, [volume, image, { ...container, state: 'exited' }], { logger: silent });
+    // The tags and the containers of the image are read just before its removal.
     expect(docker.calls).toEqual([
       ['container', 'rm', 'c1'],
+      imageTagsNowArgs('sha256:w'),
+      imageUsersNowArgs('sha256:w'),
       ['image', 'rm', 'devspaces-monitor:abc'],
       ['image', 'rm', 'devspaces-worker:1'],
       ['volume', 'rm', 'devspaces-vscode'],
     ]);
+    expect(imageTagsNowArgs('sha256:w')).toEqual(['image', 'inspect', '--format', '{{json .RepoTags}}', 'sha256:w']);
+    expect(imageUsersNowArgs('sha256:w')).toEqual(['container', 'ls', '--all', '--no-trunc', '--filter', 'ancestor=sha256:w', '--format', '{{.ID}}']);
     expect(results.map((result) => result.outcome)).toEqual(['removed', 'removed', 'removed']);
     expect(docker.calls.flat()).not.toContain('-f');
     expect(docker.calls.flat()).not.toContain('--force');
@@ -707,23 +714,101 @@ describe('stop and removal', () => {
     expect(results[2].detail).toMatch(/volume is in use/);
   });
 
-  it('keeps every tag of an image that a container uses, unless that container goes in the same removal', async () => {
-    const used = { ...image, usedBy: 1 };
-    const docker = fakeDocker({});
-    const kept = await removeHostObjects(docker, [used], { logger: silent });
-    expect(kept).toEqual([{ object: { kind: 'image', name: used.name }, outcome: 'inUse', detail: 'A container uses this image.' }]);
-    expect(docker.calls).toEqual([]);
+  it('keeps an image that a container uses now, also when the read of the view counted none, unless that container goes in the same removal', async () => {
+    const tags = ok('["devspaces-monitor:abc","devspaces-worker:1"]');
+    const docker = fakeDocker({ 'image inspect': tags, 'container ls': ok('c2\n') });
+    const kept = await removeHostObjects(docker, [{ ...image, usedBy: 0 }], { logger: silent });
+    expect(kept).toEqual([{ object: { kind: 'image', name: image.name }, outcome: 'inUse', detail: 'A container uses this image.' }]);
+    // No call that untags: Docker would untag the first tags and refuse only the last one.
+    expect(docker.calls).toEqual([imageTagsNowArgs('sha256:w'), imageUsersNowArgs('sha256:w')]);
+    // A container of the same removal is gone when the containers of the image are read.
+    const removed = new Set<string>();
+    const calls: string[][] = [];
+    const engine = {
+      run: async (args: readonly string[]): Promise<RunResult> => {
+        calls.push([...args]);
+        if (args[0] === 'container' && args[1] === 'rm') {
+          removed.add(args[2]);
+          return ok();
+        }
+        if (args[0] === 'container' && args[1] === 'ls') return ok(removed.has('c2') ? '' : 'c2\n');
+        if (args[1] === 'inspect') return tags;
+        return ok('Deleted: sha256:w\n');
+      },
+    };
     const worker: HostObject = { kind: 'container', id: 'c2', name: 'devspaces-w1-worker1', purpose: 'worker', state: 'exited', image: 'devspaces-worker:1' };
-    const both = await removeHostObjects(docker, [used, worker], { logger: silent });
+    const both = await removeHostObjects(engine, [{ ...image, usedBy: 1 }, worker], { logger: silent });
     expect(both.map((result) => result.outcome)).toEqual(['removed', 'removed']);
-    expect(docker.calls.map((args) => args.slice(0, 2).join(' '))).toEqual(['container rm', 'image rm', 'image rm']);
+    expect(calls.map((args) => args.slice(0, 2).join(' '))).toEqual(['container rm', 'image inspect', 'container ls', 'image rm', 'image rm']);
+    // An image whose containers cannot be read stays.
+    const unread = await removeHostObjects(fakeDocker({ 'image inspect': tags, 'container ls': fail('Cannot connect to the Docker daemon') }), [image], { logger: silent });
+    expect(unread).toEqual([{ object: { kind: 'image', name: image.name }, outcome: 'failed', detail: 'The containers of this image could not be read: Cannot connect to the Docker daemon' }]);
+  });
+
+  it('removes only the tags of the read that still name the image, and keeps an image with a tag that the view did not show', async () => {
+    // devspaces-worker:1 names another image since the read: only devspaces-monitor:abc goes.
+    const moved = fakeDocker({ 'image inspect': ok('["devspaces-monitor:abc"]'), 'image rm': ok('Untagged: devspaces-monitor:abc\nDeleted: sha256:w\n') });
+    expect(await removeHostObjects(moved, [image], { logger: silent })).toMatchObject([{ outcome: 'removed' }]);
+    expect(moved.calls.filter((args) => args[1] === 'rm')).toEqual([['image', 'rm', 'devspaces-monitor:abc']]);
+    // A tag since the read: no call that untags.
+    const tagged = fakeDocker({ 'image inspect': ok('["devspaces-monitor:abc","devspaces-worker:1","mine:1"]') });
+    expect(await removeHostObjects(tagged, [image], { logger: silent })).toEqual([
+      { object: { kind: 'image', name: image.name }, outcome: 'failed', detail: 'The image has the tag mine:1 now, which the view did not show. Click Refresh.' },
+    ]);
+    expect(tagged.calls).toEqual([imageTagsNowArgs('sha256:w')]);
+    // Gone since the read, or Docker cannot say.
+    expect(await removeHostObjects(fakeDocker({ 'image inspect': fail('Error response from daemon: No such image: sha256:w') }), [image], { logger: silent })).toMatchObject([{ outcome: 'missing' }]);
+    expect(await removeHostObjects(fakeDocker({ 'image inspect': fail('permission denied') }), [image], { logger: silent })).toEqual([
+      { object: { kind: 'image', name: image.name }, outcome: 'failed', detail: 'The tags of this image could not be read: permission denied' },
+    ]);
+    expect(await removeHostObjects(fakeDocker({ 'image inspect': ok('not json') }), [image], { logger: silent })).toMatchObject([{ outcome: 'failed', detail: expect.stringMatching(/could not be read: Docker wrote not json/) }]);
+    // An image without a tag goes by its ID.
+    const bare = fakeDocker({ 'image inspect': ok('[]'), 'image rm': ok('Deleted: sha256:w\n') });
+    expect(await removeHostObjects(bare, [{ ...image, name: '<none> (w)', tags: [] }], { logger: silent })).toMatchObject([{ outcome: 'removed' }]);
+    expect(bare.calls.at(-1)).toEqual(['image', 'rm', 'sha256:w']);
+  });
+
+  it('reads the image again when Docker untagged its last tag but kept the image', async () => {
+    /** An engine that untags each tag and keeps the image; the second read of its tags gives `after`. */
+    const untagOnly = (after: RunResult) => {
+      const calls: string[][] = [];
+      let reads = 0;
+      return {
+        calls,
+        run: async (args: readonly string[]): Promise<RunResult> => {
+          calls.push([...args]);
+          if (args[1] === 'inspect') {
+            reads += 1;
+            return reads === 1 ? ok('["devspaces-monitor:abc","devspaces-worker:1"]') : after;
+          }
+          if (args[0] === 'image' && args[2] === 'sha256:w') return ok('Untagged: mirror.example/worker@sha256:1\nDeleted: sha256:w\n');
+          return args[0] === 'image' ? ok(`Untagged: ${args[2]}\n`) : ok();
+        },
+      };
+    };
+    // Only a reference with a digest of another repository is left: the ID removes it and the image.
+    const digests = untagOnly(ok('[]'));
+    expect(await removeHostObjects(digests, [image], { logger: silent })).toMatchObject([{ outcome: 'removed' }]);
+    expect(digests.calls.filter((args) => args[1] === 'rm')).toEqual([
+      ['image', 'rm', 'devspaces-monitor:abc'],
+      ['image', 'rm', 'devspaces-worker:1'],
+      ['image', 'rm', 'sha256:w'],
+    ]);
+    // A tag since the first read: the image stays.
+    const late = untagOnly(ok('["late:1"]'));
+    expect(await removeHostObjects(late, [image], { logger: silent })).toEqual([
+      { object: { kind: 'image', name: image.name }, outcome: 'failed', detail: 'Docker kept the image: it has the tag late:1 now. Click Refresh.' },
+    ]);
+    expect(late.calls.filter((args) => args[1] === 'rm')).toHaveLength(2);
+    // Gone after all.
+    expect(await removeHostObjects(untagOnly(fail('Error response from daemon: No such image: sha256:w')), [image], { logger: silent })).toMatchObject([{ outcome: 'removed' }]);
   });
 
   it('removes a network after the containers and before the images, and keeps one that a container uses now or that Docker made', async () => {
     const network: HostObject = { kind: 'network', id: 'n6', name: 'mynet', purpose: 'notDevspaces', usedBy: 0 };
-    const docker = fakeDocker({});
+    const docker = fakeDocker({ 'image inspect': ok('["devspaces-monitor:abc","devspaces-worker:1"]'), 'image rm': ok('Deleted: sha256:w\n') });
     const results = await removeHostObjects(docker, [volume, image, network, { ...container, state: 'exited' }], { logger: silent });
-    expect(docker.calls.map((args) => args.slice(0, 2).join(' '))).toEqual(['container rm', 'container ls', 'network rm', 'image rm', 'image rm', 'volume rm']);
+    expect(docker.calls.map((args) => args.slice(0, 2).join(' '))).toEqual(['container rm', 'container ls', 'network rm', 'image inspect', 'container ls', 'image rm', 'image rm', 'volume rm']);
     // The containers on the network are read now, with the names of their networks (also those that never ran), and it
     // is removed by its ID.
     expect(docker.calls[1]).toEqual([...NETWORK_USERS_ARGS]);

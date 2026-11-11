@@ -7,9 +7,10 @@
 // networks of each container and the build cache as `docker system df` sums it; Stop and Start of a container that is
 // not of Devspaces; a network that a stopped container uses stays (Docker would remove it, and the container could not
 // start again), also one that a container joined after the read, with a space and a comma in its name; a container and its network go in one removal, never
-// with force; an image with two tags goes in one removal, also with a container of its second tag; which objects a
-// running container uses (the colors of the view), by the ID of its image and its mounts. Not the removal of the build
-// cache: it would remove the build cache of the developer who runs the tests.
+// with force; an image with two tags goes in one removal, also with a container of its second tag, and a removal after a
+// tag moved or a container started since the read; which objects a running container uses (the colors of the view), by
+// the ID of its image and its mounts. Not the removal of the build cache: it would remove the build cache of the
+// developer who runs the tests.
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -155,6 +156,38 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
     } finally {
       cli.run(['rm', '-f', source, user]);
       cli.run(['image', 'rm', `${repository}:one`, `${repository}:two`]);
+    }
+  });
+
+  it('keeps a tag that names another image since the read, and every tag of an image that a container uses since the read', async () => {
+    // The rows of the view can be old: a pull or a build moves a tag, a container starts. The removal reads the tags and
+    // the containers of the image again, so it never removes another image and never untags an image that stays.
+    const repository = `stale${tag}`;
+    const source = `stale-${tag}-source`;
+    const user = `stale-${tag}-user`;
+    try {
+      cli.ok(['create', '--name', source, '--label', runLabel, TEST_BASE_IMAGE, 'true']);
+      const first = cli.lines(['commit', '--change', `LABEL ${runLabel}`, '--change', 'LABEL stale=first', source, `${repository}:a`])[0];
+      cli.ok(['tag', `${repository}:a`, `${repository}:b`]);
+      const used = cli.lines(['commit', '--change', `LABEL ${runLabel}`, '--change', 'LABEL stale=used', source, `${repository}:c`])[0];
+      cli.ok(['tag', `${repository}:c`, `${repository}:d`]);
+      const inventory = await read();
+      const byId = (id: string): HostObject => {
+        const image = inventory.images.find((candidate) => candidate.id === id);
+        if (image === undefined) throw new Error(`The read found no image ${id}.`);
+        return image;
+      };
+      // Since the read: the tag b names a new image, and a container uses the tag d.
+      const moved = cli.lines(['commit', '--change', `LABEL ${runLabel}`, '--change', 'LABEL stale=moved', source, `${repository}:b`])[0];
+      cli.ok(['create', '--name', user, '--label', runLabel, `${repository}:d`, 'true']);
+      const results = await removeHostObjects(docker, [byId(first), byId(used)], { logger: log });
+      expect(results.map((result) => result.outcome)).toEqual(['removed', 'inUse']);
+      expect(cli.run(['image', 'inspect', first]).code).not.toBe(0);
+      expect(cli.ok(['image', 'inspect', '--format', '{{.Id}}', `${repository}:b`])).toBe(moved);
+      expect(JSON.parse(cli.ok(['image', 'inspect', '--format', '{{json .RepoTags}}', used])).sort()).toEqual([`${repository}:c`, `${repository}:d`]);
+    } finally {
+      cli.run(['rm', '-f', source, user]);
+      cli.run(['image', 'rm', `${repository}:a`, `${repository}:b`, `${repository}:c`, `${repository}:d`]);
     }
   });
 

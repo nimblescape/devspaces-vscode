@@ -581,8 +581,9 @@ function sameImageId(a: string, b: string): boolean {
  * Whether an object is active (HostObject.active). A container by its state. An image, a volume or a network by what
  * the running containers use: exactly, from `running` (runningUsesArgs: the ID of the image, the volumes of the mounts,
  * the names of the networks). Without it (the read failed), by the fields of the running containers of `docker system df
- * -v` (verified with Docker 29.9): an image by the field `Image`, as namesImage compares it (the field names the image as
- * the container was created, so a tag that names another image since then marks that image); a volume by the field
+ * -v` (verified with Docker 29.9): an image by the field `Image`, as namesImage compares it (the reference that created
+ * the container, or the ID of its image once that reference names another image: Docker replaces it; with the classic
+ * image store a reference with a digest misses the container); a volume by the field
  * `Mounts` (the names of the volumes and the paths of the bind mounts, joined with commas) when Docker counts a container
  * of it (a path with a comma could name it); a network by the field `Networks`, as networkUsers counts it.
  */
@@ -873,9 +874,9 @@ export async function startHostContainer(docker: Pick<BootstrapDocker, 'run'>, o
 
 /**
  * Removes `objects` on the engine of the operation, never with force: the containers first (by ID; a running one
- * stays), then the images (each tag, so that the last tag removes the image; an image without a tag by its ID), then
- * the volumes, so that an image or a volume that only a removed container used goes too. Every object is logged with its
- * outcome. Throws only an AbortError (cancel); the objects before it are removed.
+ * stays), then the networks, then the images (removeImage), then the volumes, so that a network, an image or a volume
+ * that only a removed container used goes too. Every object is logged with its outcome. Throws only an AbortError
+ * (cancel); the objects before it are removed.
  */
 export async function removeHostObjects(
   docker: Pick<BootstrapDocker, 'run'>,
@@ -887,9 +888,14 @@ export async function removeHostObjects(
   const results: ObjectResult[] = [];
   for (const object of [...objects].sort((a, b) => order[a.kind] - order[b.kind])) {
     options.onItem?.(objectText(object));
-    // An image that a container uses keeps all its tags: Docker would untag the first tags and refuse only the last one.
-    // A container of this removal does not count (it goes first).
-    // A network that a container uses stays too: Docker would remove it under a stopped container, which then cannot
+    if (object.kind === 'image') {
+      const removal = await removeImage(docker, object, options.signal);
+      const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, ...removal };
+      logResult(options.logger, entry);
+      results.push(entry);
+      continue;
+    }
+    // A network that a container uses stays: Docker would remove it under a stopped container, which then cannot
     // start. Its containers are read now, not taken from the read of the view: a container may use it since then.
     // Docker keeps its own networks.
     const network = object.kind === 'network' && object.builtIn !== true ? await networkUsersNow(docker, object, options.signal) : undefined;
@@ -899,7 +905,7 @@ export async function removeHostObjects(
       results.push(entry);
       continue;
     }
-    const users = object.kind === 'image' ? (object.usedBy ?? 0) - removedUsers(object, objects, results) : (network?.users ?? 0);
+    const users = network?.users ?? 0;
     if (users > 0 || object.builtIn === true) {
       const detail = object.builtIn === true ? 'Docker keeps its own networks.' : `${users === 1 ? 'A container uses' : `${users} containers use`} this ${object.kind}.`;
       const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome: 'inUse', detail };
@@ -907,14 +913,7 @@ export async function removeHostObjects(
       results.push(entry);
       continue;
     }
-    const references = object.kind === 'image' && (object.tags?.length ?? 0) > 0 ? (object.tags ?? []) : [object.id];
-    let last: { result?: RunResult; error?: unknown } = {};
-    for (const reference of references) {
-      const args = [object.kind, 'rm', reference];
-      last = await call(docker, args, object.kind === 'volume' ? VOLUME_REMOVE_TIMEOUT_MS : DOCKER_QUERY_TIMEOUT_MS, options.signal);
-      const step = outcomeOf(last.result, 'removed');
-      if (step !== 'removed' && step !== 'missing') break;
-    }
+    const last = await call(docker, [object.kind, 'rm', object.id], object.kind === 'volume' ? VOLUME_REMOVE_TIMEOUT_MS : DOCKER_QUERY_TIMEOUT_MS, options.signal);
     const outcome = outcomeOf(last.result, 'removed');
     const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome, ...(outcome === 'inUse' || outcome === 'failed' ? { detail: detailOf(last.result, last.error) } : {}) };
     logResult(options.logger, entry);
@@ -923,13 +922,80 @@ export async function removeHostObjects(
   return results;
 }
 
+/** What `docker image rm` writes for each image that it deletes; an untag writes only `Untagged: …`. */
+const IMAGE_DELETED_LINE = /^Deleted: /m;
+
+/** The read of the tags of the image `id` now (`docker image inspect`, GET /images/<id>/json), just before its removal. */
+export function imageTagsNowArgs(id: string): string[] {
+  return ['image', 'inspect', '--format', '{{json .RepoTags}}', id];
+}
+
 /**
- * The containers of `objects` that this removal removed and that used the image `used` (by the image of the container
- * in `docker system df`), so that an image whose only containers went is removed too.
+ * The read of the containers of the image `id` now (`docker container ls --all`, GET /containers/json), just before its
+ * removal. The filter `ancestor` also lists the containers of the images built on it: a count can be too high, never too
+ * low.
  */
-function removedUsers(used: HostObject, objects: readonly HostObject[], results: readonly ObjectResult[]): number {
-  const removed = new Set(results.filter((result) => result.object.kind === 'container' && (result.outcome === 'removed' || result.outcome === 'missing')).map((result) => result.object.name));
-  return objects.filter((object) => object.kind === 'container' && removed.has(object.name) && object.image !== undefined && namesImage(object.image, used)).length;
+export function imageUsersNowArgs(id: string): string[] {
+  return ['container', 'ls', '--all', '--no-trunc', '--filter', `ancestor=${id}`, '--format', '{{.ID}}'];
+}
+
+/** The tags of the image `id` now (imageTagsNowArgs); `missing` when it is gone, `detail` when Docker could not say. Throws only an AbortError. */
+async function imageTagsNow(docker: Pick<BootstrapDocker, 'run'>, id: string, signal: AbortSignal | undefined): Promise<{ tags: string[] } | { missing: true } | { detail: string }> {
+  const { result, error } = await call(docker, imageTagsNowArgs(id), DOCKER_QUERY_TIMEOUT_MS, signal);
+  if (result !== undefined && result.exitCode !== 0 && !result.timedOut && MISSING_PATTERN.test(`${result.stderr}\n${result.stdout}`)) return { missing: true };
+  if (result === undefined || result.exitCode !== 0 || result.timedOut) return { detail: `The tags of this image could not be read: ${detailOf(result, error)}` };
+  let tags: unknown;
+  try {
+    tags = JSON.parse(result.stdout.trim() || 'null');
+  } catch {
+    return { detail: `The tags of this image could not be read: Docker wrote ${result.stdout.trim().slice(0, 100)}` };
+  }
+  return { tags: Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [] };
+}
+
+/**
+ * Removes the image `object`, never with force. Its tags and its containers are read now, not taken from the read of
+ * the view, which can be old (the Monitor pulls images, the user tags and runs them):
+ * - An image that a container uses stays without a call (`inUse`): Docker would untag its first tags and refuse only the
+ *   last one. The containers of the same removal are gone by then.
+ * - An image with a tag that the read did not show stays (`failed`): the user did not see that tag.
+ * - Each tag of the read that still names the image is removed, so that the last one removes the image; a tag that
+ *   names another image since the read stays. An image without a tag goes by its ID.
+ * - When Docker untagged the last tag but kept the image (it writes no `Deleted:`), the image is read again: one with a
+ *   tag again stays (`failed`); one with only references with a digest (of another repository) goes by its ID.
+ * Throws only an AbortError.
+ */
+async function removeImage(docker: Pick<BootstrapDocker, 'run'>, object: HostObject, signal: AbortSignal | undefined): Promise<Pick<ObjectResult, 'outcome' | 'detail'>> {
+  const ended = (step: { result?: RunResult; error?: unknown }): Pick<ObjectResult, 'outcome' | 'detail'> => {
+    const outcome = outcomeOf(step.result, 'removed');
+    return outcome === 'inUse' || outcome === 'failed' ? { outcome, detail: detailOf(step.result, step.error) } : { outcome };
+  };
+  const now = await imageTagsNow(docker, object.id, signal);
+  if ('missing' in now) return { outcome: 'missing' };
+  if ('detail' in now) return { outcome: 'failed', detail: now.detail };
+  const shown = object.tags ?? [];
+  const unseen = now.tags.filter((tag) => !shown.includes(tag));
+  if (unseen.length > 0) return { outcome: 'failed', detail: `The image has the tag ${unseen.join(', ')} now, which the view did not show. Click Refresh.` };
+  const usersNow = await call(docker, imageUsersNowArgs(object.id), DOCKER_QUERY_TIMEOUT_MS, signal);
+  if (usersNow.result === undefined || usersNow.result.exitCode !== 0 || usersNow.result.timedOut) {
+    return { outcome: 'failed', detail: `The containers of this image could not be read: ${detailOf(usersNow.result, usersNow.error)}` };
+  }
+  const users = usersNow.result.stdout.split('\n').filter((line) => line.trim() !== '').length;
+  if (users > 0) return { outcome: 'inUse', detail: `${users === 1 ? 'A container uses' : `${users} containers use`} this image.` };
+  let deleted = false;
+  let last: { result?: RunResult; error?: unknown } = {};
+  for (const reference of now.tags.length > 0 ? now.tags : [object.id]) {
+    last = await call(docker, ['image', 'rm', reference], DOCKER_QUERY_TIMEOUT_MS, signal);
+    if (last.result !== undefined && IMAGE_DELETED_LINE.test(last.result.stdout)) deleted = true;
+    const step = outcomeOf(last.result, 'removed');
+    if (step !== 'removed' && step !== 'missing') break;
+  }
+  if (outcomeOf(last.result, 'removed') !== 'removed' || deleted) return ended(last);
+  const after = await imageTagsNow(docker, object.id, signal);
+  if ('missing' in after) return { outcome: 'removed' };
+  if ('detail' in after) return { outcome: 'failed', detail: after.detail };
+  if (after.tags.length > 0) return { outcome: 'failed', detail: `Docker kept the image: it has the tag ${after.tags.join(', ')} now. Click Refresh.` };
+  return ended(await call(docker, ['image', 'rm', object.id], DOCKER_QUERY_TIMEOUT_MS, signal));
 }
 
 /**

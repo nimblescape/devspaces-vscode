@@ -82,6 +82,12 @@ export const DockerHostsCommandTexts = {
 };
 
 /** At most five names, then the number of the others. */
+/** The name of an object in the question of Remove…: an image with every tag that its removal removes. */
+function removalName(object: HostObject): string {
+  const others = object.kind === 'image' ? (object.tags ?? []).filter((tag) => tag !== object.name) : [];
+  return others.length > 0 ? `${object.kind} ${object.name} (also ${others.join(', ')})` : `${object.kind} ${object.name}`;
+}
+
 function listed(names: readonly string[]): string {
   if (names.length <= 5) return names.join(', ');
   return `${names.slice(0, 5).join(', ')} and ${names.length - 5} more`;
@@ -296,7 +302,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     }
     const objects = removable.map((row) => row.object);
     const detail = DockerHostsCommandTexts.removeDetail(
-      objects.map((object) => `${object.kind} ${object.name}`),
+      objects.map(removalName),
       objects.some((object) => object.purpose === 'otherDevspace'),
       objects.some((object) => object.purpose === 'notDevspaces'),
     );
