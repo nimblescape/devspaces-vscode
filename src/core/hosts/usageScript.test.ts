@@ -182,7 +182,11 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
     fakeCgroups(root);
     fakeDocker(bin);
     fs.mkdirSync(slowBin, { recursive: true });
-    fs.writeFileSync(path.join(slowBin, 'docker'), '#!/bin/sh\ncase "$*" in "system df"*) exec sleep "$SLOW_SECONDS";; *) exit 3;; esac\n', { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(slowBin, 'docker'),
+      '#!/bin/sh\ncase "$*" in "system df"*) exec sleep "$SLOW_SECONDS";; "ps "*) [ -n "$SLOW_PS_SECONDS" ] && exec sleep "$SLOW_PS_SECONDS"; exit 3;; *) exit 3;; esac\n',
+      { mode: 0o755 },
+    );
     idleScript = path.join(dir, 'idle-bin', 'idle');
     fs.mkdirSync(path.dirname(idleScript));
     fs.writeFileSync(idleScript, '#!/bin/sh\nwhile :; do sleep 1; done\n', { mode: 0o755 });
@@ -289,6 +293,21 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         }
       }, 20_000);
 
+      it('starts no Docker call after its input ended during the docker ps of a sizes block', async () => {
+        // docker ps of the block still runs when the clock stops the sampler; then the sizes read must not start.
+        const base = 7100 + SHELLS.indexOf(shell) * 10 + (process.pid % 7);
+        const [ps, df] = [String(base), String(base + 50)];
+        const stream = runScript(shell, root, slowBin, 30, { SLOW_SECONDS: df, SLOW_PS_SECONDS: ps });
+        await stream.started;
+        stream.child.stdin.write('s');
+        await waitFor(() => sleepers(ps).length > 0, 5_000);
+        expect(sleepers(ps).length).toBeGreaterThan(0);
+        stream.child.stdin.end();
+        await stream.exited;
+        await waitFor(() => sleepers(ps).length === 0 && sleepers(df).length === 0, 3_000);
+        expect([...sleepers(ps), ...sleepers(df)]).toEqual([]);
+      }, 30_000);
+
       it('leaves no Docker CLI on the host when its input ends during a slow sizes read', async () => {
         // A fake `docker system df` that takes long: one process (as the real CLI), named by a number of this test.
         const seconds = String(7000 + SHELLS.indexOf(shell) * 10 + (process.pid % 7));
@@ -296,6 +315,7 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         await stream.started;
         stream.child.stdin.write('s');
         await waitFor(() => sleepers(seconds).length > 0, 5_000);
+        expect(sleepers(seconds).length).toBeGreaterThan(0);
         const before = Date.now();
         stream.child.stdin.end();
         const { at } = await stream.exited;

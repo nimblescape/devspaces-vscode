@@ -227,6 +227,27 @@ describe('UsageSession', () => {
     expect(run.process.requests).toEqual(['d', ' ', 's']);
   });
 
+  it('sends one request when the handler of the header asks for the sizes itself', () => {
+    let session: UsageSession | undefined;
+    const run = start({ onHeader: () => session?.readSizes() });
+    session = run.session;
+    run.process.print(HEADER(true));
+    expect(run.process.requests).toEqual(['s']);
+    run.process.print(blockText(1, 100, 1, ['Z df {}', 'Z.']));
+    expect(run.ends).toEqual([]);
+    expect(run.blocks).toHaveLength(1);
+  });
+
+  it('stops the started transport when the script refuses a value', () => {
+    const process = new FakeProcess();
+    expect(() =>
+      UsageSession.start(process, { logger: { info: () => undefined, warn: () => undefined, error: () => undefined, output: () => undefined }, name: 'h', intervalMs: 2_000, heartbeatSeconds: 10, onBlock: () => undefined, onEnd: () => undefined }),
+    ).toThrow(/integer/);
+    expect(process.ended).toBe(true);
+    expect(process.kills).toBe(1);
+    expect(process.input).toEqual([]);
+  });
+
   it('keeps a stream that is paused before its start with spaces, and asks at the resume', () => {
     const run = start();
     run.session.pause();

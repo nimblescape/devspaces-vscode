@@ -33,8 +33,8 @@ export const MAX_USAGE_HEARTBEAT_SECONDS = 120;
  * - The first process of a container is also searched one cgroup below its own (docker-in-docker moves its processes).
  * - `tmz` runs only inside `$(…)` and replaces that subshell with `exec`: so the Docker CLI (or `timeout`, which passes
  *   the signal on) is a child of the sampler, and the clock reaches it.
- * - A block has at most one Docker call of USAGE_DOCKER_SECONDS, and a sizes read all its calls within
- *   USAGE_SIZES_SECONDS: both stay below the answer times of usageSession.ts.
+ * - With `timeout` on the host, a block has at most one Docker call of USAGE_DOCKER_SECONDS, and a sizes read all its
+ *   calls within USAGE_SIZES_SECONDS: both stay below the answer times of usageSession.ts.
  */
 export const USAGE_SCRIPT = `{
 # The utilization stream of Devspaces, protocol 1. The extension writes this fixed text to \`sh -s\` on the host and fills
@@ -69,7 +69,7 @@ printf '@%s\\n#H 1 %s %s %s %s %s %s\\n' "$mk" "$v" "\${uid:--}" "$wd" "\${boot:
 # The clock: passes each request byte to the sampler as a line (dd reads exactly one byte; BusyBox \`head -c 1\` reads
 # more). It ends at the end of the input, after HB seconds without a byte, and when the sampler is gone (its next write
 # fails). Then the sampler sees the end of its input; a sampler that is still there 2 seconds later (blocked in a write
-# to a dead connection, or in a sizes read) is killed with its children. No trap: a trapped signal waits while dash or
+# to a dead connection, or in a Docker call) is stopped, its children get TERM, and it is killed. No trap: a trapped signal waits while dash or
 # BusyBox blocks in a write. Only processes whose parent is this shell are hit, and only while the clock is its child.
 clock() {
   if [ $wd = 1 ]; then
@@ -90,6 +90,8 @@ clock() {
     [ $g = 3 ] || sleep 1
     pp=; read -r _ _ _ pp _ 2>/dev/null </proc/self/stat
   done
+  # Stopped first, so that the sampler starts no new child (the next Docker call) between the TERM and the KILL.
+  kill -STOP "$sm" 2>/dev/null
   for p in /proc/[0-9]*; do
     l=; read -r l 2>/dev/null <"$p/stat"; l=\${l##*) }
     case $l in ?\\ $sm\\ *) kill -TERM "\${p#/proc/}" 2>/dev/null;; esac
@@ -187,7 +189,7 @@ idlecheck() {
 }
 
 sampler() {
-  seq=0 ids0= pend=0 nt=-99999 rq= rd=
+  seq=0 ids0= pend=0 np=0 ni=0 rq= rd=
   while read -r c; do
     case $c in t|d|s) ;; *) continue;; esac
     seq=$((seq+1))
@@ -221,24 +223,27 @@ sampler() {
       ids="$ids $id"
       if [ $v = 2 ]; then ctr "$id" "\${d#"$C"/}"; else ctr "$id" "\${d#"$C"/memory/}"; fi
     done
-    # The names: one \`docker ps\` when the set of containers changed (again after a failure), at most every 10 s, and
-    # only while one runs. After the first names, one \`docker info\` in a later block (again after a failure) finds a
-    # data folder of Docker that is not /var/lib/docker for the lines D. One Docker call per block at most.
+    # The names: one \`docker ps\` when the set of containers changed, at most every 10 s, and only while one runs;
+    # after a failure again 60 s later. After the first names, one \`docker info\` in a later block finds a data folder
+    # of Docker that is not /var/lib/docker for the lines D; after a failure again 300 s later. One Docker call per
+    # block at most, so a slow or hung daemon slows only some blocks (np, ni: the uptime of the next try).
     [ "$ids" = "$ids0" ] || { pend=1; ids0=$ids; }
-    if [ $pend = 1 ] && [ -n "$ids" ] && [ $(( \${up%.*} - nt )) -ge 10 ]; then
-      nt=\${up%.*}
+    s0=\${up%.*}
+    if [ $pend = 1 ] && [ -n "$ids" ] && [ $s0 -ge $np ]; then
+      np=$((s0 + 10))
       if n=$(tmz ${USAGE_DOCKER_SECONDS} docker ps --no-trunc --format '{{.ID}} {{.Names}}' 2>/dev/null); then
-        pend=0; [ -n "$rq" ] || rq=0
+        pend=0; [ -n "$rq" ] || { rq=0; ni=$np; }
         set -f; x=$IFS; IFS=$nl; for l in $n; do o="$o\${nl}N $l"; done; IFS=$x; set +f
         o="$o\${nl}N."
       else
-        o="$o\${nl}N! $?"
+        x=$?; np=$((s0 + 60)); o="$o\${nl}N! $x"
       fi
-    elif [ "$rq" = 0 ] && [ $(( \${up%.*} - nt )) -ge 10 ]; then
-      nt=\${up%.*}
+    elif [ "$rq" = 0 ] && [ $s0 -ge $ni ]; then
       if x=$(tmz ${USAGE_DOCKER_SECONDS} docker info --format '{{.DockerRootDir}}' 2>/dev/null); then
         rq=1
         case $x in *"$nl"*|/var/lib/docker) ;; /*) rd=$x;; esac
+      else
+        ni=$((s0 + 300))
       fi
     fi
     [ $c = s ] && sizes

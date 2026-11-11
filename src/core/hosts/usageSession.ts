@@ -129,6 +129,15 @@ export class UsageSession {
     this.timers = options.timers ?? realTimers;
     this.interval = options.intervalMs;
     const marker = options.marker ?? newUsageMarker();
+    let script: string;
+    try {
+      script = usageScript(marker, options.heartbeatSeconds ?? USAGE_HEARTBEAT_SECONDS, options.wslIdle ?? false);
+    } catch (error) {
+      // A value that the script refuses: the started transport must not run on without a session that stops it.
+      process.end();
+      process.kill();
+      throw error;
+    }
     this.reader = new UsageStreamReader(marker, {
       header: (header) => this.onHeader(header),
       notLinux: () => this.finish({ kind: 'notLinux' }, false),
@@ -144,7 +153,7 @@ export class UsageSession {
     });
     this.exitedPromise = process.exited.then(({ exitCode, error }) => this.onExit(exitCode, error));
     // The script is the whole input until its marker line came: dash and BusyBox read it in blocks.
-    process.write(Buffer.from(usageScript(marker, options.heartbeatSeconds ?? USAGE_HEARTBEAT_SECONDS, options.wslIdle ?? false), 'utf8'));
+    process.write(Buffer.from(script, 'utf8'));
     this.armLogin();
     this.stopPrompts = options.prompts?.onPrompt((open) => {
       if (this.stage !== 'login') return;
@@ -243,7 +252,8 @@ export class UsageSession {
     this.headerValue = header;
     if (!header.byteMode) this.options.logger.info(`${this.options.name} has no \`timeout\` or \`dd\`: the utilization stream asks by lines, and a broken connection ends it only when the connection closes.`);
     this.options.onHeader?.(header);
-    if (this.stage !== 'live') return;
+    // The handler may have asked already (readSizes, or pause and resume), or ended the stream.
+    if (this.stage !== 'live' || this.inFlight !== undefined) return;
     // Hidden before the start: a space starts the keep-alive, so the script waits for the resume.
     if (this.paused) this.write(' ');
     else this.request();
