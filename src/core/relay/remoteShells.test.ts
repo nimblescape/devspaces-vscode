@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { silentLogger, type Logger, type StartedByteProcess } from '../ports';
 import { NodeProcessRunner } from '../process';
 import { sshPromptSignal, sshPromptsAllowed, withSshPrompts } from '../sshAskpass';
+import { LIMA_HOST } from '../docker/dockerHost';
 import { RemoteShells } from './remoteShells';
 
 const describeUnix = process.platform === 'win32' ? describe.skip : describe;
@@ -322,6 +323,27 @@ describeUnix('RemoteShells', () => {
     expect(logins).toEqual(['box', 'box']);
     taken!.end();
     await taken!.exited;
+    registry.dispose();
+  });
+
+  it('leaves a busy shell of the VM to its commands, so that the relay logs in itself, and waits for them on an SSH host', async () => {
+    const { registry, logins } = shells();
+    await registry.login(LIMA_HOST);
+    const running = registry.run(LIMA_HOST, 'sleep 0.3; printf done');
+    await expect(registry.takeOver(LIMA_HOST)).resolves.toBeUndefined();
+    await expect(running).resolves.toMatchObject({ stdout: 'done' });
+    // Without a command on it, the relay takes it over.
+    const taken = await registry.takeOver(LIMA_HOST);
+    expect(taken).toBeDefined();
+    taken!.end();
+    // On an SSH host, the takeover waits for the command before it.
+    await registry.login('box');
+    const before = registry.run('box', 'sleep 0.3; printf before');
+    const takenBox = await registry.takeOver('box');
+    await expect(before).resolves.toMatchObject({ stdout: 'before' });
+    expect(takenBox).toBeDefined();
+    takenBox!.end();
+    expect(logins).toEqual([LIMA_HOST, 'box']);
     registry.dispose();
   });
 
