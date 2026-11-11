@@ -910,6 +910,9 @@ async function activateExtension(
     env,
     launch: (file, args, onExit) => launchDetachedProcess(file, args, onExit, { windowsHide: true }),
     logger,
+    // Nothing runs in the distribution anymore: the shell of this window there (the shared shell of the view Docker
+    // Hosts) ends, so that it does not hold the distribution for up to 2 more minutes (R-VM-004).
+    onIdleEnded: () => shells.close(WSL_HOST),
   });
   context.subscriptions.push({ dispose: () => keeper.dispose() });
   // The setup of the WSL distribution of Devspaces (Windows): the `.wsl` file of the image of the VM of Devspaces, with

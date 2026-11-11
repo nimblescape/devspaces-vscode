@@ -90,6 +90,12 @@ export interface WslKeeperDeps {
    */
   launch: (file: string, args: readonly string[], onExit: (code: number | null) => void) => Promise<void>;
   logger: Logger;
+  /**
+   * Runs when the idle script of a keeper of this window ended (`stopping` turns true): nothing ran in the distribution
+   * at its last two checks, so a `wsl.exe` of this window that only waits there (the shell before the relay, which
+   * the view Docker Hosts keeps open for 2 minutes) must end, because it would hold the distribution (R-VM-004).
+   */
+  onIdleEnded?: (distribution: string) => void;
   /** For the tests. Default: whether the file exists. */
   exists?: (file: string) => boolean;
   /** For the tests. Default: Date.now. */
@@ -172,7 +178,10 @@ export class WslKeeper {
         if (Math.abs(this.now() - startedAt) >= KEEPER_EARLY_END_MS) {
           this.launchWarning = undefined;
           // Exit code 0: the idle script ended. Any other one: the wait for the lock ended, or the distribution stopped.
-          if (code === 0) this.idleEndedAt.set(distribution, this.now());
+          if (code === 0) {
+            this.idleEndedAt.set(distribution, this.now());
+            this.deps.onIdleEnded?.(distribution);
+          }
           return;
         }
         // A keeper that ends at once could not open the lock (no /run), found no idle script (exit code 127), or

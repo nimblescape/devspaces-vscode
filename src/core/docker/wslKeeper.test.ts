@@ -210,6 +210,27 @@ describe('the keeper of the WSL distribution', () => {
     expect(subject.stopping(WSL_DISTRIBUTION)).toBe(false);
   });
 
+  // Mutation: a call after the end of the wait for the lock (exit code 1) or after an end at once fails it.
+  it('says when the idle script of its keeper ended, so that the window ends its wsl.exe that would hold the distribution', async () => {
+    let now = 1_000_000;
+    const ended: string[] = [];
+    const { subject, launches } = keeper({ now: () => now, onIdleEnded: (distribution) => ended.push(distribution) });
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(1));
+    now += 2 * KEEPER_LAUNCH_MS;
+    launches[0]?.exit(1);
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(2));
+    launches[1]?.exit(0);
+    expect(ended).toEqual([]);
+    now += 2 * KEEPER_LAUNCH_MS;
+    subject.keep(WSL_DISTRIBUTION);
+    await vi.waitFor(() => expect(launches).toHaveLength(3));
+    now += 2 * KEEPER_LAUNCH_MS;
+    launches[2]?.exit(0);
+    expect(ended).toEqual([WSL_DISTRIBUTION]);
+  });
+
   // Mutation: a start log that is used up by a keep without a program fails it.
   it('logs the start of the first keeper that starts in the window, once', async () => {
     let now = 1_000_000;
