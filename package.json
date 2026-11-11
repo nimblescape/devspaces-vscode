@@ -432,6 +432,18 @@
         "icon": "$(debug-stop)"
       },
       {
+        "command": "devspaces.startDockerObject",
+        "title": "Start",
+        "category": "Devspaces",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "devspaces.pruneBuildCache",
+        "title": "Remove Unused Build Cache…",
+        "category": "Devspaces",
+        "icon": "$(trash)"
+      },
+      {
         "command": "devspaces.removeDockerObjects",
         "title": "Remove…",
         "category": "Devspaces",
@@ -564,6 +576,14 @@
         },
         {
           "command": "devspaces.stopDockerObject",
+          "when": "false"
+        },
+        {
+          "command": "devspaces.startDockerObject",
+          "when": "false"
+        },
+        {
+          "command": "devspaces.pruneBuildCache",
           "when": "false"
         },
         {
@@ -723,6 +743,16 @@
           "group": "inline@1"
         },
         {
+          "command": "devspaces.startDockerObject",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/",
+          "group": "inline@1"
+        },
+        {
+          "command": "devspaces.pruneBuildCache",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsBuildCache;.*canPrune(;|$)/",
+          "group": "inline@1"
+        },
+        {
           "command": "devspaces.removeDockerObjects",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canRemove(;|$)/",
           "group": "inline@2"
@@ -740,6 +770,16 @@
         {
           "command": "devspaces.stopDockerObject",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStop(;|$)/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "devspaces.startDockerObject",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "devspaces.pruneBuildCache",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsBuildCache;.*canPrune(;|$)/",
           "group": "1_actions@1"
         },
         {

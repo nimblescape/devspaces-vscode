@@ -3,17 +3,17 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The view "Docker Hosts" (`devspaces.hosts`, docs/requirements.md R-ENG-008) below the repository view: the VM of
-// Devspaces first, then each remote host of the list, with the containers, images and volumes of Devspaces there and
-// their removal. A host is read only when the user opens it in the view, and again at Refresh, never in the background
+// Devspaces first, then each remote host of the list, with all containers, networks, images and volumes there (those of
+// Devspaces with their purpose) and their management. A host is read only when the user opens it in the view, and again at Refresh, never in the background
 // (R-SEC-004): the rows of a host keep what its last read found, and a change of the view (another Docker host, a host
 // that leaves the list, the state of the VM) reads no host again. A read never starts the VM: a stopped VM shows a row
 // that starts it. Opening a remote host is a flow of the user, so a password login may ask there (R-ENG-003). A click
 // on a host row makes it the Docker host of Devspaces, after its test (RemoteDockerCommands.selectHost); a check mark
 // shows it. The objects of a devspace of this computer get the commands of the devspace (Stop, Delete…); every other
-// object gets Stop (a running container) or Remove… (never with force), after one question, also for several selected
-// rows. The rows come from dockerHostsModel.ts.
+// object gets Stop (a running container), Start (a stopped container that is not of Devspaces) or Remove… (never with
+// force), after one question, also for several selected rows. The rows come from dockerHostsModel.ts.
 import * as vscode from 'vscode';
-import type { HostInventory, HostObject, ObjectResult } from '../core/hosts/hostObjects';
+import { formatSize, type HostInventory, type HostObject, type ObjectResult } from '../core/hosts/hostObjects';
 import { errorMessage } from '../core/errors';
 import { Actions } from '../core/messages';
 import { isAbortError, type Logger } from '../core/ports';
@@ -21,6 +21,7 @@ import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import {
   DOCKER_HOSTS_VIEW_ID,
+  type BuildCacheRow,
   hostOfArgument,
   hostRows,
   objectActions,
@@ -40,23 +41,43 @@ export const DockerHostsCommandTexts = {
   stopping: (name: string, host: string) => `Stopping the container ${name} on ${host}…`,
   stopped: (name: string) => `The container ${name} was stopped.`,
   stopFailed: (name: string, detail: string) => `The container ${name} could not be stopped: ${detail}`,
+  starting: (name: string, host: string) => `Starting the container ${name} on ${host}…`,
+  started: (name: string) => `The container ${name} was started.`,
+  startFailed: (name: string, detail: string) => `The container ${name} could not be started: ${detail}`,
+  pruneQuestion: (host: string) => `Remove the unused build cache on ${host}?`,
+  pruneDetail: (unused: string) =>
+    `Docker removes the records of its build cache that no build uses now. This frees about ${unused} on the disk of the host. The next builds there take longer, because they build those steps again. Devspaces builds its images again when it needs them.`,
+  prune: 'Remove Unused Build Cache',
+  pruning: (host: string) => `Removing the unused build cache on ${host}…`,
+  pruned: (host: string) => `Removed the unused build cache on ${host}.`,
+  pruneFailed: (host: string, detail: string) => `The build cache on ${host} could not be removed: ${detail}`,
   removeQuestion: (count: number, host: string) => (count === 1 ? `Remove 1 object from ${host}?` : `Remove ${count} objects from ${host}?`),
-  removeDetail: (names: readonly string[], otherDevspace: boolean) =>
+  removeDetail: (names: readonly string[], otherDevspace: boolean, notDevspaces = false) =>
     [
       listed(names),
-      'Docker removes no object that a container uses, and no running container: Devspaces never removes with force. This cannot be undone.',
+      'Devspaces never removes with force: it keeps a running container, and every image, volume and network that a container uses. This cannot be undone.',
       ...(otherDevspace
         ? ['Some of them belong to a devspace that this computer does not know (for example of another computer). A workspace volume holds the changes of that devspace that were not pushed: they are lost with it.']
         : []),
+      ...(notDevspaces ? ['Some of them do not belong to Devspaces: another program or a service of this host may need them, and a volume may hold its data.'] : []),
     ].join('\n\n'),
   remove: 'Remove',
   removing: (host: string) => `Removing objects from ${host}…`,
   nothingToRemove:
-    'Remove… removes no object of a devspace of this computer and no running container. Delete the devspace with Delete…, which checks its Git changes first, and stop a running container first.',
-  skipped: (count: number) => (count === 1 ? ' 1 selected object was skipped: an object of a devspace of this computer, or a running container.' : ` ${count} selected objects were skipped: objects of a devspace of this computer, or running containers.`),
+    'Remove… removes no object of a devspace of this computer, no running container, and no network of Docker itself. Delete the devspace with Delete…, which checks its Git changes first, and stop a running container first.',
+  skipped: (count: number) =>
+    count === 1
+      ? ' 1 selected object was skipped: an object of a devspace of this computer, a running container, or a network of Docker itself.'
+      : ` ${count} selected objects were skipped: objects of a devspace of this computer, running containers, or networks of Docker itself.`,
   removed: (removed: number, total: number, host: string) => (removed === total ? `Removed ${total === 1 ? '1 object' : `${total} objects`} from ${host}.` : `Removed ${removed} of ${total} objects from ${host}.`),
   left: (names: readonly string[]) => ` Left: ${listed(names)}. The log says why.`,
   readFailed: (host: string) => `The objects on ${host} could not be read.`,
+  vmNotRunning: (state: VmState): string =>
+    state.kind === 'stopped'
+      ? 'The VM of Devspaces does not run now, so Devspaces did not change its objects. Start the VM to see them again.'
+      : state.kind === 'notSetUp'
+        ? 'The VM of Devspaces is not set up anymore, so Devspaces did not change its objects.'
+        : `Devspaces cannot use the VM of Devspaces now (${state.kind === 'broken' ? 'it is broken' : 'its state is not known'}), so it did not change its objects.${state.detail !== undefined ? ` ${state.detail}` : ''}`,
 };
 
 /** At most five names, then the number of the others. */
@@ -78,6 +99,10 @@ export interface DockerHostsDeps {
   read: (host: string, signal: AbortSignal) => Promise<HostInventory>;
   /** `docker container stop` of `object` on `host`. */
   stopContainer: (host: string, object: HostObject, signal: AbortSignal) => Promise<ObjectResult>;
+  /** `docker container start` of `object` on `host`. */
+  startContainer: (host: string, object: HostObject, signal: AbortSignal) => Promise<ObjectResult>;
+  /** Removes the build cache that no build uses now on `host`. */
+  pruneBuildCache: (host: string, signal: AbortSignal) => Promise<void>;
   /** Removes `objects` on `host`, never with force. */
   removeObjects: (host: string, objects: readonly HostObject[], signal: AbortSignal, onItem: (text: string) => void) => Promise<ObjectResult[]>;
   /** Devspaces uses `host` after its test (RemoteDockerCommands.selectHost). */
@@ -199,6 +224,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     const row = objectRowOf(argument);
     if (row === undefined || !objectActions(row).stop) return;
     const { host, object } = row;
+    if (!(await this.vmRunsFor(host))) return;
     try {
       const result = await withNotificationProgress({ title: DockerHostsCommandTexts.stopping(object.name, host), cancellable: true }, (_progress, token) =>
         withAbort(token, (signal) => this.deps.stopContainer(host, object, signal)),
@@ -207,6 +233,44 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
       else this.warnWithLog(DockerHostsCommandTexts.stopFailed(object.name, result.detail ?? ''));
     } catch (error) {
       if (!isAbortError(error)) this.warnWithLog(DockerHostsCommandTexts.stopFailed(object.name, errorMessage(error)));
+    } finally {
+      this.invalidate(host);
+    }
+  }
+
+  /** "Start" of a stopped container that is not of Devspaces (a service of the host that the user stopped before). */
+  async startObject(argument: unknown): Promise<void> {
+    const row = objectRowOf(argument);
+    if (row === undefined || !objectActions(row).start) return;
+    const { host, object } = row;
+    if (!(await this.vmRunsFor(host))) return;
+    try {
+      const result = await withNotificationProgress({ title: DockerHostsCommandTexts.starting(object.name, host), cancellable: true }, (_progress, token) =>
+        withAbort(token, (signal) => this.deps.startContainer(host, object, signal)),
+      );
+      if (result.outcome === 'started') this.inform(DockerHostsCommandTexts.started(object.name));
+      else this.warnWithLog(DockerHostsCommandTexts.startFailed(object.name, result.detail ?? ''));
+    } catch (error) {
+      if (!isAbortError(error)) this.warnWithLog(DockerHostsCommandTexts.startFailed(object.name, errorMessage(error)));
+    } finally {
+      this.invalidate(host);
+    }
+  }
+
+  /** "Remove Unused Build Cache…" of the build cache row of a host: after one question, `docker builder prune --all`. */
+  async pruneBuildCache(argument: unknown): Promise<void> {
+    const row = buildCacheRowOf(argument);
+    if (row === undefined || row.cache.unusedBytes <= 0) return;
+    const { host } = row;
+    const answer = await showWarningMessage(DockerHostsCommandTexts.pruneQuestion(host), { modal: true, detail: DockerHostsCommandTexts.pruneDetail(formatSize(row.cache.unusedBytes)) }, DockerHostsCommandTexts.prune);
+    if (answer !== DockerHostsCommandTexts.prune || !(await this.vmRunsFor(host))) return;
+    this.deps.logger.info(`Remove Unused Build Cache… on ${host}.`);
+    try {
+      await withNotificationProgress({ title: DockerHostsCommandTexts.pruning(host), cancellable: true }, (_progress, token) => withAbort(token, (signal) => this.deps.pruneBuildCache(host, signal)));
+      this.inform(DockerHostsCommandTexts.pruned(host));
+    } catch (error) {
+      if (isAbortError(error)) this.deps.logger.info(`Remove Unused Build Cache… on ${host} was cancelled.`);
+      else this.warnWithLog(DockerHostsCommandTexts.pruneFailed(host, errorMessage(error)));
     } finally {
       this.invalidate(host);
     }
@@ -233,9 +297,10 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     const detail = DockerHostsCommandTexts.removeDetail(
       objects.map((object) => `${object.kind} ${object.name}`),
       objects.some((object) => object.purpose === 'otherDevspace'),
+      objects.some((object) => object.purpose === 'notDevspaces'),
     );
     const answer = await showWarningMessage(DockerHostsCommandTexts.removeQuestion(objects.length, host), { modal: true, detail }, DockerHostsCommandTexts.remove);
-    if (answer !== DockerHostsCommandTexts.remove) return;
+    if (answer !== DockerHostsCommandTexts.remove || !(await this.vmRunsFor(host))) return;
     this.deps.logger.info(`Remove… on ${host}: ${objects.map((object) => `${object.kind} ${object.name}`).join(', ')}.`);
     try {
       const results = await withNotificationProgress({ title: DockerHostsCommandTexts.removing(host), cancellable: true }, (progress, token) =>
@@ -255,6 +320,22 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
   }
 
   // -------------------------------------------------------------------------------------------------------------------
+
+  /**
+   * Whether an action on the objects of `host` may run: on the VM of Devspaces only while it runs now. Its rows may come
+   * from a read before the VM stopped (for example by Stop the VM… in another window), and each Docker call to the VM
+   * would start it. A VM that does not run shows its row of now again, and the action does not run.
+   */
+  private async vmRunsFor(host: string): Promise<boolean> {
+    if (host !== this.deps.vmHost) return true;
+    const state = await this.deps.vmState();
+    if (state.kind === 'running') return true;
+    this.deps.logger.info(`The VM of Devspaces does not run now (${state.kind}); the action on its objects did not run.`);
+    this.inform(DockerHostsCommandTexts.vmNotRunning(state));
+    this.entries.delete(host);
+    this.changed();
+    return false;
+  }
 
   private async hostRows(): Promise<HostRow[]> {
     let hosts: string[] = [];
@@ -298,10 +379,12 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
         return [message(row.host, 'readFailed', entry.detail)];
       case 'inventory': {
         const { inventory } = entry;
-        const groups: GroupRow[] = [
+        const groups: Array<GroupRow | BuildCacheRow> = [
           { hostsNode: 'group', host: row.host, group: 'container', objects: inventory.containers },
           { hostsNode: 'group', host: row.host, group: 'image', objects: inventory.images },
           { hostsNode: 'group', host: row.host, group: 'volume', objects: inventory.volumes },
+          { hostsNode: 'group', host: row.host, group: 'network', objects: inventory.networks },
+          { hostsNode: 'buildCache', host: row.host, cache: inventory.buildCache },
         ];
         return groups;
       }
@@ -371,6 +454,13 @@ function objectRowOf(argument: unknown): ObjectRow | undefined {
   if (typeof argument !== 'object' || argument === null) return undefined;
   const row = argument as Partial<ObjectRow>;
   return row.hostsNode === 'object' && typeof row.host === 'string' && typeof row.object === 'object' && row.object !== null ? (row as ObjectRow) : undefined;
+}
+
+/** The build cache row of a command argument, else undefined. */
+function buildCacheRowOf(argument: unknown): BuildCacheRow | undefined {
+  if (typeof argument !== 'object' || argument === null) return undefined;
+  const row = argument as Partial<BuildCacheRow>;
+  return row.hostsNode === 'buildCache' && typeof row.host === 'string' && typeof row.cache === 'object' && row.cache !== null && typeof row.cache.unusedBytes === 'number' ? (row as BuildCacheRow) : undefined;
 }
 
 /** Runs `task` with a signal that the Cancel of `token` aborts. */

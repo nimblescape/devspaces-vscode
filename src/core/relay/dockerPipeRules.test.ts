@@ -90,13 +90,20 @@ describe('the filter of the Docker pipe of the extension', () => {
     `POST /containers/${ID}/wait`,
     `POST /containers/${ID}/start`,
     `POST /containers/${ID}/kill`,
-    // The Stop of a helper container in the view "Docker Hosts" (R-ENG-008).
+    // The Stop and the Start of a container in the view "Docker Hosts" (R-ENG-008).
     `POST /containers/${ID}/stop`,
+    // Its networks (`docker network ls`, and `docker network rm`, which inspects first) and its build cache
+    // (`docker builder prune --all`: with buildx BuildKit over `POST /grpc`, without buildx `POST /build/prune`).
+    'GET /networks',
+    'GET /networks/shop_default',
+    `DELETE /networks/${ID}`,
+    'POST /grpc',
+    'POST /build/prune',
   ])('lets %s through, which Devspaces needs', (line) => {
     expect(allowed(extensionPipeRule, line)).toBe(true);
   });
 
-  it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/restart`, 'POST /images/load', 'POST /volumes/create', 'GET /events'])(
+  it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/restart`, 'POST /images/load', 'POST /volumes/create', 'GET /events', 'POST /networks/create', `POST /networks/${ID}/disconnect`, 'POST /networks/prune'])(
     'refuses %s, which it does not need',
     (line) => {
       const [method, path] = line.split(' ');

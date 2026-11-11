@@ -196,7 +196,7 @@ export interface ControllerDeps {
    * its objects. After a command with one of its rows (also Stop and Delete of a devspace, Update All Images Now and
    * Remove Devspaces from This Docker Engine… of a host row), the view reads that host again when it is open.
    */
-  dockerHosts?: Pick<DockerHostsView, 'refresh' | 'select' | 'removeFromList' | 'stopObject' | 'removeObjects' | 'invalidate'>;
+  dockerHosts?: Pick<DockerHostsView, 'refresh' | 'select' | 'removeFromList' | 'stopObject' | 'startObject' | 'pruneBuildCache' | 'removeObjects' | 'invalidate'>;
   /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
   vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
   /**
@@ -551,6 +551,8 @@ export class Controller implements vscode.Disposable {
       selectDockerHost: async (argument) => this.deps.dockerHosts?.select(argument),
       removeDockerHostFromList: async (argument) => this.deps.dockerHosts?.removeFromList(argument),
       stopDockerObject: async (argument) => this.deps.dockerHosts?.stopObject(argument),
+      startDockerObject: async (argument) => this.deps.dockerHosts?.startObject(argument),
+      pruneBuildCache: async (argument) => this.deps.dockerHosts?.pruneBuildCache(argument),
       // VS Code passes the selected rows of the view as the second argument (canSelectMany).
       removeDockerObjects: async (argument, selection) => this.deps.dockerHosts?.removeObjects(argument, selection),
       startVm: async () => this.deps.vm?.start(),
@@ -579,6 +581,8 @@ export class Controller implements vscode.Disposable {
       'selectDockerHost',
       'removeDockerHostFromList',
       'stopDockerObject',
+      'startDockerObject',
+      'pruneBuildCache',
       'removeDockerObjects',
       'startVm',
       'stopVm',

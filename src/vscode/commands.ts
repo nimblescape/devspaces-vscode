@@ -85,6 +85,8 @@ export const Commands = {
   selectDockerHost: 'devspaces.selectDockerHost',
   removeDockerHostFromList: 'devspaces.removeDockerHostFromList',
   stopDockerObject: 'devspaces.stopDockerObject',
+  startDockerObject: 'devspaces.startDockerObject',
+  pruneBuildCache: 'devspaces.pruneBuildCache',
   removeDockerObjects: 'devspaces.removeDockerObjects',
   // The VM of Devspaces in its row of the view "Docker Hosts" (vmCommands.ts, R-VM-010), the same on every platform:
   // Start, Stop, Remove, Remove and Set Up Again, and its settings (macOS and Linux).

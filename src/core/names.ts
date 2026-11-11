@@ -135,6 +135,8 @@ export const HOST_ACCESS_CHECKED = 'checked';
  * and the host access policy read it).
  */
 export const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
+/** Label that Docker Compose gives each container of a project: the name of its service. */
+export const COMPOSE_SERVICE_LABEL = 'com.docker.compose.service';
 /**
  * `--label` values of the override configuration of a single container: the labels by which Docker Compose finds the
  * containers of a project, with empty values, so that labels that the image inherited (for example of an image that
