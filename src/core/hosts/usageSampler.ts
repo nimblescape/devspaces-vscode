@@ -11,7 +11,7 @@
 // and the data folder of Docker once from `docker info`, each between two samples and only while a container runs. Nothing retries a failed sample: each end is reported once. No `vscode`.
 import { errorMessage } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';
-import type { Logger, RunResult } from '../ports';
+import { systemClock, type Clock, type Logger, type RunResult } from '../ports';
 import { isUsableDockerRoot, newUsageMarker, usageDockerScript, usageScript, type UsageSampleKind } from './usageScript';
 import { UsageSampleError, parseUsageNames, readUsageSample, type UsageBlock, type UsageHeader } from './usageSample';
 import { usageOf, type HostUsage } from './usageRates';
@@ -36,8 +36,10 @@ export const USAGE_DOCKER_TIMEOUT_MS = 10_000;
 /** The arguments of these Docker calls (reads, so that the shared shell of the host runs them). */
 export const USAGE_NAMES_ARGS: readonly string[] = ['ps', '--no-trunc', '--format', '{{.ID}} {{.Names}}'];
 export const USAGE_ROOT_ARGS: readonly string[] = ['info', '--format', '{{.DockerRootDir}}'];
-/** The interval is at least this many times the time the host needed for the last sample. */
+/** The interval is at least this many times the time the host needed for the last sample, */
 const USAGE_SLOW_FACTOR = 4;
+/** but at most this long (the uptime of the host is not trusted: it jumps, for example, after a suspend). */
+export const MAX_USAGE_INTERVAL_MS = 60_000;
 /** The end of the error output that is kept for the reason of an end. */
 const STDERR_TAIL_LENGTH = 8 * 1024;
 
@@ -78,16 +80,15 @@ export type UsageEnd =
   | { kind: 'vmIdle' };
 
 /** The timers of the samples (the tests give fake ones). */
-export interface UsageTimers {
+export interface UsageTimers extends Clock {
   setTimeout(callback: () => void, ms: number): unknown;
   clearTimeout(handle: unknown): void;
-  now(): number;
 }
 
 const realTimers: UsageTimers = {
   setTimeout: (callback, ms) => setTimeout(callback, ms),
   clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
-  now: () => Date.now(),
+  now: () => systemClock.now(),
 };
 
 export interface UsageSamplerOptions {
@@ -139,6 +140,8 @@ export class UsageSampler {
   private names: ReadonlyMap<string, string> | undefined;
   /** The IDs of the containers at the last `docker ps` that worked, and when the next one may run. */
   private namedIds: string | undefined;
+  /** The last `docker ps` did not list every container of its block (one was starting): it runs again later. */
+  private namesIncomplete = false;
   private nextNamesAt = 0;
   /** The data folder of Docker: undefined until `docker info` ran, then the folder ('' for /var/lib/docker). */
   private dockerRoot: string | undefined;
@@ -172,11 +175,15 @@ export class UsageSampler {
     return this.stage === 'ended';
   }
 
-  /** No more samples (the page is hidden): the sample that runs still ends and is reported. */
+  /**
+   * No more samples (the page is hidden): the sample that runs still ends and is reported. The hold of the shell ends
+   * meanwhile, so that a connection of the relay may take over the shell.
+   */
   pause(): void {
     if (this.paused) return;
     this.paused = true;
     this.clearNext();
+    this.endHold();
   }
 
   /**
@@ -187,6 +194,7 @@ export class UsageSampler {
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
+    if (this.stage === 'running') this.release ??= this.options.hold?.();
     if (this.lastStartedAt === undefined) {
       this.sample();
       return;
@@ -264,14 +272,16 @@ export class UsageSampler {
     }
     const { header, block } = output;
     // A new start of the kernel: its counters start at 0, so no rate from the block before it.
-    const restarted = this.headerValue !== undefined && this.headerValue.bootId !== header.bootId;
+    // Only two boot IDs that were read: one that the host could not read once is no new start.
+    const before = this.headerValue?.bootId;
+    const restarted = before !== undefined && header.bootId !== undefined && before !== header.bootId;
     if (restarted) this.previous = undefined;
     const first = this.headerValue === undefined;
     this.headerValue = header;
     const usage = usageOf(block, this.previous);
     this.previous = block;
     // A host that needs long for a sample gets more time between the samples, so they cost it little.
-    this.interval = Math.max(this.options.intervalMs, USAGE_SLOW_FACTOR * Number(block.endCs - block.startCs) * 10);
+    this.interval = Math.max(this.options.intervalMs, Math.min(MAX_USAGE_INTERVAL_MS, USAGE_SLOW_FACTOR * Number(block.endCs - block.startCs) * 10));
     try {
       if (first || restarted) this.options.onHeader?.(header);
       if (this.stage === 'running') this.options.onBlock(block, usage, this.names);
@@ -304,7 +314,7 @@ export class UsageSampler {
   private async between(): Promise<void> {
     const now = this.timers.now();
     const ids = this.containerIds;
-    if (ids !== this.namedIds && ids !== '' && now >= this.nextNamesAt) {
+    if ((ids !== this.namedIds || this.namesIncomplete) && ids !== '' && now >= this.nextNamesAt) {
       this.nextNamesAt = now + USAGE_NAMES_EVERY_MS;
       const result = await this.dockerCall(USAGE_NAMES_ARGS);
       if (this.stage !== 'running') return;
@@ -313,8 +323,11 @@ export class UsageSampler {
         return;
       }
       try {
-        this.names = parseUsageNames(result.stdout);
+        const names = parseUsageNames(result.stdout);
+        this.names = names;
         this.namedIds = ids;
+        this.namesIncomplete = ids.split(' ').some((id) => !names.has(id));
+        if (this.namesIncomplete) this.nextNamesAt = this.timers.now() + USAGE_NAMES_RETRY_MS;
         this.nextRootAt ??= this.timers.now();
       } catch (error) {
         this.options.logger.warn(`The names of the containers of ${this.options.name} could not be read: ${errorMessage(error)}`);
@@ -325,11 +338,12 @@ export class UsageSampler {
     if (ids === '' || this.dockerRoot !== undefined || this.nextRootAt === undefined || now < this.nextRootAt) return;
     const result = await this.dockerCall(USAGE_ROOT_ARGS);
     if (this.stage !== 'running') return;
-    if (result === undefined) {
+    const folder = result?.stdout.trim().replace(/(.)\/+$/, '$1') ?? '';
+    // No answer, also an empty one (an Engine that starts): again later.
+    if (folder === '') {
       this.nextRootAt = this.timers.now() + USAGE_ROOT_RETRY_MS;
       return;
     }
-    const folder = result.stdout.trim().replace(/(.)\/+$/, '$1');
     this.dockerRoot = folder !== '/var/lib/docker' && isUsableDockerRoot(folder) ? folder : '';
   }
 
@@ -350,7 +364,8 @@ export class UsageSampler {
       if (result.exitCode === 0 && !result.timedOut) return result;
       // 124: `timeout` on the host ended it.
       const why = result.timedOut || result.exitCode === 124 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
-      logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why}); the page goes on without it.`);
+      const detail = readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
+      logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why})${detail ? `: ${detail}` : ''}; the page goes on without it.`);
     } catch (error) {
       logger.info(`docker ${args[0]} for the utilization page of ${name} failed: ${errorMessage(error)}`);
     }
@@ -380,13 +395,17 @@ export class UsageSampler {
     this.nextTimer = undefined;
   }
 
+  private endHold(): void {
+    this.release?.();
+    this.release = undefined;
+  }
+
   /** Reports `end` once. */
   private finish(end: UsageEnd): void {
     if (this.stage === 'ended') return;
     this.stage = 'ended';
     this.clearNext();
-    this.release?.();
-    this.release = undefined;
+    this.endHold();
     try {
       this.options.onEnd(end);
     } catch (error) {

@@ -5,11 +5,14 @@
 import { describe, expect, it } from 'vitest';
 import { silentLogger, type RunResult } from '../ports';
 import {
+  MAX_USAGE_INTERVAL_MS,
   MIN_USAGE_ANSWER_MS,
+  USAGE_DISK_EVERY,
   USAGE_NAMES_ARGS,
   USAGE_NAMES_EVERY_MS,
   USAGE_NAMES_RETRY_MS,
   USAGE_ROOT_ARGS,
+  USAGE_ROOT_RETRY_MS,
   UsageSampler,
   VM_USAGE_INTERVAL_MS,
   type UsageEnd,
@@ -197,6 +200,29 @@ describe('UsageSampler', () => {
     expect(blocks.map(({ usage }) => usage.cpu !== undefined)).toEqual([false, true, false, true]);
   });
 
+  it('takes a boot ID that the host could not read once for no new start of the kernel', async () => {
+    const { host, timers, blocks, headers } = await start({ docker: null });
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    host.boot = '-';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    host.boot = BOOT;
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(headers.map((header) => header.bootId)).toEqual([BOOT]);
+    expect(blocks.map(({ usage }) => usage.cpu !== undefined)).toEqual([false, true, true, true]);
+  });
+
+  it('gives a host whose uptime jumps (for example after a suspend) at most MAX_USAGE_INTERVAL_MS between the samples', async () => {
+    const host = new FakeHost();
+    // A sample of 10 hours by the uptime of the host.
+    host.durationCs = 3_600_000;
+    const { timers } = await start({ host, docker: null });
+    await timers.advance(MAX_USAGE_INTERVAL_MS - 1);
+    expect(host.sent).toHaveLength(1);
+    await timers.advance(1);
+    expect(host.sent).toHaveLength(2);
+    expect(host.sent[1].timeoutMs).toBe(3 * MAX_USAGE_INTERVAL_MS);
+  });
+
   it('gives a slow host more time between the samples', async () => {
     const host = new FakeHost();
     host.durationCs = 100;
@@ -247,6 +273,41 @@ describe('UsageSampler', () => {
       ['t', '/data/docker'],
       ['d', '/data/docker'],
     ]);
+  });
+
+  it('runs docker ps again after a minute when it did not list a container of the block (one that was starting)', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A, ID_B];
+    let listed = [ID_A];
+    const { timers, blocks, dockerCalls } = await start({ host, docker: async (args) => ran(OK(args[0] === 'ps' ? listed.map((id) => `${id} n-${id[0]}`).join('\n') : '/var/lib/docker\n')) });
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(blocks[1].names).toEqual(new Map([[ID_A, 'n-a']]));
+    listed = [ID_A, ID_B];
+    await timers.advance(USAGE_NAMES_RETRY_MS - 2 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(1);
+    await timers.advance(2 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(2);
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(blocks[blocks.length - 1].names).toEqual(new Map([[ID_A, 'n-a'], [ID_B, 'n-b']]));
+    // All named: no more docker ps for the same set.
+    await timers.advance(3 * USAGE_NAMES_RETRY_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'ps')).toHaveLength(2);
+  });
+
+  it('asks docker info again after 300 s when its answer was empty (an Engine that starts)', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    let root = '\n';
+    const { timers, dockerCalls } = await start({ host, docker: async (args) => ran(OK(args[0] === 'ps' ? `${ID_A} web\n` : root)) });
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'info')).toHaveLength(1);
+    root = '/data/docker\n';
+    await timers.advance(USAGE_ROOT_RETRY_MS - 2 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'info')).toHaveLength(1);
+    await timers.advance(3 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls.filter((args) => args[0] === 'info')).toHaveLength(2);
+    await timers.advance(USAGE_DISK_EVERY * VM_USAGE_INTERVAL_MS);
+    expect(host.sent[host.sent.length - 1].root).toBe('/data/docker');
   });
 
   it('tries a failed docker ps again after a minute, and goes on with the samples', async () => {
@@ -385,9 +446,14 @@ describe('UsageSampler', () => {
       },
     });
     expect([holds, releases]).toEqual([1, 0]);
-    sampler.stop();
-    sampler.stop();
+    // No hold while paused: the relay may take over the shell meanwhile.
+    sampler.pause();
     expect([holds, releases]).toEqual([1, 1]);
+    sampler.resume();
+    expect([holds, releases]).toEqual([2, 1]);
+    sampler.stop();
+    sampler.stop();
+    expect([holds, releases]).toEqual([2, 2]);
   });
 
   it('logs a handler of the end that throws, and stays ended', async () => {
