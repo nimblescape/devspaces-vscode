@@ -139,9 +139,9 @@ const DOCKER_SCRIPTS = new Map([USAGE_NAMES_ARGS, USAGE_ROOT_ARGS].map((args) =>
  * Starts a sampler on `host`: its samples go to `run` (default the host), its Docker calls to `docker` (default: the
  * names of the containers of the host, and /var/lib/docker; null: a Docker call fails the test).
  */
-async function start(options: Partial<UsageSamplerOptions> & { host?: FakeHost; docker?: FakeDocker | null } = {}): Promise<Started> {
-  const { host: givenHost, docker: givenDocker, run: givenRun, ...rest } = options;
-  const timers = new FakeTimers();
+async function start(options: Omit<Partial<UsageSamplerOptions>, 'timers'> & { host?: FakeHost; docker?: FakeDocker | null; timers?: FakeTimers } = {}): Promise<Started> {
+  const { host: givenHost, docker: givenDocker, run: givenRun, timers: givenTimers, ...rest } = options;
+  const timers = givenTimers ?? new FakeTimers();
   const host = givenHost ?? new FakeHost();
   host.clock = () => timers.now();
   const started: Started = { timers, host, blocks: [], headers: [], ends: [], dockerCalls: [] } as unknown as Started;
@@ -226,22 +226,28 @@ describe('UsageSampler', () => {
     // A sample of 10 hours by the uptime of the host.
     host.durationCs = 3_600_000;
     const { timers } = await start({ host, docker: null });
-    await timers.advance(MAX_USAGE_INTERVAL_MS - 1);
-    expect(host.sent).toHaveLength(1);
-    await timers.advance(1);
+    // The first sample is a d, which does not set the interval; the second (a t) does.
+    await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(host.sent).toHaveLength(2);
-    expect(host.sent[1].timeoutMs).toBe(3 * MAX_USAGE_INTERVAL_MS);
+    await timers.advance(MAX_USAGE_INTERVAL_MS - 1);
+    expect(host.sent).toHaveLength(2);
+    await timers.advance(1);
+    expect(host.sent).toHaveLength(3);
+    expect(host.sent[2].timeoutMs).toBe(3 * MAX_USAGE_INTERVAL_MS);
   });
 
   it('gives a slow host more time between the samples', async () => {
     const host = new FakeHost();
     host.durationCs = 100;
     const { timers } = await start({ host, docker: null });
-    // 1 s for the sample: 4 s until the next one.
+    // The first sample (a d, which also reads the disks) does not set the interval.
     await timers.advance(VM_USAGE_INTERVAL_MS);
-    expect(host.sent).toHaveLength(1);
-    await timers.advance(4_000 - VM_USAGE_INTERVAL_MS);
     expect(host.sent).toHaveLength(2);
+    // 1 s for the second sample (a t): 4 s until the next one.
+    await timers.advance(4_000 - 1);
+    expect(host.sent).toHaveLength(2);
+    await timers.advance(1);
+    expect(host.sent).toHaveLength(3);
   });
 
   it('reads the names with docker ps when the set of containers changed, at most every 10 s, and the data folder of Docker once', async () => {
@@ -346,15 +352,19 @@ describe('UsageSampler', () => {
     expect(ends).toEqual([{ kind: 'failed', detail: 'adapter broke' }]);
   });
 
-  it('reads the data folder of Docker again after a new start of the kernel', async () => {
+  it('reads the names and the data folder of Docker again after a new start of the kernel', async () => {
     const host = new FakeHost();
     host.containers = [ID_A];
-    const { timers, dockerCalls } = await start({ host });
+    const { timers, dockerCalls, blocks } = await start({ host });
     await timers.advance(2 * VM_USAGE_INTERVAL_MS);
     expect(dockerCalls.filter((args) => args[0] === 'info')).toHaveLength(1);
+    expect(blocks[blocks.length - 1].names).toBeDefined();
     host.boot = 'd979624d-e703-46d3-ae35-c4cb34a59e91';
-    // docker ps again at most 10 s after the last one, then docker info.
-    await timers.advance(USAGE_NAMES_EVERY_MS + 2 * VM_USAGE_INTERVAL_MS);
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    // The names of the containers before the new start are gone.
+    expect(blocks[blocks.length - 1].names).toBeUndefined();
+    // docker ps again, then docker info.
+    await timers.advance(2 * VM_USAGE_INTERVAL_MS);
     expect(dockerCalls.map((args) => args[0])).toEqual(['ps', 'info', 'ps', 'info']);
   });
 
@@ -386,6 +396,48 @@ describe('UsageSampler', () => {
     expect(ends).toEqual([{ kind: 'vmStopped' }]);
     await timers.advance(10 * VM_USAGE_INTERVAL_MS);
     expect(host.sent).toHaveLength(1);
+  });
+
+  it('keeps the rates when a Docker call between two samples took long', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    const timers = new FakeTimers();
+    const { blocks } = await start({
+      host,
+      timers,
+      docker: async (args) => {
+        // 7 s for docker ps (a host without `timeout`): the next block is 7 s after the one before it, more than 3
+        // intervals.
+        if (args[0] === 'ps') await new Promise<void>((resolve) => timers.setTimeout(resolve, 7_000));
+        return ran(OK(args[0] === 'ps' ? `${ID_A} web\n` : '/var/lib/docker\n'));
+      },
+    });
+    await timers.advance(7_000);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[1].usage.cpu).toBeDefined();
+  });
+
+  it('runs the first sample after resume returned when it was paused before it started', async () => {
+    const holder: { sampler?: UsageSampler } = {};
+    const seen: string[] = [];
+    holder.sampler = UsageSampler.start({
+      logger: silentLogger,
+      name: 'box',
+      intervalMs: VM_USAGE_INTERVAL_MS,
+      run: () => {
+        throw new Error('gone');
+      },
+      onBlock: () => undefined,
+      onEnd: (end) => seen.push(end.kind),
+      timers: new FakeTimers(),
+    });
+    holder.sampler.pause();
+    await flush();
+    expect(seen).toEqual([]);
+    holder.sampler.resume();
+    expect(seen).toEqual([]);
+    await flush();
+    expect(seen).toEqual(['failed']);
   });
 
   it('reports the end of a run that throws at once only after start returned', async () => {

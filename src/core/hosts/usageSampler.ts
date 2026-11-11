@@ -36,6 +36,9 @@ export const USAGE_DOCKER_TIMEOUT_MS = 10_000;
 /** The arguments of these Docker calls (reads, so that the shared shell of the host runs them). */
 export const USAGE_NAMES_ARGS: readonly string[] = ['ps', '--no-trunc', '--format', '{{.ID}} {{.Names}}'];
 export const USAGE_ROOT_ARGS: readonly string[] = ['info', '--format', '{{.DockerRootDir}}'];
+/** The scripts of these Docker calls. */
+const USAGE_NAMES_SCRIPT = usageDockerScript(USAGE_NAMES_ARGS);
+const USAGE_ROOT_SCRIPT = usageDockerScript(USAGE_ROOT_ARGS);
 /** The interval is at least this many times the time the host needed for the last sample, */
 const USAGE_SLOW_FACTOR = 4;
 /** but at most this long (the uptime of the host is not trusted: it jumps, for example, after a suspend). */
@@ -163,6 +166,8 @@ export class UsageSampler {
   private idleSeen = false;
   /** When the last sample started. */
   private lastStartedAt: number | undefined;
+  /** How long the Docker call after the last sample took (0 without one): it may lengthen the gap to the next block. */
+  private betweenMs = 0;
   /** The end of the hold of `hold`. */
   private release: (() => void) | undefined;
 
@@ -206,7 +211,8 @@ export class UsageSampler {
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    if (this.lastStartedAt === undefined) this.sample();
+    // The first sample after resume returned, as after start (an end never comes within the call).
+    if (this.lastStartedAt === undefined) queueMicrotask(() => this.sample());
     else this.schedule(this.lastStartedAt);
   }
 
@@ -230,7 +236,11 @@ export class UsageSampler {
         const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
         const run = await this.options.run(script, timeoutMs);
         // No Docker call after the page was hidden: no work for a page that nobody sees.
-        if (this.stage === 'running' && this.take(run, marker, seq, timeoutMs) && !this.paused) await this.between();
+        if (this.stage === 'running' && this.take(run, marker, seq, kind, timeoutMs) && !this.paused) {
+          const before = this.timers.now();
+          await this.between();
+          this.betweenMs = this.timers.now() - before;
+        } else this.betweenMs = 0;
       } catch (error) {
         const detail = errorMessage(error);
         this.options.logger.warn(`The utilization sample of ${this.options.name} failed: ${detail}`);
@@ -243,7 +253,7 @@ export class UsageSampler {
   }
 
   /** The run of sample `seq`: its block to the page, or the end. False after an end. */
-  private take(run: UsageRun, marker: string, seq: number, timeoutMs: number): boolean {
+  private take(run: UsageRun, marker: string, seq: number, kind: UsageSampleKind, timeoutMs: number): boolean {
     const { logger, name } = this.options;
     if (run.kind === 'notRun') {
       this.notRun(run.reason);
@@ -253,7 +263,7 @@ export class UsageSampler {
     if (result.timedOut) {
       // Also a login of the shell that did not answer in time: then its error output says so.
       const detail = stderrTail(result);
-      logger.warn(`${name} did not answer the utilization sample in time (${timeoutMs / 1000} seconds for the sample)${detail ? `: ${detail}` : '.'}`);
+      logger.warn(`${name} did not answer the utilization sample in time: ${detail || `the sample took more than ${timeoutMs / 1000} seconds.`}`);
       this.finish({ kind: 'noAnswer', detail });
       return false;
     }
@@ -286,17 +296,22 @@ export class UsageSampler {
       // Docker may have another data folder now (a new data-root needs a new start of the Engine): read again.
       this.dockerRoot = undefined;
       this.nextRootAt = undefined;
+      this.names = undefined;
       this.namedIds = undefined;
+      this.namesIncomplete = false;
+      this.namesRetried = undefined;
+      this.nextNamesAt = 0;
     }
     const first = this.headerValue === undefined;
     this.headerValue = header;
     // No rate over a long gap (a pause, a sample that waited long on the shell, a suspend of the host): it would be the
     // mean of the whole gap, no live value.
     const gapMs = this.previous === undefined ? 0 : Number(block.startCs - this.previous.startCs) * 10;
-    const usage = usageOf(block, gapMs <= USAGE_RATE_GAP_FACTOR * this.interval ? this.previous : undefined);
+    const usage = usageOf(block, gapMs <= USAGE_RATE_GAP_FACTOR * this.interval + this.betweenMs ? this.previous : undefined);
     this.previous = block;
-    // A host that needs long for a sample gets more time between the samples, so they cost it little.
-    this.interval = Math.max(this.options.intervalMs, Math.min(MAX_USAGE_INTERVAL_MS, USAGE_SLOW_FACTOR * Number(block.endCs - block.startCs) * 10));
+    // A host that needs long for a sample gets more time between the samples, so they cost it little. Only by a sample
+    // `t`: a `d` also reads the disks, which may be slow alone.
+    if (kind === 't') this.interval = Math.max(this.options.intervalMs, Math.min(MAX_USAGE_INTERVAL_MS, USAGE_SLOW_FACTOR * Number(block.endCs - block.startCs) * 10));
     try {
       if (first || restarted) this.options.onHeader?.(header);
       if (this.stage === 'running') this.options.onBlock(block, usage, this.names);
@@ -331,8 +346,8 @@ export class UsageSampler {
     const ids = this.containerIds;
     if ((ids !== this.namedIds || this.namesIncomplete) && ids !== '' && now >= this.nextNamesAt) {
       this.nextNamesAt = now + USAGE_NAMES_EVERY_MS;
-      if (ids === this.namedIds) this.namesRetried = ids;
-      const result = await this.dockerCall(USAGE_NAMES_ARGS);
+      this.namesRetried = ids === this.namedIds ? ids : undefined;
+      const result = await this.dockerCall('ps', USAGE_NAMES_SCRIPT);
       if (this.stage !== 'running') return;
       if (result === undefined) {
         this.nextNamesAt = this.timers.now() + USAGE_NAMES_RETRY_MS;
@@ -351,7 +366,7 @@ export class UsageSampler {
       return;
     }
     if (ids === '' || this.dockerRoot !== undefined || this.nextRootAt === undefined || now < this.nextRootAt) return;
-    const result = await this.dockerCall(USAGE_ROOT_ARGS);
+    const result = await this.dockerCall('info', USAGE_ROOT_SCRIPT);
     if (this.stage !== 'running') return;
     const folder = result?.stdout.trim().replace(/(.)\/+$/, '$1') ?? '';
     // No answer, also an empty one (an Engine that starts): again later.
@@ -366,10 +381,10 @@ export class UsageSampler {
    * `docker <args>` within USAGE_DOCKER_TIMEOUT_MS: its result when it worked, else undefined (logged). A call that could
    * not run ends the samples (undefined too), and a `run` that rejects rejects here.
    */
-  private async dockerCall(args: readonly string[]): Promise<RunResult | undefined> {
+  private async dockerCall(command: string, script: string): Promise<RunResult | undefined> {
     const { logger, name } = this.options;
     // A `run` that rejects ends the samples, as for a sample (the catch of `sample`).
-    const run = await this.options.run(usageDockerScript(args), USAGE_DOCKER_TIMEOUT_MS);
+    const run = await this.options.run(script, USAGE_DOCKER_TIMEOUT_MS);
     if (this.stage !== 'running') return undefined;
     if (run.kind === 'notRun') {
       this.notRun(run.reason);
@@ -380,7 +395,7 @@ export class UsageSampler {
     // `timeout` on the host ended it: 124 (coreutils), or 143 (BusyBox, whose command gets TERM in its place).
     const why = result.timedOut || result.exitCode === 124 || result.exitCode === 143 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
     const detail = stderrTail(result);
-    logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why})${detail ? `: ${detail}` : ''}; the page goes on without it.`);
+    logger.info(`docker ${command} for the utilization page of ${name} failed (${why})${detail ? `: ${detail}` : ''}; the page goes on without it.`);
     return undefined;
   }
 

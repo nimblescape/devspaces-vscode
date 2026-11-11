@@ -216,9 +216,11 @@ export class RemoteShells {
 
   /**
    * Holds the shell to `host` back from the relay until the returned function runs (the utilization page of the host
-   * samples on it): takeOver gives the relay nothing then, and the relay logs in itself (within the flow that opens it,
-   * so it may ask). Without the hold, the next sample after a takeover would need a new login outside of a flow of the
-   * user, which cannot ask for a password.
+   * samples on it): takeOver gives nothing to a connection of the relay that opens in a flow of the user, which logs in
+   * itself and may ask, and nothing on the VM of Devspaces, whose login asks nothing. Without the hold, the next sample
+   * after a takeover would need a new login outside of a flow of the user, which cannot ask for a password. A
+   * connection of the relay in the background cannot ask either: it still takes the shell, because the window needs it
+   * more than the page, which logs in anew (or shows that it cannot).
    */
   keep(host: string): () => void {
     this.kept.set(host, (this.kept.get(host) ?? 0) + 1);
@@ -238,9 +240,12 @@ export class RemoteShells {
    * of this window then. On an SSH host, the takeover waits for the commands before it, because a new login may ask
    * for the password again. A shell of the VM of Devspaces with a command on it (RemoteShell.busy, for example a long
    * removal of the view Docker Hosts) stays with its commands, and the relay logs in itself: a login to the VM asks
-   * nothing, and the open of a devspace does not wait for that command. A shell that `keep` holds stays too.
+   * nothing, and the open of a devspace does not wait for that command. A shell that `keep` holds stays too, except
+   * for a connection of the relay in the background on an SSH host.
    */
   async takeOver(host: string): Promise<StartedByteProcess | undefined> {
+    const inFlow = currentSshPromptFlow() !== undefined;
+    const held = () => this.kept.has(host) && (inFlow || isVmHost(host));
     const entry = this.entries.get(host);
     if (entry === undefined) return undefined;
     let shell: RemoteShell | undefined;
@@ -250,9 +255,9 @@ export class RemoteShells {
       return undefined;
     }
     await entry.afterLogin;
-    if ((shell?.busy === true && isVmHost(host)) || this.kept.has(host)) return undefined;
+    if ((shell?.busy === true && isVmHost(host)) || held()) return undefined;
     // A hold that started while the takeover waited for the commands before it counts too.
-    return shell?.takeOver(() => !this.kept.has(host));
+    return shell?.takeOver(() => !held());
   }
 
   /**
