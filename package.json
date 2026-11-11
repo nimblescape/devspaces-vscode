@@ -448,11 +448,6 @@
         "icon": "$(refresh)"
       },
       {
-        "command": "devspaces.selectDockerHost",
-        "title": "Use as Docker Host",
-        "category": "Devspaces"
-      },
-      {
         "command": "devspaces.removeDockerHostFromList",
         "title": "Remove from the List",
         "category": "Devspaces"
@@ -599,10 +594,6 @@
           "when": "false"
         },
         {
-          "command": "devspaces.selectDockerHost",
-          "when": "false"
-        },
-        {
           "command": "devspaces.removeDockerHostFromList",
           "when": "false"
         },
@@ -708,11 +699,6 @@
           "command": "devspaces.startVm",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStart(;|$)/",
           "group": "inline@1"
-        },
-        {
-          "command": "devspaces.selectDockerHost",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;canSelect(;|$)/",
-          "group": "0_select@1"
         },
         {
           "command": "devspaces.setUpLimaVm",

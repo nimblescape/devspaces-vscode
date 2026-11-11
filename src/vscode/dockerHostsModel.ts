@@ -97,8 +97,8 @@ export const DockerHostsTexts = {
   },
   remoteHost: 'Remote host',
   selected: 'Docker host of Devspaces: the repository view and Start use it.',
-  clickToSelect: 'Click to make it the Docker host of Devspaces: the repository view and Start use it then.',
-  clickToSetUp: 'Click to set up the VM of Devspaces with Docker Engine.',
+  chooseInRepositoryView: 'The first row of the repository view chooses the Docker host of Devspaces.',
+  setUpInMenu: 'The menu of this row sets up the VM of Devspaces with Docker Engine.',
   vmTooltip: (host: string, state: VmState | undefined): string[] => {
     const lines = [`${host}: the VM of Devspaces with Docker Engine on this computer. ${DockerHostsTexts.vmState(state)}.`];
     const facts: string[] = [];
@@ -234,10 +234,9 @@ export function hostRowLook(row: HostRow): RowLook {
     flags.push('selected');
     tooltip.push(DockerHostsTexts.selected);
   } else if (row.vm && row.vmState?.kind === 'notSetUp') {
-    tooltip.push(DockerHostsTexts.clickToSetUp);
+    tooltip.push(DockerHostsTexts.setUpInMenu);
   } else {
-    flags.push('canSelect');
-    tooltip.push(DockerHostsTexts.clickToSelect);
+    tooltip.push(DockerHostsTexts.chooseInRepositoryView);
   }
   return {
     id: `host:${row.host}`,
@@ -245,10 +244,10 @@ export function hostRowLook(row: HostRow): RowLook {
     description,
     tooltip: tooltip.join('\n'),
     contextValue: flags.join(';'),
-    // The check mark names the Docker host of Devspaces.
+    // The check mark names the Docker host of Devspaces. A click only opens or closes the row: the Docker host of
+    // Devspaces is chosen only in the first row of the repository view.
     icon: row.selected ? 'check' : row.vm ? 'vm' : MonitorIcons.remote,
     collapsible,
-    command: { command: Commands.selectDockerHost, title: 'Select', arguments: [row] },
   };
 }
 

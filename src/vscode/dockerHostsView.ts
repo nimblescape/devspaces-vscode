@@ -7,11 +7,12 @@
 // Devspaces with their purpose) and their management. A host is read only when the user opens it in the view, and again at Refresh, never in the background
 // (R-SEC-004): the rows of a host keep what its last read found, and a change of the view (another Docker host, a host
 // that leaves the list, the state of the VM) reads no host again. A read never starts the VM: a stopped VM shows a row
-// that starts it. Opening a remote host is a flow of the user, so a password login may ask there (R-ENG-003). A click
-// on a host row makes it the Docker host of Devspaces, after its test (RemoteDockerCommands.selectHost); a check mark
-// shows it. The objects of a devspace of this computer get the commands of the devspace (Stop, Delete…); every other
-// object gets Stop (a running container), Start (a stopped container that is not of Devspaces) or Remove… (never with
-// force), after one question, also for several selected rows. The rows come from dockerHostsModel.ts.
+// that starts it. Opening a remote host is a flow of the user, so a password login may ask there (R-ENG-003). A check
+// mark shows the Docker host of Devspaces; a click on a host row only opens or closes it, because the Docker host of
+// Devspaces is chosen only in the first row of the repository view. The objects of a devspace of this computer get the
+// commands of the devspace (Stop, Delete…); every other object gets Stop (a running container), Start (a stopped
+// container that is not of Devspaces) or Remove… (never with force), after one question, also for several selected
+// rows. The rows come from dockerHostsModel.ts.
 import * as vscode from 'vscode';
 import { formatSize, type HostInventory, type HostObject, type ObjectResult } from '../core/hosts/hostObjects';
 import { errorMessage } from '../core/errors';
@@ -112,10 +113,6 @@ export interface DockerHostsDeps {
   pruneBuildCache: (host: string, signal: AbortSignal) => Promise<void>;
   /** Removes `objects` on `host`, never with force. */
   removeObjects: (host: string, objects: readonly HostObject[], signal: AbortSignal, onItem: (text: string) => void) => Promise<ObjectResult[]>;
-  /** Devspaces uses `host` after its test (RemoteDockerCommands.selectHost). */
-  select: (host: string) => Promise<void>;
-  /** The setup of the VM of Devspaces (a click on the VM row while it is not set up). */
-  setUpVm: () => Promise<void>;
   /** `host` leaves the list of Devspaces (RemoteDockerCommands.removeFromList). */
   removeFromList: (host: string) => Promise<void>;
 }
@@ -205,18 +202,6 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     if (this.disposed) return;
     // A row that the view does not show (anymore): the whole view.
     this.changeEmitter.fire(row);
-  }
-
-  /** The click on a host row: the setup of the VM while it is not set up, else the host becomes the Docker host of Devspaces. */
-  async select(argument: unknown): Promise<void> {
-    const host = hostOfArgument(argument);
-    if (host === undefined) return;
-    const row = this.rows.get(host);
-    if (row?.vm === true && row.vmState?.kind === 'notSetUp') {
-      await this.deps.setUpVm();
-      return;
-    }
-    await this.deps.select(host);
   }
 
   /** "Remove from the List" of a remote host row. */

@@ -1441,8 +1441,6 @@ async function activateExtension(
     startContainer: (host, object, signal) => runWithDockerTarget(remoteDockerTarget(host), () => startHostContainer(docker, object, logger, signal)),
     pruneBuildCache: (host, signal) => runWithDockerTarget(remoteDockerTarget(host), () => pruneBuildCache(docker, logger, signal)),
     removeObjects: (host, objects, signal, onItem) => runWithDockerTarget(remoteDockerTarget(host), () => removeHostObjects(docker, objects, { logger, signal, onItem })),
-    select: (host) => remoteDocker.selectHost(host),
-    setUpVm: () => (platform === 'win32' ? wslSetup.setUp() : limaSetup.setUp()),
     removeFromList: (host) => remoteDocker.removeFromList(host),
   });
   hostsView = dockerHosts;
