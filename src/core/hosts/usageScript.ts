@@ -29,7 +29,7 @@ export type UsageSampleKind = 't' | 'd';
  * - The first process of a container is also searched one cgroup below its own (docker-in-docker moves its processes).
  */
 export const USAGE_SCRIPT = `{
-# One utilization sample of Devspaces, protocol 2. The extension runs \`sh -s\` with this fixed text as its input and
+# One utilization sample of Devspaces, protocol 2. The extension runs \`sh -s\` with this fixed text from a pipe and
 # fills in only the marker (32 hexadecimal digits), the number of the sample, its kind (t: the counters; d: also the
 # disks and, on WSL, the idle check), 0 or 1, and the data folder of Docker. The script only reads: it creates no file,
 # starts no container and calls no Docker CLI.
@@ -150,7 +150,7 @@ export const USAGE_DOCKER_SECONDS = 5;
  * A Docker call of the samples (`docker <args>`, a read) as a script for `sh -s` on the shared shell, like USAGE_SCRIPT:
  * one compound command, with its input closed. Where the host has a `timeout` of this form (coreutils, BusyBox from
  * 1.30), the call has a time limit of USAGE_DOCKER_SECONDS there, so that a Docker Engine that does not answer ends the
- * call (exit code 124) and not the shared shell, which a time limit of the extension stops. Throws for an argument with
+ * call (exit code 124, or 143 with BusyBox) and not the shared shell, which a time limit of the extension stops. Throws for an argument with
  * a line break or a NUL.
  */
 export function usageDockerScript(args: readonly string[]): string {
@@ -171,6 +171,11 @@ export function usageShellCommand(script: string): string {
   const encoded = script.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
   return `{ printf '%b' ${shellWord(encoded)} | sh -s; }`;
 }
+
+/** USAGE_SCRIPT without its lines of comments, which the host does not need: what each sample sends. */
+const USAGE_SCRIPT_CODE = USAGE_SCRIPT.split('\n')
+  .filter((line) => !/^\s*#/.test(line))
+  .join('\n');
 
 /** A new marker for USAGE_SCRIPT: 32 hexadecimal digits. */
 export function newUsageMarker(): string {
@@ -196,7 +201,7 @@ export function isUsableDockerRoot(path: string): boolean {
 }
 
 /**
- * USAGE_SCRIPT with its placeholders filled. Throws for a value that is not valid (a marker that is not 32 hexadecimal
+ * USAGE_SCRIPT with its placeholders filled, without its lines of comments. Throws for a value that is not valid (a marker that is not 32 hexadecimal
  * digits, a number that is not a positive integer, a data folder that isUsableDockerRoot refuses), so that no other
  * text reaches the shell.
  */
@@ -206,7 +211,7 @@ export function usageScript(values: UsageSampleValues): string {
   if (!Number.isSafeInteger(seq) || seq < 1) throw new Error('The number of a utilization sample must be a positive integer.');
   if (kind !== 't' && kind !== 'd') throw new Error('The kind of a utilization sample must be t or d.');
   if (dockerRoot !== '' && !isUsableDockerRoot(dockerRoot)) throw new Error('The data folder of Docker for a utilization sample must be an absolute path without a quote or a line break.');
-  return USAGE_SCRIPT.replace('@MARK@', marker)
+  return USAGE_SCRIPT_CODE.replace('@MARK@', marker)
     .replace('@SEQ@', String(seq))
     .replace('@KIND@', kind)
     .replace('@WI@', wslIdle ? '1' : '0')

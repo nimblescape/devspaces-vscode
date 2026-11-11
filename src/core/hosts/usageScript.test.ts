@@ -44,6 +44,12 @@ describe('usageScript', () => {
     expect(() => usageDockerScript(['ps', 'a\nb'])).toThrow(/line break/);
   });
 
+  it('sends the script without its lines of comments', () => {
+    const script = usageScript({ marker: MARKER, seq: 1, kind: 'd' });
+    expect(script.split('\n').filter((line) => /^\s*#/.test(line))).toEqual([]);
+    expect(script.length).toBeLessThan(USAGE_SCRIPT.length);
+  });
+
   it('makes the line of the shell one printf into sh -s, with each backslash and line feed for %b', () => {
     expect(usageShellCommand("a\\n'b\nc\n")).toBe("{ printf '%b' 'a\\\\n'\\''b\\nc\\n' | sh -s; }");
     expect(usageShellCommand(usageScript({ marker: MARKER, seq: 1, kind: 'd', dockerRoot: '/data' }))).not.toMatch(/[\r\n]/);

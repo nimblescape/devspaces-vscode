@@ -75,7 +75,8 @@ export type UsageEnd =
   | { kind: 'noTransport' }
   /**
    * Only with `wslIdle`: the idle script of the WSL distribution of Devspaces ran and ended, so nothing runs there and
-   * WSL stops it; the samples end, so that they do not hold it (R-VM-004).
+   * WSL stops it; the samples end, so that they do not hold it (R-VM-004). The page closes the shell then
+   * (RemoteShells.close), whose open `wsl.exe` would hold the distribution until the shell closes when not used.
    */
   | { kind: 'vmIdle' };
 
@@ -127,6 +128,8 @@ export class UsageSampler {
   private readonly timers: UsageTimers;
   private stage: 'running' | 'ended' = 'running';
   private headerValue: UsageHeader | undefined;
+  /** The last boot ID that the host could read. */
+  private bootId: string | undefined;
   private previous: UsageBlock | undefined;
   /** The number of samples so far. */
   private samples = 0;
@@ -223,7 +226,8 @@ export class UsageSampler {
       try {
         const script = usageScript({ marker, seq, kind, wslIdle: this.options.wslIdle ?? false, dockerRoot: this.dockerRoot || undefined });
         const run = await this.options.run(script, timeoutMs);
-        if (this.stage === 'running' && this.take(run, marker, seq, timeoutMs)) await this.between();
+        // No Docker call after the page was hidden: the hold of the shell ended, and the relay may take it over.
+        if (this.stage === 'running' && this.take(run, marker, seq, timeoutMs) && !this.paused) await this.between();
       } catch (error) {
         const detail = errorMessage(error);
         this.options.logger.warn(`The utilization sample of ${this.options.name} failed: ${detail}`);
@@ -273,8 +277,8 @@ export class UsageSampler {
     const { header, block } = output;
     // A new start of the kernel: its counters start at 0, so no rate from the block before it.
     // Only two boot IDs that were read: one that the host could not read once is no new start.
-    const before = this.headerValue?.bootId;
-    const restarted = before !== undefined && header.bootId !== undefined && before !== header.bootId;
+    const restarted = this.bootId !== undefined && header.bootId !== undefined && this.bootId !== header.bootId;
+    this.bootId = header.bootId ?? this.bootId;
     if (restarted) this.previous = undefined;
     const first = this.headerValue === undefined;
     this.headerValue = header;
@@ -362,8 +366,8 @@ export class UsageSampler {
       }
       const { result } = run;
       if (result.exitCode === 0 && !result.timedOut) return result;
-      // 124: `timeout` on the host ended it.
-      const why = result.timedOut || result.exitCode === 124 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
+      // `timeout` on the host ended it: 124 (coreutils), or 143 (BusyBox, whose command gets TERM in its place).
+      const why = result.timedOut || result.exitCode === 124 || result.exitCode === 143 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
       const detail = readableStderr(result.stderr.slice(-STDERR_TAIL_LENGTH), STDERR_TAIL_LENGTH);
       logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why})${detail ? `: ${detail}` : ''}; the page goes on without it.`);
     } catch (error) {

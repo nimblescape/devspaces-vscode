@@ -209,6 +209,13 @@ describe('UsageSampler', () => {
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(headers.map((header) => header.bootId)).toEqual([BOOT]);
     expect(blocks.map(({ usage }) => usage.cpu !== undefined)).toEqual([false, true, true, true]);
+    // A new start after a boot ID that could not be read is still one.
+    host.boot = '-';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    host.boot = 'd979624d-e703-46d3-ae35-c4cb34a59e91';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(headers.map((header) => header.bootId)).toEqual([BOOT, host.boot]);
+    expect(blocks[blocks.length - 1].usage.cpu).toBeUndefined();
   });
 
   it('gives a host whose uptime jumps (for example after a suspend) at most MAX_USAGE_INTERVAL_MS between the samples', async () => {
@@ -433,6 +440,23 @@ describe('UsageSampler', () => {
     expect(host.sent).toHaveLength(3);
     expect(blocks).toHaveLength(3);
     expect(blocks[2].usage.cpu).toBeDefined();
+  });
+
+  it('runs no Docker call after a sample that ended while the page was hidden', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const run = async (script: string, timeoutMs: number): Promise<UsageRun> => {
+      await slow;
+      return host.run(script, timeoutMs);
+    };
+    const { sampler, blocks, dockerCalls } = await start({ host, run });
+    sampler.pause();
+    release();
+    await flush();
+    expect(blocks).toHaveLength(1);
+    expect(dockerCalls).toEqual([]);
   });
 
   it('takes its hold at the start and ends it once at the end', async () => {
