@@ -77,6 +77,22 @@ export const Commands = {
   // Removes what Devspaces keeps on the current Docker engine (the Monitor, the helper containers and images, the shared
   // volumes), and on request the devspaces of the signed-in account there (Command Palette, the "…" menu of the view).
   removeFromDockerEngine: 'devspaces.removeFromDockerEngine',
+  // The view "Docker Hosts" (dockerHostsView.ts, R-ENG-008): Refresh of the view or of a host row (a host is read only
+  // when the user opens it or clicks Refresh), the click on a host row (hidden in the Command Palette: it makes the host
+  // the Docker host of Devspaces), Remove from the List of a remote host row, and Stop and Remove… of a container, an
+  // image or a volume that is no object of a devspace of this computer (hidden in the Command Palette: they take rows).
+  refreshDockerHosts: 'devspaces.refreshDockerHosts',
+  selectDockerHost: 'devspaces.selectDockerHost',
+  removeDockerHostFromList: 'devspaces.removeDockerHostFromList',
+  stopDockerObject: 'devspaces.stopDockerObject',
+  removeDockerObjects: 'devspaces.removeDockerObjects',
+  // The VM of Devspaces in its row of the view "Docker Hosts" (vmCommands.ts, R-VM-010), the same on every platform:
+  // Start, Stop, Remove, Remove and Set Up Again, and its settings (macOS and Linux).
+  startVm: 'devspaces.startVm',
+  stopVm: 'devspaces.stopVm',
+  removeVm: 'devspaces.removeVm',
+  resetVm: 'devspaces.resetVm',
+  vmSettings: 'devspaces.vmSettings',
 } as const;
 
 export type CommandName = keyof typeof Commands;

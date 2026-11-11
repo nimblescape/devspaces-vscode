@@ -15,6 +15,7 @@ import { WSL_LIST_ARGS } from './dockerHost';
 import {
   DOCKER_WAIT_SCRIPT,
   LXSS_KEY,
+  WSL_TERMINATE_ARGS,
   WSL_UNREGISTER_ARGS,
   WslSetup,
   WslSetupError,
@@ -978,6 +979,21 @@ describe('WslSetup.remove', () => {
     const runner = wslRunner(() => failed('Access is denied.'));
     await expect(setup({ runner }).remove()).rejects.toEqual(new WslSetupError('removeFailed', 'wsl.exe --unregister devspaces failed (exit code 1): Access is denied.'));
     expect(fs.existsSync(folder)).toBe(true);
+  });
+});
+
+describe('WslSetup.stop', () => {
+  it('terminates the distribution and deletes nothing', async () => {
+    fs.mkdirSync(path.join(folder, 'disk'));
+    const runner = wslRunner((args) => (args.join(' ') === WSL_TERMINATE_ARGS.join(' ') ? ok() : undefined));
+    await setup({ runner }).stop();
+    expect(runner.calls.map((call) => call.args.join(' '))).toEqual(['--terminate devspaces']);
+    expect(fs.existsSync(path.join(folder, 'disk'))).toBe(true);
+  });
+
+  it('says why when WSL refuses', async () => {
+    const runner = wslRunner(() => failed('Access is denied.'));
+    await expect(setup({ runner }).stop()).rejects.toThrow('wsl.exe --terminate devspaces failed (exit code 1): Access is denied.');
   });
 });
 

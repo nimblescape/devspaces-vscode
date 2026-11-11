@@ -155,7 +155,7 @@ describe('DockerHostIndicator', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { views: { devspaces: Array<{ id: string; name: string }> } };
     };
-    expect(manifest.contributes.views.devspaces[0].name).toBe('Devspaces');
+    expect(manifest.contributes.views.devspaces.find((view) => view.id === 'devspaces.repositories')?.name).toBe('Devspaces');
   });
 
   // The user guide and the change log quote these texts as the view shows them, like the texts of the state rows.

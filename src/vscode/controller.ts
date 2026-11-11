@@ -69,6 +69,9 @@ import type { RemoteDockerCommands } from './remoteDockerCommands';
 import type { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import type { WslSetupCommands } from './wslSetupCommands';
 import type { LimaSetupCommands } from './limaSetupCommands';
+import type { DockerHostsView } from './dockerHostsView';
+import { hostOfArgument, hostOfNode } from './dockerHostsModel';
+import type { VmCommands } from './vmCommands';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import type { SessionCoordinator } from './sessionCoordinator';
 import { RowActivationTracker, activatedRow, type ListOpenMode } from './rowActivation';
@@ -188,6 +191,14 @@ export interface ControllerDeps {
   wslSetup?: Pick<WslSetupCommands, 'setUp' | 'remove' | 'removeAndSetUpAgain' | 'ensureDockerHost' | 'wslInstalled'>;
   /** "Set Up Docker for Devspaces in Its VM…" (macOS and Linux), also for a link on a computer without Docker. */
   limaSetup?: Pick<LimaSetupCommands, 'setUp' | 'ensureDockerHost'>;
+  /**
+   * The view "Docker Hosts" (R-ENG-008): Refresh, the click on a host row, Remove from the List, and Stop and Remove… of
+   * its objects. After a command with one of its rows (also Stop and Delete of a devspace, Update All Images Now and
+   * Remove Devspaces from This Docker Engine… of a host row), the view reads that host again when it is open.
+   */
+  dockerHosts?: Pick<DockerHostsView, 'refresh' | 'select' | 'removeFromList' | 'stopObject' | 'removeObjects' | 'invalidate'>;
+  /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
+  vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
   /**
    * The record of the installation of WSL (Windows): the first window after the restart of Windows goes on with the
    * setup of Docker for Devspaces (goOnAfterWslInstall).
@@ -495,7 +506,7 @@ export class Controller implements vscode.Disposable {
 
   /** Registers the commands of package.json (controller.test.ts counts them). A command never rejects: errors are shown. */
   registerCommands(): vscode.Disposable[] {
-    const handlers: Record<CommandName, (argument: unknown) => Promise<void>> = {
+    const handlers: Record<CommandName, (argument: unknown, selection?: unknown) => Promise<void>> = {
       start: (argument) => this.start(parseCommandArgument(argument)),
       startInNewWindow: (argument) => this.start(parseCommandArgument(argument), 'newWindow'),
       startInCurrentWindow: (argument) => this.start(parseCommandArgument(argument), 'currentWindow'),
@@ -508,7 +519,7 @@ export class Controller implements vscode.Disposable {
       switchDevspaceInNewWindow: () => this.switchDevspace('newWindow'),
       switchDevspaceInCurrentWindow: () => this.switchDevspace('currentWindow'),
       refresh: () => this.refresh(),
-      updateImagesNow: () => this.updateImagesNowCommand(),
+      updateImagesNow: (argument) => this.updateImagesNowCommand(hostOfArgument(argument)),
       removeFromDockerEngine: () => this.removeFromDockerEngine(),
       search: () => this.search(),
       showLog: (argument) => this.showLog(argument),
@@ -536,6 +547,17 @@ export class Controller implements vscode.Disposable {
       setUpLimaVm: async () => this.deps.limaSetup?.setUp(),
       rowActivated: (argument) => this.rowActivated(argument),
       rowEnter: () => this.rowEnter(),
+      refreshDockerHosts: async (argument) => this.deps.dockerHosts?.refresh(argument),
+      selectDockerHost: async (argument) => this.deps.dockerHosts?.select(argument),
+      removeDockerHostFromList: async (argument) => this.deps.dockerHosts?.removeFromList(argument),
+      stopDockerObject: async (argument) => this.deps.dockerHosts?.stopObject(argument),
+      // VS Code passes the selected rows of the view as the second argument (canSelectMany).
+      removeDockerObjects: async (argument, selection) => this.deps.dockerHosts?.removeObjects(argument, selection),
+      startVm: async () => this.deps.vm?.start(),
+      stopVm: async () => this.deps.vm?.stop(),
+      removeVm: async () => this.deps.vm?.remove(),
+      resetVm: async () => this.deps.vm?.reset(),
+      vmSettings: async () => this.deps.vm?.settings(),
     };
     // Each command is one operation: on the Docker host of the devspace that it names (a row, the status bar item), else
     // on the Docker host that is current when it starts (withCommandTarget); the commands that change the host read it
@@ -552,20 +574,40 @@ export class Controller implements vscode.Disposable {
       'rowActivated',
       'rowEnter',
       'showLog',
+      // The view "Docker Hosts" names the host of each of its commands, and the VM commands act on the VM.
+      'refreshDockerHosts',
+      'selectDockerHost',
+      'removeDockerHostFromList',
+      'stopDockerObject',
+      'removeDockerObjects',
+      'startVm',
+      'stopVm',
+      'removeVm',
+      'resetVm',
+      'vmSettings',
     ]);
-    const run = async (name: CommandName, argument: unknown): Promise<void> => {
+    // The commands of the engine that a host row of the view "Docker Hosts" passes: on that host, whatever host
+    // Devspaces uses now.
+    const hostCommands = new Set<CommandName>(['updateImagesNow', 'removeFromDockerEngine']);
+    const run = async (name: CommandName, argument: unknown, selection: unknown): Promise<void> => {
       // Enter on a row whose command is another command of Devspaces (the Sign in row, the Docker host row) ends with
       // that command: a click on a repository row right after it only selects that row (rowActivation.ts).
       if (name !== 'rowEnter' && name !== 'rowActivated') this.rowActivations.forgetEnter();
+      const host = hostCommands.has(name) ? hostOfArgument(argument) : undefined;
       try {
-        if (ownTarget.has(name)) await handlers[name](argument);
-        else await this.withCommandTarget(parseCommandArgument(argument), () => handlers[name](argument));
+        if (ownTarget.has(name)) await handlers[name](argument, selection);
+        else if (host !== undefined) await this.withHost(host, () => handlers[name](argument, selection));
+        else await this.withCommandTarget(parseCommandArgument(argument), () => handlers[name](argument, selection));
       } catch (error) {
         this.showError(error);
+      } finally {
+        // A command with a row of the view "Docker Hosts" changed its host: the view reads it again when it is open.
+        const changed = ownTarget.has(name) ? undefined : hostOfNode(argument);
+        if (changed !== undefined) this.deps.dockerHosts?.invalidate(changed);
       }
     };
     return (Object.keys(handlers) as CommandName[]).map((name) =>
-      vscode.commands.registerCommand(Commands[name], (argument: unknown) => run(name, argument)),
+      vscode.commands.registerCommand(Commands[name], (argument: unknown, selection: unknown) => run(name, argument, selection)),
     );
   }
 
@@ -1431,14 +1473,14 @@ export class Controller implements vscode.Disposable {
 
   /**
    * The command "Update All Images Now": a failure is shown with Try again where the error offers it (errors.ts), as for
-   * Start. Try again runs the command again, as one operation on the Docker host that is current then. A cancellation
-   * shows nothing.
+   * Start. Try again runs the command again, as one operation on the Docker host that is current then; for the host row
+   * `host` of the view "Docker Hosts", on that host again. A cancellation shows nothing.
    */
-  private async updateImagesNowCommand(): Promise<void> {
+  private async updateImagesNowCommand(host?: string): Promise<void> {
     try {
       await this.updateImagesNow();
     } catch (error) {
-      this.showError(error, () => this.withDockerTarget(() => this.updateImagesNowCommand()));
+      this.showError(error, () => (host !== undefined ? this.withHost(host, () => this.updateImagesNowCommand(host)) : this.withDockerTarget(() => this.updateImagesNowCommand())));
     }
   }
 
@@ -3980,6 +4022,15 @@ export class Controller implements vscode.Disposable {
     } finally {
       if (!this.disposed) this.background(this.deps.sidebar.refreshStates(), 'update the sidebar');
     }
+  }
+
+  /**
+   * Runs `fn` as one operation on the Docker host `host` (DockerTargets.ofHost), whatever host Devspaces uses now: a
+   * command of a host row of the view "Docker Hosts".
+   */
+  private async withHost<T>(host: string, fn: () => Promise<T>): Promise<T> {
+    const target = await this.deps.dockerTargets?.ofHost(host);
+    return target === undefined ? fn() : runWithDockerTarget(target, fn);
   }
 
   /** Runs `fn` as one operation on the Docker host that is current now (DockerTargets.withOperation). */

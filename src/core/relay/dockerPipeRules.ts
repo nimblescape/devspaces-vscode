@@ -52,8 +52,10 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
 /**
  * Devspaces itself (BootstrapDocker run): the checks of the engine and of the helper image, the build of the helper
  * image (the pull and the tag of the build image, and `docker run -i` of the build container, which the Docker CLI
- * stops with `kill` at its own stop; `docker build` as the fallback, with BuildKit or the classic builder), and the
- * removal of its objects ("Remove Devspaces from This Docker Engine…"). Its worker starts behind the relay or with
+ * stops with `kill` at its own stop; `docker build` as the fallback, with BuildKit or the classic builder), the
+ * removal of its objects ("Remove Devspaces from This Docker Engine…"), and the read, the Stop of a container and the
+ * removal of the view "Docker Hosts" (hostObjects.ts: `docker system df -v`, `docker container stop`, and `rm` without
+ * force). Its worker starts behind the relay or with
  * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
@@ -67,6 +69,7 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('POST', `/containers/${NAME}/start`),
   endpoint('POST', `/containers/${NAME}/wait`),
   endpoint('POST', `/containers/${NAME}/kill`),
+  endpoint('POST', `/containers/${NAME}/stop`),
   endpoint('DELETE', `/containers/${NAME}`),
   endpoint('GET', '/images/json'),
   endpoint('GET', `/images/${IMAGE}/json`),

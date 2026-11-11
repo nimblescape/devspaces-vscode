@@ -18,7 +18,7 @@ const FOLDER = '/Users/ana/.nimblescape/devspaces';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
 
 type Setup = NonNullable<LimaSetupCommandsDeps['setup']>;
-let setup: { precondition: Mock<Setup['precondition']>; setUp: Mock<Setup['setUp']>; linuxNeeds: Mock<Setup['linuxNeeds']> };
+let setup: { precondition: Mock<Setup['precondition']>; setUp: Mock<Setup['setUp']>; linuxNeeds: Mock<Setup['linuxNeeds']>; remove: Mock<Setup['remove']> };
 let useHost: Mock<LimaSetupCommandsDeps['useHost']>;
 let useRemoteHost: Mock<LimaSetupCommandsDeps['useRemoteHost']>;
 let showLog: Mock<() => void>;
@@ -42,6 +42,7 @@ beforeEach(() => {
   setup = {
     precondition: vi.fn(() => undefined),
     linuxNeeds: vi.fn(() => ({ kvm: 'ok' as const, qemuMissing: [] })),
+    remove: vi.fn(async () => true),
     setUp: vi.fn(async (onStep: (step: LimaSetupStep) => void, _signal?: AbortSignal) => {
       onStep({ kind: 'lima' });
       onStep({ kind: 'download', received: 0, total: undefined });
@@ -214,5 +215,56 @@ describe('LimaSetupCommands', () => {
       await vi.waitFor(() => expect(window.showInformationMessage).toHaveBeenLastCalledWith(LimaSetupTexts.qemuNotFound));
       expect(setup.setUp).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('Remove the VM… and Remove and Set Up the VM Again… (R-VM-010)', () => {
+  it('asks first, and removes nothing without the answer', async () => {
+    window.showWarningMessage.mockResolvedValue(undefined);
+    const forgetHost = vi.fn(async () => true);
+    await commands({ forgetHost }).remove();
+    expect(window.showWarningMessage.mock.calls[0][0]).toBe(LimaSetupTexts.confirmRemove);
+    expect(window.showWarningMessage.mock.calls[0][1]).toMatchObject({ modal: true, detail: LimaSetupTexts.confirmRemoveDetail(FOLDER) });
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(forgetHost).not.toHaveBeenCalled();
+  });
+
+  it('removes the VM after the answer, ends the connections first, and takes the host out of the list', async () => {
+    window.showWarningMessage.mockResolvedValue(LimaSetupTexts.remove);
+    const order: string[] = [];
+    const beforeRemove = vi.fn(() => order.push('close'));
+    setup.remove.mockImplementation(async () => {
+      order.push('remove');
+      return true;
+    });
+    const forgetHost = vi.fn(async (_host: string) => {
+      order.push('forget');
+      return true;
+    });
+    const afterRemove = vi.fn(async () => {
+      order.push('after');
+    });
+    await commands({ forgetHost, beforeRemove, afterRemove }).remove();
+    expect(order).toEqual(['close', 'remove', 'forget', 'after']);
+    expect(forgetHost).toHaveBeenCalledWith(LIMA_HOST);
+    expect(window.showInformationMessage).toHaveBeenCalledWith(LimaSetupTexts.removed(true));
+  });
+
+  it('says so when the removal fails', async () => {
+    window.showWarningMessage.mockResolvedValue(LimaSetupTexts.remove);
+    setup.remove.mockRejectedValue(new LimaSetupError('failed', 'limactl delete failed: boom'));
+    await commands({ forgetHost: vi.fn(async () => false) }).remove();
+    expect(window.showErrorMessage.mock.calls).toEqual([[LimaSetupTexts.removeFailed, Actions.showDetails]]);
+  });
+
+  it('removes the VM without another question and sets it up again, which Devspaces then uses', async () => {
+    const forgetHost = vi.fn(async () => true);
+    await commands({ forgetHost }).removeAndSetUpAgain();
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(setup.remove).toHaveBeenCalledTimes(1);
+    expect(setup.setUp).toHaveBeenCalledTimes(1);
+    expect(useHost).toHaveBeenCalledWith(LIMA_HOST);
+    // The host stays in the list meanwhile.
+    expect(forgetHost).not.toHaveBeenCalled();
   });
 });

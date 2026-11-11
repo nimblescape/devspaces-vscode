@@ -170,6 +170,11 @@ export interface WslSetupCommandsDeps {
    */
   forgetDistribution?: () => Promise<void>;
   /**
+   * Right before `wsl --unregister`: the connections of this window to the distribution end (its worker, the relay), so
+   * that nothing of this window holds or starts it during the removal.
+   */
+  beforeRemove?: () => void;
+  /**
    * Whether Docker Desktop has its WSL integration on for the distribution (dockerDesktopIntegrates), also by its
    * integration with the default distribution of WSL when the distribution is that default (`isDefault`). Never rejects.
    */
@@ -472,6 +477,7 @@ export class WslSetupCommands {
    * when the folder is gone. Under the lock of all windows, after removalCheck gave `own`.
    */
   private async unregister(setup: NonNullable<WslSetupCommandsDeps['setup']>): Promise<boolean> {
+    this.deps.beforeRemove?.();
     const folderGone = await setup.remove();
     await this.deps.forgetDistribution?.();
     return folderGone;

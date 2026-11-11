@@ -28,6 +28,8 @@ export const WSL_VERSION_ARGS: readonly string[] = ['--version'];
 export const WSL_STATUS_ARGS: readonly string[] = ['--status'];
 /** Deletes the distribution with its virtual disk: everything in it is lost. */
 export const WSL_UNREGISTER_ARGS: readonly string[] = ['--unregister', WSL_DISTRIBUTION];
+/** Stops the distribution with everything that runs in it; nothing is deleted, and its next use starts it again. */
+export const WSL_TERMINATE_ARGS: readonly string[] = ['--terminate', WSL_DISTRIBUTION];
 /** The key of the registry with the WSL distributions of the Windows user: one subkey for each, with its name and folder. */
 export const LXSS_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss';
 
@@ -41,6 +43,7 @@ const REGISTER_MS = 15 * 60_000;
  */
 const START_MS = 5 * 60_000;
 const UNREGISTER_MS = 5 * 60_000;
+const TERMINATE_MS = 2 * 60_000;
 /**
  * Marks in the output of `wsl.exe` when WSL 2 cannot start its virtual machine, because the Virtual Machine Platform of
  * Windows does not run: Windows has not restarted since the installation of WSL, the platform is off, or virtualization
@@ -590,6 +593,19 @@ export class WslSetup {
       if (wait.exitCode === 0 || wait.timedOut || attempt >= WSL_START_ATTEMPTS || !startTimedOut(wait)) return wait;
       this.deps.logger.info(`WSL ran out of time to start the distribution ${WSL_DISTRIBUTION} (attempt ${attempt} of ${WSL_START_ATTEMPTS}), so Devspaces starts it again: ${outputOf(wait)}`);
     }
+  }
+
+  /**
+   * "Stop the VM…" (R-VM-010): `wsl --terminate devspaces`, which stops the distribution with its devspaces and its
+   * Docker; nothing is deleted. Its next use starts it again. Throws an Error with a technical message when WSL refuses
+   * or does not answer within TERMINATE_MS.
+   */
+  async stop(signal?: AbortSignal): Promise<void> {
+    const result = await this.runWsl(WSL_TERMINATE_ARGS, { timeoutMs: TERMINATE_MS, signal });
+    if (result.exitCode !== 0 || result.timedOut) {
+      throw new Error(`wsl.exe ${WSL_TERMINATE_ARGS.join(' ')} failed (${endOf(result, TERMINATE_MS)}): ${outputOf(result)}`);
+    }
+    this.deps.logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was stopped.`);
   }
 
   /**

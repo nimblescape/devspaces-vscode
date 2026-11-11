@@ -148,6 +148,8 @@ export interface RemoteDockerDeps {
   devspaceCount?: (host: string) => Promise<number>;
   /** After a change of the Docker host of Devspaces: the sidebar shows the devspaces of the new host. */
   onDidSwitch: () => Promise<void>;
+  /** After a host left the list of Devspaces: the view "Docker Hosts" shows the list again. */
+  onDidChangeList?: () => void;
   /**
    * Downloads the Docker CLI of Devspaces with a progress notification (installOwnDockerCliWithProgress) for a computer
    * without a Docker CLI: its path, or undefined when the download failed (the message says so) or was cancelled.
@@ -248,7 +250,10 @@ export class RemoteDockerCommands {
    */
   async forgetHost(host: string): Promise<boolean> {
     const { removed, wasDockerHost } = await this.deps.state.removeHost(host);
-    if (removed) this.deps.logger.info(`${host} was removed from the list of Devspaces.`);
+    if (removed) {
+      this.deps.logger.info(`${host} was removed from the list of Devspaces.`);
+      this.listChanged();
+    }
     if (!wasDockerHost) return false;
     await this.deps.targets.resolve();
     this.deps.logger.info('Devspaces has no Docker host now; the sidebar shows the Docker setup.');
@@ -256,8 +261,52 @@ export class RemoteDockerCommands {
     return true;
   }
 
+  /**
+   * A click on a host row of the view "Docker Hosts" (R-ENG-008): Devspaces uses `host` after its test, as the choice
+   * in the first row of the repository view does. Nothing when Devspaces uses it already. Never throws.
+   */
+  async selectHost(host: string): Promise<void> {
+    try {
+      if (host === (await this.deps.state.dockerHost()) && this.remoteCliReady()) {
+        this.deps.logger.info(`Devspaces uses ${host} already.`);
+        return;
+      }
+      if (!(await this.ensureRemoteCli())) return;
+      await this.switchToRemote(host);
+    } catch (error) {
+      this.showFailure(error);
+    }
+  }
+
+  /**
+   * "Start the VM" of the VM row of the view "Docker Hosts" (R-VM-010): the test of the host `host` with its progress,
+   * which starts the VM of Devspaces (each Docker connection to it starts it), without a change of the Docker host of
+   * Devspaces. True when Docker answers there; a failure is shown. Never throws.
+   */
+  async testHost(host: string): Promise<boolean> {
+    try {
+      if (!(await this.ensureRemoteCli())) return false;
+      return (await this.checkHost(host)) !== undefined;
+    } catch (error) {
+      this.showFailure(error);
+      return false;
+    }
+  }
+
   /** Test, rootless socket, use. True when Devspaces uses `host` afterwards. */
   private async switchToRemote(host: string): Promise<boolean> {
+    const check = await this.checkHost(host);
+    if (check === undefined) return false;
+    await this.deps.state.setDockerHost(host);
+    this.deps.logger.info(`Devspaces uses ${host} (${hostEndpoint(host)}). No Docker context was changed.`);
+    await this.deps.targets.resolve();
+    this.inform(RemoteDockerTexts.nowRemote(host, check.rootless));
+    await this.afterSwitch();
+    return true;
+  }
+
+  /** The test of `host` with its progress, and the socket of a rootless engine; undefined (shown) when it fails. */
+  private async checkHost(host: string): Promise<{ rootless: boolean } | undefined> {
     this.deps.logger.info(`Devspaces tests the Docker host ${host}.`);
     const check = await withNotificationProgress(
       { title: RemoteDockerTexts.testing(host), cancellable: true },
@@ -302,15 +351,10 @@ export class RemoteDockerCommands {
       // A damaged disk of the WSL distribution of Devspaces: its button removes the distribution and sets it up again.
       const reset = check.problem === 'wslDiskCorrupt' && host === WSL_HOST;
       this.showError(Messages.dockerHostUnreachable(host, dockerHostReason(check.problem, host)), reset ? 'resetWsl' : undefined);
-      return false;
+      return undefined;
     }
     this.deps.logger.info(`The Docker host ${host} answers: Docker engine ${check.version}${check.rootless ? ' (rootless)' : ''}.`);
-    await this.deps.state.setDockerHost(host);
-    this.deps.logger.info(`Devspaces uses ${host} (${hostEndpoint(host)}). No Docker context was changed.`);
-    await this.deps.targets.resolve();
-    this.inform(RemoteDockerTexts.nowRemote(host, check.rootless));
-    await this.afterSwitch();
-    return true;
+    return { rootless: check.rootless };
   }
 
   /**
@@ -325,18 +369,36 @@ export class RemoteDockerCommands {
       { title: RemoteDockerTexts.removeTitle, placeHolder: RemoteDockerTexts.removePlaceholder },
     );
     if (picked === undefined) return;
+    await this.removeListedHost(picked.host);
+  }
+
+  /**
+   * "Remove from the List" of a host row of the view "Docker Hosts", and the choice of "Remove a Host from the List…":
+   * `host` leaves the list; when Devspaces uses it, Devspaces has no Docker host afterwards. Its devspaces stay on that
+   * computer, and nothing there is changed. Never throws.
+   */
+  async removeFromList(host: string): Promise<void> {
+    try {
+      await this.removeListedHost(host);
+    } catch (error) {
+      this.showFailure(error);
+    }
+  }
+
+  private async removeListedHost(host: string): Promise<void> {
     // What the file holds now counts, not what was read before the choice (another window may have changed it).
-    const { removed, wasDockerHost } = await this.deps.state.removeHost(picked.host);
+    const { removed, wasDockerHost } = await this.deps.state.removeHost(host);
     if (!removed) {
-      this.deps.logger.info(`${picked.host} is not in the list of Devspaces anymore.`);
+      this.deps.logger.info(`${host} is not in the list of Devspaces anymore.`);
       return;
     }
-    const count = await (this.deps.devspaceCount?.(picked.host) ?? Promise.resolve(0)).catch((error: unknown) => {
-      this.deps.logger.warn(`The devspaces on ${picked.host} could not be counted: ${errorMessage(error)}`);
+    const count = await (this.deps.devspaceCount?.(host) ?? Promise.resolve(0)).catch((error: unknown) => {
+      this.deps.logger.warn(`The devspaces on ${host} could not be counted: ${errorMessage(error)}`);
       return 0;
     });
-    this.deps.logger.info(`${picked.host} was removed from the list of Devspaces (${count} devspaces on it).`);
-    this.inform(RemoteDockerTexts.removed(picked.host, count, wasDockerHost));
+    this.deps.logger.info(`${host} was removed from the list of Devspaces (${count} devspaces on it).`);
+    this.inform(RemoteDockerTexts.removed(host, count, wasDockerHost));
+    this.listChanged();
     if (!wasDockerHost) return;
     await this.deps.targets.resolve();
     await this.afterSwitch();
@@ -489,6 +551,15 @@ export class RemoteDockerCommands {
     } catch (error) {
       this.deps.logger.warn(`The Lima VM of Devspaces could not be checked: ${errorMessage(error)}`);
       return 'unknown';
+    }
+  }
+
+  /** The list of hosts changed: the view "Docker Hosts" shows it again. Never throws. */
+  private listChanged(): void {
+    try {
+      this.deps.onDidChangeList?.();
+    } catch (error) {
+      this.deps.logger.error('Could not update the view Docker Hosts.', error);
     }
   }
 

@@ -90,11 +90,13 @@ describe('the filter of the Docker pipe of the extension', () => {
     `POST /containers/${ID}/wait`,
     `POST /containers/${ID}/start`,
     `POST /containers/${ID}/kill`,
+    // The Stop of a helper container in the view "Docker Hosts" (R-ENG-008).
+    `POST /containers/${ID}/stop`,
   ])('lets %s through, which Devspaces needs', (line) => {
     expect(allowed(extensionPipeRule, line)).toBe(true);
   });
 
-  it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/stop`, 'POST /images/load', 'POST /volumes/create', 'GET /events'])(
+  it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/restart`, 'POST /images/load', 'POST /volumes/create', 'GET /events'])(
     'refuses %s, which it does not need',
     (line) => {
       const [method, path] = line.split(' ');

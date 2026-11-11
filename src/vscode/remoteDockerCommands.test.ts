@@ -699,6 +699,46 @@ describe('useHost and forgetHost (the WSL distribution of Devspaces after its se
   });
 });
 
+describe('the rows of the view "Docker Hosts" (selectHost, testHost, removeFromList)', () => {
+  it('selectHost tests a host of the list and makes it the Docker host of Devspaces', async () => {
+    await listed(['build-box', 'gpu'], 'gpu');
+    cli.hosts.set('build-box', engineInfo());
+    await commands.selectHost('build-box');
+    expect(await state.dockerHost()).toBe('build-box');
+    expect(cli.calls.filter((call) => call.args[0] === '-H').map((call) => call.args[1])).toEqual(['ssh://build-box']);
+    expect(onDidSwitch).toHaveBeenCalledTimes(1);
+  });
+
+  it('selectHost tests nothing for the host that Devspaces uses already', async () => {
+    await listed(['gpu'], 'gpu');
+    await commands.selectHost('gpu');
+    expect(cli.calls.filter((call) => call.args[0] === '-H')).toEqual([]);
+    expect(onDidSwitch).not.toHaveBeenCalled();
+  });
+
+  it('testHost tests the host and keeps the Docker host of Devspaces', async () => {
+    await listed(['build-box', 'gpu'], 'gpu');
+    cli.hosts.set('build-box', engineInfo());
+    await expect(commands.testHost('build-box')).resolves.toBe(true);
+    expect(await state.dockerHost()).toBe('gpu');
+    expect(onDidSwitch).not.toHaveBeenCalled();
+    await expect(commands.testHost('nowhere')).resolves.toBe(false);
+    expect(window.showErrorMessage).toHaveBeenCalled();
+  });
+
+  it('removeFromList removes the host, says so, and tells the view; the list of another window may have lost it already', async () => {
+    const onDidChangeList = vi.fn();
+    commands = create({ onDidChangeList });
+    await listed(['build-box', 'gpu'], 'gpu');
+    await commands.removeFromList('build-box');
+    expect(await state.remoteHosts()).toEqual(['gpu']);
+    expect(window.showInformationMessage).toHaveBeenCalledWith(RemoteDockerTexts.removed('build-box', 0, false));
+    expect(onDidChangeList).toHaveBeenCalledTimes(1);
+    await commands.removeFromList('build-box');
+    expect(onDidChangeList).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('describeEntry', () => {
   it('shows User, HostName and Port where set', () => {
     expect(describeEntry({ alias: 'a' })).toBeUndefined();

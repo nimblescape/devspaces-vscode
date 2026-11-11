@@ -180,7 +180,8 @@ interface Harness {
   sessionFiles: SessionFiles;
   disconnectRequests: DisconnectRequests;
   controller: Controller;
-  commands: Map<string, (argument?: unknown) => Promise<void>>;
+  /** The handlers of the commands; VS Code passes the selected rows of a view as the second argument. */
+  commands: Map<string, (argument?: unknown, selection?: unknown) => Promise<void>>;
   docker: {
     isInstalled: ReturnType<typeof vi.fn>;
     canRunOn: ReturnType<typeof vi.fn>;
@@ -306,6 +307,9 @@ function createHarness(
     startDocker?: ControllerDeps['startDocker'];
     /** The longest wait of a removal for the background builds of the helper image (default 60 s). */
     helperBuildsStopWaitMs?: number;
+    /** The view "Docker Hosts" and the commands of the VM of Devspaces. Default: none. */
+    dockerHosts?: ControllerDeps['dockerHosts'];
+    vm?: ControllerDeps['vm'];
   } = {},
 ): Harness {
   const listOpenMode: Harness['listOpenMode'] = { value: 'singleClick' };
@@ -500,6 +504,8 @@ function createHarness(
     engineRemoval: options.engineRemoval,
     updateImagesNow: options.updateImagesNow,
     startDocker: options.startDocker,
+    dockerHosts: options.dockerHosts,
+    vm: options.vm,
     listOpenMode: () => listOpenMode.value,
     // A promise of its own: vitest handles the promises that a mock returns, so a rejection would never be unhandled.
     revealRow: async (rowId: string) => revealRow(rowId),
@@ -518,8 +524,8 @@ function createHarness(
   } as unknown as ControllerDeps;
   const controller = new Controller(deps);
 
-  const commands = new Map<string, (argument?: unknown) => Promise<void>>();
-  fakeVscode.commands.registerCommand.mockImplementation((id: string, handler: (argument?: unknown) => Promise<void>) => {
+  const commands = new Map<string, (argument?: unknown, selection?: unknown) => Promise<void>>();
+  fakeVscode.commands.registerCommand.mockImplementation((id: string, handler: (argument?: unknown, selection?: unknown) => Promise<void>) => {
     commands.set(id, handler);
     return { dispose() {} };
   });
@@ -700,13 +706,14 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 39 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
+    // 49 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
-    // runs Start), the choice of the Docker host (the command of the first row of the view), and the button "Remove and
-    // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces. The last one that was added
-    // is the setup of the Lima VM of Devspaces (macOS and Linux); the last ones that were removed are the installation
-    // and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
-    expect(declared).toHaveLength(39);
+    // runs Start), the choice of the Docker host (the command of the first row of the view), the button "Remove and
+    // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, and the commands of the rows
+    // of the view "Docker Hosts". The last ones that were added are the view "Docker Hosts" (R-ENG-008) and the
+    // management of the VM of Devspaces in it (R-VM-010); the last ones that were removed are the installation and the
+    // start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
+    expect(declared).toHaveLength(49);
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
     expect(declared).toEqual(
       expect.arrayContaining([
@@ -718,6 +725,13 @@ describe('Controller commands', () => {
         Commands.removeWslDistribution,
         Commands.resetWslDistribution,
         Commands.setUpLimaVm,
+        Commands.refreshDockerHosts,
+        Commands.removeDockerObjects,
+        Commands.startVm,
+        Commands.stopVm,
+        Commands.removeVm,
+        Commands.resetVm,
+        Commands.vmSettings,
       ]),
     );
   });
@@ -6109,8 +6123,10 @@ describe('Start in a new window', () => {
     for (const item of [...menus['view/item/context'], ...menus['devspaces.more']]) {
       expect(matches(item.when, REPOSITORY_NODE_CONTEXT), `${item.command ?? item.submenu} for a repository node`).toBe(false);
     }
-    // Stop and the others follow Start, in their order.
-    const actions = menus['view/item/context'].filter((item) => item.group?.startsWith('1_actions@')).map((item) => `${item.group} ${item.command}`);
+    // Stop and the others follow Start, in their order (the view of the repositories; the view "Docker Hosts" has its own
+    // menus).
+    const repositoryItems = menus['view/item/context'].filter((item) => item.when?.startsWith('view == devspaces.repositories '));
+    const actions = repositoryItems.filter((item) => item.group?.startsWith('1_actions@')).map((item) => `${item.group} ${item.command}`);
     expect(actions).toEqual([
       '1_actions@1 devspaces.start',
       '1_actions@2 devspaces.startInNewWindow',
@@ -6124,7 +6140,7 @@ describe('Start in a new window', () => {
     ]);
     // The buttons of a row are Start, Stop and the ⋯ submenu; Delete is in the submenu (last, in its own group) and in
     // the context menu, not next to Stop.
-    const inline = menus['view/item/context'].filter((item) => item.group?.startsWith('inline@')).map((item) => `${item.group} ${item.command ?? item.submenu}`);
+    const inline = repositoryItems.filter((item) => item.group?.startsWith('inline@')).map((item) => `${item.group} ${item.command ?? item.submenu}`);
     expect(inline).toEqual(['inline@1 devspaces.start', 'inline@2 devspaces.stop', 'inline@4 devspaces.more']);
     expect(menus['devspaces.more'].at(-1)).toEqual({ command: Commands.delete, when: 'viewItem =~ /canDelete/', group: '3_delete@1' });
     // The settings of the default image: the image, and the place of its row.
@@ -6247,8 +6263,8 @@ describe('the Docker host of Devspaces', () => {
     expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
   });
 
-  // The choice of the Docker host is the command of the first row of the view, so the view's title bar has no icon of
-  // the Docker host.
+  // The choice of the Docker host is the command of the first row of the view of the repositories, so its title bar has
+  // no icon of the Docker host; the title bar of the view "Docker Hosts" adds a remote host (R-ENG-008).
   it('runs the choice of the Docker host without an operation, and shows no icon of the Docker host in the title bar', async () => {
     await run('chooseDockerHost');
     expect(remote.chooseDockerHost).toHaveBeenCalledTimes(1);
@@ -6260,11 +6276,12 @@ describe('the Docker host of Devspaces', () => {
       };
     };
     const title = manifest.contributes.menus['view/title'];
-    // The first row of the list chooses the Docker host; the title bar has no icon of the Docker host, and the commands
-    // no icon.
-    expect(title.filter((entry) => entry.command === 'devspaces.useRemoteDockerHost' || entry.command === 'devspaces.chooseDockerHost')).toEqual([]);
+    // The first row of the list chooses the Docker host; the title bar of the repositories has no icon of the Docker
+    // host. The "+" of the view "Docker Hosts" adds a remote host.
+    const hostTitle = title.filter((entry) => entry.command === 'devspaces.useRemoteDockerHost' || entry.command === 'devspaces.chooseDockerHost');
+    expect(hostTitle).toEqual([{ command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts', group: 'navigation@1' }]);
     const icons = Object.fromEntries(manifest.contributes.commands.map((command) => [command.command, command.icon]));
-    expect(icons['devspaces.useRemoteDockerHost']).toBeUndefined();
+    expect(icons['devspaces.useRemoteDockerHost']).toBe('$(add)');
     expect(icons['devspaces.chooseDockerHost']).toBeUndefined();
     expect(manifest.contributes.menus.commandPalette).toContainEqual({ command: 'devspaces.chooseDockerHost', when: 'false' });
   });
@@ -6301,6 +6318,60 @@ describe('the Docker host of Devspaces', () => {
     await run('stop', row('acme/api', devspace()));
     await settle(() => h.service.stop.mock.calls.length === 2, 'the Try again');
     expect(seen).toEqual(['', '']);
+  });
+
+  // The view "Docker Hosts" (R-ENG-008): a host row names the host of the command; after a command with one of its rows,
+  // the view reads that host again.
+  it('runs Update All Images Now of a host row on that host, also its Try again, and the view reads the host again', async () => {
+    const dockerHosts = { refresh: vi.fn(), select: vi.fn(async () => {}), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const seen: string[] = [];
+    const update = vi.fn(async (target: DockerTarget) => {
+      seen.push(target.host);
+      if (seen.length === 1) throw new UserFacingError('dockerStartFailed', Messages.dockerStartFailed, 'log');
+    });
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, updateImagesNow: update, startDocker: vi.fn(async () => {}) });
+    current = remoteDockerTarget('build-box');
+    fakeVscode.window.showErrorMessage.mockResolvedValueOnce(Actions.tryAgain);
+    await run('updateImagesNow', { hostsNode: 'host', host: 'lab', vm: false, selected: false });
+    await settle(() => update.mock.calls.length === 2, 'the Try again');
+    expect(seen).toEqual(['lab', 'lab']);
+    expect(operations).toEqual([]);
+    expect(dockerHosts.invalidate).toHaveBeenCalledWith('lab');
+  });
+
+  it('passes the selected rows of the view "Docker Hosts" to Remove…, and runs the commands of the VM without an operation', async () => {
+    const dockerHosts = { refresh: vi.fn(), select: vi.fn(async () => {}), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const vm = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), remove: vi.fn(async () => {}), reset: vi.fn(async () => {}), settings: vi.fn(async () => {}) };
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm });
+    const clicked = { hostsNode: 'object', host: 'lab', object: { kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume' } };
+    const handler = h.commands.get(Commands.removeDockerObjects);
+    await handler?.(clicked, [clicked]);
+    expect(dockerHosts.removeObjects).toHaveBeenCalledWith(clicked, [clicked]);
+    for (const command of ['startVm', 'stopVm', 'removeVm', 'resetVm', 'vmSettings'] as const) await run(command);
+    expect([vm.start, vm.stop, vm.remove, vm.reset, vm.settings].map((mock) => mock.mock.calls.length)).toEqual([1, 1, 1, 1, 1]);
+    await run('refreshDockerHosts');
+    expect(dockerHosts.refresh).toHaveBeenCalledWith(undefined);
+    expect(operations).toEqual([]);
+  });
+
+  it('runs Stop of a devspace from its object row of the view "Docker Hosts" on the host of the devspace, and the view reads the host again', async () => {
+    const dockerHosts = { refresh: vi.fn(), select: vi.fn(async () => {}), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts });
+    await h.registry.add(remoteDevspace());
+    const seen: Array<string | undefined> = [];
+    h.service.stop.mockImplementation(async () => {
+      seen.push(operationDockerTarget()?.host);
+    });
+    await run('stop', { hostsNode: 'object', host: 'build-box', devspaceId: REMOTE_ENV_ID, object: { kind: 'container', id: 'c', name: 'c', purpose: 'devspace', state: 'running' } });
+    expect(h.service.stop).toHaveBeenCalledWith(REMOTE_ENV_ID);
+    expect(seen).toEqual(['build-box']);
+    expect(dockerHosts.invalidate).toHaveBeenCalledWith('build-box');
   });
 
   it('runs every other command as one operation on the host that is current when it starts', async () => {

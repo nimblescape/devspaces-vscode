@@ -67,6 +67,34 @@ function setup(runner: ProcessRunner, overrides: Partial<LimaSetupDeps> = {}): L
   });
 }
 
+describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
+  it('stops a running VM with limactl stop, and nothing for a VM that does not run', async () => {
+    const running = fakeRunner({ status: 'Running' });
+    await setup(running.runner).stop();
+    expect(running.calls.map((call) => call.slice(0, 3).join(' '))).toEqual(['limactl list --json', 'limactl stop devspaces']);
+    const stopped = fakeRunner({ status: 'Stopped' });
+    await setup(stopped.runner).stop();
+    expect(stopped.calls.map((call) => call[1])).toEqual(['list']);
+  });
+
+  it('removes the VM with its disk under the lock of the setup, and says false when there was none', async () => {
+    const existing = fakeRunner({ status: 'Stopped' });
+    await expect(setup(existing.runner).remove()).resolves.toBe(true);
+    expect(existing.calls.map((call) => call.slice(0, 4).join(' '))).toEqual(['limactl list --json', 'limactl delete --force devspaces']);
+    expect(fs.existsSync(path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock'))).toBe(false);
+    const missing = fakeRunner({ status: '' });
+    await expect(setup(missing.runner).remove()).resolves.toBe(false);
+    expect(missing.calls.map((call) => call[1])).toEqual(['list']);
+  });
+
+  it('removes nothing while another window sets up the VM', async () => {
+    const { runner, calls } = fakeRunner({ status: 'Stopped' });
+    fs.mkdirSync(path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock'), { recursive: true });
+    await expect(setup(runner).remove()).rejects.toMatchObject({ problem: 'busy' });
+    expect(calls).toEqual([]);
+  });
+});
+
 describe('LimaSetup', () => {
   it('downloads the disk, creates the VM with the configuration of Devspaces, starts it, and waits for Docker Engine', async () => {
     const state = { status: '' };
