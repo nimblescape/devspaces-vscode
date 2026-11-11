@@ -432,11 +432,19 @@ function buildCacheOf(items: readonly unknown[]): BuildCacheSummary {
   return { records, bytes, unusedBytes };
 }
 
+/** `repository:tag` of an entry of `docker system df -v` or `docker image ls`; undefined for `<none>`. */
+function referenceOf(item: Record<string, unknown>): string | undefined {
+  const repository = text(item.Repository);
+  const tag = text(item.Tag);
+  return repository !== undefined && tag !== undefined && repository !== '<none>' && tag !== '<none>' ? `${repository}:${tag}` : undefined;
+}
+
 /**
- * The image entries of `docker system df -v`, merged by image ID. The Docker CLI lists each image once, with its first
- * tag only (verified with Docker 29.9), so `tags` holds that tag.
+ * The image entries of `docker system df -v`, merged by image ID, with every tag of each from `tagRows` (IMAGE_TAGS_ARGS).
+ * The Docker CLI lists each image once in `docker system df -v`, with its first tag only, and `docker image ls` lists
+ * one line per tag (verified with Docker 29.9). The images are those of `docker system df -v`.
  */
-function mergedImages(items: readonly unknown[]): Array<{ id: string; tags: string[]; item: Record<string, unknown> }> {
+function mergedImages(items: readonly unknown[], tagRows: readonly unknown[] = []): Array<{ id: string; tags: string[]; item: Record<string, unknown> }> {
   const images = new Map<string, { id: string; tags: string[]; item: Record<string, unknown> }>();
   for (const item of items) {
     if (!isRecord(item)) continue;
@@ -447,12 +455,14 @@ function mergedImages(items: readonly unknown[]): Array<{ id: string; tags: stri
       image = { id, tags: [], item };
       images.set(id, image);
     }
-    const repository = text(item.Repository);
-    const tag = text(item.Tag);
-    if (repository !== undefined && tag !== undefined && repository !== '<none>' && tag !== '<none>') {
-      const reference = `${repository}:${tag}`;
-      if (!image.tags.includes(reference)) image.tags.push(reference);
-    }
+    const reference = referenceOf(item);
+    if (reference !== undefined && !image.tags.includes(reference)) image.tags.push(reference);
+  }
+  for (const row of tagRows) {
+    if (!isRecord(row)) continue;
+    const image = images.get(text(row.ID) ?? '');
+    const reference = referenceOf(row);
+    if (image !== undefined && reference !== undefined && !image.tags.includes(reference)) image.tags.push(reference);
   }
   return [...images.values()];
 }
@@ -505,6 +515,8 @@ export interface InventoryInput {
   baseImages: ReadonlySet<string>;
   /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
   networks?: readonly unknown[];
+  /** The output of IMAGE_TAGS_ARGS, parsed: one entry per tag of an image, so that each image has all its tags. */
+  imageTags?: readonly unknown[];
   /**
    * The output of runningUsesArgs for the running containers, parsed: one entry per container with the ID of its image,
    * its mounts and its networks. Undefined when it could not be read: then the fields of `docker system df -v` decide.
@@ -521,7 +533,7 @@ export function buildInventory(input: InventoryInput): HostInventory {
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
   const containers = list(df.Containers).flatMap((item) => (isRecord(item) ? (classifyContainer(item, input.known) ?? []) : []));
   const volumes = list(df.Volumes).flatMap((item) => (isRecord(item) ? (classifyVolume(item, input.known) ?? []) : []));
-  const images = mergedImages(list(df.Images)).map((image) => classifyImage(image, input));
+  const images = mergedImages(list(df.Images), input.imageTags).map((image) => classifyImage(image, input));
   const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, list(df.Containers)) ?? []) : []));
   const active = activeOf(list(df.Containers), input.running);
   const order = (a: HostObject, b: HostObject): number => Number(a.purpose === 'notDevspaces') - Number(b.purpose === 'notDevspaces') || a.name.localeCompare(b.name);
@@ -569,8 +581,8 @@ function sameImageId(a: string, b: string): boolean {
  * Whether an object is active (HostObject.active). A container by its state. An image, a volume or a network by what
  * the running containers use: exactly, from `running` (runningUsesArgs: the ID of the image, the volumes of the mounts,
  * the names of the networks). Without it (the read failed), by the fields of the running containers of `docker system df
- * -v` (verified with Docker 29.9): an image by the field `Image` (a tag or an ID; a container of another tag of the image,
- * or of a digest, is missed, because the field names the image as the container was created); a volume by the field
+ * -v` (verified with Docker 29.9): an image by the field `Image`, as namesImage compares it (the field names the image as
+ * the container was created, so a tag that names another image since then marks that image); a volume by the field
  * `Mounts` (the names of the volumes and the paths of the bind mounts, joined with commas) when Docker counts a container
  * of it (a path with a comma could name it); a network by the field `Networks`, as networkUsers counts it.
  */
@@ -654,10 +666,17 @@ export const SYSTEM_DF_TIMEOUT_MS = 3 * 60_000;
 export const SYSTEM_DF_ARGS: readonly string[] = ['system', 'df', '--verbose', '--format', '{{json .}}'];
 
 /**
+ * The arguments of the read of every tag of every image (`docker image ls`, GET /images/json): one line per tag, because
+ * `docker system df -v` names the first tag of an image only, and a removal needs all of them (removeHostObjects).
+ */
+export const IMAGE_TAGS_ARGS: readonly string[] = ['image', 'ls', '--no-trunc', '--format', '{{json .}}'];
+
+/**
  * Reads the objects on the engine of the operation (runWithDockerTarget): one `docker system df -v`, the IDs of the
- * images with the labels of Devspaces, `docker network ls`, and, while containers run, what they use (one `docker
- * container inspect` of them, for HostObject.active). Only calls that read. Throws CommandError when one of the first
- * three fails (a failed inspect only makes the colors less exact), and an AbortError when `signal` aborts.
+ * images with the labels of Devspaces, `docker network ls`, every tag of every image (IMAGE_TAGS_ARGS), and, while
+ * containers run, what they use (`docker container inspect` of them in batches of RUNNING_USES_BATCH, for
+ * HostObject.active). Only calls that read. Throws CommandError when one of the reads before the inspect fails (a failed
+ * inspect only makes the colors less exact), and an AbortError when `signal` aborts.
  */
 export async function readHostInventory(
   docker: Pick<BootstrapDocker, 'run' | 'listImagesByLabel'>,
@@ -674,6 +693,8 @@ export async function readHostInventory(
   const helperImageIds = new Set((await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => image.id));
   const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr);
+  const tagList = await docker.run(IMAGE_TAGS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+  if (tagList.exitCode !== 0 || tagList.timedOut) throw new CommandError(commandText(IMAGE_TAGS_ARGS), tagList.exitCode, tagList.stdout, tagList.stderr);
   const runningIds = runningContainers(Array.isArray(df.Containers) ? df.Containers : []).flatMap((item) => text(item.ID) ?? []);
   const running = runningIds.length > 0 ? await readRunningUses(docker, runningIds, signal) : [];
   return buildInventory({
@@ -683,6 +704,7 @@ export async function readHostInventory(
     known: options.known,
     baseImages: options.baseImages,
     networks: parseJsonLines(networkList.stdout),
+    imageTags: parseJsonLines(tagList.stdout),
     ...(running !== undefined ? { running } : {}),
   });
 }
@@ -936,8 +958,15 @@ async function networkUsersNow(docker: Pick<BootstrapDocker, 'run'>, network: Ho
   return { users };
 }
 
-/** Whether `name`, the image of a container as Docker names it (a tag, a full or short ID), is `image`. */
+/**
+ * Whether `name`, the image of a container as Docker names it (a tag, a full or short ID, a reference with a digest), is
+ * `image`. A reference with a digest (`repository@sha256:…`, also after a tag) names the image of its digest, never the
+ * image that its repository or tag names now: the digest is the ID of the image with the containerd image store; with
+ * the classic image store it is a digest of the registry, and the container is missed.
+ */
 function namesImage(name: string, image: HostObject): boolean {
+  const at = name.indexOf('@');
+  if (at !== -1) return sameImageId(name.slice(at + 1), image.id);
   const hex = image.id.replace(/^sha256:/, '');
   const bare = name.replace(/^sha256:/, '');
   return (image.tags ?? []).some((tag) => normalizedReference(tag) === normalizedReference(name)) || (bare.length >= 12 && hex.startsWith(bare));

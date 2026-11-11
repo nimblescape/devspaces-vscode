@@ -7,8 +7,9 @@
 // networks of each container and the build cache as `docker system df` sums it; Stop and Start of a container that is
 // not of Devspaces; a network that a stopped container uses stays (Docker would remove it, and the container could not
 // start again), also one that a container joined after the read, with a space and a comma in its name; a container and its network go in one removal, never
-// with force; which objects a running container uses (the colors of the view), by the ID of its image and its mounts. Not
-// the removal of the build cache: it would remove the build cache of the developer who runs the tests.
+// with force; an image with two tags goes in one removal, also with a container of its second tag; which objects a
+// running container uses (the colors of the view), by the ID of its image and its mounts. Not the removal of the build
+// cache: it would remove the build cache of the developer who runs the tests.
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -128,9 +129,38 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
     }
   });
 
+  it('removes an image with two tags, also together with a container of its second tag, never with force', async () => {
+    // `docker system df -v` names the first tag only: the read takes every tag from `docker image ls`, so that the
+    // removal untags each and the last one removes the image (with one tag only, Docker would only untag it).
+    const repository = `untag${tag}`;
+    const source = `untag-${tag}-source`;
+    const user = `untag-${tag}-user`;
+    try {
+      cli.ok(['create', '--name', source, '--label', runLabel, TEST_BASE_IMAGE, 'true']);
+      const imageId = cli.lines(['commit', '--change', `LABEL ${runLabel}`, source, `${repository}:one`])[0];
+      cli.ok(['rm', source]);
+      cli.ok(['tag', `${repository}:one`, `${repository}:two`]);
+      cli.ok(['create', '--name', user, '--label', runLabel, `${repository}:two`, 'true']);
+      const inventory = await read();
+      const image = inventory.images.find((candidate) => candidate.id === imageId);
+      if (image === undefined) throw new Error(`The read found no image ${imageId}.`);
+      expect([...(image.tags ?? [])].sort()).toEqual([`${repository}:one`, `${repository}:two`]);
+      expect(image.usedBy).toBe(1);
+      const results = await removeHostObjects(docker, [image, find(inventory.containers, user)], { logger: log });
+      expect(results.map((result) => [result.object.kind, result.outcome])).toEqual([
+        ['container', 'removed'],
+        ['image', 'removed'],
+      ]);
+      expect(cli.run(['image', 'inspect', imageId]).code).not.toBe(0);
+    } finally {
+      cli.run(['rm', '-f', source, user]);
+      cli.run(['image', 'rm', `${repository}:one`, `${repository}:two`]);
+    }
+  });
+
   it('marks the image of a running container active also when the container names another tag of it, and a volume only when the container mounts it', async () => {
-    // An image of its own with two tags: `docker system df -v` lists it with one tag only, and the container names the
-    // other one. A bind mount whose path ends with `,<name of a volume>` does not make that volume active.
+    // An image of its own with two tags: `docker system df -v` lists it with its first tag only, and the container names
+    // the other one. A bind mount whose path ends with `,<name of a volume>` does not make that volume active.
     const repository = `colors${tag}`;
     const holder = `colors-${tag}`;
     const unused = `colors-unused-${tag}`;
@@ -148,7 +178,7 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
       const inventory = await read();
       const image = inventory.images.find((candidate) => candidate.id === imageId);
       expect(image).toMatchObject({ kind: 'image', purpose: 'notDevspaces', active: true });
-      expect(image?.tags).toHaveLength(1);
+      expect([...(image?.tags ?? [])].sort()).toEqual([`${repository}:one`, `${repository}:two`]);
       expect(find(inventory.volumes, used).active).toBe(true);
       expect(find(inventory.volumes, unused).active).toBeUndefined();
       expect(find(inventory.containers, holder).active).toBe(true);
