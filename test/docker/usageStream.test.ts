@@ -77,6 +77,11 @@ describe('the utilization stream with real shells and a real SSH server', () => 
   }
 
   /** The commands of the processes in `container` (`docker top`, read on this computer). */
+  /** The changes of the files of `container` (`docker diff`), sorted: Docker does not keep their order. */
+  function changes(container: string): string[] {
+    return cli.lines(['diff', container]).sort();
+  }
+
   function processes(container: string): string[] {
     // Docker needs the column PID; the command is the rest of each line.
     const lines = cli.lines(['top', container, '-o', 'pid,args']);
@@ -171,7 +176,7 @@ describe('the utilization stream with real shells and a real SSH server', () => 
     it('runs over SSH with the transport of the extension, reads the sizes, and leaves nothing after a stop and after a killed client', async () => {
       const transport = sshHostTransport(ALIAS, sshPath, env);
       if (transport === undefined) throw new Error('No SSH transport for the alias.');
-      const before = cli.ok(['diff', sshdContainer]);
+      const before = changes(sshdContainer);
       // The server and its processes of a session (`sshd: root@notty`, or `sshd-session: root@notty` from OpenSSH 9.8 on).
       const sshdOnly = (command: string) => /^(\/usr\/sbin\/|\/usr\/lib\/ssh\/)?sshd(-session)?\b/.test(command);
 
@@ -204,7 +209,7 @@ describe('the utilization stream with real shells and a real SSH server', () => 
       await second.session.exited;
       const left = await onlyProcesses(sshdContainer, sshdOnly);
       expect(left.filter((command) => !sshdOnly(command))).toEqual([]);
-      expect(cli.ok(['diff', sshdContainer])).toBe(before);
+      expect(changes(sshdContainer)).toEqual(before);
     });
   });
 });

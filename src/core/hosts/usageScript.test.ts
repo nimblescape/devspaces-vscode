@@ -172,6 +172,7 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
   let root: string;
   let bin: string;
   let slowBin: string;
+  let idleScript: string;
 
   beforeAll(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-usage-script-'));
@@ -182,6 +183,9 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
     fakeDocker(bin);
     fs.mkdirSync(slowBin, { recursive: true });
     fs.writeFileSync(path.join(slowBin, 'docker'), '#!/bin/sh\ncase "$*" in "system df"*) exec sleep "$SLOW_SECONDS";; *) exit 3;; esac\n', { mode: 0o755 });
+    idleScript = path.join(dir, 'idle-bin', 'idle');
+    fs.mkdirSync(path.dirname(idleScript));
+    fs.writeFileSync(idleScript, '#!/bin/sh\nwhile :; do sleep 1; done\n', { mode: 0o755 });
   });
 
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -201,7 +205,8 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         expect([d.seq, t.seq, s.seq]).toEqual([1, 2, 3]);
         expect(d.cpu).toBeDefined();
         expect(d.memoryKb.MemTotal).toBeGreaterThan(0n);
-        expect(d.idle).toBe(false);
+        // Another test file may run a process "idle" now (the WSL keeper), so only the kind is checked here.
+        expect(typeof d.idle).toBe('boolean');
         expect(t.idle).toBeUndefined();
         expect(d.containers.map((container) => [container.id, container.network])).toEqual([
           [id('1'), { kind: 'host' }],
@@ -265,6 +270,23 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         const { at } = await stream.exited;
         // The time without a byte, then the clock kills the blocked sampler about 2 s later.
         expect(at - before).toBeLessThan(9_000);
+      }, 20_000);
+
+      it('sees a running process "idle" in the idle check of a block d', async () => {
+        // A script named idle has the name idle, as the idle script of the WSL keeper.
+        const idle = spawn(idleScript, [], { stdio: 'ignore' });
+        try {
+          await waitFor(() => fs.existsSync(`/proc/${idle.pid}/comm`) && fs.readFileSync(`/proc/${idle.pid}/comm`, 'utf8') === 'idle\n', 5_000);
+          const stream = runScript(shell, root, bin);
+          await stream.started;
+          stream.child.stdin.write('dt');
+          await stream.next(2);
+          expect(stream.blocks.map((block) => block.idle)).toEqual([true, undefined]);
+          stream.child.stdin.end();
+          await stream.exited;
+        } finally {
+          idle.kill();
+        }
       }, 20_000);
 
       it('leaves no Docker CLI on the host when its input ends during a slow sizes read', async () => {
