@@ -81,13 +81,13 @@ export const DockerHostsCommandTexts = {
         : `Devspaces cannot use the VM of Devspaces now (${state.kind === 'broken' ? 'it is broken' : 'its state is not known'}), so it did not change its objects.${state.detail !== undefined ? ` ${state.detail}` : ''}`,
 };
 
-/** At most five names, then the number of the others. */
 /** The name of an object in the question of Remove…: an image with every tag that its removal removes. */
 function removalName(object: HostObject): string {
   const others = object.kind === 'image' ? (object.tags ?? []).filter((tag) => tag !== object.name) : [];
   return others.length > 0 ? `${object.kind} ${object.name} (also ${others.join(', ')})` : `${object.kind} ${object.name}`;
 }
 
+/** At most five names, then the number of the others. */
 function listed(names: readonly string[]): string {
   if (names.length <= 5) return names.join(', ');
   return `${names.slice(0, 5).join(', ')} and ${names.length - 5} more`;

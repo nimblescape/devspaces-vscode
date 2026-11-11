@@ -8,7 +8,7 @@
 // not of Devspaces; a network that a stopped container uses stays (Docker would remove it, and the container could not
 // start again), also one that a container joined after the read, with a space and a comma in its name; a container and its network go in one removal, never
 // with force; an image with two tags goes in one removal, also with a container of its second tag, and a removal after a
-// tag moved or a container started since the read; which objects a running container uses (the colors of the view), by
+// tag moved or a container was created since the read; which objects a running container uses (the colors of the view), by
 // the ID of its image and its mounts. Not the removal of the build cache: it would remove the build cache of the
 // developer who runs the tests.
 import * as crypto from 'crypto';

@@ -932,14 +932,14 @@ export function imageTagsNowArgs(id: string): string[] {
 
 /**
  * The read of the containers of the image `id` now (`docker container ls --all`, GET /containers/json), just before its
- * removal. The filter `ancestor` also lists the containers of the images built on it: a count can be too high, never too
- * low.
+ * removal. The filter `ancestor` also lists the containers of the images that have it as their parent (`docker commit`,
+ * the classic builder; not an image that BuildKit built FROM it): a count can be too high, never too low.
  */
 export function imageUsersNowArgs(id: string): string[] {
   return ['container', 'ls', '--all', '--no-trunc', '--filter', `ancestor=${id}`, '--format', '{{.ID}}'];
 }
 
-/** The tags of the image `id` now (imageTagsNowArgs); `missing` when it is gone, `detail` when Docker could not say. Throws only an AbortError. */
+/** The references of the image `id` now (imageTagsNowArgs: RepoTags); `missing` when it is gone, `detail` when Docker could not say. Throws only an AbortError. */
 async function imageTagsNow(docker: Pick<BootstrapDocker, 'run'>, id: string, signal: AbortSignal | undefined): Promise<{ tags: string[] } | { missing: true } | { detail: string }> {
   const { result, error } = await call(docker, imageTagsNowArgs(id), DOCKER_QUERY_TIMEOUT_MS, signal);
   if (result !== undefined && result.exitCode !== 0 && !result.timedOut && MISSING_PATTERN.test(`${result.stderr}\n${result.stdout}`)) return { missing: true };
@@ -953,20 +953,39 @@ async function imageTagsNow(docker: Pick<BootstrapDocker, 'run'>, id: string, si
   return { tags: Array.isArray(tags) ? tags.filter((tag): tag is string => typeof tag === 'string') : [] };
 }
 
+/** A reference with a digest (`repository@sha256:…`): the containerd image store lists it in RepoTags too. */
+function hasDigest(reference: string): boolean {
+  return reference.includes('@');
+}
+
 /**
- * Removes the image `object`, never with force. Its tags and its containers are read now, not taken from the read of
- * the view, which can be old (the Monitor pulls images, the user tags and runs them):
+ * Removes the image `object`, never with force. Its references and its containers are read now, not taken from the read
+ * of the view, which can be old (the Monitor pulls images, the user tags and runs them):
  * - An image that a container uses stays without a call (`inUse`): Docker would untag its first tags and refuse only the
  *   last one. The containers of the same removal are gone by then.
  * - An image with a tag that the read did not show stays (`failed`): the user did not see that tag.
- * - Each tag of the read that still names the image is removed, so that the last one removes the image; a tag that
- *   names another image since the read stays. An image without a tag goes by its ID.
- * - When Docker untagged the last tag but kept the image (it writes no `Deleted:`), the image is read again: one with a
- *   tag again stays (`failed`); one with only references with a digest (of another repository) goes by its ID.
+ * - Each tag of the read that still names the image is removed, then each reference with a digest that RepoTags lists
+ *   (the containerd image store lists a pull by digest there, and `docker image ls` shows no such tag; it names only this
+ *   image), so that the last one removes the image (Docker writes `Deleted:`). A tag that names another image since the
+ *   read stays. An image without a reference goes by its ID (by its ID Docker refuses an image of several repositories).
+ * - When Docker removed each reference but kept the image (no `Deleted:`), the image is read again: one with a tag again
+ *   stays (`failed`); otherwise its new references with a digest, else its ID, are removed.
  * Throws only an AbortError.
  */
 async function removeImage(docker: Pick<BootstrapDocker, 'run'>, object: HostObject, signal: AbortSignal | undefined): Promise<Pick<ObjectResult, 'outcome' | 'detail'>> {
-  const ended = (step: { result?: RunResult; error?: unknown }): Pick<ObjectResult, 'outcome' | 'detail'> => {
+  /** Removes `references` in turn: `deleted` when Docker deleted the image, else the refusal or the last step. */
+  const removeReferences = async (references: readonly string[]): Promise<{ deleted: boolean; gone?: true; refused?: { result?: RunResult; error?: unknown } }> => {
+    for (const reference of references) {
+      const step = await call(docker, ['image', 'rm', reference], DOCKER_QUERY_TIMEOUT_MS, signal);
+      if (step.result !== undefined && step.result.exitCode === 0 && IMAGE_DELETED_LINE.test(step.result.stdout)) return { deleted: true };
+      const outcome = outcomeOf(step.result, 'removed');
+      // A tag that is gone may have moved: the read afterwards decides. The ID that is gone is the image.
+      if (outcome === 'missing' && reference === object.id) return { deleted: false, gone: true };
+      if (outcome !== 'removed' && outcome !== 'missing') return { deleted: false, refused: step };
+    }
+    return { deleted: false };
+  };
+  const refusal = (step: { result?: RunResult; error?: unknown }): Pick<ObjectResult, 'outcome' | 'detail'> => {
     const outcome = outcomeOf(step.result, 'removed');
     return outcome === 'inUse' || outcome === 'failed' ? { outcome, detail: detailOf(step.result, step.error) } : { outcome };
   };
@@ -974,7 +993,7 @@ async function removeImage(docker: Pick<BootstrapDocker, 'run'>, object: HostObj
   if ('missing' in now) return { outcome: 'missing' };
   if ('detail' in now) return { outcome: 'failed', detail: now.detail };
   const shown = object.tags ?? [];
-  const unseen = now.tags.filter((tag) => !shown.includes(tag));
+  const unseen = now.tags.filter((reference) => !hasDigest(reference) && !shown.includes(reference));
   if (unseen.length > 0) return { outcome: 'failed', detail: `The image has the tag ${unseen.join(', ')} now, which the view did not show. Click Refresh.` };
   const usersNow = await call(docker, imageUsersNowArgs(object.id), DOCKER_QUERY_TIMEOUT_MS, signal);
   if (usersNow.result === undefined || usersNow.result.exitCode !== 0 || usersNow.result.timedOut) {
@@ -982,20 +1001,21 @@ async function removeImage(docker: Pick<BootstrapDocker, 'run'>, object: HostObj
   }
   const users = usersNow.result.stdout.split('\n').filter((line) => line.trim() !== '').length;
   if (users > 0) return { outcome: 'inUse', detail: `${users === 1 ? 'A container uses' : `${users} containers use`} this image.` };
-  let deleted = false;
-  let last: { result?: RunResult; error?: unknown } = {};
-  for (const reference of now.tags.length > 0 ? now.tags : [object.id]) {
-    last = await call(docker, ['image', 'rm', reference], DOCKER_QUERY_TIMEOUT_MS, signal);
-    if (last.result !== undefined && IMAGE_DELETED_LINE.test(last.result.stdout)) deleted = true;
-    const step = outcomeOf(last.result, 'removed');
-    if (step !== 'removed' && step !== 'missing') break;
-  }
-  if (outcomeOf(last.result, 'removed') !== 'removed' || deleted) return ended(last);
+  const references = [...now.tags.filter((reference) => !hasDigest(reference)), ...now.tags.filter(hasDigest)];
+  const first = await removeReferences(references.length > 0 ? references : [object.id]);
+  if (first.deleted) return { outcome: 'removed' };
+  if (first.gone === true) return { outcome: 'missing' };
+  if (first.refused !== undefined) return refusal(first.refused);
   const after = await imageTagsNow(docker, object.id, signal);
   if ('missing' in after) return { outcome: 'removed' };
   if ('detail' in after) return { outcome: 'failed', detail: after.detail };
-  if (after.tags.length > 0) return { outcome: 'failed', detail: `Docker kept the image: it has the tag ${after.tags.join(', ')} now. Click Refresh.` };
-  return ended(await call(docker, ['image', 'rm', object.id], DOCKER_QUERY_TIMEOUT_MS, signal));
+  const tagsAfter = after.tags.filter((reference) => !hasDigest(reference));
+  if (tagsAfter.length > 0) return { outcome: 'failed', detail: `Docker kept the image: it has the tag ${tagsAfter.join(', ')} now. Click Refresh.` };
+  const digestsAfter = after.tags.filter(hasDigest);
+  const second = await removeReferences(digestsAfter.length > 0 ? digestsAfter : [object.id]);
+  if (second.deleted || second.gone === true) return { outcome: 'removed' };
+  if (second.refused !== undefined) return refusal(second.refused);
+  return { outcome: 'failed', detail: 'Docker kept the image. Click Refresh.' };
 }
 
 /**
