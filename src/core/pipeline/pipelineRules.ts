@@ -16,6 +16,7 @@ import { isDockerHub, parseImageReference } from '../imageCheck/reference';
 import { isNetworkFailure } from '../networkFailure';
 import {
   COMPOSE_PROJECT_LABEL,
+  COMPOSE_SERVICE_LABEL,
   CONTAINER_CONFIG_UNKNOWN,
   CONTAINER_VERSION,
   HOST_ACCESS_UNRESTRICTED,
@@ -488,8 +489,8 @@ export function nonEmptyString(value: unknown): string | undefined {
 // ---------------------------------------------------------------------------------------------------------------------
 // Docker Compose
 
-/** Label that Docker Compose gives each container of a project: the name of its service. */
-export const COMPOSE_SERVICE_LABEL = 'com.docker.compose.service';
+/** Label that Docker Compose gives each container of a project: the name of its service (names.ts). */
+export { COMPOSE_SERVICE_LABEL };
 /**
  * Recreate offer: label that Docker Compose gives each container: the ID of the image that it was created from
  * (verified with Compose 5.1.1). Compose creates a container again when it differs from the current ID of the image of

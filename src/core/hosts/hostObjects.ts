@@ -2,17 +2,19 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The objects of Devspaces on a Docker host, for the view "Docker Hosts" (docs/requirements.md R-ENG-008): its
-// containers, images and volumes with their purpose and size, read with the Docker CLI of Devspaces (BootstrapDocker.run,
-// within an operation on that host: through the Docker pipe of the extension, as "Remove Devspaces from This Docker
-// Engine…" reads), and their removal. Only the objects of Devspaces: those with a label nimblescape.devspaces.*, the
-// containers, images and volumes whose name starts with `devspaces-` (also the tags of the build image
-// devspaces-buildx), and the base images that the build record of a devspace of the host names. Every other object of
-// the engine stays hidden. The removal never uses force: Docker refuses a running container, and an image or a volume
-// that a container uses, and the result says so. No `vscode`.
+// The objects on a Docker host, for the view "Docker Hosts" (docs/requirements.md R-ENG-008): all its containers,
+// networks, images and volumes with their purpose and size, and its build cache, read with the Docker CLI of Devspaces (BootstrapDocker.run, within an
+// operation on that host: through the Docker pipe of the extension, as "Remove Devspaces from This Docker Engine…"
+// reads), their Start and Stop, and their removal. The objects of Devspaces get their purpose: those with a label
+// nimblescape.devspaces.*, the containers, images and volumes whose name starts with `devspaces-` (also the tags of the
+// build image devspaces-buildx), and the base images that the build record of a devspace of the host names. Every other
+// object of the engine is listed too, as `notDevspaces` (for example the services of the host, which the user stops to
+// free CPU and memory). The removal never uses force: Docker refuses a running container, and an image or a volume that
+// a container uses, and the result says so. No `vscode`.
 import { CommandError, errorMessage } from '../errors';
 import {
   COMPOSE_PROJECT_LABEL,
+  COMPOSE_SERVICE_LABEL,
   LABEL_BUILD_RUN,
   LABEL_CHANNEL_STEP,
   LABEL_COMPOSE_SERVICE,
@@ -40,13 +42,14 @@ import { BUILDX_REPOSITORY } from '../docker/buildxImage';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { VOLUME_REMOVE_TIMEOUT_MS } from '../docker/engineRemoval';
 
-export type HostObjectKind = 'container' | 'image' | 'volume';
+export type HostObjectKind = 'container' | 'network' | 'image' | 'volume';
 
 /**
  * What an object is for. `devspace`: an object of a devspace of this computer (its container, the containers of its
  * services, its images, its volumes), which gets the actions of the devspace (Stop, Delete…). `otherDevspace`: an object
  * of a devspace that this computer does not know (for example of another computer on a shared host). The others belong
- * to the helpers of Devspaces, or are other objects of Devspaces (`other`).
+ * to the helpers of Devspaces, or are other objects of Devspaces (`other`), or do not belong to Devspaces at all
+ * (`notDevspaces`).
  */
 export type HostObjectPurpose =
   | 'devspace'
@@ -59,13 +62,14 @@ export type HostObjectPurpose =
   | 'buildImage'
   | 'baseImage'
   | 'sharedVolume'
-  | 'other';
+  | 'other'
+  | 'notDevspaces';
 
 export interface HostObject {
   kind: HostObjectKind;
-  /** The full ID of a container or an image, the name of a volume. */
+  /** The full ID of a container, a network or an image, the name of a volume. */
   id: string;
-  /** The name of a container or a volume; the first tag of an image, or its short ID when it has none. */
+  /** The name of a container, a network or a volume; the first tag of an image, or its short ID when it has none. */
   name: string;
   /** All tags of an image (`repository:tag`). */
   tags?: string[];
@@ -76,7 +80,8 @@ export interface HostObject {
   repository?: string;
   /**
    * The part of a devspace that the object is (`dev container`, `service db`, `image`, `prepared image`, `workspace`,
-   * `additional volume`, `volume of Docker Compose`, `data of a service`), or what a shared volume holds.
+   * `additional volume`, `volume of Docker Compose`, `data of a service`), what a shared volume holds, or the service of
+   * Docker Compose of a container that is not of Devspaces (`service web of shop`).
    */
   role?: string;
   /** A container: `running`, `exited`, `created`, `paused`, `restarting`, `removing` or `dead`. */
@@ -87,18 +92,36 @@ export interface HostObject {
   sizeBytes?: number;
   /** An image: the bytes that only this image uses (not shared with another image). */
   uniqueBytes?: number;
-  /** The number of containers that use the image or the volume. */
+  /** The number of containers that use the image, the volume or the network. */
   usedBy?: number;
+  /** A network: its driver (`bridge`, `overlay`, …). */
+  driver?: string;
+  /** A network that Docker creates itself and never removes (`bridge`, `host`, `none`). */
+  builtIn?: boolean;
   /** When Docker created the container or the image, as Docker writes it. */
   createdAt?: string;
   /** A container: its image, as Docker names it (a tag, or an ID). */
   image?: string;
+  /** A container: the names of its networks. */
+  networks?: string[];
+}
+
+/** The build cache of the engine (BuildKit), as `docker system df` counts it. */
+export interface BuildCacheSummary {
+  /** The number of its records. */
+  records: number;
+  /** The size of all records. */
+  bytes: number;
+  /** What its removal frees (the reclaimable space of `docker system df`): the records that no build uses and no image shares. */
+  unusedBytes: number;
 }
 
 export interface HostInventory {
   containers: HostObject[];
+  networks: HostObject[];
   images: HostObject[];
   volumes: HostObject[];
+  buildCache: BuildCacheSummary;
 }
 
 /** A devspace of this computer on the host, for the purpose of its objects (from the registry). */
@@ -261,7 +284,7 @@ function classifyContainer(item: Record<string, unknown>, known: readonly KnownD
   if (id === undefined || name === undefined) return undefined;
   const labels = parseLabels(item.Labels);
   const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
-  if (devspaceId === undefined && !hasDevspacesLabel(labels) && !name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX)) return undefined;
+  const ofDevspaces = devspaceId !== undefined || hasDevspacesLabel(labels) || name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX);
   const base: HostObject = {
     kind: 'container',
     id,
@@ -272,7 +295,14 @@ function classifyContainer(item: Record<string, unknown>, known: readonly KnownD
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),
     ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
     ...(text(item.Image) !== undefined ? { image: text(item.Image) } : {}),
+    ...networksOf(item),
   };
+  if (!ofDevspaces) {
+    // A service of Docker Compose names its project and its service.
+    const project = text(labels.get(COMPOSE_PROJECT_LABEL));
+    const service = text(labels.get(COMPOSE_SERVICE_LABEL));
+    return { ...base, purpose: 'notDevspaces', ...(project !== undefined && service !== undefined ? { role: `service ${service} of ${project}` } : {}) };
+  }
   // The helpers first: a worker of a devspace window has a name that starts with the name of that devspace.
   if (labels.has(LABEL_MONITOR)) return { ...base, purpose: 'monitor' };
   if (labels.has(LABEL_BUILD_RUN)) return { ...base, purpose: 'buildContainer' };
@@ -290,7 +320,7 @@ function classifyVolume(item: Record<string, unknown>, known: readonly KnownDevs
   const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
   // A named volume of the configuration of a devspace of this computer, also one without the labels of Devspaces.
   const additionalOf = known.find((devspace) => devspace.additionalVolumes.includes(name));
-  if (devspaceId === undefined && additionalOf === undefined && !hasDevspacesLabel(labels) && !name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX)) return undefined;
+  const ofDevspaces = devspaceId !== undefined || additionalOf !== undefined || hasDevspacesLabel(labels) || name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX);
   const base: HostObject = {
     kind: 'volume',
     id: name,
@@ -299,6 +329,7 @@ function classifyVolume(item: Record<string, unknown>, known: readonly KnownDevs
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),
     ...(count(item.Links) !== undefined ? { usedBy: count(item.Links) } : {}),
   };
+  if (!ofDevspaces) return { ...base, purpose: 'notDevspaces' };
   const shared = SHARED_VOLUME_ROLES[name];
   if (shared !== undefined) return { ...base, purpose: 'sharedVolume', role: shared };
   const byName = additionalOf ?? devspaceByName(name, known);
@@ -312,6 +343,73 @@ function classifyVolume(item: Record<string, unknown>, known: readonly KnownDevs
         ? 'volume of Docker Compose'
         : 'workspace';
   return { ...base, ...devspaceFields(devspaceId, byName, known, text(labels.get(LABEL_REPOSITORY))), role };
+}
+
+/** The networks of a container of `docker system df -v` (its field `Networks`: names joined with commas). */
+function networksOf(item: Record<string, unknown>): Pick<HostObject, 'networks'> {
+  const networks = (text(item.Networks) ?? '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter((name) => name !== '');
+  return networks.length > 0 ? { networks } : {};
+}
+
+/** The networks that Docker creates itself on every engine and never removes. */
+const BUILT_IN_NETWORKS = new Set(['bridge', 'host', 'none']);
+
+/** The number of containers of `docker system df -v` on each network, by its name. */
+function networkUsers(containers: readonly unknown[]): Map<string, number> {
+  const users = new Map<string, number>();
+  for (const item of containers) {
+    if (!isRecord(item)) continue;
+    for (const network of networksOf(item).networks ?? []) users.set(network, (users.get(network) ?? 0) + 1);
+  }
+  return users;
+}
+
+/** A network of `docker network ls --format '{{json .}}'`. */
+function classifyNetwork(item: Record<string, unknown>, known: readonly KnownDevspace[], users: ReadonlyMap<string, number>): HostObject | undefined {
+  const id = text(item.ID);
+  const name = text(item.Name);
+  if (id === undefined || name === undefined) return undefined;
+  const labels = parseLabels(item.Labels);
+  const base: HostObject = {
+    kind: 'network',
+    id,
+    name,
+    purpose: 'notDevspaces',
+    usedBy: users.get(name) ?? 0,
+    ...(text(item.Driver) !== undefined ? { driver: text(item.Driver) } : {}),
+    ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
+  };
+  if (BUILT_IN_NETWORKS.has(name)) return { ...base, builtIn: true, role: 'network of Docker' };
+  const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
+  const project = text(labels.get(COMPOSE_PROJECT_LABEL));
+  const byName = devspaceByName(project ?? name, known);
+  if (devspaceId !== undefined || byName !== undefined) return { ...base, ...devspaceFields(devspaceId, byName, known, text(labels.get(LABEL_REPOSITORY))), role: 'network' };
+  if (hasDevspacesLabel(labels) || name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX)) return { ...base, purpose: 'other' };
+  return project !== undefined ? { ...base, role: `network of ${project}` } : base;
+}
+
+/**
+ * The build cache of `docker system df -v` (its field `BuildCache`): `InUse`, `Shared` and `Size` as the Docker CLI
+ * writes them (text), summed as `docker system df` sums its size and its reclaimable space (verified with Docker 29.9):
+ * all records; and those that no build uses and that share their data with no image (a shared record keeps its data
+ * on the disk after its removal, for example a layer of a base image).
+ */
+function buildCacheOf(items: readonly unknown[]): BuildCacheSummary {
+  const yes = (value: unknown): boolean => value === true || value === 'true';
+  let bytes = 0;
+  let unusedBytes = 0;
+  let records = 0;
+  for (const item of items) {
+    if (!isRecord(item)) continue;
+    records += 1;
+    const size = parseDockerSize(item.Size) ?? 0;
+    bytes += size;
+    if (!yes(item.InUse) && !yes(item.Shared)) unusedBytes += size;
+  }
+  return { records, bytes, unusedBytes };
 }
 
 /** The image entries of `docker system df -v` (one per tag), merged by image ID. */
@@ -344,7 +442,7 @@ function untaggedName(id: string): string {
 function classifyImage(
   image: { id: string; tags: string[]; item: Record<string, unknown> },
   input: { devspaceImageIds: ReadonlySet<string>; helperImageIds: ReadonlySet<string>; baseImages: ReadonlySet<string>; known: readonly KnownDevspace[] },
-): HostObject | undefined {
+): HostObject {
   const { id, tags, item } = image;
   // The tags of Devspaces first, so that the name of the row is one of them.
   const ordered = [...tags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX)), ...tags.filter((tag) => !tag.startsWith(RESOURCE_NAME_PREFIX))];
@@ -368,7 +466,7 @@ function classifyImage(
   }
   if (ordered.some((tag) => input.baseImages.has(normalizedReference(tag)))) return { ...base, purpose: 'baseImage' };
   if (ordered.some((tag) => tag.toLowerCase().startsWith(RESOURCE_NAME_PREFIX))) return base;
-  return undefined;
+  return { ...base, purpose: 'notDevspaces' };
 }
 
 export interface InventoryInput {
@@ -382,18 +480,28 @@ export interface InventoryInput {
   known: readonly KnownDevspace[];
   /** baseImageReferences of the devspaces of the host. */
   baseImages: ReadonlySet<string>;
+  /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
+  networks?: readonly unknown[];
 }
 
-/** The objects of Devspaces in the output of `docker system df -v` (see the module comment), each group by name. */
+/**
+ * The objects in the output of `docker system df -v` (see the module comment), each group with the objects of
+ * Devspaces first, then the others, each part by name.
+ */
 export function buildInventory(input: InventoryInput): HostInventory {
   const df = isRecord(input.df) ? input.df : {};
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
   const containers = list(df.Containers).flatMap((item) => (isRecord(item) ? (classifyContainer(item, input.known) ?? []) : []));
   const volumes = list(df.Volumes).flatMap((item) => (isRecord(item) ? (classifyVolume(item, input.known) ?? []) : []));
-  const images = mergedImages(list(df.Images)).flatMap((image) => classifyImage(image, input) ?? []);
-  const byName = (a: HostObject, b: HostObject): number => a.name.localeCompare(b.name);
-  return { containers: containers.sort(byName), images: images.sort(byName), volumes: volumes.sort(byName) };
+  const images = mergedImages(list(df.Images)).map((image) => classifyImage(image, input));
+  const users = networkUsers(list(df.Containers));
+  const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, users) ?? []) : []));
+  const order = (a: HostObject, b: HostObject): number => Number(a.purpose === 'notDevspaces') - Number(b.purpose === 'notDevspaces') || a.name.localeCompare(b.name);
+  return { containers: containers.sort(order), networks: networks.sort(order), images: images.sort(order), volumes: volumes.sort(order), buildCache: buildCacheOf(list(df.BuildCache)) };
 }
+
+/** The arguments of the read of the networks of the engine. */
+export const NETWORK_LS_ARGS: readonly string[] = ['network', 'ls', '--no-trunc', '--format', '{{json .}}'];
 
 /** The time limit of `docker system df -v`: it sums the sizes of all volumes, which can take some time on a large engine. */
 export const SYSTEM_DF_TIMEOUT_MS = 3 * 60_000;
@@ -402,8 +510,8 @@ export const SYSTEM_DF_TIMEOUT_MS = 3 * 60_000;
 export const SYSTEM_DF_ARGS: readonly string[] = ['system', 'df', '--verbose', '--format', '{{json .}}'];
 
 /**
- * Reads the objects of Devspaces on the engine of the operation (runWithDockerTarget): one `docker system df -v` and the
- * IDs of the images with the labels of Devspaces. Only calls that read. Throws CommandError when a call fails, and an
+ * Reads the objects on the engine of the operation (runWithDockerTarget): one `docker system df -v`, the IDs of the
+ * images with the labels of Devspaces, and `docker network ls`. Only calls that read. Throws CommandError when a call fails, and an
  * AbortError when `signal` aborts.
  */
 export async function readHostInventory(
@@ -419,7 +527,9 @@ export async function readHostInventory(
   if (!isRecord(df)) throw new CommandError(commandText(SYSTEM_DF_ARGS), result.exitCode, result.stdout, 'Unexpected output of docker system df.');
   const devspaceImageIds = new Set((await docker.listImagesByLabel(LABEL_DEVSPACE_ID)).map((image) => image.id));
   const helperImageIds = new Set((await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => image.id));
-  return buildInventory({ df, devspaceImageIds, helperImageIds, known: options.known, baseImages: options.baseImages });
+  const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+  if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr);
+  return buildInventory({ df, devspaceImageIds, helperImageIds, known: options.known, baseImages: options.baseImages, networks: parseJsonLines(networkList.stdout) });
 }
 
 /** `docker ps` of the running dev containers and service containers of devspaces (label LABEL_DEVSPACE_ID). */
@@ -448,14 +558,17 @@ export async function runningDevspaces(docker: Pick<BootstrapDocker, 'run'>, kno
 // Stop and removal
 
 /** What Docker says of an object that is not there (anymore). */
-const MISSING_PATTERN = /no such (container|image|volume|object)/i;
+const MISSING_PATTERN = /no such (container|image|volume|object|network)|network \S+ not found/i;
 /** What Docker says when another removal of the container runs already (for example the `--rm` of a closing worker). */
 const REMOVAL_IN_PROGRESS_PATTERN = /removal of container .* is already in progress/i;
 /** What Docker says of a running container that `docker rm` without force does not remove. */
-const RUNNING_PATTERN = /cannot remove (a )?(running|paused|restarting) container|stop the container before/i;
+const RUNNING_PATTERN = /cannot remove (a )?(running|paused|restarting) container|stop the container before|has active endpoints/i;
 
-/** `removed`; `missing`: it was not there anymore; `inUse`: a container uses it, or it runs; `failed`: another error. */
-export type ObjectOutcome = 'removed' | 'stopped' | 'missing' | 'inUse' | 'failed';
+/**
+ * `removed`, `stopped`, `started`; `missing`: it was not there anymore; `inUse`: a container uses it, or it runs;
+ * `failed`: another error.
+ */
+export type ObjectOutcome = 'removed' | 'stopped' | 'started' | 'missing' | 'inUse' | 'failed';
 
 export interface ObjectResult {
   object: Pick<HostObject, 'kind' | 'name'>;
@@ -464,8 +577,8 @@ export interface ObjectResult {
   detail?: string;
 }
 
-/** The outcome of a removal or a stop call. */
-function outcomeOf(result: RunResult | undefined, done: 'removed' | 'stopped'): ObjectOutcome {
+/** The outcome of a removal, a stop or a start call. */
+function outcomeOf(result: RunResult | undefined, done: 'removed' | 'stopped' | 'started'): ObjectOutcome {
   if (result === undefined) return 'failed';
   if (result.exitCode === 0 && !result.timedOut) return done;
   if (result.timedOut) return 'failed';
@@ -510,6 +623,9 @@ function logResult(logger: Logger, entry: ObjectResult): void {
     case 'stopped':
       logger.info(`Stopped ${name}.`);
       break;
+    case 'started':
+      logger.info(`Started ${name}.`);
+      break;
     case 'missing':
       logger.info(`${capitalized(name)} was not there anymore.`);
       break;
@@ -531,6 +647,38 @@ export async function stopHostContainer(docker: Pick<BootstrapDocker, 'run'>, ob
   return entry;
 }
 
+/** `docker builder prune --all --force`: the records of the build cache that no build uses now; `--force` only skips the question of the CLI. */
+export const BUILD_CACHE_PRUNE_ARGS: readonly string[] = ['builder', 'prune', '--all', '--force'];
+
+/** The time limit of the removal of the build cache, which can hold many gigabytes. */
+const BUILD_CACHE_PRUNE_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * Removes the build cache that no build uses now on the engine of the operation, and logs the size of the removed
+ * records that Docker counts (with the records that share their data with an image, which free no space). Throws a
+ * CommandError when Docker fails, an AbortError when `signal` aborts.
+ */
+export async function pruneBuildCache(docker: Pick<BootstrapDocker, 'run'>, logger: Logger, signal?: AbortSignal): Promise<void> {
+  const result = await docker.run(BUILD_CACHE_PRUNE_ARGS, { timeoutMs: BUILD_CACHE_PRUNE_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+  if (result.exitCode !== 0 || result.timedOut) throw new CommandError(commandText(BUILD_CACHE_PRUNE_ARGS), result.exitCode, result.stdout, result.stderr);
+  // The last line of the CLI: `Total:\t1.2GB` (verified with Docker 29.9), or `Total reclaimed space: 1.2GB` of older versions.
+  const match = /Total(?: reclaimed space)?:\s*(\S+)/i.exec(result.stdout);
+  const removed = match === null ? undefined : parseDockerSize(match[1]);
+  logger.info(`Removed the unused build cache${removed === undefined ? '' : `; Docker counts ${formatSize(removed)} of removed records`}.`);
+}
+
+/** The time limit of `docker container start`: the start of the process of the container, not of its service. */
+const START_TIMEOUT_MS = 60_000;
+
+/** `docker container start` of the container `object` (by its ID) on the engine of the operation. Throws only an AbortError. */
+export async function startHostContainer(docker: Pick<BootstrapDocker, 'run'>, object: Pick<HostObject, 'kind' | 'id' | 'name'>, logger: Logger, signal?: AbortSignal): Promise<ObjectResult> {
+  const { result, error } = await call(docker, ['container', 'start', object.id], START_TIMEOUT_MS, signal);
+  const outcome = outcomeOf(result, 'started');
+  const entry: ObjectResult = { object, outcome, ...(outcome === 'missing' || outcome === 'failed' || outcome === 'inUse' ? { detail: detailOf(result, error) } : {}) };
+  logResult(logger, entry);
+  return entry;
+}
+
 /**
  * Removes `objects` on the engine of the operation, never with force: the containers first (by ID; a running one
  * stays), then the images (each tag, so that the last tag removes the image; an image without a tag by its ID), then
@@ -542,15 +690,18 @@ export async function removeHostObjects(
   objects: readonly HostObject[],
   options: { logger: Logger; signal?: AbortSignal; onItem?: (text: string) => void },
 ): Promise<ObjectResult[]> {
-  const order: Record<HostObjectKind, number> = { container: 0, image: 1, volume: 2 };
+  // The containers first, so that a network, an image or a volume that only they used goes too.
+  const order: Record<HostObjectKind, number> = { container: 0, network: 1, image: 2, volume: 3 };
   const results: ObjectResult[] = [];
   for (const object of [...objects].sort((a, b) => order[a.kind] - order[b.kind])) {
     options.onItem?.(objectText(object));
     // An image that a container uses keeps all its tags: Docker would untag the first tags and refuse only the last one.
-    // A container of this removal does not count (it goes first).
-    const users = object.kind === 'image' ? (object.usedBy ?? 0) - removedUsers(object, objects, results) : 0;
-    if (users > 0) {
-      const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome: 'inUse', detail: `${users === 1 ? 'A container uses' : `${users} containers use`} this image.` };
+    // A network that a container uses stays too: Docker would remove it under a stopped container, which then cannot
+    // start. A container of this removal does not count (it goes first). Docker keeps its own networks.
+    const users = object.kind === 'image' || object.kind === 'network' ? (object.usedBy ?? 0) - removedUsers(object, objects, results) : 0;
+    if (users > 0 || object.builtIn === true) {
+      const detail = object.builtIn === true ? 'Docker keeps its own networks.' : `${users === 1 ? 'A container uses' : `${users} containers use`} this ${object.kind}.`;
+      const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome: 'inUse', detail };
       logResult(options.logger, entry);
       results.push(entry);
       continue;
@@ -558,7 +709,7 @@ export async function removeHostObjects(
     const references = object.kind === 'image' && (object.tags?.length ?? 0) > 0 ? (object.tags ?? []) : [object.id];
     let last: { result?: RunResult; error?: unknown } = {};
     for (const reference of references) {
-      const args = object.kind === 'container' ? ['container', 'rm', reference] : object.kind === 'image' ? ['image', 'rm', reference] : ['volume', 'rm', reference];
+      const args = [object.kind, 'rm', reference];
       last = await call(docker, args, object.kind === 'volume' ? VOLUME_REMOVE_TIMEOUT_MS : DOCKER_QUERY_TIMEOUT_MS, options.signal);
       const step = outcomeOf(last.result, 'removed');
       if (step !== 'removed' && step !== 'missing') break;
@@ -572,12 +723,15 @@ export async function removeHostObjects(
 }
 
 /**
- * The containers of `objects` that this removal removed and that used `image` (by the image of the container in
- * `docker system df`), so that an image whose only containers went is removed too.
+ * The containers of `objects` that this removal removed and that used `used`, an image (by the image of the container
+ * in `docker system df`) or a network (by its networks), so that an image or a network whose only containers went is
+ * removed too.
  */
-function removedUsers(image: HostObject, objects: readonly HostObject[], results: readonly ObjectResult[]): number {
+function removedUsers(used: HostObject, objects: readonly HostObject[], results: readonly ObjectResult[]): number {
   const removed = new Set(results.filter((result) => result.object.kind === 'container' && (result.outcome === 'removed' || result.outcome === 'missing')).map((result) => result.object.name));
-  return objects.filter((object) => object.kind === 'container' && removed.has(object.name) && object.image !== undefined && namesImage(object.image, image)).length;
+  const uses = (container: HostObject): boolean =>
+    used.kind === 'network' ? (container.networks ?? []).includes(used.name) : container.image !== undefined && namesImage(container.image, used);
+  return objects.filter((object) => object.kind === 'container' && removed.has(object.name) && uses(object)).length;
 }
 
 /** Whether `name`, the image of a container as Docker names it (a tag, a full or short ID), is `image`. */

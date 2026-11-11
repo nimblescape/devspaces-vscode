@@ -3,11 +3,12 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The rows of the view "Docker Hosts" (docs/requirements.md R-ENG-008, R-VM-010), below the repository view: the VM of
-// Devspaces first, then each remote host of the list of Devspaces; under each host its containers, images and volumes
-// of Devspaces (src/core/hosts/hostObjects.ts) with their purpose and size. The texts, icons, context values and
+// Devspaces first, then each remote host of the list of Devspaces; under each host all its containers, networks,
+// images and volumes (src/core/hosts/hostObjects.ts), those of Devspaces with their purpose, with their sizes, and its
+// build cache. The texts, icons, context values and
 // commands of each row, without `vscode` (dockerHostsView.ts renders them).
 import { describeDockerHost, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
-import { formatSize, totalSize, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
+import { formatSize, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
 import type { VmState } from '../core/vm/vmState';
 import { Commands } from './commands';
 import { MonitorIcons } from './treeModel';
@@ -24,12 +25,19 @@ export interface HostRow {
   vmState?: VmState;
 }
 
-/** The containers, the images or the volumes of a host. */
+/** The containers, the networks, the images or the volumes of a host. */
 export interface GroupRow {
   hostsNode: 'group';
   host: string;
   group: HostObjectKind;
   objects: HostObject[];
+}
+
+/** The build cache of a host: its records and their sizes, without a row for each record. */
+export interface BuildCacheRow {
+  hostsNode: 'buildCache';
+  host: string;
+  cache: BuildCacheSummary;
 }
 
 /**
@@ -51,7 +59,7 @@ export interface MessageRow {
   detail?: string;
 }
 
-export type HostsNode = HostRow | GroupRow | ObjectRow | MessageRow;
+export type HostsNode = HostRow | GroupRow | BuildCacheRow | ObjectRow | MessageRow;
 
 /** What a row looks like (dockerHostsView.ts makes a TreeItem of it). */
 export interface RowLook {
@@ -101,7 +109,10 @@ export const DockerHostsTexts = {
     return lines;
   },
   remoteTooltip: (host: string) => `${host}: Docker on another computer, which Devspaces reaches over SSH. Its objects are read only when you open it here or click Refresh.`,
-  groups: { container: 'Containers', image: 'Images', volume: 'Volumes' } as Record<HostObjectKind, string>,
+  groups: { container: 'Containers', network: 'Networks', image: 'Images', volume: 'Volumes' } satisfies Record<HostObjectKind, string> as Record<HostObjectKind, string>,
+  buildCache: 'Build cache',
+  buildCacheTooltip: (cache: BuildCacheSummary): string =>
+    `The cache of the builds of Docker (BuildKit) on this host: ${cache.records} record${cache.records === 1 ? '' : 's'}, ${formatSize(cache.bytes)}. ${formatSize(cache.unusedBytes)} of it can be freed: the records that no build uses now and that share their data with no image. Remove Unused Build Cache… removes the records that no build uses, after one question; the next builds take longer.`,
   none: 'none',
   vmStopped: 'Start the VM to see its containers, images and volumes',
   vmStoppedTooltip: 'The VM of Devspaces is stopped. Devspaces does not start it to read it. Click to start it.',
@@ -113,6 +124,8 @@ export const DockerHostsTexts = {
   purpose: (object: HostObject): string => {
     const role = object.role !== undefined ? ` · ${object.role}` : '';
     switch (object.purpose) {
+      case 'notDevspaces':
+        return `${PURPOSE_WORDS.notDevspaces}${role}`;
       case 'devspace':
         return `${object.repository ?? 'devspace'}${role}`;
       case 'otherDevspace':
@@ -137,6 +150,7 @@ const PURPOSE_WORDS: Readonly<Record<Exclude<HostObjectPurpose, 'devspace' | 'ot
   buildImage: 'build image',
   baseImage: 'base image of a devspace',
   other: 'of Devspaces',
+  notDevspaces: 'not of Devspaces',
 };
 
 const PURPOSE_TOOLTIPS: Readonly<Record<HostObjectPurpose, string>> = {
@@ -152,6 +166,8 @@ const PURPOSE_TOOLTIPS: Readonly<Record<HostObjectPurpose, string>> = {
   baseImage: 'An image that the configuration of a devspace of this computer names. The next build of the devspace pulls it again.',
   sharedVolume: 'A volume that the devspaces of the engine share. Devspaces creates it again when it needs it.',
   other: 'An object with a label or a name of Devspaces.',
+  notDevspaces:
+    'An object that does not belong to Devspaces, for example of a service of this host or of another program. Stop frees the CPU and the memory of a container, and Start starts it again. Remove… asks first and never uses force.',
 };
 
 function capitalized(value: string): string {
@@ -163,14 +179,19 @@ export function isRunningContainer(object: HostObject): boolean {
   return object.kind === 'container' && (object.state === 'running' || object.state === 'paused' || object.state === 'restarting');
 }
 
-/** The actions of an object row (H2 of the design): the devspace actions, Stop, or Remove…. */
-export function objectActions(row: ObjectRow): { stopDevspace: boolean; deleteDevspace: boolean; stop: boolean; remove: boolean } {
+/**
+ * The actions of an object row: the devspace actions for an object of a devspace of this computer; else Stop for a
+ * running container, Start for a stopped container that is not of Devspaces (Devspaces starts its own helpers itself),
+ * and Remove… for every object that does not run, but never for a network of Docker itself.
+ */
+export function objectActions(row: ObjectRow): { stopDevspace: boolean; deleteDevspace: boolean; stop: boolean; start: boolean; remove: boolean } {
   const { object } = row;
   if (row.devspaceId !== undefined) {
-    return { stopDevspace: object.kind === 'container' && isRunningContainer(object), deleteDevspace: true, stop: false, remove: false };
+    return { stopDevspace: object.kind === 'container' && isRunningContainer(object), deleteDevspace: true, stop: false, start: false, remove: false };
   }
   const running = isRunningContainer(object);
-  return { stopDevspace: false, deleteDevspace: false, stop: running, remove: !running };
+  const start = object.kind === 'container' && object.purpose === 'notDevspaces' && (object.state === 'exited' || object.state === 'created');
+  return { stopDevspace: false, deleteDevspace: false, stop: running, start, remove: !running && object.builtIn !== true };
 }
 
 /** The row of a host. */
@@ -228,18 +249,35 @@ export function groupRowLook(row: GroupRow): RowLook {
     parts.push(String(row.objects.length));
     if (bytes > 0 || complete) parts.push(formatSize(bytes));
   }
+  const order = `${DockerHostsTexts.groups[row.group]} on ${describeDockerHost(row.host)}: those of Devspaces first, then the others.`;
   const tooltip =
-    row.group === 'image'
-      ? 'The size of the group counts the bytes that only these images use; an image row shows its whole size, with the layers that it shares with other images.'
-      : `${DockerHostsTexts.groups[row.group]} of Devspaces on ${describeDockerHost(row.host)}.`;
+    row.group === 'image' ? `${order} The size of the group counts the bytes that only these images use; an image row shows its whole size, with the layers that it shares with other images.` : order;
   return {
     id: `group:${row.host}:${row.group}`,
     label: DockerHostsTexts.groups[row.group],
     description: parts.join(' · '),
     tooltip,
     contextValue: 'hostsGroup',
-    icon: row.group === 'container' ? 'package' : row.group === 'image' ? 'layers' : 'database',
+    icon: GROUP_ICONS[row.group],
     collapsible: row.objects.length === 0 ? 'none' : 'expanded',
+  };
+}
+
+const GROUP_ICONS: Readonly<Record<HostObjectKind, string>> = { container: 'package', network: 'type-hierarchy', image: 'layers', volume: 'database' };
+
+/** The row of the build cache: the number of its records, their size, and what no build uses now. */
+export function buildCacheRowLook(row: BuildCacheRow): RowLook {
+  const { cache } = row;
+  const parts = cache.records === 0 ? [DockerHostsTexts.none] : [String(cache.records), formatSize(cache.bytes)];
+  if (cache.unusedBytes > 0) parts.push(`${formatSize(cache.unusedBytes)} unused`);
+  return {
+    id: `buildCache:${row.host}`,
+    label: DockerHostsTexts.buildCache,
+    description: parts.join(' · '),
+    tooltip: DockerHostsTexts.buildCacheTooltip(cache),
+    contextValue: cache.unusedBytes > 0 ? 'hostsBuildCache;canPrune' : 'hostsBuildCache',
+    icon: 'archive',
+    collapsible: 'none',
   };
 }
 
@@ -251,12 +289,17 @@ export function objectRowLook(row: ObjectRow): RowLook {
   if (actions.stopDevspace) flags.push('canStopDevspace');
   if (actions.deleteDevspace) flags.push('canDeleteDevspace');
   if (actions.stop) flags.push('canStop');
+  if (actions.start) flags.push('canStart');
   if (actions.remove) flags.push('canRemove');
   const parts = [DockerHostsTexts.purpose(object)];
   const state = DockerHostsTexts.containerState(object.state);
   if (state !== undefined) parts.push(state);
   if (object.sizeBytes !== undefined && object.kind !== 'container') parts.push(formatSize(object.sizeBytes));
-  const tooltip = [`${capitalized(object.kind)} ${object.name}`, DockerHostsTexts.purposeTooltip(object.purpose)];
+  if (object.kind === 'network') {
+    if (object.driver !== undefined) parts.push(object.driver);
+    if (object.usedBy !== undefined && object.usedBy > 0) parts.push(`${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
+  }
+  const tooltip = [`${capitalized(object.kind)} ${object.name}`, object.builtIn === true ? 'A network that Docker creates itself on every engine and keeps.' : DockerHostsTexts.purposeTooltip(object.purpose)];
   if (object.status !== undefined) tooltip.push(`Status: ${object.status}`);
   if (object.kind === 'image' && (object.tags?.length ?? 0) > 1) tooltip.push(`Tags: ${(object.tags ?? []).join(', ')}`);
   if (object.sizeBytes !== undefined) tooltip.push(`Size: ${formatSize(object.sizeBytes)}${object.uniqueBytes !== undefined ? ` (${formatSize(object.uniqueBytes)} only for this image)` : ''}`);
@@ -268,7 +311,7 @@ export function objectRowLook(row: ObjectRow): RowLook {
     description: parts.join(' · '),
     tooltip: tooltip.join('\n'),
     contextValue: flags.join(';'),
-    icon: object.kind === 'container' ? (isRunningContainer(object) ? 'vm-running' : 'vm-outline') : object.kind === 'image' ? 'file-binary' : 'database',
+    icon: object.kind === 'container' ? (isRunningContainer(object) ? 'vm-running' : 'vm-outline') : object.kind === 'image' ? 'file-binary' : object.kind === 'network' ? 'plug' : 'database',
     collapsible: 'none',
   };
 }
@@ -304,6 +347,8 @@ export function rowLook(node: HostsNode): RowLook {
       return hostRowLook(node);
     case 'group':
       return groupRowLook(node);
+    case 'buildCache':
+      return buildCacheRowLook(node);
     case 'object':
       return objectRowLook(node);
     case 'message':

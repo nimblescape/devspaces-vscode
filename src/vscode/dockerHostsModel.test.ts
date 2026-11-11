@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The rows of the view "Docker Hosts" (R-ENG-008, R-VM-010): their order, their flags for the menus of package.json, and
-// the actions of each object (H2 of the design).
+// the actions of each object, also of the objects that are not of Devspaces, the networks and the build cache.
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -11,6 +11,7 @@ import { LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
 import type { HostObject } from '../core/hosts/hostObjects';
 import { Commands } from './commands';
 import {
+  buildCacheRowLook,
   DOCKER_HOSTS_VIEW_ID,
   groupRowLook,
   hostOfArgument,
@@ -21,6 +22,7 @@ import {
   objectActions,
   objectRowLook,
   objectRows,
+  rowLook,
   type HostRow,
   type ObjectRow,
 } from './dockerHostsModel';
@@ -77,21 +79,54 @@ describe('hostRowLook', () => {
 
 describe('objectActions', () => {
   it('gives the objects of a devspace of this computer its Stop and Delete…, never Remove…', () => {
-    expect(objectActions(objectRow(container('running', { purpose: 'devspace' }), 'id-1'))).toEqual({ stopDevspace: true, deleteDevspace: true, stop: false, remove: false });
-    expect(objectActions(objectRow({ kind: 'volume', id: 'v', name: 'v', purpose: 'devspace' }, 'id-1'))).toEqual({ stopDevspace: false, deleteDevspace: true, stop: false, remove: false });
+    expect(objectActions(objectRow(container('running', { purpose: 'devspace' }), 'id-1'))).toEqual({ stopDevspace: true, deleteDevspace: true, stop: false, start: false, remove: false });
+    expect(objectActions(objectRow({ kind: 'volume', id: 'v', name: 'v', purpose: 'devspace' }, 'id-1'))).toEqual({ stopDevspace: false, deleteDevspace: true, stop: false, start: false, remove: false });
+    expect(objectActions(objectRow({ kind: 'network', id: 'n', name: 'n', purpose: 'devspace' }, 'id-1'))).toMatchObject({ deleteDevspace: true, remove: false });
   });
 
   it('gives any other running container Stop first, and Remove… only after it stopped', () => {
-    expect(objectActions(objectRow(container('running')))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: true, remove: false });
+    expect(objectActions(objectRow(container('running')))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: true, start: false, remove: false });
     expect(objectActions(objectRow(container('paused')))).toMatchObject({ stop: true, remove: false });
     expect(objectActions(objectRow(container('exited')))).toMatchObject({ stop: false, remove: true });
     expect(objectActions(objectRow({ kind: 'image', id: 'sha256:1', name: 'devspaces-worker:1', purpose: 'helperImage' }))).toMatchObject({ remove: true });
+  });
+
+  it('gives a stopped container that is not of Devspaces Start; Devspaces starts its own helpers itself', () => {
+    const other = (state: string) => container(state, { name: 'shop-web-1', purpose: 'notDevspaces' });
+    expect(objectActions(objectRow(other('exited')))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: false, start: true, remove: true });
+    expect(objectActions(objectRow(other('created')))).toMatchObject({ start: true, remove: true });
+    expect(objectActions(objectRow(other('running')))).toMatchObject({ start: false, stop: true, remove: false });
+    expect(objectActions(objectRow(other('dead')))).toMatchObject({ start: false, remove: true });
+    expect(objectActions(objectRow(container('exited')))).toMatchObject({ start: false });
+  });
+
+  it('gives a network Remove…, but never a network of Docker itself', () => {
+    expect(objectActions(objectRow({ kind: 'network', id: 'n6', name: 'mynet', purpose: 'notDevspaces', usedBy: 0 }))).toMatchObject({ stop: false, start: false, remove: true });
+    expect(objectActions(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true }))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: false, start: false, remove: false });
   });
 
   it('names the actions in the context value, which the menus of package.json match', () => {
     expect(objectRowLook(objectRow(container('running'))).contextValue).toBe('hostsObject;container;monitor;canStop');
     expect(objectRowLook(objectRow(container('exited', { purpose: 'otherDevspace' }))).contextValue).toBe('hostsObject;container;otherDevspace;canRemove');
     expect(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue).toBe('hostsObject;container;devspace;canStopDevspace;canDeleteDevspace');
+    expect(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue).toBe('hostsObject;container;notDevspaces;canStart;canRemove');
+  });
+});
+
+describe('objectRowLook', () => {
+  it('marks an object that is not of Devspaces, with the service of Docker Compose of a container', () => {
+    const look = objectRowLook(objectRow(container('exited', { name: 'shop-web-1', purpose: 'notDevspaces', role: 'service web of shop' })));
+    expect(look.description).toBe('not of Devspaces · service web of shop · Stopped');
+    expect(look.tooltip).toContain('does not belong to Devspaces');
+  });
+
+  it('shows the driver of a network and the number of its containers; a network of Docker says that Docker keeps it', () => {
+    const look = objectRowLook(objectRow({ kind: 'network', id: 'n5', name: 'shop_default', purpose: 'notDevspaces', role: 'network of shop', driver: 'bridge', usedBy: 2 }));
+    expect(look).toMatchObject({ label: 'shop_default', description: 'not of Devspaces · network of shop · bridge · 2 containers', icon: 'plug', contextValue: 'hostsObject;network;notDevspaces;canRemove' });
+    const bridge = objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', role: 'network of Docker', builtIn: true, driver: 'bridge', usedBy: 0 }));
+    expect(bridge.description).toBe('not of Devspaces · network of Docker · bridge');
+    expect(bridge.tooltip).toContain('Docker creates itself on every engine and keeps');
+    expect(bridge.contextValue).toBe('hostsObject;network;notDevspaces');
   });
 });
 
@@ -110,6 +145,23 @@ describe('groupRowLook', () => {
     const look = groupRowLook({ hostsNode: 'group', host: 'lab', group: 'volume', objects: [{ kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume', sizeBytes: 2_500 }] });
     expect(look.description).toBe('1 · 2.5 kB');
     expect(groupRowLook({ hostsNode: 'group', host: 'lab', group: 'image', objects: [] })).toMatchObject({ description: 'none', collapsible: 'none' });
+  });
+
+  it('has a group Networks with its own icon, and says in each tooltip that the objects of Devspaces come first', () => {
+    const look = groupRowLook({ hostsNode: 'group', host: 'lab', group: 'network', objects: [{ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true }] });
+    expect(look).toMatchObject({ label: 'Networks', icon: 'type-hierarchy', id: 'group:lab:network' });
+    expect(look.tooltip).toContain('those of Devspaces first, then the others');
+  });
+});
+
+describe('buildCacheRowLook', () => {
+  it('shows the records of the build cache, their size and what no build uses; Remove Unused Build Cache… only when there is some', () => {
+    const look = buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 3, bytes: 2_000_000_000, unusedBytes: 1_500_000_000 } });
+    expect(look).toMatchObject({ id: 'buildCache:lab', label: 'Build cache', description: '3 · 2 GB · 1.5 GB unused', contextValue: 'hostsBuildCache;canPrune', collapsible: 'none' });
+    expect(look.tooltip).toContain('3 records');
+    expect(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 500, unusedBytes: 0 } }).contextValue).toBe('hostsBuildCache');
+    expect(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 0, bytes: 0, unusedBytes: 0 } }).description).toBe('none');
+    expect(rowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 0, bytes: 0, unusedBytes: 0 } }).label).toBe('Build cache');
   });
 });
 
@@ -165,5 +217,10 @@ describe('the menus of the view (package.json)', () => {
     expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue)).toEqual(['devspaces.stop', 'devspaces.delete']);
     expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue)).toEqual(['devspaces.stopDockerObject']);
     expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue)).toEqual(['devspaces.removeDockerObjects']);
+    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue)).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
+    expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue)).toEqual([]);
+    const cache = { records: 1, bytes: 10, unusedBytes: 10 };
+    expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache }).contextValue)).toEqual(['devspaces.pruneBuildCache']);
+    expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue)).toEqual([]);
   });
 });

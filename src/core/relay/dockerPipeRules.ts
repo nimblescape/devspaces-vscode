@@ -53,9 +53,10 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
  * Devspaces itself (BootstrapDocker run): the checks of the engine and of the helper image, the build of the helper
  * image (the pull and the tag of the build image, and `docker run -i` of the build container, which the Docker CLI
  * stops with `kill` at its own stop; `docker build` as the fallback, with BuildKit or the classic builder), the
- * removal of its objects ("Remove Devspaces from This Docker Engine…"), and the read, the Stop of a container and the
- * removal of the view "Docker Hosts" (hostObjects.ts: `docker system df -v`, `docker container stop`, and `rm` without
- * force). Its worker starts behind the relay or with
+ * removal of its objects ("Remove Devspaces from This Docker Engine…"), and the read, the Start and the Stop of a
+ * container, the removal and the removal of the unused build cache of the view "Docker Hosts" (hostObjects.ts:
+ * `docker system df -v`, `docker network ls`, `docker container start` and `stop`, `rm` without force, and
+ * `docker builder prune --all`). Its worker starts behind the relay or with
  * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
@@ -77,11 +78,15 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('POST', `/images/${IMAGE}/tag`),
   endpoint('DELETE', `/images/${IMAGE}`),
   endpoint('POST', '/build'),
+  endpoint('POST', '/build/prune'),
   endpoint('POST', '/session'),
   endpoint('POST', '/grpc'),
   endpoint('GET', '/volumes'),
   endpoint('GET', `/volumes/${NAME}`),
   endpoint('DELETE', `/volumes/${NAME}`),
+  endpoint('GET', '/networks'),
+  endpoint('GET', `/networks/${NAME}`),
+  endpoint('DELETE', `/networks/${NAME}`),
 ];
 
 /**

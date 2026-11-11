@@ -49,7 +49,7 @@ import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
-import { baseImageReferences, knownDevspace, readHostInventory, removeHostObjects, runningDevspaces, stopHostContainer } from '../core/hosts/hostObjects';
+import { baseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
@@ -1419,8 +1419,9 @@ async function activateExtension(
     channels.close(remoteDockerTarget(vmHost));
     relayConnections.close(vmHost, 'the VM of Devspaces stops');
   };
-  // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with the containers,
-  // images and volumes of Devspaces there. A host is read only when the user opens its row or clicks Refresh.
+  // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with all containers,
+  // networks, images and volumes there and its build cache. A host is read only when the user opens its row or clicks
+  // Refresh.
   const dockerHosts = new DockerHostsView({
     logger,
     showLog: () => logger.show(),
@@ -1435,6 +1436,8 @@ async function activateExtension(
       return runWithDockerTarget(remoteDockerTarget(host), () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
     },
     stopContainer: (host, object, signal) => runWithDockerTarget(remoteDockerTarget(host), () => stopHostContainer(docker, object, logger, signal)),
+    startContainer: (host, object, signal) => runWithDockerTarget(remoteDockerTarget(host), () => startHostContainer(docker, object, logger, signal)),
+    pruneBuildCache: (host, signal) => runWithDockerTarget(remoteDockerTarget(host), () => pruneBuildCache(docker, logger, signal)),
     removeObjects: (host, objects, signal, onItem) => runWithDockerTarget(remoteDockerTarget(host), () => removeHostObjects(docker, objects, { logger, signal, onItem })),
     select: (host) => remoteDocker.selectHost(host),
     setUpVm: () => (platform === 'win32' ? wslSetup.setUp() : limaSetup.setUp()),

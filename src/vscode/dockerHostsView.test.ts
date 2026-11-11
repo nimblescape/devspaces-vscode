@@ -3,7 +3,8 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The view "Docker Hosts" (R-ENG-008): a host is read only when the user opens it or clicks Refresh, never a VM that does
-// not run; Remove… asks once and removes no object of a devspace of this computer and no running container.
+// not run; Remove… asks once and removes no object of a devspace of this computer and no running container; Start of a
+// container that is not of Devspaces; Remove Unused Build Cache… asks once.
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
@@ -12,7 +13,7 @@ import { LIMA_HOST } from '../core/docker/dockerHost';
 import type { HostInventory, HostObject, ObjectResult } from '../core/hosts/hostObjects';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
-import type { GroupRow, HostRow, HostsNode, MessageRow, ObjectRow } from './dockerHostsModel';
+import type { BuildCacheRow, GroupRow, HostRow, HostsNode, MessageRow, ObjectRow } from './dockerHostsModel';
 import { DockerHostsCommandTexts, DockerHostsView, type DockerHostsDeps } from './dockerHostsView';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
 
@@ -23,7 +24,18 @@ const worker: HostObject = { kind: 'container', id: 'c-worker', name: 'devspaces
 const oldWorker: HostObject = { kind: 'container', id: 'c-old', name: 'devspaces-w2-worker1', purpose: 'worker', state: 'exited' };
 const devspaceVolume: HostObject = { kind: 'volume', id: 'v-ws', name: 'majikmate-web-curious-hopper', purpose: 'devspace', devspaceId: 'id-1', repository: 'majikmate/web' };
 const foreignVolume: HostObject = { kind: 'volume', id: 'v-other', name: 'majikmate-web-brave-otter', purpose: 'otherDevspace', devspaceId: 'id-9', repository: 'majikmate/web' };
-const inventory = (): HostInventory => ({ containers: [worker, oldWorker], images: [], volumes: [devspaceVolume, foreignVolume] });
+/** A service of the host that is not of Devspaces, stopped, its volume, and a network. */
+const shopWeb: HostObject = { kind: 'container', id: 'c-shop', name: 'shop-web-1', purpose: 'notDevspaces', state: 'exited', role: 'service web of shop' };
+const pgdata: HostObject = { kind: 'volume', id: 'pgdata', name: 'pgdata', purpose: 'notDevspaces', usedBy: 0 };
+const bridge: HostObject = { kind: 'network', id: 'n-bridge', name: 'bridge', purpose: 'notDevspaces', builtIn: true, usedBy: 1 };
+const inventory = (): HostInventory => ({ containers: [worker, oldWorker], networks: [], images: [], volumes: [devspaceVolume, foreignVolume], buildCache: { records: 0, bytes: 0, unusedBytes: 0 } });
+const fullInventory = (): HostInventory => ({
+  containers: [worker, oldWorker, shopWeb],
+  networks: [bridge],
+  images: [],
+  volumes: [devspaceVolume, foreignVolume, pgdata],
+  buildCache: { records: 4, bytes: 3_000_000_000, unusedBytes: 2_500_000_000 },
+});
 
 let vmState: VmState;
 let hosts: string[];
@@ -31,6 +43,8 @@ let selected: string | undefined;
 let read: Mock<DockerHostsDeps['read']>;
 let removeObjects: Mock<DockerHostsDeps['removeObjects']>;
 let stopContainer: Mock<DockerHostsDeps['stopContainer']>;
+let startContainer: Mock<DockerHostsDeps['startContainer']>;
+let pruneBuildCache: Mock<DockerHostsDeps['pruneBuildCache']>;
 let select: Mock<DockerHostsDeps['select']>;
 let setUpVm: Mock<DockerHostsDeps['setUpVm']>;
 let removeFromList: Mock<DockerHostsDeps['removeFromList']>;
@@ -45,6 +59,8 @@ function view(vmHost: string | undefined = LIMA_HOST): DockerHostsView {
     vmState: async () => vmState,
     read,
     stopContainer,
+    startContainer,
+    pruneBuildCache,
     removeObjects,
     select,
     setUpVm,
@@ -62,8 +78,15 @@ async function hostRow(provider: DockerHostsView, host: string): Promise<HostRow
 }
 
 async function objectRowsOf(provider: DockerHostsView, host: string): Promise<ObjectRow[]> {
-  const groups = (await provider.getChildren(await hostRow(provider, host))) as GroupRow[];
+  const groups = (await provider.getChildren(await hostRow(provider, host))) as Array<GroupRow | BuildCacheRow>;
   return (await Promise.all(groups.map((group) => provider.getChildren(group)))).flat() as ObjectRow[];
+}
+
+async function buildCacheRowOf(provider: DockerHostsView, host: string): Promise<BuildCacheRow> {
+  const children = (await provider.getChildren(await hostRow(provider, host))) as Array<GroupRow | BuildCacheRow>;
+  const row = children.find((child): child is BuildCacheRow => child.hostsNode === 'buildCache');
+  if (row === undefined) throw new Error(`no build cache row of ${host}`);
+  return row;
 }
 
 const rowOf = (rows: readonly ObjectRow[], object: HostObject): ObjectRow => {
@@ -84,6 +107,8 @@ beforeEach(() => {
   read = vi.fn(async () => inventory());
   removeObjects = vi.fn(async (_host: string, objects: readonly HostObject[]): Promise<ObjectResult[]> => objects.map((object) => ({ object, outcome: 'removed' })));
   stopContainer = vi.fn(async (_host: string, object: HostObject): Promise<ObjectResult> => ({ object, outcome: 'stopped' }));
+  startContainer = vi.fn(async (_host: string, object: HostObject): Promise<ObjectResult> => ({ object, outcome: 'started' }));
+  pruneBuildCache = vi.fn(async () => undefined);
   select = vi.fn(async () => undefined);
   setUpVm = vi.fn(async () => undefined);
   removeFromList = vi.fn(async () => undefined);
@@ -119,11 +144,13 @@ describe('DockerHostsView: the read of a host', () => {
       return inventory();
     });
     const provider = view();
-    const groups = (await provider.getChildren(await hostRow(provider, 'lab'))) as GroupRow[];
-    expect(groups.map((group) => [group.group, group.objects.length])).toEqual([
+    const children = (await provider.getChildren(await hostRow(provider, 'lab'))) as Array<GroupRow | BuildCacheRow>;
+    expect(children.map((child) => (child.hostsNode === 'group' ? [child.group, child.objects.length] : [child.hostsNode, child.cache.records]))).toEqual([
       ['container', 2],
       ['image', 0],
       ['volume', 2],
+      ['network', 0],
+      ['buildCache', 0],
     ]);
     expect(read).toHaveBeenCalledTimes(1);
     expect(read.mock.calls[0][0]).toBe('lab');
@@ -252,5 +279,81 @@ describe('DockerHostsView: the commands of the rows', () => {
     expect(stopContainer).toHaveBeenCalledTimes(1);
     await settle();
     expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.stopped(worker.name));
+  });
+});
+
+describe('DockerHostsView: the objects that are not of Devspaces, the networks and the build cache', () => {
+  beforeEach(() => {
+    read.mockImplementation(async () => fullInventory());
+  });
+
+  it('starts a stopped container that is not of Devspaces, and no container of Devspaces', async () => {
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.startObject(rowOf(rows, shopWeb));
+    expect(startContainer).toHaveBeenCalledWith('lab', shopWeb, expect.any(AbortSignal));
+    await provider.startObject(rowOf(rows, oldWorker));
+    expect(startContainer).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.started(shopWeb.name));
+    // The row shows the new state after the next read.
+    await provider.getChildren(await hostRow(provider, 'lab'));
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('says why a container did not start', async () => {
+    startContainer.mockResolvedValueOnce({ object: shopWeb, outcome: 'failed', detail: 'port is already allocated' });
+    const provider = view();
+    await provider.startObject(rowOf(await objectRowsOf(provider, 'lab'), shopWeb));
+    await settle();
+    expect(window.showWarningMessage).toHaveBeenLastCalledWith(DockerHostsCommandTexts.startFailed(shopWeb.name, 'port is already allocated'), 'Show details');
+  });
+
+  it('asks once before it removes an object that is not of Devspaces, says that another program may need it, and never removes a network of Docker', async () => {
+    window.showWarningMessage.mockResolvedValue(DockerHostsCommandTexts.remove);
+    const provider = view();
+    const rows = await objectRowsOf(provider, 'lab');
+    await provider.removeObjects(rowOf(rows, pgdata), [rowOf(rows, pgdata), rowOf(rows, shopWeb), rowOf(rows, bridge)]);
+    const [question, options] = window.showWarningMessage.mock.calls[0] as [string, { modal: boolean; detail: string }];
+    expect(question).toBe('Remove 2 objects from lab?');
+    expect(options.detail).toContain('do not belong to Devspaces');
+    expect(options.detail).not.toContain('changes of that devspace');
+    expect(removeObjects.mock.calls[0][1]).toEqual([pgdata, shopWeb]);
+  });
+
+  it('removes the unused build cache after one question, and reads the host again', async () => {
+    window.showWarningMessage.mockResolvedValueOnce(DockerHostsCommandTexts.prune);
+    const provider = view();
+    const row = await buildCacheRowOf(provider, 'lab');
+    expect(row.cache).toEqual({ records: 4, bytes: 3_000_000_000, unusedBytes: 2_500_000_000 });
+    await provider.pruneBuildCache(row);
+    const [question, options] = window.showWarningMessage.mock.calls[0] as [string, { modal: boolean; detail: string }];
+    expect(question).toBe(DockerHostsCommandTexts.pruneQuestion('lab'));
+    expect(options).toMatchObject({ modal: true, detail: expect.stringContaining('frees about 2.5 GB') });
+    expect(pruneBuildCache).toHaveBeenCalledWith('lab', expect.any(AbortSignal));
+    await settle();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.pruned('lab'));
+    await provider.getChildren(await hostRow(provider, 'lab'));
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes no build cache without the answer, and asks nothing when no build cache is unused', async () => {
+    const provider = view();
+    const row = await buildCacheRowOf(provider, 'lab');
+    await provider.pruneBuildCache(row);
+    expect(window.showWarningMessage).toHaveBeenCalledTimes(1);
+    expect(pruneBuildCache).not.toHaveBeenCalled();
+    await provider.pruneBuildCache({ ...row, cache: { ...row.cache, unusedBytes: 0 } });
+    await provider.pruneBuildCache({ hostsNode: 'object', host: 'lab' });
+    expect(window.showWarningMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why the build cache could not be removed', async () => {
+    window.showWarningMessage.mockResolvedValueOnce(DockerHostsCommandTexts.prune);
+    pruneBuildCache.mockRejectedValueOnce(new Error('a prune operation is already running'));
+    const provider = view();
+    await provider.pruneBuildCache(await buildCacheRowOf(provider, 'lab'));
+    await settle();
+    expect(window.showWarningMessage).toHaveBeenLastCalledWith(DockerHostsCommandTexts.pruneFailed('lab', 'a prune operation is already running'), 'Show details');
   });
 });
