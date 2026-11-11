@@ -347,13 +347,25 @@ describeUnix('RemoteShells', () => {
     registry.dispose();
   });
 
+  it('runs a command with login false only on a shell that is open or logging in, never with a new login', async () => {
+    const { registry, logins } = shells();
+    await expect(registry.run('box', 'printf one', { login: false })).resolves.toBeUndefined();
+    expect(logins).toEqual([]);
+    // A login in progress counts.
+    const login = registry.login('box');
+    await expect(registry.run('box', 'printf two', { login: false })).resolves.toMatchObject({ stdout: 'two' });
+    await login;
+    await expect(registry.run('box', 'printf three', { input: 'x', login: false })).resolves.toMatchObject({ stdout: 'three' });
+    // After the shell closed, nothing runs and nothing logs in.
+    registry.close('box');
+    await expect(registry.run('box', 'printf four', { login: false })).resolves.toBeUndefined();
+    expect(logins).toEqual(['box']);
+    registry.dispose();
+  });
+
   it('holds a shell back from the relay while the page samples on it, and gives it again after the last hold', async () => {
     const { registry, logins } = shells();
-    expect(registry.hasShell('box')).toBe(false);
-    const login = registry.login('box');
-    // A login in progress counts: a command needs no new login.
-    expect(registry.hasShell('box')).toBe(true);
-    await login;
+    await registry.login('box');
     const first = registry.keep('box');
     const second = registry.keep('box');
     await expect(registry.takeOver('box')).resolves.toBeUndefined();
@@ -374,7 +386,7 @@ describeUnix('RemoteShells', () => {
     late();
     const taken = await registry.takeOver('box');
     expect(taken).toBeDefined();
-    expect(registry.hasShell('box')).toBe(false);
+    await expect(registry.run('box', 'true', { login: false })).resolves.toBeUndefined();
     taken!.end();
     expect(logins).toEqual(['box']);
     registry.dispose();

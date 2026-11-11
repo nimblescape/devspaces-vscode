@@ -7,8 +7,10 @@
 // view Docker Hosts uses), as the input of that one command. It reads files of /proc and /sys/fs/cgroup and the space
 // of the disks; it writes no file, starts no container and calls no Docker CLI, so nothing of it stays on the host and
 // it cannot hang on a Docker daemon. Each run prints one block of values (usageSample.ts reads it). It runs in dash
-// (Debian), BusyBox ash (Alpine) and bash. No `vscode`.
+// (Debian), BusyBox ash (Alpine) and bash. The Docker calls of the samples are scripts of their own (usageDockerScript),
+// with a time limit on the host. No `vscode`.
 import { randomBytes } from 'crypto';
+import { shellWord } from '../relay/startScript';
 
 /** The protocol of the script, the second field of its line `#H`. */
 export const USAGE_PROTOCOL = 2;
@@ -139,6 +141,22 @@ printf '%s\\n#E %s %s\\n' "$o" "$seq" "$up"
 exit 0
 }
 `;
+
+/** The time limit of a Docker call of the samples on the host (seconds), where the host has `timeout`. */
+export const USAGE_DOCKER_SECONDS = 5;
+
+/**
+ * A Docker call of the samples (`docker <args>`, a read) as a script for `sh -s` on the shared shell, like USAGE_SCRIPT:
+ * one compound command, with its input closed. Where the host has a `timeout` of this form (coreutils, BusyBox from
+ * 1.30), the call has a time limit of USAGE_DOCKER_SECONDS there, so that a Docker Engine that does not answer ends the
+ * call (exit code 124) and not the shared shell, which a time limit of the extension stops. Throws for an argument with
+ * a line break or a NUL.
+ */
+export function usageDockerScript(args: readonly string[]): string {
+  if (args.some((arg) => /[\0\r\n]/.test(arg))) throw new Error('An argument of a Docker call of the utilization samples has a line break or a NUL.');
+  const command = ['docker', ...args].map(shellWord).join(' ');
+  return `{\nexec 0</dev/null\nif timeout 1 true 2>/dev/null; then exec timeout ${USAGE_DOCKER_SECONDS} ${command}; fi\nexec ${command}\n}\n`;
+}
 
 /** A new marker for USAGE_SCRIPT: 32 hexadecimal digits. */
 export function newUsageMarker(): string {

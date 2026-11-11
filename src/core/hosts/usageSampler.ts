@@ -6,13 +6,13 @@
 // sample is one run of USAGE_SCRIPT on the shared shell of the host (`run`, the shell that the view Docker Hosts uses),
 // so the page of a host makes no connection of its own and leaves nothing on the host. The first sample is a `d`, then
 // `t`, with a `d` every fifth sample. The next sample starts after the one before it ended, at the interval, or later
-// when the host needs long for a sample. The names of the containers come from `docker ps` on the same shell (`docker`),
-// at most every USAGE_NAMES_EVERY_MS while the set of running containers changes, and the data folder of Docker once
-// from `docker info`, each between two samples and only while a container runs. Nothing retries a failed sample: each end is reported once. No `vscode`.
+// when the host needs long for a sample. The names of the containers come from `docker ps` on the same shell
+// (usageDockerScript, also with `run`), at most every USAGE_NAMES_EVERY_MS while the set of running containers changes,
+// and the data folder of Docker once from `docker info`, each between two samples and only while a container runs. Nothing retries a failed sample: each end is reported once. No `vscode`.
 import { errorMessage } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';
 import type { Logger, RunResult } from '../ports';
-import { isUsableDockerRoot, newUsageMarker, usageScript, type UsageSampleKind } from './usageScript';
+import { isUsableDockerRoot, newUsageMarker, usageDockerScript, usageScript, type UsageSampleKind } from './usageScript';
 import { UsageSampleError, parseUsageNames, readUsageSample, type UsageBlock, type UsageHeader } from './usageSample';
 import { usageOf, type HostUsage } from './usageRates';
 
@@ -28,7 +28,10 @@ export const USAGE_NAMES_EVERY_MS = 10_000;
 /** After a failed `docker ps`, the next one after this time; after a failed `docker info`, after the second one. */
 export const USAGE_NAMES_RETRY_MS = 60_000;
 export const USAGE_ROOT_RETRY_MS = 300_000;
-/** The time limit of each of these Docker calls. */
+/**
+ * The time limit of each of these Docker calls on the shell: longer than their time limit on the host
+ * (USAGE_DOCKER_SECONDS), so that this one stops the shell only on a host without `timeout`, or that does not answer.
+ */
 export const USAGE_DOCKER_TIMEOUT_MS = 10_000;
 /** The arguments of these Docker calls (reads, so that the shared shell of the host runs them). */
 export const USAGE_NAMES_ARGS: readonly string[] = ['ps', '--no-trunc', '--format', '{{.ID}} {{.Names}}'];
@@ -92,13 +95,11 @@ export interface UsageSamplerOptions {
   intervalMs: number;
   /** The idle check of the WSL distribution of Devspaces (lines `I`, and the end `vmIdle`). */
   wslIdle?: boolean;
-  /** Runs `sh -s` with `script` as its input on the shared shell of the host, within `timeoutMs`. */
-  run(script: string, timeoutMs: number): Promise<UsageRun>;
   /**
-   * `docker <args>` on the host (BootstrapDocker on its shared shell), with the same guard as `run`; without it, no
-   * names and no data folder.
+   * Runs `sh -s` with `script` as its input on the shared shell of the host, within `timeoutMs`: a sample
+   * (usageScript), or a Docker call between two samples (usageDockerScript).
    */
-  docker?(args: readonly string[], timeoutMs: number): Promise<UsageRun>;
+  run(script: string, timeoutMs: number): Promise<UsageRun>;
   /** The line `#H` of the first sample, and again when the kernel of the host started anew. */
   onHeader?(header: UsageHeader): void;
   /**
@@ -168,14 +169,19 @@ export class UsageSampler {
 
   /**
    * Samples again: the next sample one interval after the start of the last one (at once after a longer pause), or after
-   * the one that runs. No rate from the block before the pause: it would be the mean of the whole pause.
+   * the one that runs. When the pause left out a sample, the next block has no rates: a rate over the whole pause would
+   * be no live value.
    */
   resume(): void {
     if (!this.paused) return;
     this.paused = false;
-    this.previous = undefined;
-    if (this.lastStartedAt === undefined) this.sample();
-    else this.schedule(this.lastStartedAt);
+    if (this.lastStartedAt === undefined) {
+      this.sample();
+      return;
+    }
+    // A sample was left out in the pause (none runs, and the next one was due).
+    if (!this.busy && this.timers.now() - this.lastStartedAt > this.interval) this.previous = undefined;
+    this.schedule(this.lastStartedAt);
   }
 
   /** Ends the samples. A sample that runs ends on the shell and is not reported (the shell must not stop for it). */
@@ -281,13 +287,11 @@ export class UsageSampler {
    * ends the samples.
    */
   private async between(): Promise<void> {
-    const docker = this.options.docker;
-    if (docker === undefined) return;
     const now = this.timers.now();
     const ids = this.containerIds;
     if (ids !== this.namedIds && ids !== '' && now >= this.nextNamesAt) {
       this.nextNamesAt = now + USAGE_NAMES_EVERY_MS;
-      const result = await this.dockerCall(docker, USAGE_NAMES_ARGS);
+      const result = await this.dockerCall(USAGE_NAMES_ARGS);
       if (this.stage !== 'running') return;
       if (result === undefined) {
         this.nextNamesAt = this.timers.now() + USAGE_NAMES_RETRY_MS;
@@ -304,7 +308,7 @@ export class UsageSampler {
       return;
     }
     if (ids === '' || this.dockerRoot !== undefined || this.nextRootAt === undefined || now < this.nextRootAt) return;
-    const result = await this.dockerCall(docker, USAGE_ROOT_ARGS);
+    const result = await this.dockerCall(USAGE_ROOT_ARGS);
     if (this.stage !== 'running') return;
     if (result === undefined) {
       this.nextRootAt = this.timers.now() + USAGE_ROOT_RETRY_MS;
@@ -318,10 +322,10 @@ export class UsageSampler {
    * `docker <args>` within USAGE_DOCKER_TIMEOUT_MS: its result when it worked, else undefined (logged). A call that could
    * not run ends the samples (undefined too).
    */
-  private async dockerCall(docker: NonNullable<UsageSamplerOptions['docker']>, args: readonly string[]): Promise<RunResult | undefined> {
+  private async dockerCall(args: readonly string[]): Promise<RunResult | undefined> {
     const { logger, name } = this.options;
     try {
-      const run = await docker(args, USAGE_DOCKER_TIMEOUT_MS);
+      const run = await this.options.run(usageDockerScript(args), USAGE_DOCKER_TIMEOUT_MS);
       if (this.stage !== 'running') return undefined;
       if (run.kind === 'notRun') {
         this.notRun(run.reason);
@@ -329,7 +333,9 @@ export class UsageSampler {
       }
       const { result } = run;
       if (result.exitCode === 0 && !result.timedOut) return result;
-      logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${result.timedOut ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`}); the page goes on without it.`);
+      // 124: `timeout` on the host ended it.
+      const why = result.timedOut || result.exitCode === 124 ? 'no answer' : `exit code ${result.exitCode ?? 'none'}`;
+      logger.info(`docker ${args[0]} for the utilization page of ${name} failed (${why}); the page goes on without it.`);
     } catch (error) {
       logger.info(`docker ${args[0]} for the utilization page of ${name} failed: ${errorMessage(error)}`);
     }
@@ -364,6 +370,10 @@ export class UsageSampler {
     if (this.stage === 'ended') return;
     this.stage = 'ended';
     this.clearNext();
-    this.options.onEnd(end);
+    try {
+      this.options.onEnd(end);
+    } catch (error) {
+      this.options.logger.warn(`The utilization page of ${this.options.name} failed at the end of its samples: ${errorMessage(error)}`);
+    }
   }
 }

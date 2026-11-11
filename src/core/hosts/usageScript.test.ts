@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { USAGE_SCRIPT, isUsableDockerRoot, newUsageMarker, usageScript, type UsageSampleValues } from './usageScript';
+import { USAGE_DOCKER_SECONDS, USAGE_SCRIPT, isUsableDockerRoot, newUsageMarker, usageDockerScript, usageScript, type UsageSampleValues } from './usageScript';
 import { readUsageSample, type UsageBlock, type UsageHeader } from './usageSample';
 
 const MARKER = '0123456789abcdef0123456789abcdef';
@@ -34,6 +34,14 @@ describe('usageScript', () => {
     expect(isUsableDockerRoot('/var/lib/docker')).toBe(true);
     expect(isUsableDockerRoot('/mnt/my data/$x')).toBe(true);
     for (const folder of ['', 'docker', "/a'b", '/a\rb', `/${'x'.repeat(1024)}`]) expect(isUsableDockerRoot(folder)).toBe(false);
+  });
+
+  it('makes each Docker call of the samples one compound command with its words quoted, and refuses a line break', () => {
+    const script = usageDockerScript(['ps', '--format', "{{.ID}} it's"]);
+    expect(script.startsWith('{\nexec 0</dev/null\n')).toBe(true);
+    expect(script.endsWith('\n}\n')).toBe(true);
+    expect(script).toContain(`exec timeout ${USAGE_DOCKER_SECONDS} 'docker' 'ps' '--format' '{{.ID}} it'\\''s'`);
+    expect(() => usageDockerScript(['ps', 'a\nb'])).toThrow(/line break/);
   });
 
   it('makes a new marker of 32 hexadecimal digits each time', () => {
@@ -107,6 +115,9 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
   let dir: string;
   let root: string;
   let idleScript: string;
+  /** Folders with a fake `docker`: one that prints its arguments, one that does not answer. */
+  let fakeBin: string;
+  let slowBin: string;
 
   beforeAll(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-usage-script-'));
@@ -115,7 +126,22 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
     idleScript = path.join(dir, 'idle-bin', 'idle');
     fs.mkdirSync(path.dirname(idleScript));
     fs.writeFileSync(idleScript, '#!/bin/sh\nwhile :; do sleep 1; done\n', { mode: 0o755 });
+    fakeBin = path.join(dir, 'fake-bin');
+    fs.mkdirSync(fakeBin);
+    fs.writeFileSync(path.join(fakeBin, 'docker'), '#!/bin/sh\nfor a in "$@"; do printf \'%s\\n\' "$a"; done\n', { mode: 0o755 });
+    slowBin = path.join(dir, 'slow-bin');
+    fs.mkdirSync(slowBin);
+    fs.writeFileSync(path.join(slowBin, 'docker'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
   });
+
+  it('ends a Docker call that does not answer after its time limit on the host, before the one of the shell', () => {
+    // Only where this computer has a `timeout` of that form, as the script checks it.
+    if (spawnSync('/bin/sh', ['-c', 'timeout 1 true']).status !== 0) return;
+    const started = Date.now();
+    const result = spawnSync('/bin/sh', ['-s'], { input: usageDockerScript(['ps']), env: { ...process.env, PATH: `${slowBin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 20_000 });
+    expect(result.status).toBe(124);
+    expect(Date.now() - started).toBeLessThan(USAGE_DOCKER_SECONDS * 1000 + 3000);
+  }, 20_000);
 
   afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -154,6 +180,12 @@ describe.skipIf(!linux)('USAGE_SCRIPT in the shells of this computer', () => {
         fs.mkdirSync(rootless, { recursive: true });
         const paths = runSample(shell, root, { seq: 1, kind: 'd', dockerRoot: rootless }).block.disks?.map((disk) => disk.path) ?? [];
         expect(paths.filter((folder) => folder === rootless)).toHaveLength(1);
+      });
+
+      it('runs a Docker call of the samples with its arguments', () => {
+        const result = spawnSync(shell, ['-s'], { input: usageDockerScript(['ps', '--format', "{{.ID}} it's"]), env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}` }, encoding: 'utf8', timeout: 10_000 });
+        expect(result.status).toBe(0);
+        expect(result.stdout).toBe("ps\n--format\n{{.ID}} it's\n");
       });
 
       it('sees a running process "idle" in the idle check of a sample d, and leaves the check out without wslIdle', async () => {

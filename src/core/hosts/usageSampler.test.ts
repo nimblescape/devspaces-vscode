@@ -18,6 +18,7 @@ import {
   type UsageTimers,
 } from './usageSampler';
 import type { UsageBlock, UsageHeader } from './usageSample';
+import { usageDockerScript } from './usageScript';
 import type { HostUsage } from './usageRates';
 
 const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
@@ -123,30 +124,47 @@ interface Started {
   dockerCalls: string[][];
 }
 
-async function start(options: Omit<Partial<UsageSamplerOptions>, 'docker'> & { host?: FakeHost; docker?: UsageSamplerOptions['docker'] | null } = {}): Promise<Started> {
+/** The fake answer of a Docker call of the samples, by its arguments. */
+type FakeDocker = (args: readonly string[], timeoutMs: number) => Promise<UsageRun>;
+
+/** The scripts of the Docker calls of the sampler, and their arguments. */
+const DOCKER_SCRIPTS = new Map([USAGE_NAMES_ARGS, USAGE_ROOT_ARGS].map((args) => [usageDockerScript(args), args]));
+
+/**
+ * Starts a sampler on `host`: its samples go to `run` (default the host), its Docker calls to `docker` (default: the
+ * names of the containers of the host, and /var/lib/docker; null: a Docker call fails the test).
+ */
+async function start(options: Partial<UsageSamplerOptions> & { host?: FakeHost; docker?: FakeDocker | null } = {}): Promise<Started> {
+  const { host: givenHost, docker: givenDocker, run: givenRun, ...rest } = options;
   const timers = new FakeTimers();
-  const host = options.host ?? new FakeHost();
+  const host = givenHost ?? new FakeHost();
   const started: Started = { timers, host, blocks: [], headers: [], ends: [], dockerCalls: [] } as unknown as Started;
-  const docker: UsageSamplerOptions['docker'] =
-    options.docker === null
+  const docker: FakeDocker | undefined =
+    givenDocker === null
       ? undefined
-      : (options.docker ??
+      : (givenDocker ??
         (async (args) => {
-          started.dockerCalls.push([...args]);
           if (args[0] === 'ps') return ran(OK(host.containers.map((id, index) => `${id} c${index}`).join('\n')));
           return ran(OK('/var/lib/docker\n'));
         }));
+  const samples = givenRun ?? host.run;
+  const run = async (script: string, timeoutMs: number): Promise<UsageRun> => {
+    const args = DOCKER_SCRIPTS.get(script);
+    if (args === undefined) return samples(script, timeoutMs);
+    if (docker === undefined) throw new Error('A Docker call in a test without Docker.');
+    started.dockerCalls.push([...args]);
+    return docker(args, timeoutMs);
+  };
   started.sampler = UsageSampler.start({
     logger: silentLogger,
     name: 'box',
     intervalMs: VM_USAGE_INTERVAL_MS,
-    run: host.run,
     onHeader: (header) => started.headers.push(header),
     onBlock: (block, usage, names) => started.blocks.push({ block, usage, names }),
     onEnd: (end) => started.ends.push(end),
     timers,
-    ...options,
-    ...(docker !== undefined ? { docker } : { docker: undefined }),
+    ...rest,
+    run,
   });
   await flush();
   return started;
@@ -316,8 +334,8 @@ describe('UsageSampler', () => {
     expect(blocks[3].usage.cpu).toBeDefined();
   });
 
-  it('keeps the interval when the page is hidden and shown again at once', async () => {
-    const { sampler, timers, host } = await start({ docker: null });
+  it('keeps the interval and the rates when the page is hidden and shown again at once', async () => {
+    const { sampler, timers, host, blocks } = await start({ docker: null });
     expect(host.sent).toHaveLength(1);
     for (let i = 0; i < 5; i++) {
       sampler.pause();
@@ -327,6 +345,24 @@ describe('UsageSampler', () => {
     expect(host.sent).toHaveLength(1);
     await timers.advance(VM_USAGE_INTERVAL_MS - 500);
     expect(host.sent).toHaveLength(2);
+    // No sample was left out: the block has its rates.
+    expect(blocks[1].usage.cpu).toBeDefined();
+  });
+
+  it('logs a handler of the end that throws, and stays ended', async () => {
+    const host = new FakeHost();
+    // A run that rejects: its end comes from the catch of the sample, where a throw would be an unhandled rejection.
+    host.next = new Error('gone');
+    const { sampler, timers } = await start({
+      host,
+      docker: null,
+      onEnd: () => {
+        throw new Error('page gone');
+      },
+    });
+    await timers.advance(5 * VM_USAGE_INTERVAL_MS);
+    expect(sampler.ended).toBe(true);
+    expect(host.sent).toHaveLength(1);
   });
 
   it('reports a sample that runs after stop not, and runs no other', async () => {

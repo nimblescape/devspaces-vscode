@@ -44,7 +44,7 @@ describe('the utilization samples with real shells and a real SSH server', () =>
   const sshdContainer = `devspaces-test-sshd-usage-${run.runId}`;
   let sshPath: string;
 
-  function samples(runSample: UsageSamplerOptions['run'], docker?: UsageSamplerOptions['docker'], intervalMs = 500): TestSamples {
+  function samples(runSample: UsageSamplerOptions['run'], intervalMs = 500): TestSamples {
     const result = { headers: [], blocks: [], names: [], ends: [] } as unknown as TestSamples;
     const waiters: Array<() => void> = [];
     result.sampler = UsageSampler.start({
@@ -52,7 +52,6 @@ describe('the utilization samples with real shells and a real SSH server', () =>
       name: 'test host',
       intervalMs,
       run: runSample,
-      docker,
       onHeader: (header) => result.headers.push(header),
       onBlock: (block, _usage, names) => {
         result.blocks.push(block);
@@ -91,14 +90,19 @@ describe('the utilization samples with real shells and a real SSH server', () =>
     return lines.slice(1).map((line) => line.trim().replace(/^\d+\s+/, ''));
   }
 
-  /** Waits until `container` runs only processes that `allowed` accepts; returns them. */
-  async function onlyProcesses(container: string, allowed: (command: string) => boolean): Promise<string[]> {
+  /** Waits until the processes of `container` are as `wanted` says (at most 15 s); returns them. */
+  async function processesWhen(container: string, wanted: (commands: string[]) => boolean): Promise<string[]> {
     const deadline = Date.now() + 15_000;
     for (;;) {
       const left = processes(container);
-      if (left.every(allowed) || Date.now() > deadline) return left;
+      if (wanted(left) || Date.now() > deadline) return left;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
+  }
+
+  /** Waits until `container` runs only processes that `allowed` accepts; returns them. */
+  function onlyProcesses(container: string, allowed: (command: string) => boolean): Promise<string[]> {
+    return processesWhen(container, (commands) => commands.every(allowed));
   }
 
   afterAll(() => {
@@ -154,6 +158,8 @@ describe('the utilization samples with real shells and a real SSH server', () =>
         'run', '-d', '--name', sshdContainer, '--label', `${TEST_RUN_LABEL}=${run.runId}`,
         '-e', `AUTHORIZED_KEY=${fs.readFileSync(`${key}.pub`, 'utf8').trim()}`,
         '-v', `${helperDockerSocket(env, process.platform)}:/var/run/docker.sock`,
+        // The cgroups of the engine, as on a host: the script finds the containers there, also this one.
+        '--cgroupns', 'host',
         '-p', '127.0.0.1::22',
         sshdImage,
       ]);
@@ -198,23 +204,26 @@ describe('the utilization samples with real shells and a real SSH server', () =>
           const result = await shells.run(ALIAS, 'sh -s', { input: script, timeoutMs });
           return result === undefined ? { kind: 'notRun', reason: 'noTransport' } : { kind: 'ran', result };
         };
-        const docker = async (args: readonly string[], timeoutMs: number): Promise<UsageRun> => {
-          const result = await shells.docker(ALIAS, args, { timeoutMs });
-          return result === undefined ? { kind: 'notRun', reason: 'noTransport' } : { kind: 'ran', result };
-        };
-        const test = samples(runSample, docker);
+        const test = samples(runSample);
         await test.blocksCame(6);
         expect(test.headers[0]).toMatchObject({ uid: 0 });
         expect(test.blocks.map((block) => block.seq)).toEqual([1, 2, 3, 4, 5, 6]);
-        // All samples on one login.
+        // The script finds the containers of the engine in its cgroups, and the sampler their names with `docker ps`
+        // on the same shell between two samples. Only with cgroup v2 (the runners of CI): with cgroup v1, Docker
+        // mounts only the cgroup of the container itself, also with the cgroup namespace of the host.
+        if (test.headers[0].cgroup === 2) {
+          const sshdId = cli.ok(['inspect', '--format', '{{.Id}}', sshdContainer]).trim();
+          expect(test.blocks.at(-1)?.containers.map((container) => container.id)).toContain(sshdId);
+          expect(test.names.at(-1)?.get(sshdId)).toBe(sshdContainer);
+        } else log.info('cgroup v1: the containers of the engine are not visible in the SSH server, so their names are not checked.');
+        // All samples and Docker calls on one login.
         expect(logins).toBe(1);
-        // The Docker CLI of the host on the same shell: the names of the containers of the engine.
-        const names = await docker(['ps', '--no-trunc', '--format', '{{.ID}} {{.Names}}'], 10_000);
-        expect(names.kind === 'ran' ? names.result.stdout : '').toContain(sshdContainer);
         test.sampler.stop();
         expect(test.ends).toEqual([{ kind: 'stopped' }]);
-        // Between two samples, the host runs nothing of them.
-        expect((await onlyProcesses(sshdContainer, (command) => sshdOnly(command) || command === 'sh -s')).filter((command) => !sshdOnly(command) && command !== 'sh -s')).toEqual([]);
+        // After the last sample, the host runs only the shared shell (one `sh -s`) and sshd.
+        const shellOnly = (commands: string[]) => commands.filter((command) => command === 'sh -s').length === 1 && commands.every((command) => sshdOnly(command) || command === 'sh -s');
+        const left = await processesWhen(sshdContainer, shellOnly);
+        expect(shellOnly(left), left.join('\n')).toBe(true);
       } finally {
         shells.dispose();
       }
