@@ -44,6 +44,11 @@ export const VM_CHECK_MS = 30_000;
  * answer takes time on its way back, and the age has steps of 1/100 s.
  */
 const VM_AGE_MARGIN_MS = 1_000;
+/**
+ * After the login of the page started the VM: how long the checks of the VM let it sleep, without reading again while it
+ * still runs (the idle script stops a VM that nothing uses after two checks a minute apart).
+ */
+const VM_SLEEP_WAIT_MS = 5 * 60_000;
 
 export interface UsagePagesDeps {
   extensionUri: vscode.Uri;
@@ -152,6 +157,10 @@ class UsagePage {
   private checkingVm = false;
   /** The visibility that visibilityChanged last saw. */
   private wasVisible = true;
+  /** Ends a password question of the samples of the current start when they end (endSampler). */
+  private runAbort: AbortController | undefined;
+  /** When the login of the page started the VM (onBlock): checkVm reads again only after VM_SLEEP_WAIT_MS. */
+  private vmStartedByPageAt: number | undefined;
   /** Ends the Read Sizes that runs (vmClosing). */
   private sizesAbort: AbortController | undefined;
   /** Raised at each new start of the host, so that a Read Sizes that ran across it keeps nothing. */
@@ -258,6 +267,9 @@ class UsagePage {
     this.setPhase({ kind: 'starting' });
     this.touch();
     this.flowPending = flow;
+    this.vmStartedByPageAt = undefined;
+    const runAbort = new AbortController();
+    this.runAbort = runAbort;
     // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).
     if (!vscode.window.state.focused) this.focusChanged(false);
     let first = flow;
@@ -270,8 +282,7 @@ class UsagePage {
       run: (script, timeoutMs) => {
         const inFlow = first;
         first = false;
-        if (inFlow) this.flowPending = false;
-        return this.run(script, timeoutMs, inFlow, generation);
+        return this.run(script, timeoutMs, inFlow, generation, runAbort.signal);
       },
       hold: () => this.deps.shells.keep(this.host),
       onHeader: (header) => this.onHeader(sampler, header),
@@ -287,7 +298,17 @@ class UsagePage {
    * One command of the samples on the shell of the host: on the shell that is open (or logging in) without a login;
    * else, on the VM only after a check that it runs (the page never starts it, R-VM-004), a login of the shell.
    */
-  private async run(script: string, timeoutMs: number, flow: boolean, generation: number): Promise<UsageRun> {
+  private async run(script: string, timeoutMs: number, flow: boolean, generation: number, signal: AbortSignal): Promise<UsageRun> {
+    try {
+      return await this.runOnce(script, timeoutMs, flow, generation, signal);
+    } finally {
+      // The click of the user had its first sample. A sample that the end of its samples overtook leaves the click open,
+      // so that the start at the next show may still ask (visibilityChanged).
+      if (flow && generation === this.generation) this.flowPending = false;
+    }
+  }
+
+  private async runOnce(script: string, timeoutMs: number, flow: boolean, generation: number, signal: AbortSignal): Promise<UsageRun> {
     const { shells } = this.deps;
     const command = usageShellCommand(script);
     const open = await shells.run(this.host, command, { timeoutMs, login: false });
@@ -305,7 +326,8 @@ class UsagePage {
       checkedAt = this.timers.now();
     }
     const login = () => shells.run(this.host, command, { timeoutMs });
-    const result = flow ? await withSshPrompts(login, this.abort.signal) : await login();
+    // A question of the login ends when the samples end (a pause, a hide, a stop of the VM, a close).
+    const result = flow ? await withSshPrompts(login, signal) : await login();
     if (result === undefined) return { kind: 'notRun', reason: 'noTransport' };
     if (checkedAt !== undefined && generation === this.generation) this.loginCheckedAt = checkedAt;
     return { kind: 'ran', result };
@@ -327,7 +349,9 @@ class UsagePage {
 
   private onBlock(sampler: UsageSampler, block: UsageBlock, usage: HostUsage, names: ReadonlyMap<string, string> | undefined): void {
     if (sampler !== this.sampler) return;
-    const header = sampler.header;
+    const sampled = sampler.header;
+    // A header without a boot ID (it could not be read once) keeps the boot ID of before, for the check of onHeader.
+    const header = sampled !== undefined && sampled.bootId === undefined && this.header?.bootId !== undefined ? { ...sampled, bootId: this.header.bootId } : sampled;
     if (header !== undefined) this.header = header;
     const checkedAt = this.loginCheckedAt;
     this.loginCheckedAt = undefined;
@@ -341,6 +365,7 @@ class UsagePage {
     if (checkedAt !== undefined && ageMs !== undefined && ageMs + VM_AGE_MARGIN_MS < this.timers.now() - checkedAt) {
       this.deps.logger.info(`The VM of Devspaces started after the utilization page found it running: the page ends its samples there, so that the VM can go to sleep again.`);
       this.endSampler();
+      this.vmStartedByPageAt = this.timers.now();
       this.setPhase({ kind: 'vm', state: { kind: 'stopped' }, idle: true });
       return;
     }
@@ -468,6 +493,8 @@ class UsagePage {
   /** Ends the samples of the page; their end is not reported (onEnd), and a sample that still runs logs in no more. */
   private endSampler(): void {
     this.generation += 1;
+    this.runAbort?.abort();
+    this.runAbort = undefined;
     const sampler = this.sampler;
     this.sampler = undefined;
     this.clearTimer('hiddenTimer');
@@ -533,18 +560,20 @@ class UsagePage {
     // Not while the VM stops or is set up again (Stop the VM…, Remove, Reset): a read would log in to it again.
     if (this.sizesReading || this.disposed || (this.phase.kind === 'paused' && this.phase.reason === 'vm')) return;
     const epoch = this.bootEpoch;
+    const controller = new AbortController();
+    this.sizesAbort = controller;
     this.sizesReading = true;
     this.post();
     try {
       if (this.vm) {
         const state = await this.vmStateNow();
+        // The VM stops or is set up again meanwhile (vmClosing): no login to it.
+        if (controller.signal.aborted) return;
         if (state.kind !== 'running') {
           this.sizesError = state.kind === 'stopped' || state.kind === 'notSetUp' ? UsagePageTexts.sizesVmStopped : UsagePageTexts.sizesVmUnusable(state.detail);
           return;
         }
       }
-      const controller = new AbortController();
-      this.sizesAbort = controller;
       const signal = AbortSignal.any([this.abort.signal, controller.signal]);
       const inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
       // The host started again meanwhile: the objects are of before.
@@ -622,8 +651,14 @@ class UsagePage {
       this.checkingVm = false;
     }
     if (generation !== this.generation || this.disposed || this.phase.kind !== 'vm' || this.startingVm) return;
-    if (state.kind === 'running') this.start(false);
-    else if (state.kind !== this.phase.state.kind || state.detail !== this.phase.state.detail) this.setPhase({ kind: 'vm', state });
+    if (state.kind === 'running') {
+      // The VM that the login of the page started still runs: the page lets it go to sleep first.
+      if (this.vmStartedByPageAt !== undefined && this.timers.now() - this.vmStartedByPageAt < VM_SLEEP_WAIT_MS) this.scheduleVmCheck();
+      else this.start(false);
+      return;
+    }
+    this.vmStartedByPageAt = undefined;
+    if (state.kind !== this.phase.state.kind || state.detail !== this.phase.state.detail) this.setPhase({ kind: 'vm', state });
     else this.scheduleVmCheck();
   }
 

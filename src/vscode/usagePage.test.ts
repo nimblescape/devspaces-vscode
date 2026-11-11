@@ -298,6 +298,11 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.vmIdle);
     await timers.advance(VM_USAGE_INTERVAL_MS * 3);
     expect(shells.samples).toHaveLength(2);
+    // The checks of the VM let it go to sleep: no reading while it still runs, for 5 minutes.
+    await timers.advance(VM_CHECK_MS * 9);
+    expect(shells.samples).toHaveLength(2);
+    await timers.advance(VM_CHECK_MS * 2);
+    expect(shells.samples.length).toBeGreaterThan(2);
   });
 
   it('counts the VM as started by its login only when it is younger than the check by more than 1 second', async () => {
@@ -337,12 +342,48 @@ describe('UsagePages', () => {
     expect(shells.logins).toEqual([{ host: 'build-box', flow: true }]);
   });
 
+  it('lets the start again after a hide ask, when the end of the samples overtook the first login of the click', async () => {
+    const real = shells.run.getMockImplementation()!;
+    let gated = true;
+    shells.run.mockImplementation(async (host, command, options) => {
+      if (options?.login !== false && gated) {
+        gated = false;
+        // The password question stays open until the samples end.
+        await new Promise<void>(() => {});
+      }
+      return real(host, command, options);
+    });
+    const made = pages();
+    made.show(hostRow('build-box'));
+    await flush();
+    const panel = fakeVscode.webviewPanels.at(-1)!;
+    panel.setVisible(false);
+    await timers.advance(HIDDEN_STOP_MS);
+    panel.setVisible(true);
+    await flush();
+    expect(shells.logins).toEqual([{ host: 'build-box', flow: true }]);
+  });
+
   it('forgets the sizes of before a new start of the host', async () => {
     shells.open.add(LIMA_HOST);
     readSizes.mockResolvedValue(emptyInventory());
     const panel = await open(pages(), LIMA_HOST);
     panel.receive({ type: 'readSizes' });
     await flush();
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(lastView(panel).sizes.label).toBe('Read Sizes');
+  });
+
+  it('sees a new start of the host also after a sample without a boot ID', async () => {
+    shells.open.add(LIMA_HOST);
+    readSizes.mockResolvedValue(emptyInventory());
+    const panel = await open(pages(), LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    shells.boot = 'unreadable';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
@@ -598,6 +639,19 @@ describe('UsagePages', () => {
     expect(lastView(panel).sizes.disabled).toBe(true);
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.vm);
     panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(readSizes).not.toHaveBeenCalled();
+  });
+
+  it('starts no Read Sizes when the VM stops while it reads the state of the VM', async () => {
+    shells.open.add(LIMA_HOST);
+    let release: (state: VmState) => void = () => {};
+    const made = pages(LIMA_HOST, { vmState: () => new Promise<VmState>((resolve) => (release = resolve)) });
+    const panel = await open(made, LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    made.vmClosing();
+    release({ kind: 'running' });
     await flush();
     expect(readSizes).not.toHaveBeenCalled();
   });
