@@ -804,10 +804,19 @@ describe('stop and removal', () => {
     const onlyDigest = engine({ [digest]: deleted }, [ok(`["${digest}"]`)]);
     expect(await removeHostObjects(onlyDigest, [{ ...image, tags: [] }], { logger: silent })).toEqual(result('removed'));
     expect(rms(onlyDigest.calls)).toEqual([digest]);
-    // Docker deletes the image with its last tag (also the references with a digest of the same repository): no further call.
-    const sameRepository = engine({ 'devspaces-worker:1': deleted }, [ok(`["devspaces-monitor:abc","devspaces-worker:1","${digest}"]`)]);
+    // Docker deletes the image with its last tag, also the references with a digest of the same repository: no further call.
+    const sameDigest = `devspaces-worker@sha256:${'1'.repeat(64)}`;
+    const sameRepository = engine({ 'devspaces-worker:1': deleted }, [ok(`["devspaces-monitor:abc","devspaces-worker:1","${sameDigest}"]`)]);
     expect(await removeHostObjects(sameRepository, [image], { logger: silent })).toEqual(result('removed'));
     expect(rms(sameRepository.calls)).toEqual(['devspaces-monitor:abc', 'devspaces-worker:1']);
+    // The tags first, then the references with a digest, in whatever order RepoTags lists them.
+    const digestFirst = engine({ [digest]: deleted }, [ok(`["${digest}","devspaces-monitor:abc","devspaces-worker:1"]`)]);
+    expect(await removeHostObjects(digestFirst, [image], { logger: silent })).toEqual(result('removed'));
+    expect(rms(digestFirst.calls)).toEqual(['devspaces-monitor:abc', 'devspaces-worker:1', digest]);
+    // An image without a reference that is gone before its removal by ID: gone, with no second read.
+    const idGone = engine({ 'sha256:w': fail('Error response from daemon: No such image: sha256:w') }, [ok('[]')]);
+    expect(await removeHostObjects(idGone, [{ ...image, tags: [] }], { logger: silent })).toEqual(result('missing'));
+    expect(idGone.calls.map((args) => args.slice(0, 3).join(' '))).toEqual(['image inspect --format', 'container ls --all', 'image rm sha256:w']);
     // A tag that is gone meanwhile does not stop the others.
     const gone = engine({ 'devspaces-monitor:abc': fail('Error response from daemon: No such image: devspaces-monitor:abc'), 'devspaces-worker:1': deleted }, [both]);
     expect(await removeHostObjects(gone, [image], { logger: silent })).toEqual(result('removed'));
@@ -832,8 +841,13 @@ describe('stop and removal', () => {
     const childless = kept(ok('[]'), { 'sha256:w': deleted });
     expect(await removeHostObjects(childless, [image], { logger: silent })).toEqual(result('removed'));
     expect(rms(childless.calls).at(-1)).toBe('sha256:w');
+    expect(await removeHostObjects(kept(ok('[]'), { 'sha256:w': fail('Error response from daemon: No such image: sha256:w') }), [image], { logger: silent })).toEqual(result('removed'));
     const child = kept(ok('[]'), { 'sha256:w': fail('Error response from daemon: conflict: unable to delete w (cannot be forced) - image has dependent child images') });
     expect(await removeHostObjects(child, [image], { logger: silent })).toMatchObject(result('inUse', expect.stringMatching(/dependent child images/) as unknown as string));
+    // Docker untags the new reference too and still keeps the image: it says so.
+    const stuck = kept(ok(`["${digest}"]`));
+    expect(await removeHostObjects(stuck, [image], { logger: silent })).toEqual(result('failed', 'Docker kept the image. Click Refresh.'));
+    expect(rms(stuck.calls)).toEqual(['devspaces-monitor:abc', 'devspaces-worker:1', digest]);
     // A tag since the first read: it stays.
     const late = kept(ok('["late:1"]'));
     expect(await removeHostObjects(late, [image], { logger: silent })).toEqual(result('failed', 'Docker kept the image: it has the tag late:1 now. Click Refresh.'));

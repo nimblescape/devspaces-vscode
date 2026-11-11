@@ -973,7 +973,11 @@ function hasDigest(reference: string): boolean {
  * Throws only an AbortError.
  */
 async function removeImage(docker: Pick<BootstrapDocker, 'run'>, object: HostObject, signal: AbortSignal | undefined): Promise<Pick<ObjectResult, 'outcome' | 'detail'>> {
-  /** Removes `references` in turn: `deleted` when Docker deleted the image, else the refusal or the last step. */
+  /**
+   * Removes `references` in turn. It stops when Docker deleted the image (`deleted`: it wrote `Deleted:`), when the ID is
+   * gone (`gone`: the image is gone), or at any other refusal (`refused`, with that step); a tag that is gone goes on to
+   * the next reference. Else `{ deleted: false }`: each reference went, but Docker kept the image.
+   */
   const removeReferences = async (references: readonly string[]): Promise<{ deleted: boolean; gone?: true; refused?: { result?: RunResult; error?: unknown } }> => {
     for (const reference of references) {
       const step = await call(docker, ['image', 'rm', reference], DOCKER_QUERY_TIMEOUT_MS, signal);
