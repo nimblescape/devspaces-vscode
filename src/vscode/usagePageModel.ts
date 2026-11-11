@@ -120,7 +120,7 @@ export interface UsagePageView {
     note: string;
   };
   containers: { summary: string; rows: UsageContainerRow[]; more?: string; empty?: string; notes: string[] };
-  stopped?: { summary: string; rows: Array<{ name: string; purpose: string; tone: UsageTone }> };
+  stopped?: { summary: string; rows: Array<{ name: string; purpose: string; tone: UsageTone }>; more?: string };
   tables: UsageTable[];
   footer: string[];
 }
@@ -245,6 +245,7 @@ export const UsagePageTexts = {
   sizesAt: (at: string) => `Sizes read at ${at}. Refresh Sizes reads them again. Can be freed: what no container uses (an unused volume holds data), and the build cache that no build uses.`,
   sizesFailed: (detail: string) => `The sizes could not be read: ${detail}`,
   sizesVmStopped: 'the VM of Devspaces does not run, and the page does not start it.',
+  sizesVmUnusable: (detail: string | undefined) => `Devspaces cannot use the VM of Devspaces now${detail !== undefined && detail !== '' ? ` (${detail})` : ''}.`,
   containersSummary: (count: number) => `${count} · CPU: 100 % = one CPU, as in docker stats`,
   noContainers: 'No container runs.',
   containersNotRead: 'Not read.',
@@ -568,7 +569,8 @@ function stoppedPart(input: UsagePageInput): UsagePageView['stopped'] {
     .join(', ');
   return {
     summary: UsagePageTexts.stopped(stopped.length, stopped.length > 3 ? `${first}, …` : first),
-    rows: stopped.map((object) => ({ name: object.name, purpose: purposeOf(object), tone: toneOf(object) })),
+    rows: stopped.slice(0, MAX_CONTAINER_ROWS).map((object) => ({ name: object.name, purpose: purposeOf(object), tone: toneOf(object) })),
+    ...(stopped.length > MAX_CONTAINER_ROWS ? { more: UsagePageTexts.moreObjects(stopped.length - MAX_CONTAINER_ROWS) } : {}),
   };
 }
 

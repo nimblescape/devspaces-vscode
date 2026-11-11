@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { LIMA_HOST } from '../core/docker/dockerHost';
 import type { HostInventory, HostObject } from '../core/hosts/hostObjects';
 import type { HostUsage } from '../core/hosts/usageRates';
-import { UsagePageTexts, usagePageView, type UsagePageInput, type UsagePageView } from './usagePageModel';
+import { MAX_CONTAINER_ROWS, UsagePageTexts, usagePageView, type UsagePageInput, type UsagePageView } from './usagePageModel';
 
 type Listener = (event?: unknown) => void;
 
@@ -66,7 +66,9 @@ function loadScript() {
     createElementNS: (_namespace: string, tag: string) => new StubElement(tag),
     createTextNode: (text: string) => Object.assign(new StubElement('#text'), { textContent: text }),
   });
-  const window = new StubElement('window');
+  /** The text selection of the page (window.getSelection). */
+  const selection = { isCollapsed: true };
+  const window = Object.assign(new StubElement('window'), { getSelection: () => selection });
   const posted: Array<Record<string, unknown>> = [];
   const clock = { now: 100_000 };
   const context = vm.createContext({
@@ -79,7 +81,7 @@ function loadScript() {
   vm.runInContext(source, context);
   const byId = (id: string): StubElement => document.getElementById(id) as StubElement;
   const show = (view: UsagePageView) => window.dispatch('message', { data: { type: 'view', view } });
-  return { document, window, posted, clock, byId, show };
+  return { document, window, posted, clock, byId, show, selection };
 }
 
 const GB = 1_000_000_000;
@@ -212,6 +214,43 @@ describe('page.js', () => {
     expect(page.byId('banner-detail').hidden).toBe(true);
     expect(page.byId('banner-buttons').children).toEqual([]);
     expect(page.posted).toEqual([{ type: 'ready' }]);
+  });
+
+  it('keeps its content while text is selected, and builds a part again only when it changed', () => {
+    const page = loadScript();
+    page.show(liveView({ phase: { kind: 'paused', reason: 'button' } }));
+    const button = page.byId('banner-buttons').children[0];
+    const table = page.byId('tables').children[0];
+    const cards = page.byId('cards').children[0];
+    // The same banner and the same sizes: the button keeps its focus, and the tables stay.
+    page.show(liveView({ phase: { kind: 'paused', reason: 'button' }, busy: [1, 2, 3] }));
+    expect(page.byId('banner-buttons').children[0]).toBe(button);
+    expect(page.byId('tables').children[0]).toBe(table);
+    expect(page.byId('cards').children[0]).not.toBe(cards);
+
+    // While the user selects text, the page waits; the newest view comes when the selection ends.
+    page.selection.isCollapsed = false;
+    page.show(liveView());
+    page.show(liveView({ names: new Map([[id(1), 'newest']]) }));
+    expect(page.byId('status').className).toBe('status paused');
+    page.document.dispatch('selectionchange');
+    expect(page.byId('status').className).toBe('status paused');
+    page.selection.isCollapsed = true;
+    page.document.dispatch('selectionchange');
+    expect(page.byId('status').className).toBe('status live');
+    expect(page.byId('banner').hidden).toBe(true);
+    expect(page.byId('banner-buttons').children).toEqual([]);
+    expect(page.byId('containers').children[0].children[0].textContent).toBe('newest');
+  });
+
+  it('cuts a long list of stopped containers', () => {
+    const page = loadScript();
+    const containers = Array.from({ length: MAX_CONTAINER_ROWS + 2 }, (_, index) => object('container', `stopped-${index}`, { state: 'exited' }));
+    const inventory: HostInventory = { containers, images: [], volumes: [], networks: [], buildCache: { records: 0, bytes: 0, unusedBytes: 0 } };
+    page.show(usagePageView(input({ sizes: { inventory, at: 0 } })));
+    const items = page.byId('stopped-list').children;
+    expect(items).toHaveLength(MAX_CONTAINER_ROWS + 1);
+    expect(items.at(-1)?.textContent).toBe(UsagePageTexts.moreObjects(2));
   });
 
   it('sends activity on a click or a key, at most every 10 s', () => {

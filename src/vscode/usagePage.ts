@@ -37,6 +37,13 @@ export const HIDDEN_STOP_MS = 15_000;
 export const FOCUS_PAUSE_MS = 2 * 60_000;
 /** and after this long without a click or a key on it. */
 export const IDLE_PAUSE_MS = 30 * 60_000;
+/** While the page shows a VM that does not run, visible and with the focus: how often it reads the state of the VM. */
+export const VM_CHECK_MS = 30_000;
+/**
+ * The VM counts as started by the login of the page only when it is younger than the check by more than this: the
+ * answer takes time on its way back, and the age has steps of 1/100 s.
+ */
+const VM_AGE_MARGIN_MS = 1_000;
 
 export interface UsagePagesDeps {
   extensionUri: vscode.Uri;
@@ -136,9 +143,11 @@ class UsagePage {
   private loginCheckedAt: number | undefined;
   /** The samples ended 15 seconds after a hide: a show starts new ones. */
   private stoppedByHide = false;
-  /** The VM changed while the page waited for it hidden: the next show reads again (vmChanged). */
-  private vmChangedWhileHidden = false;
+  /** The history has a gap since its last point (one gap for each pause, hide or end). */
+  private gapped = false;
   private hiddenTimer: unknown;
+  private vmCheckTimer: unknown;
+  private checkingVm = false;
   private focusTimer: unknown;
   private idleTimer: unknown;
   private disposed = false;
@@ -189,7 +198,7 @@ class UsagePage {
     this.disposed = true;
     this.generation += 1;
     this.endSampler();
-    for (const timer of [this.hiddenTimer, this.focusTimer, this.idleTimer]) if (timer !== undefined) this.timers.clearTimeout(timer);
+    for (const timer of [this.hiddenTimer, this.focusTimer, this.idleTimer, this.vmCheckTimer]) if (timer !== undefined) this.timers.clearTimeout(timer);
     this.abort.abort();
     for (const listener of this.listeners) listener.dispose();
     this.panel.dispose();
@@ -200,7 +209,11 @@ class UsagePage {
   /** The window got or lost the focus: 2 minutes without it pause the page, while it reads and is visible. */
   focusChanged(focused: boolean): void {
     this.clearTimer('focusTimer');
-    if (focused || this.disposed) return;
+    if (this.disposed) return;
+    if (focused) {
+      void this.checkVm();
+      return;
+    }
     this.focusTimer = this.timers.setTimeout(() => {
       this.focusTimer = undefined;
       if (this.panel.visible && this.reading()) this.pause('focus');
@@ -213,10 +226,8 @@ class UsagePage {
 
   vmChanged(): void {
     // Only a page that waits for the VM: a page that Stop the VM… paused stays paused until Resume. A hidden page reads
-    // nothing: it reads again at its next show.
-    if (this.phase.kind !== 'vm' || this.startingVm) return;
-    if (this.panel.visible) this.start(false);
-    else this.vmChangedWhileHidden = true;
+    // nothing: it reads the state of the VM again at its next show (checkVm).
+    if (this.phase.kind === 'vm' && this.panel.visible && !this.startingVm) this.start(false);
   }
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -229,11 +240,10 @@ class UsagePage {
   private start(flow: boolean): void {
     this.endSampler();
     this.stoppedByHide = false;
-    this.vmChangedWhileHidden = false;
     this.checkedState = undefined;
     this.loginCheckedAt = undefined;
-    this.generation += 1;
-    if (this.usage !== undefined) this.history.gap();
+    const generation = ++this.generation;
+    this.markGap();
     this.setPhase({ kind: 'starting' });
     this.touch();
     let first = flow;
@@ -246,7 +256,7 @@ class UsagePage {
       run: (script, timeoutMs) => {
         const inFlow = first;
         first = false;
-        return this.run(script, timeoutMs, inFlow);
+        return this.run(script, timeoutMs, inFlow, generation);
       },
       hold: () => this.deps.shells.keep(this.host),
       onHeader: (header) => this.onHeader(sampler, header),
@@ -262,7 +272,7 @@ class UsagePage {
    * One command of the samples on the shell of the host: on the shell that is open (or logging in) without a login;
    * else, on the VM only after a check that it runs (the page never starts it, R-VM-004), a login of the shell.
    */
-  private async run(script: string, timeoutMs: number, flow: boolean): Promise<UsageRun> {
+  private async run(script: string, timeoutMs: number, flow: boolean, generation: number): Promise<UsageRun> {
     const { shells } = this.deps;
     const command = usageShellCommand(script);
     const open = await shells.run(this.host, command, { timeoutMs, login: false });
@@ -270,6 +280,9 @@ class UsagePage {
     let checkedAt: number | undefined;
     if (this.vm) {
       const state = await this.deps.vmState();
+      // The samples of an older start (a pause, a hide or a close came meanwhile): no login, and nothing of the page
+      // changes, because its sampler is gone.
+      if (generation !== this.generation) return { kind: 'notRun', reason: 'vmStopped' };
       const stopping = state.kind === 'running' && this.deps.vmStopping();
       this.checkedState = stopping ? { kind: 'stopped' } : state;
       if (state.kind !== 'running' || stopping) return { kind: 'notRun', reason: 'vmStopped' };
@@ -278,7 +291,7 @@ class UsagePage {
     const login = () => shells.run(this.host, command, { timeoutMs });
     const result = flow ? await withSshPrompts(login, this.abort.signal) : await login();
     if (result === undefined) return { kind: 'notRun', reason: 'noTransport' };
-    if (checkedAt !== undefined) this.loginCheckedAt = checkedAt;
+    if (checkedAt !== undefined && generation === this.generation) this.loginCheckedAt = checkedAt;
     return { kind: 'ran', result };
   }
 
@@ -298,7 +311,7 @@ class UsagePage {
     // The login of the page started the VM: it stopped between the check and the login (wsl.exe starts a WSL
     // distribution). The VM is younger than the check. The page ends its samples and its shell, so that the VM can go to
     // sleep again.
-    if (checkedAt !== undefined && header?.pid1AgeCs !== undefined && header.pid1AgeCs * 10 < this.timers.now() - checkedAt) {
+    if (checkedAt !== undefined && header?.pid1AgeCs !== undefined && header.pid1AgeCs * 10 + VM_AGE_MARGIN_MS < this.timers.now() - checkedAt) {
       this.deps.logger.info(`The VM of Devspaces started after the utilization page found it running: the page ends its samples and its shell there, so that the VM can go to sleep again.`);
       this.endSampler();
       this.deps.shells.close(this.host);
@@ -315,6 +328,7 @@ class UsagePage {
       this.readLocalDisk();
     }
     this.history.add(usage);
+    this.gapped = false;
     if (this.phase.kind === 'starting') this.phase = { kind: 'live' };
     this.post();
   }
@@ -324,7 +338,7 @@ class UsagePage {
     if (sampler !== this.sampler) return;
     this.sampler = undefined;
     this.clearTimer('hiddenTimer');
-    if (this.usage !== undefined) this.history.gap();
+    this.markGap();
     void this.afterEnd(end);
   }
 
@@ -379,8 +393,8 @@ class UsagePage {
     if (this.reading()) {
       if (this.sampler !== undefined) this.sampler.resume();
       else if (this.stoppedByHide) this.start(false);
-    } else if (this.phase.kind === 'vm' && this.vmChangedWhileHidden && !this.startingVm) {
-      this.start(false);
+    } else {
+      void this.checkVm();
     }
   }
 
@@ -397,7 +411,7 @@ class UsagePage {
       this.deps.logger.info(`The utilization page of ${this.host} is hidden: its samples end.`);
       this.endSampler();
       this.stoppedByHide = true;
-      if (this.usage !== undefined) this.history.gap();
+      this.markGap();
     }, HIDDEN_STOP_MS);
   }
 
@@ -416,7 +430,7 @@ class UsagePage {
     this.endSampler();
     this.stoppedByHide = false;
     this.generation += 1;
-    if (this.usage !== undefined) this.history.gap();
+    this.markGap();
     this.setPhase({ kind: 'paused', reason });
   }
 
@@ -428,7 +442,7 @@ class UsagePage {
     sampler?.stop();
   }
 
-  private clearTimer(name: 'hiddenTimer' | 'focusTimer' | 'idleTimer'): void {
+  private clearTimer(name: 'hiddenTimer' | 'focusTimer' | 'idleTimer' | 'vmCheckTimer'): void {
     const timer = this[name];
     if (timer !== undefined) this.timers.clearTimeout(timer);
     this[name] = undefined;
@@ -491,7 +505,7 @@ class UsagePage {
       if (this.vm) {
         const state = await this.vmStateNow();
         if (state.kind !== 'running') {
-          this.sizesError = UsagePageTexts.sizesVmStopped;
+          this.sizesError = state.kind === 'stopped' || state.kind === 'notSetUp' ? UsagePageTexts.sizesVmStopped : UsagePageTexts.sizesVmUnusable(state.detail);
           return;
         }
       }
@@ -518,7 +532,9 @@ class UsagePage {
     read()
       .then(
         (free) => {
+          if (this.disposed) return;
           this.localDiskFree = free;
+          this.post();
         },
         (error: unknown) => this.deps.logger.warn(`The free space for the disk of the VM could not be read: ${errorMessage(error)}`),
       )
@@ -529,7 +545,47 @@ class UsagePage {
 
   private setPhase(phase: UsagePhase): void {
     this.phase = phase;
+    this.scheduleVmCheck();
     this.post();
+  }
+
+  /** One gap in the history after the last point, for a pause, a hide or an end. */
+  private markGap(): void {
+    if (this.usage === undefined || this.gapped) return;
+    this.history.gap();
+    this.gapped = true;
+  }
+
+  /**
+   * While the page shows a VM that does not run: the VM can start from somewhere else (a Start of a devspace), which
+   * calls no vmChanged. The page reads the state of the VM, which starts nothing, every VM_CHECK_MS while it is visible
+   * and has the focus, and at a show and when the window gets the focus.
+   */
+  private scheduleVmCheck(): void {
+    this.clearTimer('vmCheckTimer');
+    if (this.disposed || this.phase.kind !== 'vm') return;
+    this.vmCheckTimer = this.timers.setTimeout(() => {
+      this.vmCheckTimer = undefined;
+      void this.checkVm();
+    }, VM_CHECK_MS);
+  }
+
+  private async checkVm(): Promise<void> {
+    if (this.disposed || this.phase.kind !== 'vm' || this.startingVm || this.checkingVm) return;
+    // A hidden page or a window without the focus waits for the show or the focus, which check again.
+    if (!this.panel.visible || !vscode.window.state.focused) return;
+    const generation = this.generation;
+    this.checkingVm = true;
+    let state: VmState;
+    try {
+      state = await this.vmStateNow();
+    } finally {
+      this.checkingVm = false;
+    }
+    if (generation !== this.generation || this.disposed || this.phase.kind !== 'vm' || this.startingVm) return;
+    if (state.kind === 'running') this.start(false);
+    else if (state.kind !== this.phase.state.kind) this.setPhase({ kind: 'vm', state });
+    else this.scheduleVmCheck();
   }
 
   /** Sends the view to a visible page (a hidden one has no page; it asks with `ready` when it shows again). */

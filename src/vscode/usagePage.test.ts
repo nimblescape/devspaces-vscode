@@ -18,7 +18,7 @@ import type { RunResult } from '../core/ports';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { fakeVscode, resetFakeVscode, type FakeWebviewPanel } from './testing/fakeVscode';
-import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, UsagePages, type UsagePagesDeps } from './usagePage';
+import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
 import { UsagePageTexts, type UsagePageView } from './usagePageModel';
 
 const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
@@ -239,6 +239,8 @@ describe('UsagePages', () => {
     expect(shells.logins).toEqual([]);
     expect(shells.holds).toBe(1);
     expect(lastView(panel)).toMatchObject({ status: { tone: 'live' }, memory: { value: '614 kB' }, description: 'Local VM of Devspaces · Linux 6.12.48 · up 3 h 3 min' });
+    // The free space of this computer comes after the first sample, and the page shows it at once.
+    expect(lastView(panel).disk.lines).toContainEqual({ label: 'This computer: free for the disk of the VM', value: '210 GB' });
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(shells.samples.map((sample) => sample.kind)).toEqual(['d', 't']);
     expect(lastView(panel).cpu.value).toBe('10 %');
@@ -291,6 +293,30 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.vmIdle);
     await timers.advance(VM_USAGE_INTERVAL_MS * 3);
     expect(shells.samples).toHaveLength(2);
+  });
+
+  it('counts the VM as started by its login only when it is younger than the check by more than 1 second', async () => {
+    // The login takes 3 seconds, and the VM is 2.5 seconds old at the first sample: it started before the check, and
+    // the answer took its time on the way back.
+    shells.loginMs = 3_000;
+    shells.pid1AgeCs = 250 - Math.floor((timers.time + 3_000) / 10);
+    const panel = await open(pages(WSL_HOST), WSL_HOST);
+    expect(shells.closed).toEqual([]);
+    expect(lastView(panel).status.tone).toBe('live');
+  });
+
+  it('starts no login for the samples of an older start', async () => {
+    let release: (state: VmState) => void = () => {};
+    const made = pages(LIMA_HOST, { vmState: () => new Promise<VmState>((resolve) => (release = resolve)) });
+    made.show(hostRow(LIMA_HOST));
+    await flush();
+    const panel = fakeVscode.webviewPanels.at(-1)!;
+    // Pause while the first sample still reads the state of the VM.
+    panel.receive({ type: 'pause' });
+    release({ kind: 'running' });
+    await flush();
+    expect(shells.logins).toEqual([]);
+    expect(lastView(panel).status.tone).toBe('paused');
   });
 
   it('ends the samples of WSL when its idle script ended, and closes the shell', async () => {
@@ -398,6 +424,18 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
   });
 
+  it('puts one gap into the line of the CPU use for a pause and its Resume', async () => {
+    shells.open.add(LIMA_HOST);
+    const panel = await open(pages(), LIMA_HOST);
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    const before = lastView(panel).cpu.spark.length;
+    panel.receive({ type: 'pause' });
+    panel.receive({ type: 'resume' });
+    await flush();
+    // The gap and the first sample of the new start.
+    expect(lastView(panel).cpu.spark).toHaveLength(before + 2);
+  });
+
   it('pauses with Pause, and Stop the VM… pauses until Resume', async () => {
     shells.open.add(LIMA_HOST);
     const made = pages();
@@ -424,6 +462,24 @@ describe('UsagePages', () => {
     shells.open.add(LIMA_HOST);
     made.vmChanged();
     await flush();
+    expect(lastView(panel).status.tone).toBe('live');
+  });
+
+  it('reads the state of a VM that does not run every 30 seconds while it is visible with the focus, and starts nothing', async () => {
+    vmState = { kind: 'stopped' };
+    const panel = await open(pages(), LIMA_HOST);
+    await timers.advance(VM_CHECK_MS);
+    expect(shells.logins).toEqual([]);
+    expect(lastView(panel).banner?.message).toBe(UsagePageTexts.vmStopped);
+    // A Start of a devspace started the VM, which calls no vmChanged.
+    vmState = { kind: 'running' };
+    shells.open.add(LIMA_HOST);
+    fakeVscode.fireWindowState(false);
+    await timers.advance(VM_CHECK_MS * 2);
+    expect(shells.samples).toHaveLength(0);
+    fakeVscode.fireWindowState(true);
+    await flush();
+    expect(shells.samples).toHaveLength(1);
     expect(lastView(panel).status.tone).toBe('live');
   });
 
@@ -468,6 +524,10 @@ describe('UsagePages', () => {
     await flush();
     expect(readSizes).toHaveBeenCalledTimes(1);
     expect(lastView(panel).docker.note).toContain(UsagePageTexts.sizesVmStopped);
+    vmState = { kind: 'unknown', detail: 'limactl failed' };
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(lastView(panel).docker.note).toContain('The sizes could not be read: Devspaces cannot use the VM of Devspaces now (limactl failed).');
     vmState = { kind: 'running' };
     readSizes.mockRejectedValueOnce(new Error('docker system df failed\nmore'));
     panel.receive({ type: 'readSizes' });

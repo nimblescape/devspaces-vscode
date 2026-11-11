@@ -325,7 +325,7 @@ export class UsageHistory {
   }
 
   snapshot(): UsageHistorySnapshot {
-    const host = Object.fromEntries(HOST_SERIES.map((series) => [series, this.host.get(series)?.points() ?? []])) as Record<HostSeries, Array<number | null>>;
+    const host = Object.fromEntries(HOST_SERIES.map((series) => [series, this.seriesPoints(series)])) as Record<HostSeries, Array<number | null>>;
     const containers: UsageHistorySnapshot['containers'] = {};
     for (const [id, rings] of this.containers) {
       if (rings.cpu.empty && rings.memory.empty) continue;

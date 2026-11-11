@@ -5,7 +5,10 @@
 // Script of the utilization page of a Docker host (src/vscode/usagePage.ts). It only shows the view that the extension
 // sends (usagePageModel.ts), and sends the clicks of its buttons. Texts from the extension are always set as text, never
 // as HTML. A click or a key on the page is sent as `activity` (at most every ACTIVITY_EVERY_MS): after 30 minutes
-// without one, the extension pauses the page.
+// without one, the extension pauses the page. While text on the page is selected, the page keeps its content, so that
+// the selection can be copied; it shows the newest view when the selection ends. The parts that did not change (the
+// banner with its buttons, the stopped containers, the tables of the sizes, the footer) are not built again, so that a
+// button keeps its focus.
 (function () {
   'use strict';
 
@@ -55,6 +58,30 @@
   $('sizes').addEventListener('click', () => send('readSizes'));
   document.addEventListener('pointerdown', activity);
   document.addEventListener('keydown', activity);
+
+  /** The JSON of the parts that the page showed last, so that a part that did not change is not built again. */
+  const shown = {};
+  function changed(part, value) {
+    const json = JSON.stringify(value === undefined ? null : value);
+    if (shown[part] === json) return false;
+    shown[part] = json;
+    return true;
+  }
+
+  function selecting() {
+    const selection = typeof window.getSelection === 'function' ? window.getSelection() : null;
+    return !!selection && !selection.isCollapsed;
+  }
+
+  /** The newest view while text is selected. */
+  let waiting = undefined;
+  document.addEventListener('selectionchange', () => {
+    if (waiting && !selecting()) {
+      const view = waiting;
+      waiting = undefined;
+      render(view);
+    }
+  });
 
   /** A bar of `percent` (0 to 100) with the class `className`. */
   function bar(percent, className) {
@@ -197,23 +224,26 @@
 
     const banner = $('banner');
     banner.hidden = !view.banner;
-    if (view.banner) {
-      banner.className = `banner ${view.banner.tone}`;
-      $('banner-message').textContent = view.banner.message;
-      $('banner-detail').textContent = view.banner.detail || '';
-      $('banner-detail').hidden = !view.banner.detail;
-      $('banner-buttons').replaceChildren(
-        ...view.banner.buttons.map((button) => {
-          const node = el('button', { type: 'button', className: button.primary ? undefined : 'secondary', text: button.label });
-          node.addEventListener('click', () => {
-            const value = action(button.action);
-            if (value) send(value);
-          });
-          return node;
-        }),
-      );
-    } else {
-      $('banner-buttons').replaceChildren();
+    // A banner that did not change keeps its buttons, with their focus.
+    if (changed('banner', view.banner)) {
+      if (view.banner) {
+        banner.className = `banner ${view.banner.tone}`;
+        $('banner-message').textContent = view.banner.message;
+        $('banner-detail').textContent = view.banner.detail || '';
+        $('banner-detail').hidden = !view.banner.detail;
+        $('banner-buttons').replaceChildren(
+          ...view.banner.buttons.map((button) => {
+            const node = el('button', { type: 'button', className: button.primary ? undefined : 'secondary', text: button.label });
+            node.addEventListener('click', () => {
+              const value = action(button.action);
+              if (value) send(value);
+            });
+            return node;
+          }),
+        );
+      } else {
+        $('banner-buttons').replaceChildren();
+      }
     }
 
     $('values').className = view.stale ? 'values stale' : 'values';
@@ -230,22 +260,27 @@
 
     const stopped = $('stopped');
     stopped.hidden = !view.stopped;
-    if (view.stopped) {
+    if (view.stopped && changed('stopped', view.stopped)) {
       $('stopped-summary').textContent = view.stopped.summary;
-      $('stopped-list').replaceChildren(
-        ...view.stopped.rows.map((row) =>
-          el('li', {}, [el('span', { className: `tone-${row.tone}`, text: row.name }), el('span', { className: 'muted', text: row.purpose ? ` · ${row.purpose}` : '' })]),
-        ),
+      const items = view.stopped.rows.map((row) =>
+        el('li', {}, [el('span', { className: `tone-${row.tone}`, text: row.name }), el('span', { className: 'muted', text: row.purpose ? ` · ${row.purpose}` : '' })]),
       );
+      if (view.stopped.more) items.push(el('li', { className: 'muted', text: view.stopped.more }));
+      $('stopped-list').replaceChildren(...items);
     }
 
-    $('tables').replaceChildren(...view.tables.map(objectTable));
-    $('footer').replaceChildren(...view.footer.map((line) => el('p', { text: line })));
+    if (changed('tables', view.tables)) $('tables').replaceChildren(...view.tables.map(objectTable));
+    if (changed('footer', view.footer)) $('footer').replaceChildren(...view.footer.map((line) => el('p', { text: line })));
   }
 
   window.addEventListener('message', (event) => {
     const message = event.data;
-    if (message && message.type === 'view' && message.view) render(message.view);
+    if (!message || message.type !== 'view' || !message.view) return;
+    if (selecting()) waiting = message.view;
+    else {
+      waiting = undefined;
+      render(message.view);
+    }
   });
   send('ready');
 })();
