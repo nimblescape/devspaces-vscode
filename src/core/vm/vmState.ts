@@ -54,9 +54,11 @@ export async function freeSpace(folder: string): Promise<number | undefined> {
     try {
       const stats = await fs.promises.statfs(current);
       return Number(stats.bavail) * Number(stats.bsize);
-    } catch {
+    } catch (error) {
+      // Only a folder that does not exist (yet) goes up: another error would give the space of another file system.
+      const code = (error as NodeJS.ErrnoException).code;
       const parent = path.dirname(current);
-      if (parent === current) return undefined;
+      if ((code !== 'ENOENT' && code !== 'ENOTDIR') || parent === current) return undefined;
       current = parent;
     }
   }

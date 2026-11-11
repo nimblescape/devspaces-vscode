@@ -9,7 +9,7 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunResult } from '../ports';
 import { limaPaths, type LimaPaths } from './limaInstance';
-import { diskSpace, limaInstanceFiles, limaVmState, wslDiskFiles, wslVmState } from './vmState';
+import { diskSpace, freeSpace, limaInstanceFiles, limaVmState, wslDiskFiles, wslVmState } from './vmState';
 
 const silent: Logger = silentLogger;
 
@@ -91,5 +91,19 @@ describe('wslVmState', () => {
 describe('diskSpace', () => {
   it('is undefined when no file exists', async () => {
     expect(await diskSpace([path.join(home, 'missing')])).toBeUndefined();
+  });
+});
+
+describe('freeSpace', () => {
+  it('reads the file system of the folder, or of the nearest folder above it that exists', async () => {
+    const free = await freeSpace(home);
+    expect(free).toBeGreaterThan(0);
+    expect(await freeSpace(path.join(home, 'not', 'yet'))).toBeGreaterThan(0);
+  });
+
+  it('does not go up for a path below a file', async () => {
+    await fs.promises.writeFile(path.join(home, 'file'), 'x');
+    // ENOTDIR: the folder can never exist, its parent is the file system of the file.
+    expect(await freeSpace(path.join(home, 'file', 'below'))).toBeGreaterThan(0);
   });
 });

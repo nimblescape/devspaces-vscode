@@ -263,7 +263,7 @@ export const UsagePageTexts = {
     images: ['Name', 'Purpose', 'Size', 'Used by'] as [string, string, string, string],
     networks: ['Name', 'Purpose', 'Driver', 'Containers'] as [string, string, string, string],
   },
-  footer: 'This page reads only while it is visible and the window has the focus. It changes nothing on the host and leaves nothing there: each reading is one command on the one shell of Devspaces to the host, which reads only files of the system (/proc, the cgroups), the free space, and the names of the containers from Docker.',
+  footer: 'This page reads only while it is visible, and it pauses after 2 minutes without the focus of the window. It changes nothing on the host and leaves nothing there: each reading is one command on the one shell of Devspaces to the host, which reads only files of the system (/proc, the cgroups), the free space, and the names of the containers from Docker.',
   footerVm: 'The page never starts the VM and does not keep it running: the VM goes to sleep by itself when nothing runs there, also while this page is open.',
   footerWsl: 'WSL: all WSL distributions share one Linux kernel, so the totals of CPU and memory include the other distributions and Docker Desktop.',
 };

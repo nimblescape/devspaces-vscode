@@ -91,6 +91,8 @@ class FakeShells {
   uptimeCs = 1_000_000;
   /** The line `I` of a sample `d` with the idle check. */
   idle = true;
+  /** The boot ID of the line `#H`. */
+  boot = BOOT;
   containers: string[] = [];
   /** The next answer to a sample, instead of the output of the script. */
   next: RunResult | undefined;
@@ -123,7 +125,7 @@ class FakeShells {
     const time = (cs: number) => `${Math.floor(cs / 100)}.${String(cs % 100).padStart(2, '0')}`;
     const lines = [
       `@${marker}`,
-      `#H 2 2 0 ${BOOT} ${this.pid1AgeCs + elapsed} 6.12.48`,
+      `#H 2 2 0 ${this.boot} ${this.pid1AgeCs + elapsed} 6.12.48`,
       `#T ${seq} ${time(start)}`,
       `cpu  ${100 * Number(seq)} 0 0 ${900 * Number(seq)} 0 0 0 0`,
       'M MemTotal: 1000',
@@ -303,6 +305,45 @@ describe('UsagePages', () => {
     const panel = await open(pages(WSL_HOST), WSL_HOST);
     expect(shells.closed).toEqual([]);
     expect(lastView(panel).status.tone).toBe('live');
+  });
+
+  it('starts no login for a sample that the end 15 seconds after a hide stopped', async () => {
+    let release: (state: VmState) => void = () => {};
+    const made = pages(LIMA_HOST, { vmState: () => new Promise<VmState>((resolve) => (release = resolve)) });
+    made.show(hostRow(LIMA_HOST));
+    await flush();
+    const panel = fakeVscode.webviewPanels.at(-1)!;
+    panel.setVisible(false);
+    await timers.advance(HIDDEN_STOP_MS);
+    release({ kind: 'running' });
+    await flush();
+    expect(shells.logins).toEqual([]);
+  });
+
+  it('lets the start again after a hide ask, when the click that opened the page did not log in yet', async () => {
+    const made = pages();
+    made.show(hostRow('build-box'));
+    // VS Code hides the new page before its first sample.
+    const panel = fakeVscode.webviewPanels.at(-1)!;
+    panel.setVisible(false);
+    await flush();
+    expect(shells.samples).toHaveLength(0);
+    await timers.advance(HIDDEN_STOP_MS);
+    panel.setVisible(true);
+    await flush();
+    expect(shells.logins).toEqual([{ host: 'build-box', flow: true }]);
+  });
+
+  it('forgets the sizes of before a new start of the host', async () => {
+    shells.open.add(LIMA_HOST);
+    readSizes.mockResolvedValue(emptyInventory());
+    const panel = await open(pages(), LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(lastView(panel).sizes.label).toBe('Read Sizes');
   });
 
   it('starts no login for the samples of an older start', async () => {

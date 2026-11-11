@@ -143,6 +143,8 @@ class UsagePage {
   private loginCheckedAt: number | undefined;
   /** The samples ended 15 seconds after a hide: a show starts new ones. */
   private stoppedByHide = false;
+  /** The first sample of a start from a click did not run yet: a start again after a hide may still ask (start). */
+  private flowPending = false;
   /** The history has a gap since its last point (one gap for each pause, hide or end). */
   private gapped = false;
   private hiddenTimer: unknown;
@@ -246,6 +248,7 @@ class UsagePage {
     this.markGap();
     this.setPhase({ kind: 'starting' });
     this.touch();
+    this.flowPending = flow;
     let first = flow;
     const sampler: UsageSampler = UsageSampler.start({
       logger: this.deps.logger,
@@ -256,6 +259,7 @@ class UsagePage {
       run: (script, timeoutMs) => {
         const inFlow = first;
         first = false;
+        if (inFlow) this.flowPending = false;
         return this.run(script, timeoutMs, inFlow, generation);
       },
       hold: () => this.deps.shells.keep(this.host),
@@ -279,13 +283,12 @@ class UsagePage {
     if (open !== undefined) return { kind: 'ran', result: open };
     let checkedAt: number | undefined;
     if (this.vm) {
-      const state = await this.deps.vmState();
+      const state = await this.vmStateNow();
       // The samples of an older start (a pause, a hide or a close came meanwhile): no login, and nothing of the page
       // changes, because its sampler is gone.
       if (generation !== this.generation) return { kind: 'notRun', reason: 'vmStopped' };
-      const stopping = state.kind === 'running' && this.deps.vmStopping();
-      this.checkedState = stopping ? { kind: 'stopped' } : state;
-      if (state.kind !== 'running' || stopping) return { kind: 'notRun', reason: 'vmStopped' };
+      this.checkedState = state;
+      if (state.kind !== 'running') return { kind: 'notRun', reason: 'vmStopped' };
       checkedAt = this.timers.now();
     }
     const login = () => shells.run(this.host, command, { timeoutMs });
@@ -298,7 +301,13 @@ class UsagePage {
   private onHeader(sampler: UsageSampler, header: UsageHeader): void {
     if (sampler !== this.sampler) return;
     // A new start of the kernel: the history of before is of another start.
-    if (this.header?.bootId !== undefined && header.bootId !== undefined && header.bootId !== this.header.bootId) this.history.clear();
+    if (this.header?.bootId !== undefined && header.bootId !== undefined && header.bootId !== this.header.bootId) {
+      this.history.clear();
+      this.gapped = false;
+      // The sizes are of the objects before the start: Read Sizes reads them again.
+      this.sizes = undefined;
+      this.sizesError = undefined;
+    }
     this.header = header;
   }
 
@@ -392,7 +401,8 @@ class UsagePage {
     if (!vscode.window.state.focused) this.focusChanged(false);
     if (this.reading()) {
       if (this.sampler !== undefined) this.sampler.resume();
-      else if (this.stoppedByHide) this.start(false);
+      // The click that opened or resumed the page may still ask, when its first sample did not run before the hide.
+      else if (this.stoppedByHide) this.start(this.flowPending);
     } else {
       void this.checkVm();
     }
@@ -434,8 +444,9 @@ class UsagePage {
     this.setPhase({ kind: 'paused', reason });
   }
 
-  /** Ends the samples of the page; their end is not reported (onEnd). */
+  /** Ends the samples of the page; their end is not reported (onEnd), and a sample that still runs logs in no more. */
   private endSampler(): void {
+    this.generation += 1;
     const sampler = this.sampler;
     this.sampler = undefined;
     this.clearTimer('hiddenTimer');
