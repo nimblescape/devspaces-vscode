@@ -319,6 +319,11 @@ export class UsageHistory {
     this.containers = next;
   }
 
+  /** The points of one series of the host, the oldest first; a gap is null. */
+  seriesPoints(series: HostSeries): Array<number | null> {
+    return this.host.get(series)?.points() ?? [];
+  }
+
   snapshot(): UsageHistorySnapshot {
     const host = Object.fromEntries(HOST_SERIES.map((series) => [series, this.host.get(series)?.points() ?? []])) as Record<HostSeries, Array<number | null>>;
     const containers: UsageHistorySnapshot['containers'] = {};

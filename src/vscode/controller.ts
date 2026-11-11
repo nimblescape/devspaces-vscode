@@ -70,6 +70,7 @@ import type { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import type { WslSetupCommands } from './wslSetupCommands';
 import type { LimaSetupCommands } from './limaSetupCommands';
 import type { DockerHostsView } from './dockerHostsView';
+import type { UsagePages } from './usagePage';
 import { hostOfArgument, hostOfNode } from './dockerHostsModel';
 import type { VmCommands } from './vmCommands';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
@@ -197,6 +198,8 @@ export interface ControllerDeps {
    * This Docker Engine… of a host row), the view reads that host again when it is open.
    */
   dockerHosts?: Pick<DockerHostsView, 'refresh' | 'removeFromList' | 'stopObject' | 'startObject' | 'pruneBuildCache' | 'removeObjects' | 'invalidate'>;
+  /** The utilization pages of the hosts of the view "Docker Hosts" (R-ENG-009). */
+  usagePages?: Pick<UsagePages, 'show'>;
   /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
   vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
   /**
@@ -554,6 +557,7 @@ export class Controller implements vscode.Disposable {
       pruneBuildCache: async (argument) => this.deps.dockerHosts?.pruneBuildCache(argument),
       // VS Code passes the selected rows of the view as the second argument (canSelectMany).
       removeDockerObjects: async (argument, selection) => this.deps.dockerHosts?.removeObjects(argument, selection),
+      showUtilization: async (argument) => this.deps.usagePages?.show(argument),
       startVm: async () => this.deps.vm?.start(),
       stopVm: async () => this.deps.vm?.stop(),
       removeVm: async () => this.deps.vm?.remove(),
@@ -582,6 +586,7 @@ export class Controller implements vscode.Disposable {
       'startDockerObject',
       'pruneBuildCache',
       'removeDockerObjects',
+      'showUtilization',
       'startVm',
       'stopVm',
       'removeVm',

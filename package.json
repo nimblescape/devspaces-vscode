@@ -453,6 +453,12 @@
         "category": "Devspaces"
       },
       {
+        "command": "devspaces.showUtilization",
+        "title": "Show Utilization",
+        "category": "Devspaces",
+        "icon": "$(pulse)"
+      },
+      {
         "command": "devspaces.stopDockerObject",
         "title": "Stop",
         "category": "Devspaces",
@@ -598,6 +604,10 @@
           "when": "false"
         },
         {
+          "command": "devspaces.showUtilization",
+          "when": "false"
+        },
+        {
           "command": "devspaces.stopDockerObject",
           "when": "false"
         },
@@ -691,6 +701,11 @@
       ],
       "view/item/context": [
         {
+          "command": "devspaces.showUtilization",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/",
+          "group": "inline@0"
+        },
+        {
           "command": "devspaces.refreshDockerHosts",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/",
           "group": "inline@2"
@@ -724,6 +739,11 @@
           "command": "devspaces.vmSettings",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && (isMac || isLinux)",
           "group": "1_vm@4"
+        },
+        {
+          "command": "devspaces.showUtilization",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/",
+          "group": "2_engine@0"
         },
         {
           "command": "devspaces.updateImagesNow",

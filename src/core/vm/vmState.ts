@@ -45,6 +45,23 @@ export async function diskSpace(files: readonly string[]): Promise<number | unde
   return total;
 }
 
+/**
+ * The space that a user who is not root may still use on the file system of `folder` (statfs), for the disk of the VM
+ * on this computer: of the nearest folder above it that exists, when it does not exist. Undefined when none can be read.
+ */
+export async function freeSpace(folder: string): Promise<number | undefined> {
+  for (let current = path.resolve(folder); ; ) {
+    try {
+      const stats = await fs.promises.statfs(current);
+      return Number(stats.bavail) * Number(stats.bsize);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      current = parent;
+    }
+  }
+}
+
 /** The regular files in `folder` and up to `depth` levels below it that `accept` takes. */
 async function filesBelow(folder: string, depth: number, accept: (name: string) => boolean): Promise<string[]> {
   const found: string[] = [];

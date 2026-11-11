@@ -87,6 +87,9 @@ export const Commands = {
   startDockerObject: 'devspaces.startDockerObject',
   pruneBuildCache: 'devspaces.pruneBuildCache',
   removeDockerObjects: 'devspaces.removeDockerObjects',
+  // The utilization page of a host row of the view "Docker Hosts" (usagePage.ts, R-ENG-009): one page per host in the
+  // editor (hidden in the Command Palette: it takes a row).
+  showUtilization: 'devspaces.showUtilization',
   // The VM of Devspaces in its row of the view "Docker Hosts" (vmCommands.ts, R-VM-010), the same on every platform:
   // Start, Stop, Remove, Remove and Set Up Again, and its settings (macOS and Linux).
   startVm: 'devspaces.startVm',

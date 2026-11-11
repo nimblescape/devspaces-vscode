@@ -20,7 +20,7 @@ const ignored = [
   '**/.vscode-test/',
 ];
 // The scripts that run in a webview, with the globals of a browser.
-const webviewScripts = ['resources/groupsEditor/**/*.js'];
+const webviewScripts = ['resources/groupsEditor/**/*.js', 'resources/usagePage/**/*.js'];
 
 export default defineConfig(
   globalIgnores(ignored),
