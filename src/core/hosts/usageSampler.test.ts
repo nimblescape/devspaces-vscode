@@ -1,0 +1,376 @@
+// SPDX-License-Identifier: MIT
+// © 2026 Hannes Stauss (scalarion@nimblescape.com)
+// Licensed under the MIT License. See LICENSE in the repository root for details.
+
+import { describe, expect, it } from 'vitest';
+import { silentLogger, type RunResult } from '../ports';
+import {
+  MIN_USAGE_ANSWER_MS,
+  USAGE_NAMES_ARGS,
+  USAGE_NAMES_EVERY_MS,
+  USAGE_NAMES_RETRY_MS,
+  USAGE_ROOT_ARGS,
+  UsageSampler,
+  VM_USAGE_INTERVAL_MS,
+  type UsageEnd,
+  type UsageRun,
+  type UsageSamplerOptions,
+  type UsageTimers,
+} from './usageSampler';
+import type { UsageBlock, UsageHeader } from './usageSample';
+import type { HostUsage } from './usageRates';
+
+const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
+const ID_A = 'a'.repeat(64);
+const ID_B = 'b'.repeat(64);
+const OK = (stdout: string): RunResult => ({ exitCode: 0, stdout, stderr: '', timedOut: false });
+
+/** Timers that run only when the test moves the clock. */
+class FakeTimers implements UsageTimers {
+  time = 0;
+  private next = 1;
+  private readonly pending = new Map<number, { at: number; callback: () => void }>();
+
+  setTimeout(callback: () => void, ms: number): unknown {
+    const id = this.next++;
+    this.pending.set(id, { at: this.time + ms, callback });
+    return id;
+  }
+
+  clearTimeout(handle: unknown): void {
+    this.pending.delete(handle as number);
+  }
+
+  now(): number {
+    return this.time;
+  }
+
+  get waiting(): number {
+    return this.pending.size;
+  }
+
+  /** Moves the clock by `ms`, runs each timer that is due, and lets the promises after it run. */
+  async advance(ms: number): Promise<void> {
+    const end = this.time + ms;
+    for (;;) {
+      const due = [...this.pending.entries()].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (due === undefined) break;
+      this.pending.delete(due[0]);
+      this.time = due[1].at;
+      due[1].callback();
+      await flush();
+    }
+    this.time = end;
+    await flush();
+  }
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+/** The values that USAGE_SCRIPT got (usageScript). */
+interface Sent {
+  seq: number;
+  kind: string;
+  wslIdle: boolean;
+  root: string;
+  timeoutMs: number;
+}
+
+/**
+ * A host that answers each sample as the script would: a header with `boot`, and a block with the `containers`, the
+ * `idle` check, and a duration of `durationCs`.
+ */
+class FakeHost {
+  readonly sent: Sent[] = [];
+  boot = BOOT;
+  containers: string[] = [];
+  idle = true;
+  durationCs = 1;
+  uptimeCs = 100_000;
+  /** When set, the next run gives this instead of the output of the script. */
+  next: UsageRun | Error | undefined;
+
+  run = async (script: string, timeoutMs: number): Promise<UsageRun> => {
+    const match = /^mk=([0-9a-f]{32}) seq=(\d+) c=([td]) wi=([01]) rd='([^']*)'$/m.exec(script);
+    if (match === null) throw new Error('not the script');
+    const [, marker, seq, kind, wi, root] = match;
+    this.sent.push({ seq: Number(seq), kind, wslIdle: wi === '1', root, timeoutMs });
+    const next = this.next;
+    this.next = undefined;
+    if (next instanceof Error) throw next;
+    if (next !== undefined) return next;
+    const start = this.uptimeCs;
+    this.uptimeCs += this.durationCs;
+    const time = (cs: number) => `${Math.floor(cs / 100)}.${String(cs % 100).padStart(2, '0')}`;
+    const lines = [`@${marker}`, `#H 2 2 0 ${this.boot} 5000 -`, `#T ${seq} ${time(start)}`, `cpu  ${100 * Number(seq)} 0 0 ${900 * Number(seq)} 0 0 0 0`, 'M MemTotal: 1000', 'M MemAvailable: 400'];
+    if (kind === 'd' && wi === '1') lines.push(`I ${this.idle ? 1 : 0}`);
+    for (const id of this.containers) lines.push(`C ${id}`, 'm 10');
+    lines.push(`#E ${seq} ${time(this.uptimeCs)}`, '');
+    return { kind: 'ran', result: OK(lines.join('\n')) };
+  };
+}
+
+interface Started {
+  sampler: UsageSampler;
+  timers: FakeTimers;
+  host: FakeHost;
+  blocks: Array<{ block: UsageBlock; usage: HostUsage; names: ReadonlyMap<string, string> | undefined }>;
+  headers: UsageHeader[];
+  ends: UsageEnd[];
+  dockerCalls: string[][];
+}
+
+async function start(options: Omit<Partial<UsageSamplerOptions>, 'docker'> & { host?: FakeHost; docker?: UsageSamplerOptions['docker'] | null } = {}): Promise<Started> {
+  const timers = new FakeTimers();
+  const host = options.host ?? new FakeHost();
+  const started: Started = { timers, host, blocks: [], headers: [], ends: [], dockerCalls: [] } as unknown as Started;
+  const docker: UsageSamplerOptions['docker'] =
+    options.docker === null
+      ? undefined
+      : (options.docker ??
+        (async (args) => {
+          started.dockerCalls.push([...args]);
+          if (args[0] === 'ps') return OK(host.containers.map((id, index) => `${id} c${index}`).join('\n'));
+          return OK('/var/lib/docker\n');
+        }));
+  started.sampler = UsageSampler.start({
+    logger: silentLogger,
+    name: 'box',
+    intervalMs: VM_USAGE_INTERVAL_MS,
+    run: host.run,
+    onHeader: (header) => started.headers.push(header),
+    onBlock: (block, usage, names) => started.blocks.push({ block, usage, names }),
+    onEnd: (end) => started.ends.push(end),
+    timers,
+    ...options,
+    ...(docker !== undefined ? { docker } : { docker: undefined }),
+  });
+  await flush();
+  return started;
+}
+
+describe('UsageSampler', () => {
+  it('runs a d first, then t, with a d every fifth sample, each at the interval from the start of the one before it', async () => {
+    const { host, timers, blocks } = await start({ docker: null });
+    expect(host.sent.map((sent) => [sent.seq, sent.kind])).toEqual([[1, 'd']]);
+    expect(host.sent[0].timeoutMs).toBe(Math.max(3 * VM_USAGE_INTERVAL_MS, MIN_USAGE_ANSWER_MS));
+    await timers.advance(VM_USAGE_INTERVAL_MS - 1);
+    expect(host.sent).toHaveLength(1);
+    await timers.advance(1);
+    expect(host.sent).toHaveLength(2);
+    await timers.advance(5 * VM_USAGE_INTERVAL_MS);
+    expect(host.sent.map((sent) => sent.kind)).toEqual(['d', 't', 't', 't', 't', 'd', 't']);
+    expect(blocks.map(({ block }) => block.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    // The rates come from the block before: the first has none.
+    expect(blocks[0].usage.cpu).toBeUndefined();
+    expect(blocks[1].usage.cpu).toBeDefined();
+  });
+
+  it('gives no rate across a new start of the kernel, and the new header', async () => {
+    const { host, timers, blocks, headers } = await start({ docker: null });
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    host.boot = 'd979624d-e703-46d3-ae35-c4cb34a59e91';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(headers.map((header) => header.bootId)).toEqual([BOOT, host.boot]);
+    expect(blocks.map(({ usage }) => usage.cpu !== undefined)).toEqual([false, true, false, true]);
+  });
+
+  it('gives a slow host more time between the samples', async () => {
+    const host = new FakeHost();
+    host.durationCs = 100;
+    const { timers } = await start({ host, docker: null });
+    // 1 s for the sample: 4 s until the next one.
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(host.sent).toHaveLength(1);
+    await timers.advance(4_000 - VM_USAGE_INTERVAL_MS);
+    expect(host.sent).toHaveLength(2);
+  });
+
+  it('reads the names with docker ps when the set of containers changed, at most every 10 s, and the data folder of Docker once', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    const started = await start({ host });
+    const { timers, blocks, dockerCalls } = started;
+    // docker ps after the first block, and the names with the next block; docker info between the next two samples.
+    expect(dockerCalls).toEqual([[...USAGE_NAMES_ARGS]]);
+    expect(blocks[0].names).toBeUndefined();
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(blocks[1].names).toEqual(new Map([[ID_A, 'c0']]));
+    expect(dockerCalls).toEqual([[...USAGE_NAMES_ARGS], [...USAGE_ROOT_ARGS]]);
+    // A new container: docker ps again, but not before 10 s after the last one.
+    host.containers = [ID_A, ID_B];
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls).toHaveLength(2);
+    await timers.advance(USAGE_NAMES_EVERY_MS);
+    expect(dockerCalls).toEqual([[...USAGE_NAMES_ARGS], [...USAGE_ROOT_ARGS], [...USAGE_NAMES_ARGS]]);
+    expect(blocks[blocks.length - 1].names).toEqual(new Map([[ID_A, 'c0'], [ID_B, 'c1']]));
+    // The same set: no more Docker calls.
+    await timers.advance(10 * USAGE_NAMES_EVERY_MS);
+    expect(dockerCalls).toHaveLength(3);
+    // /var/lib/docker is read by the script anyway.
+    expect(host.sent.every((sent) => sent.root === '')).toBe(true);
+  });
+
+  it('reads the disk of another data folder of Docker in each sample d after docker info', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    const { timers } = await start({ host, docker: async (args) => OK(args[0] === 'ps' ? `${ID_A} web\n` : '/data/docker\n') });
+    await timers.advance(5 * VM_USAGE_INTERVAL_MS);
+    // docker ps between the first two samples, docker info between the next two: one Docker call between two samples.
+    expect(host.sent.map((sent) => [sent.kind, sent.root])).toEqual([
+      ['d', ''],
+      ['t', ''],
+      ['t', '/data/docker'],
+      ['t', '/data/docker'],
+      ['t', '/data/docker'],
+      ['d', '/data/docker'],
+    ]);
+  });
+
+  it('tries a failed docker ps again after a minute, and goes on with the samples', async () => {
+    const host = new FakeHost();
+    host.containers = [ID_A];
+    let calls = 0;
+    const { timers, blocks } = await start({
+      host,
+      docker: async () => {
+        calls++;
+        return { exitCode: 1, stdout: '', stderr: 'permission denied', timedOut: false };
+      },
+    });
+    expect(calls).toBe(1);
+    await timers.advance(USAGE_NAMES_RETRY_MS - VM_USAGE_INTERVAL_MS);
+    expect(calls).toBe(1);
+    await timers.advance(2 * VM_USAGE_INTERVAL_MS);
+    expect(calls).toBe(2);
+    expect(blocks.length).toBeGreaterThan(20);
+    expect(blocks.every(({ names }) => names === undefined)).toBe(true);
+  });
+
+  it('asks nothing of Docker while no container runs', async () => {
+    const { timers, dockerCalls } = await start();
+    await timers.advance(20 * VM_USAGE_INTERVAL_MS);
+    expect(dockerCalls).toEqual([]);
+  });
+
+  it('runs no sample while paused; the one that runs is still reported, and resume runs the next at once', async () => {
+    const host = new FakeHost();
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const run = async (script: string, timeoutMs: number): Promise<UsageRun> => {
+      if (host.sent.length === 1) await slow;
+      return host.run(script, timeoutMs);
+    };
+    const { sampler, timers, blocks } = await start({ host, run, docker: null });
+    expect(host.sent).toHaveLength(1);
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    // The second sample waits for the host.
+    expect(host.sent).toHaveLength(1);
+    sampler.pause();
+    release();
+    await flush();
+    expect(blocks).toHaveLength(2);
+    await timers.advance(10 * VM_USAGE_INTERVAL_MS);
+    expect(host.sent).toHaveLength(2);
+    expect(timers.waiting).toBe(0);
+    sampler.resume();
+    await flush();
+    expect(host.sent).toHaveLength(3);
+  });
+
+  it('reports a sample that runs after stop not, and runs no other', async () => {
+    const host = new FakeHost();
+    let release!: () => void;
+    const slow = new Promise<void>((resolve) => (release = resolve));
+    const run = async (script: string, timeoutMs: number): Promise<UsageRun> => {
+      await slow;
+      return host.run(script, timeoutMs);
+    };
+    const { sampler, timers, blocks, ends } = await start({ host, run, docker: null });
+    sampler.stop();
+    release();
+    await flush();
+    await timers.advance(10 * VM_USAGE_INTERVAL_MS);
+    expect(blocks).toEqual([]);
+    expect(ends).toEqual([{ kind: 'stopped' }]);
+    expect(host.sent).toHaveLength(1);
+    expect(sampler.ended).toBe(true);
+  });
+
+  describe('ends once, and runs no other sample', () => {
+    const cases: Array<[string, UsageRun | Error, UsageEnd]> = [
+      ['a VM that does not run', { kind: 'notRun', reason: 'vmStopped' }, { kind: 'vmStopped' }],
+      ['a host without the program of its transport', { kind: 'notRun', reason: 'noTransport' }, { kind: 'noTransport' }],
+      ['a sample that did not end in time', { kind: 'ran', result: { exitCode: null, stdout: '', stderr: '', timedOut: true } }, { kind: 'noAnswer' }],
+      ['a failed login of the shell', { kind: 'ran', result: { exitCode: 255, stdout: '', stderr: 'ssh: connect to host box port 22: Connection refused\n', timedOut: false } }, { kind: 'exited', exitCode: 255, detail: 'ssh: connect to host box port 22: Connection refused' }],
+      ['output that is not of the script', { kind: 'ran', result: OK('hello\n') }, { kind: 'badOutput', detail: 'The host did not run the utilization sample.' }],
+      ['a run that failed', new Error('broken'), { kind: 'failed', detail: 'broken' }],
+    ];
+    for (const [name, next, end] of cases) {
+      it(name, async () => {
+        const host = new FakeHost();
+        host.next = next;
+        const { timers, ends, blocks } = await start({ host, docker: null });
+        await timers.advance(10 * VM_USAGE_INTERVAL_MS);
+        expect(ends).toEqual([end]);
+        expect(blocks).toEqual([]);
+        expect(host.sent).toHaveLength(1);
+      });
+    }
+
+    it('a host that is no Linux', async () => {
+      const host = new FakeHost();
+      const run = async (script: string): Promise<UsageRun> => {
+        const marker = /^mk=([0-9a-f]{32})/m.exec(script)?.[1] ?? '';
+        host.sent.push({ seq: 1, kind: 'd', wslIdle: false, root: '', timeoutMs: 0 });
+        return { kind: 'ran', result: OK(`@${marker}\n#X noproc\n`) };
+      };
+      const { timers, ends } = await start({ host, run, docker: null });
+      await timers.advance(10 * VM_USAGE_INTERVAL_MS);
+      expect(ends).toEqual([{ kind: 'notLinux' }]);
+      expect(host.sent).toHaveLength(1);
+    });
+
+    it('a handler of the page that throws', async () => {
+      const host = new FakeHost();
+      const ends: UsageEnd[] = [];
+      const timers = new FakeTimers();
+      UsageSampler.start({
+        logger: silentLogger,
+        name: 'box',
+        intervalMs: VM_USAGE_INTERVAL_MS,
+        run: host.run,
+        onBlock: () => {
+          throw new Error('page broke');
+        },
+        onEnd: (end) => ends.push(end),
+        timers,
+      });
+      await flush();
+      await timers.advance(10 * VM_USAGE_INTERVAL_MS);
+      expect(ends).toEqual([{ kind: 'failed', detail: 'page broke' }]);
+      expect(host.sent).toHaveLength(1);
+    });
+  });
+
+  it('ends when the idle script of WSL ran and ended, so that the samples do not hold the distribution', async () => {
+    const host = new FakeHost();
+    host.idle = false;
+    const { timers, ends, blocks } = await start({ host, wslIdle: true, docker: null });
+    // Not yet seen: a keeper that just starts. The samples go on.
+    await timers.advance(5 * VM_USAGE_INTERVAL_MS);
+    expect(ends).toEqual([]);
+    host.idle = true;
+    await timers.advance(5 * VM_USAGE_INTERVAL_MS);
+    expect(ends).toEqual([]);
+    host.idle = false;
+    await timers.advance(5 * VM_USAGE_INTERVAL_MS);
+    expect(ends).toEqual([{ kind: 'vmIdle' }]);
+    // The block of that sample still reached the page.
+    expect(blocks[blocks.length - 1].block.idle).toBe(false);
+    expect(host.sent.every((sent) => sent.wslIdle)).toBe(true);
+  });
+});

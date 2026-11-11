@@ -347,6 +347,30 @@ describeUnix('RemoteShells', () => {
     registry.dispose();
   });
 
+  it('holds a shell back from the relay while the page samples on it, and gives it again after the last hold', async () => {
+    const { registry, logins } = shells();
+    expect(registry.hasShell('box')).toBe(false);
+    const login = registry.login('box');
+    // A login in progress counts: a command needs no new login.
+    expect(registry.hasShell('box')).toBe(true);
+    await login;
+    const first = registry.keep('box');
+    const second = registry.keep('box');
+    await expect(registry.takeOver('box')).resolves.toBeUndefined();
+    first();
+    first();
+    await expect(registry.takeOver('box')).resolves.toBeUndefined();
+    // The shell stays with the window meanwhile.
+    await expect(registry.run('box', 'printf still')).resolves.toMatchObject({ stdout: 'still' });
+    second();
+    const taken = await registry.takeOver('box');
+    expect(taken).toBeDefined();
+    expect(registry.hasShell('box')).toBe(false);
+    taken!.end();
+    expect(logins).toEqual(['box']);
+    registry.dispose();
+  });
+
   it('gives the relay a login that is still in progress, and nothing when there is none', async () => {
     const { registry } = shells();
     await expect(registry.takeOver('box')).resolves.toBeUndefined();
