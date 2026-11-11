@@ -4,7 +4,7 @@
 
 // Test double of the part of the `vscode` API that the UI components use. Tests replace the module with
 // `vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)` and script the answers.
-import { vi } from 'vitest';
+import { vi, type Mock } from 'vitest';
 
 export class EventEmitter<T> {
   private readonly listeners = new Set<(event: T) => void>();
@@ -58,11 +58,99 @@ export class FileDecoration {
   ) {}
 }
 
+const fileUri = (fsPath: string) => ({ scheme: 'file', fsPath, toString: () => `file://${fsPath}` });
+
 export const Uri = {
   from: (parts: { scheme: string; path?: string }) => ({ scheme: parts.scheme, path: parts.path ?? '', toString: () => `${parts.scheme}:${parts.path ?? ''}` }),
   parse: (value: string) => ({ scheme: value.split(':')[0], toString: () => value }),
-  file: (fsPath: string) => ({ scheme: 'file', fsPath, toString: () => `file://${fsPath}` }),
+  file: fileUri,
+  /** A file URI stays a file URI with the joined path; any other URI gets the parts after a `/`. */
+  joinPath: (base: { toString(): string; fsPath?: string }, ...parts: string[]) =>
+    base.fsPath === undefined ? { toString: () => [base.toString(), ...parts].join('/') } : fileUri([base.fsPath, ...parts].join('/')),
 };
+
+export const ViewColumn = { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 } as const;
+
+/** A panel of `window.createWebviewPanel`. It starts visible and active, as a new panel in VS Code does. */
+export interface FakeWebviewPanel {
+  viewType: string;
+  title: string;
+  /** The column of `createWebviewPanel`. */
+  column: unknown;
+  /** The options of `createWebviewPanel`. */
+  options: unknown;
+  webview: {
+    html: string;
+    cspSource: string;
+    options?: unknown;
+    asWebviewUri(uri: { toString(): string }): { toString(): string };
+    /** Records each message in `posted` and resolves to true. */
+    postMessage: Mock<(message: { type: string; [key: string]: unknown }) => Promise<boolean>>;
+    onDidReceiveMessage(listener: (message: unknown) => void): { dispose(): void };
+  };
+  visible: boolean;
+  active: boolean;
+  /** Makes the panel visible and active (with `onDidChangeViewState` on a change). */
+  reveal: Mock<(column?: unknown, preserveFocus?: boolean) => void>;
+  /** Closes the panel once: fires `onDidDispose`; later calls do nothing. */
+  dispose(): void;
+  onDidDispose(listener: () => void): { dispose(): void };
+  onDidChangeViewState(listener: (event: { webviewPanel: FakeWebviewPanel }) => void): { dispose(): void };
+  /** Test helper: the page posts `message` (fires `webview.onDidReceiveMessage`). */
+  receive(message: unknown): void;
+  /**
+   * Test helper: the tab is shown or hidden, for example by a click on another tab. Fires `onDidChangeViewState` only on
+   * a change, as VS Code does; a hidden panel is not active.
+   */
+  setVisible(visible: boolean): void;
+  /** Every message of `webview.postMessage`, in order. */
+  posted: Array<{ type: string; [key: string]: unknown }>;
+  disposed: boolean;
+}
+
+function fakeWebviewPanel(viewType: string, title: string, column: unknown, options: unknown): FakeWebviewPanel {
+  const messages = new EventEmitter<unknown>();
+  const disposals = new EventEmitter<void>();
+  const viewStates = new EventEmitter<{ webviewPanel: FakeWebviewPanel }>();
+  const setView = (visible: boolean, active: boolean) => {
+    if (panel.disposed || (panel.visible === visible && panel.active === active)) return;
+    panel.visible = visible;
+    panel.active = active;
+    viewStates.fire({ webviewPanel: panel });
+  };
+  const panel: FakeWebviewPanel = {
+    viewType,
+    title,
+    column,
+    options,
+    webview: {
+      html: '',
+      cspSource: 'vscode-webview://test',
+      asWebviewUri: (uri) => ({ toString: () => `webview:${uri.toString()}` }),
+      postMessage: vi.fn(async (message: { type: string; [key: string]: unknown }) => {
+        panel.posted.push(message);
+        return true;
+      }),
+      onDidReceiveMessage: messages.event,
+    },
+    visible: true,
+    active: true,
+    reveal: vi.fn(() => setView(true, true)),
+    dispose: () => {
+      if (panel.disposed) return;
+      panel.disposed = true;
+      disposals.fire();
+      for (const emitter of [messages, disposals, viewStates]) emitter.dispose();
+    },
+    onDidDispose: disposals.event,
+    onDidChangeViewState: viewStates.event,
+    receive: (message) => messages.fire(message),
+    setVisible: (visible) => setView(visible, visible),
+    posted: [],
+    disposed: false,
+  };
+  return panel;
+}
 
 export interface FakeTerminal {
   name?: string;
@@ -109,6 +197,7 @@ export interface FakeOutputChannel {
 const sessionChanges = new EventEmitter<{ provider: { id: string; label: string } }>();
 const configurationChanges = new EventEmitter<{ affectsConfiguration(section: string): boolean }>();
 const trustGrants = new EventEmitter<void>();
+const windowStates = new EventEmitter<{ focused: boolean }>();
 
 export const fakeVscode = {
   EventEmitter,
@@ -122,6 +211,7 @@ export const fakeVscode = {
   TreeItemCollapsibleState,
   QuickPickItemKind,
   ConfigurationTarget,
+  ViewColumn,
   window: {
     createOutputChannel: vi.fn(),
     createStatusBarItem: vi.fn(),
@@ -135,6 +225,10 @@ export const fakeVscode = {
     createTerminal: vi.fn(),
     registerUriHandler: vi.fn(),
     registerFileDecorationProvider: vi.fn(() => ({ dispose: () => undefined })),
+    /** Each panel goes to `webviewPanels`. */
+    createWebviewPanel: vi.fn(),
+    /** Fired by `fireWindowState`. */
+    onDidChangeWindowState: vi.fn(),
     /** `window.state`: resetFakeVscode gives the window the focus. */
     state: { focused: true },
   },
@@ -161,6 +255,11 @@ export const fakeVscode = {
   fireConfigurationChange(...keys: string[]): void {
     configurationChanges.fire({ affectsConfiguration: (section) => keys.some((key) => key === section || key.startsWith(`${section}.`)) });
   },
+  /** Test helper: the window gets or loses the focus (`window.state.focused`, `window.onDidChangeWindowState`). */
+  fireWindowState(focused: boolean): void {
+    fakeVscode.window.state.focused = focused;
+    windowStates.fire({ focused });
+  },
   /** Test helper: VS Code trusts the workspace now (`workspace.isTrusted`, `workspace.onDidGrantWorkspaceTrust`). */
   grantWorkspaceTrust(): void {
     fakeVscode.workspace.isTrusted = true;
@@ -169,6 +268,7 @@ export const fakeVscode = {
   statusBarItems: [] as FakeStatusBarItem[],
   terminals: [] as FakeTerminal[],
   outputChannels: [] as FakeOutputChannel[],
+  webviewPanels: [] as FakeWebviewPanel[],
 };
 
 /** Restores the default behavior of every fake: messages are dismissed, quick picks cancelled. */
@@ -180,6 +280,9 @@ export function resetFakeVscode(): void {
   fakeVscode.workspace.isTrusted = true;
   window.state.focused = true;
   fakeVscode.outputChannels.length = 0;
+  fakeVscode.webviewPanels.length = 0;
+  // A listener of an earlier test never hears a later window state.
+  windowStates.dispose();
   const { state: _state, ...windowMocks } = window;
   for (const mock of [
     ...Object.values(windowMocks),
@@ -199,6 +302,12 @@ export function resetFakeVscode(): void {
   window.showInputBox.mockResolvedValue(undefined);
   window.registerUriHandler.mockReturnValue({ dispose() {} });
   window.registerFileDecorationProvider.mockReturnValue({ dispose: () => undefined });
+  window.createWebviewPanel.mockImplementation((viewType: string, title: string, column: unknown, options?: unknown) => {
+    const panel = fakeWebviewPanel(viewType, title, column, options);
+    fakeVscode.webviewPanels.push(panel);
+    return panel;
+  });
+  window.onDidChangeWindowState.mockImplementation(windowStates.event);
   fakeVscode.env.openExternal.mockResolvedValue(true);
   fakeVscode.commands.executeCommand.mockResolvedValue(undefined);
   fakeVscode.commands.registerCommand.mockImplementation(() => ({ dispose() {} }));
