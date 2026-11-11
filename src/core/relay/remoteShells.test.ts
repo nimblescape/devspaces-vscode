@@ -362,4 +362,32 @@ describeUnix('RemoteShells', () => {
     await processes[0].exited;
     await expect(login).resolves.toMatchObject({ ok: false, timedOut: false });
   });
+
+  it('stops the shell of one host at once (a stop of the VM), with the command on it, and logs in anew for the next call', async () => {
+    const { registry, processes, logins } = shells();
+    await registry.login('box');
+    await registry.login('other');
+    const running = registry.run('box', 'sleep 30');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    registry.close('box');
+    // The command ends with the shell, long before its 30 seconds (the time limit of the test is 5 seconds), as a failure.
+    expect((await running)?.exitCode).not.toBe(0);
+    await expect(processes[0].exited).resolves.toMatchObject({ exitCode: null });
+    // The shell of the other host stays; the next call to the host logs in anew.
+    await expect(registry.run('other', 'printf still')).resolves.toMatchObject({ stdout: 'still' });
+    await expect(registry.run('box', 'printf again')).resolves.toMatchObject({ stdout: 'again' });
+    expect(logins).toEqual(['box', 'other', 'box']);
+    // Nothing to stop: no error.
+    registry.close('none');
+    registry.dispose();
+  });
+
+  it('stops a login in progress of one host at once', async () => {
+    const { registry, processes } = shells({ script: 'exec sleep 30' });
+    const login = registry.login('box');
+    registry.close('box');
+    await processes[0].exited;
+    await expect(login).resolves.toMatchObject({ ok: false, timedOut: false });
+    registry.dispose();
+  });
 });

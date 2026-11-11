@@ -1415,11 +1415,13 @@ async function activateExtension(
     }
     return { kind: 'notSetUp' };
   };
-  // Before a stop or a removal of the VM: the worker channel and the relay connection of this window to it end.
+  // Before a stop or a removal of the VM: the worker channel, the relay connection and the shell (the shared shell of
+  // the view Docker Hosts) of this window to it end.
   const closeVmConnections = (): void => {
     if (vmHost === undefined) return;
     channels.close(remoteDockerTarget(vmHost));
     relayConnections.close(vmHost, 'the VM of Devspaces stops');
+    shells.close(vmHost);
   };
   // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with all containers,
   // networks, images and volumes there and its build cache. A host is read only when the user opens its row or clicks

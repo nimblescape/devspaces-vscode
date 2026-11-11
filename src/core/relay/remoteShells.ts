@@ -219,6 +219,20 @@ export class RemoteShells {
     return shell?.takeOver();
   }
 
+  /**
+   * Stops the shell to `host` at once, also a login in progress (a stop or a removal of the VM of Devspaces, R-VM-010):
+   * a command on it ends with it (RemoteShell.run), and the next call logs in anew. A shell that the relay took over is
+   * no longer one of this window and stays.
+   */
+  close(host: string): void {
+    const entry = this.entries.get(host);
+    if (entry === undefined) return;
+    this.entries.delete(host);
+    if (entry.shell) entry.shell.killNow();
+    else if (entry.process.killNow) entry.process.killNow();
+    else entry.process.kill();
+  }
+
   /** Stops every shell at once (the window closes), also a login in progress. */
   dispose(): void {
     this.disposed = true;
