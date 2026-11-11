@@ -72,6 +72,7 @@ import { CLOSE_REMOTE_COMMAND } from './connectionAdapter';
 import { Controller } from './controller';
 import { DockerSetup } from './dockerSetup';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+import { rowColorUri } from './rowColors';
 
 const ROOT = path.join(__dirname, '..', '..');
 const REMOVED_COMMAND = 'devspaces.installDocker';
@@ -173,6 +174,10 @@ describe('no message at activation when Docker is missing', () => {
       await handler.handleUri(uri);
       expect(opened).toHaveBeenCalledWith(uri);
       opened.mockRestore();
+    // The colors of the labels of the rows come from one file decoration provider (rowColors.ts).
+    expect(fakeVscode.window.registerFileDecorationProvider).toHaveBeenCalledTimes(1);
+    const [decorations] = fakeVscode.window.registerFileDecorationProvider.mock.calls[0] as unknown as [{ provideFileDecoration(uri: unknown): { color?: { id: string } } | undefined }];
+    expect(decorations.provideFileDecoration(rowColorUri('notDevspaces'))?.color?.id).toBe('devspaces.hosts.notDevspacesForeground');
       // The HTTPS requests name the version of the manifest, which the activation took (src/core/http.ts).
       const { userAgent } = await import('../core/http');
       const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { version: string };

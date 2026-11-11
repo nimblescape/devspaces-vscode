@@ -162,6 +162,9 @@ describe('RepositoriesTreeProvider', () => {
     expect((item.iconPath as ThemeIcon).id).toBe('devspaces-monitor-remote');
     expect(item.command).toMatchObject({ command: 'devspaces.chooseDockerHost' });
     expect(item.contextValue).toBe('dockerHost');
+    // The first row and the row Sign in keep the colors of the theme.
+    expect(item.resourceUri).toBeUndefined();
+    expect((provider.getTreeItem(signIn) as unknown as TreeItem).resourceUri).toBeUndefined();
     expect(provider.getParent(host)).toBeUndefined();
     expect(provider.getChildren(host)).toEqual([]);
     const before = changes;
@@ -321,6 +324,12 @@ describe('nodes of the setting repositoryGroups', () => {
     // Collapsed, except the node that holds the row of the devspace of this window.
     expect(provider.getTreeItem(y2025)).toMatchObject({ label: '2025-3bWI-SWP', collapsibleState: 1 });
     expect(provider.getTreeItem(y2026)).toMatchObject({ label: '2026-3cWI-SWP', collapsibleState: 2 });
+    // Gray without a running devspace below it, with its label as its hover; the nodes above the running devspace not.
+    const y2025Item = provider.getTreeItem(y2025) as unknown as TreeItem;
+    expect(y2025Item).toMatchObject({ resourceUri: { scheme: 'devspaces-row-color', path: '/inactive' }, tooltip: '2025-3bWI-SWP' });
+    expect((y2025Item.iconPath as ThemeIcon).color?.id).toBe('devspaces.inactiveForeground');
+    expect((provider.getTreeItem(y2026) as unknown as TreeItem).resourceUri).toBeUndefined();
+    expect((provider.getTreeItem(root) as unknown as TreeItem).resourceUri).toBeUndefined();
     const [module] = provider.getChildren(y2026) as GroupNode[];
     const [studentA, studentB] = provider.getChildren(module) as RepositoryRow[];
     const item = provider.getTreeItem(studentA) as unknown as TreeItem;
@@ -423,8 +432,13 @@ describe('the node of a repository with several sources', () => {
     // A double-click on the node starts its first child row (rowActivation.ts); the node itself is the argument.
     expect(item.command).toEqual({ command: 'devspaces.rowActivated', title: 'Start', arguments: [node] });
     expect((item.iconPath as ThemeIcon).id).toBe('blank');
+    // The node holds the running devspace of the child row python: the colors of the theme.
+    expect(item.resourceUri).toBeUndefined();
     expect((item.accessibilityInformation as { label: string }).label).toBe('acme/api');
     const children = provider.getChildren(node) as RepositoryRow[];
+    // The child rows without a devspace are gray.
+    expect((provider.getTreeItem(children[0]) as unknown as TreeItem).resourceUri).toMatchObject({ path: '/inactive' });
+    expect((provider.getTreeItem(children[2]) as unknown as TreeItem).resourceUri).toBeUndefined();
     expect(children.map((child) => [child.kind, child.label, child.child])).toEqual([
       ['repository', 'default', true],
       ['repository', 'config', true],
@@ -583,6 +597,41 @@ describe('RepositoriesTreeProvider: rows without an active devspace in gray', ()
     expect(api.state).toBe('filesMissing');
     expect(uriPath(apiItem)).toBe('/inactive');
     expect(iconColor(apiItem)).toBe('list.warningForeground');
+  });
+
+  it('grays the node of a repository with several sources when no child row below it runs', () => {
+    const python = '.devcontainer/python/devcontainer.json';
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(
+      buildTreeModel({
+        discovery: {
+          version: 1,
+          fetchedAt: '',
+          viewerLogin: 'me',
+          organizations: ['acme'],
+          repositories: [{ ...repo('acme/api'), configPaths: ['.devcontainer/devcontainer.json', python] }],
+          hints: [],
+          scope: [],
+          withoutConfiguration: [],
+        },
+        settings: { owners: [], includeArchived: false, includeForks: true },
+        devspaces: [{ ...env, configPath: python }],
+        runtime: new Map([['e1', { container: 'stopped', volume: true }]]),
+        currentDevspaceId: null,
+        otherWindowDevspaceIds: new Set(),
+        busyDevspaceIds: new Set(),
+        liveBranches: new Map([['e1', 'main']]),
+        signedIn: true,
+      }),
+    );
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const [node] = provider.getChildren(group) as RepositoryNode[];
+    expect(node.kind).toBe('repositoryNode');
+    const nodeItem = provider.getTreeItem(node) as unknown as TreeItem;
+    expect(uriPath(nodeItem)).toBe('/inactive');
+    expect(iconColor(nodeItem)).toBe('devspaces.inactiveForeground');
+    expect((nodeItem.iconPath as ThemeIcon).id).toBe('blank');
+    expect(uriPath(provider.getTreeItem(group) as unknown as TreeItem)).toBe('/inactive');
   });
 
   it('keeps a devspace that runs without a window in the colors of the theme', () => {

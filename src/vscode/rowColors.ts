@@ -7,7 +7,8 @@
 // its ThemeIcon, and the color of its label only from a file decoration of its `resourceUri`: each row with a color
 // gets a URI of the scheme ROW_COLOR_SCHEME that names its color, and RowColorDecorations gives that color to it. The
 // colors are theme colors of package.json (contributes.colors), so that a user can change them in
-// `workbench.colorCustomizations`.
+// `workbench.colorCustomizations`. The decoration colors the whole text of the row (its name and its description), and
+// VS Code applies it only while `explorer.decorations.colors` is on (the default); the icons keep their color anyway.
 import * as vscode from 'vscode';
 
 /** The theme colors of the rows (package.json contributes.colors), by the kind of row. */
@@ -45,7 +46,8 @@ export function coloredIcon(id: string, color: RowColor | undefined): vscode.The
 /**
  * Gives the label of a tree item the color `color` by its `resourceUri`. The item must have a ThemeIcon: without one,
  * VS Code would show the icon of the file icon theme for the URI. A row with a `resourceUri` and without a tooltip would
- * show no hover, so it gets its label as its tooltip, as VS Code shows it for a row without a `resourceUri`.
+ * show the path of the URI (`/inactive`) as its hover, so it gets its label as its tooltip, as VS Code shows it for a row
+ * without a `resourceUri`.
  */
 export function colorLabel(item: vscode.TreeItem, color: RowColor | undefined): void {
   if (color === undefined) return;

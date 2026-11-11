@@ -7,9 +7,12 @@
 // networks of each container and the build cache as `docker system df` sums it; Stop and Start of a container that is
 // not of Devspaces; a network that a stopped container uses stays (Docker would remove it, and the container could not
 // start again), also one that a container joined after the read, with a space and a comma in its name; a container and its network go in one removal, never
-// with force. Not the removal of the build cache:
-// it would remove the build cache of the developer who runs the tests.
+// with force; which objects a running container uses (the colors of the view), by the ID of its image and its mounts. Not
+// the removal of the build cache: it would remove the build cache of the developer who runs the tests.
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BootstrapDocker } from '../../src/core/docker/bootstrapDocker';
 import { normalizedReference, parseDockerSize, readHostInventory, removeHostObjects, startHostContainer, stopHostContainer, type HostInventory, type HostObject } from '../../src/core/hosts/hostObjects';
@@ -122,6 +125,38 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
     } finally {
       cli.run(['rm', lateWeb]);
       cli.run(['network', 'rm', lateId]);
+    }
+  });
+
+  it('marks the image of a running container active also when the container names another tag of it, and a volume only when the container mounts it', async () => {
+    // An image of its own with two tags: `docker system df -v` lists it with one tag only, and the container names the
+    // other one. A bind mount whose path ends with `,<name of a volume>` does not make that volume active.
+    const repository = `colors${tag}`;
+    const holder = `colors-${tag}`;
+    const unused = `colors-unused-${tag}`;
+    const used = `colors-used-${tag}`;
+    const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'colors-'));
+    const bind = path.join(folder, `x,${unused}`);
+    fs.mkdirSync(bind);
+    try {
+      cli.ok(['create', '--name', `${holder}-source`, '--label', runLabel, TEST_BASE_IMAGE, 'true']);
+      const imageId = cli.lines(['commit', '--change', `LABEL ${runLabel}`, `${holder}-source`, `${repository}:one`])[0];
+      cli.ok(['tag', `${repository}:one`, `${repository}:two`]);
+      cli.ok(['volume', 'create', '--label', runLabel, unused]);
+      cli.ok(['volume', 'create', '--label', runLabel, used]);
+      cli.ok(['run', '-d', '--name', holder, '--init', '--label', runLabel, '-v', `${bind}:/bind`, '-v', `${used}:/data`, `${repository}:two`, 'sleep', '600']);
+      const inventory = await read();
+      const image = inventory.images.find((candidate) => candidate.id === imageId);
+      expect(image).toMatchObject({ kind: 'image', purpose: 'notDevspaces', active: true });
+      expect(image?.tags).toHaveLength(1);
+      expect(find(inventory.volumes, used).active).toBe(true);
+      expect(find(inventory.volumes, unused).active).toBeUndefined();
+      expect(find(inventory.containers, holder).active).toBe(true);
+    } finally {
+      cli.run(['rm', '-f', holder, `${holder}-source`]);
+      cli.run(['volume', 'rm', unused, used]);
+      cli.run(['image', 'rm', `${repository}:one`, `${repository}:two`]);
+      fs.rmSync(folder, { recursive: true, force: true });
     }
   });
 });

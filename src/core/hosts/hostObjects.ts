@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The objects on a Docker host, for the view "Docker Hosts" (docs/requirements.md R-ENG-008): all its containers,
-// networks, images and volumes with their purpose and size, and its build cache, read with the Docker CLI of Devspaces (BootstrapDocker.run, within an
+// networks, images and volumes with their purpose, size and activity, and its build cache, read with the Docker CLI of Devspaces (BootstrapDocker.run, within an
 // operation on that host: through the Docker pipe of the extension, as "Remove Devspaces from This Docker Engine…"
 // reads), their Start and Stop, and their removal. The objects of Devspaces get their purpose: those with a label
 // nimblescape.devspaces.*, the containers, images and volumes whose name starts with `devspaces-` (also the tags of the
@@ -432,7 +432,10 @@ function buildCacheOf(items: readonly unknown[]): BuildCacheSummary {
   return { records, bytes, unusedBytes };
 }
 
-/** The image entries of `docker system df -v` (one per tag), merged by image ID. */
+/**
+ * The image entries of `docker system df -v`, merged by image ID. The Docker CLI lists each image once, with its first
+ * tag only (verified with Docker 29.9), so `tags` holds that tag.
+ */
 function mergedImages(items: readonly unknown[]): Array<{ id: string; tags: string[]; item: Record<string, unknown> }> {
   const images = new Map<string, { id: string; tags: string[]; item: Record<string, unknown> }>();
   for (const item of items) {
@@ -502,6 +505,11 @@ export interface InventoryInput {
   baseImages: ReadonlySet<string>;
   /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
   networks?: readonly unknown[];
+  /**
+   * The output of runningUsesArgs for the running containers, parsed: one entry per container with the ID of its image,
+   * its mounts and its networks. Undefined when it could not be read: then the fields of `docker system df -v` decide.
+   */
+  running?: readonly unknown[];
 }
 
 /**
@@ -515,7 +523,7 @@ export function buildInventory(input: InventoryInput): HostInventory {
   const volumes = list(df.Volumes).flatMap((item) => (isRecord(item) ? (classifyVolume(item, input.known) ?? []) : []));
   const images = mergedImages(list(df.Images)).map((image) => classifyImage(image, input));
   const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, list(df.Containers)) ?? []) : []));
-  const active = activeOf(list(df.Containers));
+  const active = activeOf(list(df.Containers), input.running);
   const order = (a: HostObject, b: HostObject): number => Number(a.purpose === 'notDevspaces') - Number(b.purpose === 'notDevspaces') || a.name.localeCompare(b.name);
   const marked = (objects: HostObject[]): HostObject[] => objects.map((object) => (active(object) ? { ...object, active: true } : object)).sort(order);
   return { containers: marked(containers), networks: marked(networks), images: marked(images), volumes: marked(volumes), buildCache: buildCacheOf(list(df.BuildCache)) };
@@ -524,16 +532,67 @@ export function buildInventory(input: InventoryInput): HostInventory {
 /** The states of a container that runs: it uses CPU or holds memory, which a Stop frees. */
 const ACTIVE_CONTAINER_STATES = new Set(['running', 'paused', 'restarting']);
 
+/** The containers of `docker system df -v` that run (ACTIVE_CONTAINER_STATES). */
+function runningContainers(containers: readonly unknown[]): Array<Record<string, unknown>> {
+  return containers.filter((item): item is Record<string, unknown> => isRecord(item) && ACTIVE_CONTAINER_STATES.has(text(item.State) ?? ''));
+}
+
+/** What the running containers use, from runningUsesArgs: the IDs of their images, the names of their volumes and networks. */
+interface RunningUses {
+  imageIds: string[];
+  volumes: Set<string>;
+  networks: Set<string>;
+}
+
+function runningUsesOf(entries: readonly unknown[]): RunningUses {
+  const uses: RunningUses = { imageIds: [], volumes: new Set(), networks: new Set() };
+  for (const entry of entries) {
+    if (!isRecord(entry)) continue;
+    const image = text(entry.image);
+    if (image !== undefined) uses.imageIds.push(image);
+    for (const mount of Array.isArray(entry.mounts) ? entry.mounts : []) {
+      if (isRecord(mount) && mount.Type === 'volume' && typeof mount.Name === 'string') uses.volumes.add(mount.Name);
+    }
+    if (isRecord(entry.networks)) for (const name of Object.keys(entry.networks)) uses.networks.add(name);
+  }
+  return uses;
+}
+
+/** Whether two image IDs (`sha256:<hex>`, or the hex only) name the same image; a short ID of 12 or more digits counts. */
+function sameImageId(a: string, b: string): boolean {
+  const left = a.replace(/^sha256:/, '');
+  const right = b.replace(/^sha256:/, '');
+  return left.length >= 12 && right.length >= 12 && (left.startsWith(right) || right.startsWith(left));
+}
+
 /**
- * Whether an object is active (HostObject.active), by the containers of `docker system df -v` (verified with Docker
- * 29.9): a container by its state; an image by the field `Image` of a running container (a tag or an ID); a volume by
- * its field `Mounts` (the names of its volumes and the paths of its bind mounts, joined with commas; a volume name has no
- * comma); a network by its field `Networks`, as networkUsers counts it.
+ * Whether an object is active (HostObject.active). A container by its state. An image, a volume or a network by what
+ * the running containers use: exactly, from `running` (runningUsesArgs: the ID of the image, the volumes of the mounts,
+ * the names of the networks). Without it (the read failed), by the fields of the running containers of `docker system df
+ * -v` (verified with Docker 29.9): an image by the field `Image` (a tag or an ID; a container of another tag of the image,
+ * or of a digest, is missed, because the field names the image as the container was created); a volume by the field
+ * `Mounts` (the names of the volumes and the paths of the bind mounts, joined with commas) when Docker counts a container
+ * of it (a path with a comma could name it); a network by the field `Networks`, as networkUsers counts it.
  */
-function activeOf(containers: readonly unknown[]): (object: HostObject) => boolean {
-  const running = containers.filter((item): item is Record<string, unknown> => isRecord(item) && ACTIVE_CONTAINER_STATES.has(text(item.State) ?? ''));
-  const images = running.flatMap((item) => text(item.Image) ?? []);
-  const mounts = new Set(running.flatMap((item) => (text(item.Mounts) ?? '').split(',').map((mount) => mount.trim())));
+function activeOf(containers: readonly unknown[], running: readonly unknown[] | undefined): (object: HostObject) => boolean {
+  const active = runningContainers(containers);
+  if (running !== undefined) {
+    const uses = runningUsesOf(running);
+    return (object) => {
+      switch (object.kind) {
+        case 'container':
+          return ACTIVE_CONTAINER_STATES.has(object.state ?? '');
+        case 'image':
+          return uses.imageIds.some((id) => sameImageId(id, object.id));
+        case 'volume':
+          return uses.volumes.has(object.name);
+        case 'network':
+          return uses.networks.has(object.name);
+      }
+    };
+  }
+  const images = active.flatMap((item) => text(item.Image) ?? []);
+  const mounts = new Set(active.flatMap((item) => (text(item.Mounts) ?? '').split(',').map((mount) => mount.trim())));
   return (object) => {
     switch (object.kind) {
       case 'container':
@@ -541,11 +600,48 @@ function activeOf(containers: readonly unknown[]): (object: HostObject) => boole
       case 'image':
         return images.some((image) => namesImage(image, object));
       case 'volume':
-        return mounts.has(object.name);
+        return (object.usedBy ?? 1) > 0 && mounts.has(object.name);
       case 'network':
-        return networkUsers(running, object.name) > 0;
+        return networkUsers(active, object.name) > 0;
     }
   };
+}
+
+/**
+ * The format of runningUsesArgs: per container, one line of JSON with the ID of its image, its mounts (`Type`, `Name`,
+ * `Source`, …) and its networks (an object by network name), as `docker container inspect` writes them.
+ */
+const RUNNING_USES_FORMAT = '{"image":{{json .Image}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}';
+
+/** The containers that one `docker container inspect` of runningUsesArgs names at most, so that its command line stays short. */
+export const RUNNING_USES_BATCH = 100;
+
+/** The arguments of the read of what the running containers `ids` use (`docker container inspect`, GET /containers/<id>/json). */
+export function runningUsesArgs(ids: readonly string[]): string[] {
+  return ['container', 'inspect', '--format', RUNNING_USES_FORMAT, ...ids];
+}
+
+/** Each line of the standard error of a failed `docker container inspect` says that a container is gone. */
+const MISSING_CONTAINER_LINE = /^Error(?: response from daemon)?: No such container/i;
+
+/**
+ * Reads what the running containers `ids` use (runningUsesArgs), in batches of RUNNING_USES_BATCH. A container that is
+ * gone since `docker system df -v` is left out. Undefined when a read fails otherwise or does not end in time: then the
+ * colors come from the fields of `docker system df -v` (activeOf).
+ */
+async function readRunningUses(docker: Pick<BootstrapDocker, 'run'>, ids: readonly string[], signal: AbortSignal | undefined): Promise<unknown[] | undefined> {
+  const uses: unknown[] = [];
+  for (let start = 0; start < ids.length; start += RUNNING_USES_BATCH) {
+    const result = await docker.run(runningUsesArgs(ids.slice(start, start + RUNNING_USES_BATCH)), { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+    if (result.timedOut) return undefined;
+    const errors = result.stderr
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (result.exitCode !== 0 && !(errors.length > 0 && errors.every((line) => MISSING_CONTAINER_LINE.test(line)))) return undefined;
+    uses.push(...parseJsonLines(result.stdout));
+  }
+  return uses;
 }
 
 /** The arguments of the read of the networks of the engine. */
@@ -559,8 +655,9 @@ export const SYSTEM_DF_ARGS: readonly string[] = ['system', 'df', '--verbose', '
 
 /**
  * Reads the objects on the engine of the operation (runWithDockerTarget): one `docker system df -v`, the IDs of the
- * images with the labels of Devspaces, and `docker network ls`. Only calls that read. Throws CommandError when a call fails, and an
- * AbortError when `signal` aborts.
+ * images with the labels of Devspaces, `docker network ls`, and, while containers run, what they use (one `docker
+ * container inspect` of them, for HostObject.active). Only calls that read. Throws CommandError when one of the first
+ * three fails (a failed inspect only makes the colors less exact), and an AbortError when `signal` aborts.
  */
 export async function readHostInventory(
   docker: Pick<BootstrapDocker, 'run' | 'listImagesByLabel'>,
@@ -577,7 +674,17 @@ export async function readHostInventory(
   const helperImageIds = new Set((await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => image.id));
   const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr);
-  return buildInventory({ df, devspaceImageIds, helperImageIds, known: options.known, baseImages: options.baseImages, networks: parseJsonLines(networkList.stdout) });
+  const runningIds = runningContainers(Array.isArray(df.Containers) ? df.Containers : []).flatMap((item) => text(item.ID) ?? []);
+  const running = runningIds.length > 0 ? await readRunningUses(docker, runningIds, signal) : [];
+  return buildInventory({
+    df,
+    devspaceImageIds,
+    helperImageIds,
+    known: options.known,
+    baseImages: options.baseImages,
+    networks: parseJsonLines(networkList.stdout),
+    ...(running !== undefined ? { running } : {}),
+  });
 }
 
 /** `docker ps` of the running dev containers and service containers of devspaces (label LABEL_DEVSPACE_ID). */

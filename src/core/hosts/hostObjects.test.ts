@@ -22,6 +22,8 @@ import {
   pruneBuildCache,
   readHostInventory,
   removeHostObjects,
+  RUNNING_USES_BATCH,
+  runningUsesArgs,
   RUNNING_DEVSPACES_ARGS,
   runningDevspaces,
   startHostContainer,
@@ -285,23 +287,31 @@ describe('buildInventory', () => {
     expect(shown['c, d'].usedBy).toBe(1);
   });
 
-  it('marks the active objects: a running container, and the images, volumes and networks that a running container uses', () => {
+  it('marks the active objects by the fields of docker system df -v when the running containers could not be read', () => {
     const result = buildInventory(
       input(
         {
           Containers: [
             { ID: 'c1', Names: 'db', State: 'running', Image: 'postgres:17', Mounts: 'pgdata,/srv/backup', Networks: 'shop_default' },
             { ID: 'c2', Names: 'cache', State: 'paused', Image: 'sha256:0123456789abcdef', Mounts: '', Networks: 'bridge' },
-            { ID: 'c3', Names: 'web', State: 'exited', Image: 'node', Mounts: 'webdata', Networks: 'web_default, bridge' },
-            { ID: 'c4', Names: 'job', State: 'created', Image: 'busybox', Networks: 'none' },
+            { ID: 'c3', Names: 'web', State: 'restarting', Image: 'node', Mounts: 'webdata', Networks: 'bridge, web_default' },
+            { ID: 'c4', Names: 'job', State: 'created', Image: 'busybox', Mounts: 'jobdata', Networks: 'none' },
+            { ID: 'c5', Names: 'bind', State: 'running', Image: 'alpine', Mounts: '/srv/x,ghost', Networks: '' },
           ],
           Images: [
             { ID: 'sha256:aaa', Repository: 'postgres', Tag: '17' },
             { ID: 'sha256:0123456789abcdef', Repository: 'redis', Tag: '8' },
             { ID: 'sha256:ccc', Repository: 'node', Tag: 'latest' },
             { ID: 'sha256:ddd', Repository: 'busybox', Tag: 'latest' },
+            { ID: 'sha256:eee', Repository: 'alpine', Tag: 'latest' },
           ],
-          Volumes: [{ Name: 'pgdata' }, { Name: 'webdata' }, { Name: 'backup' }],
+          Volumes: [
+            { Name: 'pgdata', Links: '1' },
+            { Name: 'webdata', Links: '1' },
+            { Name: 'backup', Links: '0' },
+            { Name: 'jobdata', Links: '1' },
+            { Name: 'ghost', Links: '0' },
+          ],
         },
         {
           networks: [
@@ -314,15 +324,63 @@ describe('buildInventory', () => {
       ),
     );
     const activeNames = (objects: readonly HostObject[]): string[] => objects.filter((object) => object.active === true).map((object) => object.name);
-    // Paused holds its memory: it counts as running.
-    expect(activeNames(result.containers)).toEqual(['cache', 'db']);
-    // By tag (also without `:latest`) or by the ID that Docker names when a tag moved.
-    expect(activeNames(result.images)).toEqual(['postgres:17', 'redis:8']);
-    // A bind mount (`/srv/backup`) names no volume.
-    expect(activeNames(result.volumes)).toEqual(['pgdata']);
-    expect(activeNames(result.networks)).toEqual(['bridge', 'shop_default']);
+    // Paused and restarting hold their memory: they count as running; created does not.
+    expect(activeNames(result.containers)).toEqual(['bind', 'cache', 'db', 'web']);
+    // By tag, also without `:latest` (`node`, `alpine`), or by the ID that Docker names when a tag moved.
+    expect(activeNames(result.images)).toEqual(['alpine:latest', 'node:latest', 'postgres:17', 'redis:8']);
+    // A bind mount (`/srv/backup`) names no volume; `ghost` follows a comma in a path, and no container of it counts.
+    expect(activeNames(result.volumes)).toEqual(['pgdata', 'webdata']);
+    // `bridge, web_default`: a network after a comma and a space.
+    expect(activeNames(result.networks)).toEqual(['bridge', 'shop_default', 'web_default']);
     // `active` is only set when true.
     expect(Object.keys(result.volumes.find((volume) => volume.name === 'backup') ?? {})).not.toContain('active');
+  });
+
+  it('marks the active objects exactly by what the running containers use: the ID of the image, the volumes, the networks', () => {
+    const id = (digit: string): string => `sha256:${digit.repeat(64)}`;
+    const result = buildInventory(
+      input(
+        {
+          Containers: [
+            // Created from a second tag: docker system df -v lists the image with its first tag only.
+            { ID: 'c1', Names: 'db', State: 'running', Image: 'postgres:latest', Mounts: 'pgdata', Networks: 'a,b' },
+            // Created from a digest: it names neither a tag nor the ID.
+            { ID: 'c2', Names: 'pinned', State: 'running', Image: `redis@${id('9')}`, Mounts: '/srv/x,ghost', Networks: 'bridge' },
+            { ID: 'c3', Names: 'old', State: 'exited', Image: 'node', Mounts: 'webdata', Networks: 'web_default' },
+          ],
+          Images: [
+            { ID: id('a'), Repository: 'postgres', Tag: '17' },
+            { ID: id('b'), Repository: 'redis', Tag: '8' },
+            { ID: id('c'), Repository: 'redis', Tag: 'latest' },
+            { ID: id('d'), Repository: 'node', Tag: 'latest' },
+          ],
+          Volumes: [
+            { Name: 'pgdata', Links: '1' },
+            { Name: 'ghost', Links: '1' },
+            { Name: 'webdata', Links: '1' },
+          ],
+        },
+        {
+          networks: [
+            { ID: 'n1', Name: 'a,b', Driver: 'bridge' },
+            { ID: 'n2', Name: 'a', Driver: 'bridge' },
+            { ID: 'n3', Name: 'bridge', Driver: 'bridge' },
+            { ID: 'n4', Name: 'web_default', Driver: 'bridge' },
+          ],
+          running: [
+            { image: id('a'), mounts: [{ Type: 'volume', Name: 'pgdata', Source: '/var/lib/docker/volumes/pgdata/_data' }], networks: { 'a,b': {} } },
+            { image: id('b').replace('sha256:', ''), mounts: [{ Type: 'bind', Source: '/srv/x,ghost' }], networks: { bridge: {} } },
+            'not an entry',
+          ],
+        },
+      ),
+    );
+    const activeNames = (objects: readonly HostObject[]): string[] => objects.filter((object) => object.active === true).map((object) => object.name);
+    expect(activeNames(result.containers)).toEqual(['db', 'pinned']);
+    expect(activeNames(result.images)).toEqual(['postgres:17', 'redis:8']);
+    // A bind mount names no volume, also with a comma in its path; a stopped container uses `webdata`.
+    expect(activeNames(result.volumes)).toEqual(['pgdata']);
+    expect(activeNames(result.networks)).toEqual(['a,b', 'bridge']);
   });
 
   it('marks the networks of Docker Swarm as networks of Docker', () => {
@@ -384,13 +442,57 @@ describe('readHostInventory', () => {
       { 'nimblescape.devspaces.worker=true': ['sha256:w'] },
     );
     const inventory = await readHostInventory(docker, { known: [], baseImages: new Set() });
-    expect(docker.calls).toEqual([[...SYSTEM_DF_ARGS], [...NETWORK_LS_ARGS]]);
+    expect(docker.calls).toEqual([[...SYSTEM_DF_ARGS], [...NETWORK_LS_ARGS], runningUsesArgs(['c1'])]);
     expect(SYSTEM_DF_ARGS).toEqual(['system', 'df', '--verbose', '--format', '{{json .}}']);
     expect(inventory.images.map((image) => image.purpose)).toEqual(['helperImage']);
     expect(inventory.networks.map((network) => [network.name, network.usedBy])).toEqual([
       ['bridge', 0],
       ['mynet', 1],
     ]);
+  });
+
+  it('reads what the running containers use with docker container inspect, in batches, and only when containers run', async () => {
+    expect(runningUsesArgs(['c1', 'c2'])).toEqual([
+      'container',
+      'inspect',
+      '--format',
+      '{"image":{{json .Image}},"mounts":{{json .Mounts}},"networks":{{json .NetworkSettings.Networks}}}',
+      'c1',
+      'c2',
+    ]);
+    const containers = Array.from({ length: RUNNING_USES_BATCH + 1 }, (_, index) => ({ ID: `c${index}`, Names: `n${index}`, State: index === 0 ? 'exited' : 'running', Image: 'node' }));
+    const many = fakeDocker({ 'system df': ok(JSON.stringify({ Containers: [...containers, { ID: 'p', Names: 'p', State: 'paused' }] })) });
+    await readHostInventory(many, { known: [], baseImages: new Set() });
+    const inspects = many.calls.filter((call) => call[0] === 'container');
+    expect(inspects.map((call) => call.length - 4)).toEqual([RUNNING_USES_BATCH, 1]);
+    expect(inspects.flatMap((call) => call.slice(4))).not.toContain('c0');
+    expect(inspects[1].slice(4)).toEqual(['p']);
+
+    const none = fakeDocker({ 'system df': ok(JSON.stringify({ Containers: [{ ID: 'c1', Names: 'web', State: 'exited' }] })) });
+    await readHostInventory(none, { known: [], baseImages: new Set() });
+    expect(none.calls.map((call) => call[0])).toEqual(['system', 'network']);
+  });
+
+  it('leaves out a container that is gone, and takes the fields of docker system df -v when docker container inspect fails', async () => {
+    const df = JSON.stringify({
+      Containers: [
+        { ID: 'c1', Names: 'web', State: 'running', Image: 'nginx:2', Mounts: '', Networks: 'bridge' },
+        { ID: 'c2', Names: 'gone', State: 'running', Image: 'nginx:2', Mounts: '', Networks: 'bridge' },
+      ],
+      Images: [
+        { ID: `sha256:${'a'.repeat(64)}`, Repository: 'nginx', Tag: '1' },
+        { ID: `sha256:${'b'.repeat(64)}`, Repository: 'nginx', Tag: '2' },
+      ],
+    });
+    const activeImages = (inventory: { images: HostObject[] }): string[] => inventory.images.filter((image) => image.active === true).map((image) => image.name);
+    const line = JSON.stringify({ image: `sha256:${'a'.repeat(64)}`, mounts: [], networks: { bridge: {} } });
+    const gone = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error response from daemon: No such container: c2\n', timedOut: false } });
+    // Exact: `web` was created from nginx:2, which now names another image; its image is nginx:1.
+    expect(activeImages(await readHostInventory(gone, { known: [], baseImages: new Set() }))).toEqual(['nginx:1']);
+    const failed = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'permission denied\n', timedOut: false } });
+    expect(activeImages(await readHostInventory(failed, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    const slow = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 0, stdout: line, stderr: '', timedOut: true } });
+    expect(activeImages(await readHostInventory(slow, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
   });
 
   it('throws when docker system df or docker network ls fails', async () => {
