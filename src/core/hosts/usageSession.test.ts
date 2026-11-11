@@ -238,6 +238,34 @@ describe('UsageSession', () => {
     expect(run.blocks).toHaveLength(1);
   });
 
+  it('keeps one chain of requests when the handler of a block asks for the sizes itself', () => {
+    let session: UsageSession | undefined;
+    let asked = false;
+    const run = start({
+      onBlock: () => {
+        if (!asked) asked = session?.readSizes() ?? false;
+      },
+    });
+    session = run.session;
+    const asks = () => run.process.requests.filter((request) => request !== ' ');
+    run.process.print(HEADER(true));
+    // The host answers each request 50 ms later; the first block comes after 300 ms.
+    run.timers.advance(300);
+    run.process.print(blockText(1, 100, 30));
+    expect(asks()).toEqual(['d', 's']);
+    let answered = 1;
+    for (let step = 0; step < 600; step++) {
+      run.timers.advance(50);
+      while (answered < asks().length) {
+        answered++;
+        run.process.print(blockText(answered, 100 + answered * 100, 5, asks()[answered - 1] === 's' ? ['Z df {}', 'Z.'] : []));
+      }
+    }
+    // 30 s at an interval of 2 s: about 15 requests after the sizes, not two chains of them.
+    expect(asks().length).toBeLessThanOrEqual(18);
+    expect(run.ends).toEqual([]);
+  });
+
   it('stops the started transport when the script refuses a value', () => {
     const process = new FakeProcess();
     expect(() =>

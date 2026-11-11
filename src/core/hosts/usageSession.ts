@@ -274,12 +274,14 @@ export class UsageSession {
     const durationMs = Number(block.endCs - block.startCs) * 10;
     this.interval = Math.max(this.options.intervalMs, USAGE_SLOW_FACTOR * (sent.kind === 's' ? 0 : durationMs));
     this.options.onBlock(block, usage);
-    if (this.stage !== 'live' || this.paused) return;
+    // The handler may have asked already (readSizes, or pause and resume), or ended the stream.
+    if (this.stage !== 'live' || this.paused || this.inFlight !== undefined) return;
     if (this.sizesWanted) {
       this.request();
       return;
     }
     const wait = Math.max(0, sent.at + this.interval - this.timers.now());
+    this.clear('nextTimer');
     this.nextTimer = this.timers.setTimeout(() => {
       this.nextTimer = undefined;
       if (this.stage === 'live' && !this.paused && this.inFlight === undefined) this.request();

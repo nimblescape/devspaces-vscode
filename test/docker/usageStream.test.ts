@@ -76,12 +76,12 @@ describe('the utilization stream with real shells and a real SSH server', () => 
     return result;
   }
 
-  /** The commands of the processes in `container` (`docker top`, read on this computer). */
   /** The changes of the files of `container` (`docker diff`), sorted: Docker does not keep their order. */
   function changes(container: string): string[] {
     return cli.lines(['diff', container]).sort();
   }
 
+  /** The commands of the processes in `container` (`docker top`, read on this computer). */
   function processes(container: string): string[] {
     // Docker needs the column PID; the command is the rest of each line.
     const lines = cli.lines(['top', container, '-o', 'pid,args']);
