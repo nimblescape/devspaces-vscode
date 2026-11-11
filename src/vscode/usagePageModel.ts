@@ -501,11 +501,14 @@ function dockerPart(input: UsagePageInput): UsagePageView['docker'] {
   const total = kinds.reduce((sum, item) => sum + item.size, 0);
   const free = kinds.reduce((sum, item) => sum + item.free, 0);
   const at = T.sizesAt(formatClock(sizes.at));
+  // Each kind that has a size gets at least 1 % of the bar, so that it can be seen; the widths together stay 100 %.
+  const shown = total > 0 ? kinds.filter((item) => item.size > 0).map((item) => ({ kind: item.kind, width: Math.max(1, (item.size * 100) / total) })) : [];
+  const widths = shown.reduce((sum, item) => sum + item.width, 0);
   return {
     caption: T.dockerCaption,
     value: formatSize(total),
     unit: T.canBeFreed(formatSize(free)),
-    segments: total > 0 ? kinds.filter((item) => item.size > 0).map((item) => ({ kind: item.kind, percent: Math.max(1, (item.size * 100) / total) })) : [],
+    segments: shown.map((item) => ({ kind: item.kind, percent: (item.width * 100) / widths })),
     rows: kinds.map((item) => ({ kind: item.kind, label: T.diskKinds[item.kind], size: formatSize(item.size), free: formatSize(item.free) })),
     note: input.sizesReading ? `${T.sizesReadingNote} ${at}` : failed !== undefined ? `${failed} ${at}` : at,
   };

@@ -390,6 +390,23 @@ describe('UsagePages', () => {
     expect(lastView(panel).sizes.label).toBe('Read Sizes');
   });
 
+  it('sees a new start of the host after a first sample of a resume without a boot ID', async () => {
+    shells.open.add(LIMA_HOST);
+    readSizes.mockResolvedValue(emptyInventory());
+    const panel = await open(pages(), LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    panel.receive({ type: 'pause' });
+    shells.boot = 'unreadable';
+    panel.receive({ type: 'resume' });
+    await flush();
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    // The sampler of the resume saw no boot ID before: the page compares with the boot ID of before the pause.
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(lastView(panel).sizes.label).toBe('Read Sizes');
+  });
+
   it('keeps nothing of a Read Sizes that ran across a new start of the host', async () => {
     shells.open.add(LIMA_HOST);
     let release: (inventory: HostInventory) => void = () => {};
@@ -453,6 +470,28 @@ describe('UsagePages', () => {
     expect(shells.closed).toEqual([WSL_HOST]);
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.vmIdle);
     expect(shells.holds).toBe(0);
+  });
+
+  it('ends a Read Sizes that runs before it closes the shell of WSL at the end of its idle script', async () => {
+    shells.open.add(WSL_HOST);
+    const closedAtAbort: string[][] = [];
+    readSizes.mockImplementation(
+      (_host, signal) =>
+        new Promise<HostInventory>((_resolve, reject) =>
+          signal.addEventListener('abort', () => {
+            closedAtAbort.push([...shells.closed]);
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+          }),
+        ),
+    );
+    const panel = await open(pages(WSL_HOST), WSL_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    shells.idle = false;
+    await timers.advance(VM_USAGE_INTERVAL_MS * 5);
+    expect(closedAtAbort).toEqual([[]]);
+    expect(shells.closed).toEqual([WSL_HOST]);
+    expect(lastView(panel).sizes).toEqual({ label: 'Read Sizes', disabled: false });
   });
 
   it('asks at the first login of the open of a remote host only, and shows a failed login with Retry', async () => {
@@ -656,7 +695,7 @@ describe('UsagePages', () => {
     expect(readSizes).not.toHaveBeenCalled();
   });
 
-  it('ends a Read Sizes that runs when the VM stops', async () => {
+  it('ends a Read Sizes that runs when the VM stops, and shows no error of its end', async () => {
     shells.open.add(LIMA_HOST);
     let aborted = false;
     readSizes.mockImplementation(
@@ -664,7 +703,8 @@ describe('UsagePages', () => {
         new Promise<HostInventory>((_resolve, reject) =>
           signal.addEventListener('abort', () => {
             aborted = true;
-            reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            // The stop of the shell ends the Docker call with an error of its own.
+            reject(new Error('The shell on lima is closed.'));
           }),
         ),
     );
@@ -676,6 +716,7 @@ describe('UsagePages', () => {
     await flush();
     expect(aborted).toBe(true);
     expect(lastView(panel).sizes).toEqual({ label: 'Read Sizes', disabled: true });
+    expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
   });
 
   it('pauses 2 minutes after a start from a VM change in a window without the focus', async () => {

@@ -267,7 +267,9 @@ describe('usagePageView', () => {
       { kind: 'buildCache', label: 'Build cache', size: '1.4 GB', free: '900 MB' },
     ]);
     expect(view.docker.segments.map((segment) => segment.kind)).toEqual(['images', 'containers', 'volumes', 'buildCache']);
-    expect(view.docker.segments[1].percent).toBe(1);
+    // The containers (0.05 %) get the smallest width that can be seen, and the widths together stay 100 %.
+    expect(view.docker.segments[1].percent).toBeCloseTo(0.99, 2);
+    expect(view.docker.segments.reduce((sum, segment) => sum + segment.percent, 0)).toBeCloseTo(100, 9);
     expect(view.docker.note).toBe(UsagePageTexts.sizesAt('10:40:12'));
     expect(view.stopped).toEqual({ summary: 'Stopped containers · 1 · shop-db-1', rows: [{ name: 'shop-db-1', purpose: 'not of Devspaces', tone: 'notDevspacesInactive' }] });
     const [volumeTable, imageTable, networkTable] = view.tables;

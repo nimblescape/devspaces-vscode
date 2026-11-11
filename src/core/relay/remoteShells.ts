@@ -8,7 +8,7 @@
 // (takeOver). No `vscode`.
 import { WSL_START_ATTEMPTS, hostAccessOf, isVmHost, transportProgramOf, wslStartTimedOut } from '../docker/dockerHost';
 import { errorMessage } from '../errors';
-import { isAbortError, untilAborted, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
+import { abortError, isAbortError, untilAborted, type Logger, type RunOptions, type RunResult, type StartedByteProcess } from '../ports';
 import { currentSshPromptFlow, type SshLoginPrompts } from '../sshAskpass';
 import { RemoteShell, RemoteShellError, ShellGoneError, LIMA_SHELL_LOGIN_TIMEOUT_MS, WSL_SHELL_LOGIN_TIMEOUT_MS, dockerShellCommand } from './remoteShell';
 
@@ -171,12 +171,13 @@ export class RemoteShells {
 
   /**
    * Runs `command` (one line for the shell) on the shell of `host` (`open`): its result as ProcessRunner.run gives it
-   * (RemoteShell.run). A shell that was closed or taken over before the command started is replaced by a new one, once.
-   * Undefined when the host has no transport, and after `dispose`. A failed login gives the result of `ssh` (or
-   * `wsl.exe`): exit code 255 (none after its time limit) and its error output. Rejects with an AbortError when
-   * `options.signal` aborts. With `login: false`, only on a shell that is open or logging in, never a new login:
-   * undefined also when there is none, or when it ended before the command started (the utilization page, which must
-   * not start the VM of Devspaces with a login, R-VM-004, reads the state of the VM before it lets `run` log in).
+   * (RemoteShell.run). A shell that was closed or taken over before the command started is replaced by a new one, once,
+   * but not for a call whose `options.signal` aborted meanwhile. Undefined when the host has no transport, and after
+   * `dispose`. A failed login gives the result of `ssh` (or `wsl.exe`): exit code 255 (none after its time limit) and
+   * its error output. Rejects with an AbortError when `options.signal` aborts. With `login: false`, only on a shell
+   * that is open or logging in, never a new login: undefined also when there is none, or when it ended before the
+   * command started (the utilization page, which must not start the VM of Devspaces with a login, R-VM-004, reads the
+   * state of the VM before it lets `run` log in).
    */
   async run(host: string, command: string, options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { input?: string; login?: boolean } = {}): Promise<RunResult | undefined> {
     for (let attempt = 0; ; attempt++) {
@@ -192,6 +193,8 @@ export class RemoteShells {
         return await shell.run(command, options);
       } catch (error) {
         if (!(error instanceof ShellGoneError) || attempt > 0 || isAbortError(error)) throw error;
+        // A call that was ended (its signal aborted) while it waited on the shell logs in no more.
+        if (options.signal?.aborted) throw abortError();
       }
     }
   }

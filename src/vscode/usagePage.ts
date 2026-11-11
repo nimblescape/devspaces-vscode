@@ -335,8 +335,17 @@ class UsagePage {
 
   private onHeader(sampler: UsageSampler, header: UsageHeader): void {
     if (sampler !== this.sampler) return;
-    // A new start of the kernel: the history of before is of another start.
-    if (this.header?.bootId !== undefined && header.bootId !== undefined && header.bootId !== this.header.bootId) {
+    this.noteHeader(header);
+  }
+
+  /**
+   * The header of a sample (of this sampler or of one before it): a new boot ID (a new start of the kernel) clears the
+   * history and the sizes of before. A header without a boot ID (it could not be read once) keeps the boot ID of
+   * before, so that the next boot ID that can be read is compared with it.
+   */
+  private noteHeader(header: UsageHeader): void {
+    const known = this.header?.bootId;
+    if (known !== undefined && header.bootId !== undefined && header.bootId !== known) {
       this.history.clear();
       this.gapped = false;
       // The sizes are of the objects before the start: Read Sizes reads them again.
@@ -344,15 +353,16 @@ class UsagePage {
       this.sizes = undefined;
       this.sizesError = undefined;
     }
-    this.header = header;
+    this.header = header.bootId === undefined && known !== undefined ? { ...header, bootId: known } : header;
   }
 
   private onBlock(sampler: UsageSampler, block: UsageBlock, usage: HostUsage, names: ReadonlyMap<string, string> | undefined): void {
     if (sampler !== this.sampler) return;
     const sampled = sampler.header;
-    // A header without a boot ID (it could not be read once) keeps the boot ID of before, for the check of onHeader.
-    const header = sampled !== undefined && sampled.bootId === undefined && this.header?.bootId !== undefined ? { ...sampled, bootId: this.header.bootId } : sampled;
-    if (header !== undefined) this.header = header;
+    // The sampler reports only its first header and a new start that it saw itself (onHeader): a boot ID that it reads
+    // first after a header without one is checked here.
+    if (sampled !== undefined) this.noteHeader(sampled);
+    const header = sampled === undefined ? undefined : this.header;
     const checkedAt = this.loginCheckedAt;
     this.loginCheckedAt = undefined;
     // The login of the page started the VM: it stopped between the check and the login (wsl.exe starts a WSL
@@ -398,7 +408,9 @@ class UsagePage {
     const generation = this.generation;
     if (end.kind === 'stopped') return;
     if (end.kind === 'vmIdle') {
-      // Nothing runs in the WSL distribution: the open `wsl.exe` of the shell would hold it for 2 more minutes.
+      // Nothing runs in the WSL distribution: the open `wsl.exe` of the shell would hold it for 2 more minutes. A Read
+      // Sizes that runs on the shell ends first, so that it does not log in again when the shell closes.
+      this.sizesAbort?.abort();
       this.deps.shells.close(this.host);
       this.setPhase({ kind: 'vm', state: { kind: 'stopped' }, idle: true });
       return;
@@ -581,7 +593,8 @@ class UsagePage {
       this.sizes = { inventory, at: this.timers.now() };
       this.sizesError = undefined;
     } catch (error) {
-      if (isAbortError(error) || this.disposed) return;
+      // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result.
+      if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
       const detail = errorMessage(error);
       this.deps.logger.warn(`The sizes of ${this.host} could not be read: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
