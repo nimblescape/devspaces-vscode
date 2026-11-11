@@ -603,6 +603,56 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
   });
 
+  it('counts the 30 minutes from the last step of the user also over a start of the VM from somewhere else', async () => {
+    vmState = { kind: 'stopped' };
+    const panel = await open(pages(), LIMA_HOST);
+    await timers.advance(IDLE_PAUSE_MS - 10 * 60_000);
+    vmState = { kind: 'running' };
+    await timers.advance(VM_CHECK_MS);
+    expect(lastView(panel).status.tone).toBe('live');
+    await timers.advance(10 * 60_000 - VM_CHECK_MS);
+    expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
+  });
+
+  it('pauses without a login when it finds the VM running after 30 minutes without a step of the user', async () => {
+    vmState = { kind: 'stopped' };
+    const panel = await open(pages(), LIMA_HOST);
+    await timers.advance(IDLE_PAUSE_MS);
+    vmState = { kind: 'running' };
+    await timers.advance(VM_CHECK_MS);
+    expect(shells.logins).toEqual([]);
+    expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
+  });
+
+  it('checks the state of the VM once more when its shell closed before the first sample started on it', async () => {
+    const real = shells.run.getMockImplementation()!;
+    let closed = false;
+    shells.run.mockImplementation(async (host, command, options) => {
+      if (options?.login !== false && !closed) {
+        closed = true;
+        // The shell of the login closed before the sample started on it (relogin false: no second login).
+        return undefined;
+      }
+      return real(host, command, options);
+    });
+    const panel = await open(pages(), LIMA_HOST);
+    expect(lastView(panel).status.tone).toBe('live');
+    expect(shells.logins).toEqual([{ host: LIMA_HOST, flow: true }]);
+  });
+
+  it('starts no Read Sizes when the page closes while it reads the state of the VM', async () => {
+    shells.open.add(LIMA_HOST);
+    let release: (state: VmState) => void = () => {};
+    const made = pages(LIMA_HOST, { vmState: () => new Promise<VmState>((resolve) => (release = resolve)) });
+    const panel = await open(made, LIMA_HOST);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    panel.dispose();
+    release({ kind: 'running' });
+    await flush();
+    expect(readSizes).not.toHaveBeenCalled();
+  });
+
   it('puts one gap into the line of the CPU use for a pause and its Resume', async () => {
     shells.open.add(LIMA_HOST);
     const panel = await open(pages(), LIMA_HOST);

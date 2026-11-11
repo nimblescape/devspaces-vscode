@@ -189,7 +189,7 @@ export class RemoteShells {
     for (let attempt = 0; ; attempt++) {
       let shell: RemoteShell | undefined;
       try {
-        const login = attempt === 0 ? options.login !== false : options.login !== false && options.relogin !== false;
+        const login = options.login !== false && (attempt === 0 || options.relogin !== false);
         shell = login ? await this.open(host, options.signal) : await this.current(host, options.signal);
       } catch (error) {
         if (!(error instanceof RemoteShellError)) throw error;

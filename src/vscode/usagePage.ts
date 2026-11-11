@@ -161,6 +161,8 @@ class UsagePage {
   private runAbort: AbortController | undefined;
   /** When the login of the page started the VM (onBlock): checkVm reads again only after VM_SLEEP_WAIT_MS. */
   private vmStartedByPageAt: number | undefined;
+  /** The last step of the user (touch): the open, a show, a click or a key on the page. */
+  private activityAt = 0;
   /** Ends the Read Sizes that runs (vmClosing). */
   private sizesAbort: AbortController | undefined;
   /** Raised at each new start of the host, so that a Read Sizes that ran across it keeps nothing. */
@@ -256,8 +258,11 @@ class UsagePage {
     return this.phase.kind === 'live' || this.phase.kind === 'starting';
   }
 
-  /** New samples. `flow`: a click of the user, so the first login may ask for a password. */
-  private start(flow: boolean): void {
+  /**
+   * New samples. `flow`: a click of the user, so the first login may ask for a password. `activity`: a step of the
+   * user, so the 30 minutes without activity start again; a start of the check of the VM (checkVm) keeps them.
+   */
+  private start(flow: boolean, activity = true): void {
     this.endSampler();
     this.stoppedByHide = false;
     this.checkedState = undefined;
@@ -265,7 +270,8 @@ class UsagePage {
     const generation = ++this.generation;
     this.markGap();
     this.setPhase({ kind: 'starting' });
-    this.touch();
+    if (activity) this.touch();
+    else this.armIdle();
     this.flowPending = flow;
     this.vmStartedByPageAt = undefined;
     const runAbort = new AbortController();
@@ -308,7 +314,7 @@ class UsagePage {
     }
   }
 
-  private async runOnce(script: string, timeoutMs: number, flow: boolean, generation: number, signal: AbortSignal): Promise<UsageRun> {
+  private async runOnce(script: string, timeoutMs: number, flow: boolean, generation: number, signal: AbortSignal, again = true): Promise<UsageRun> {
     const { shells } = this.deps;
     const command = usageShellCommand(script);
     const open = await shells.run(this.host, command, { timeoutMs, login: false });
@@ -330,7 +336,12 @@ class UsagePage {
     const login = () => shells.run(this.host, command, { timeoutMs, relogin: !this.vm });
     // A question of the login ends when the samples end (a pause, a hide, a stop of the VM, a close).
     const result = flow ? await withSshPrompts(login, signal) : await login();
-    if (result === undefined) return { kind: 'notRun', reason: 'noTransport' };
+    if (result === undefined) {
+      // On the VM, the shell closed before the sample started on it (a stop of the VM, the end of the idle script of
+      // WSL): the state of the VM decides once more.
+      if (this.vm && again && generation === this.generation) return this.runOnce(script, timeoutMs, flow, generation, signal, false);
+      return { kind: 'notRun', reason: 'noTransport' };
+    }
     if (checkedAt !== undefined && generation === this.generation) this.loginCheckedAt = checkedAt;
     return { kind: 'ran', result };
   }
@@ -488,12 +499,21 @@ class UsagePage {
 
   /** A click or a key on the page, a show, or a start: the 30 minutes without one start again. */
   private touch(): void {
+    this.activityAt = this.timers.now();
+    this.armIdle();
+  }
+
+  /** The pause after 30 minutes without a step of the user (touch), counted from the last one. */
+  private armIdle(): void {
     this.clearTimer('idleTimer');
     if (this.disposed) return;
-    this.idleTimer = this.timers.setTimeout(() => {
-      this.idleTimer = undefined;
-      if (this.panel.visible && this.reading()) this.pause('idle');
-    }, IDLE_PAUSE_MS);
+    this.idleTimer = this.timers.setTimeout(
+      () => {
+        this.idleTimer = undefined;
+        if (this.panel.visible && this.reading()) this.pause('idle');
+      },
+      Math.max(0, IDLE_PAUSE_MS - (this.timers.now() - this.activityAt)),
+    );
   }
 
   private pause(reason: 'button' | 'focus' | 'idle' | 'vm'): void {
@@ -581,8 +601,8 @@ class UsagePage {
     try {
       if (this.vm) {
         const state = await this.vmStateNow();
-        // The VM stops or is set up again meanwhile (vmClosing): no login to it.
-        if (controller.signal.aborted) return;
+        // The VM stops or is set up again meanwhile (vmClosing), or the page closed: no login to it.
+        if (controller.signal.aborted || this.disposed) return;
         if (state.kind !== 'running') {
           this.sizesError = state.kind === 'stopped' || state.kind === 'notSetUp' ? UsagePageTexts.sizesVmStopped : UsagePageTexts.sizesVmUnusable(state.detail);
           return;
@@ -669,7 +689,9 @@ class UsagePage {
     if (state.kind === 'running') {
       // The VM that the login of the page started still runs: the page lets it go to sleep first.
       if (this.vmStartedByPageAt !== undefined && this.timers.now() - this.vmStartedByPageAt < VM_SLEEP_WAIT_MS) this.scheduleVmCheck();
-      else this.start(false);
+      // No step of the user on the page for 30 minutes: the page pauses instead of a start that pauses at once.
+      else if (this.timers.now() - this.activityAt >= IDLE_PAUSE_MS) this.pause('idle');
+      else this.start(false, false);
       return;
     }
     this.vmStartedByPageAt = undefined;
