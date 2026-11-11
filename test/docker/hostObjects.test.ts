@@ -6,7 +6,8 @@
 // CLI of Devspaces (BootstrapDocker), as the view does: every object, also those that are not of Devspaces, with the
 // networks of each container and the build cache as `docker system df` sums it; Stop and Start of a container that is
 // not of Devspaces; a network that a stopped container uses stays (Docker would remove it, and the container could not
-// start again); a container and its network go in one removal, never with force. Not the removal of the build cache:
+// start again), also one that a container joined after the read; a container and its network go in one removal, never
+// with force. Not the removal of the build cache:
 // it would remove the build cache of the developer who runs the tests.
 import * as crypto from 'crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -101,5 +102,24 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
     const after = await read();
     expect(after.containers.map((object) => object.name)).not.toContain(web);
     expect(after.networks.map((object) => object.name)).not.toContain(network);
+  });
+
+  it('keeps a network with a comma in its name that a container joined after the read and never started', async () => {
+    const late = `late,${tag}`;
+    const lateWeb = `late-${tag}`;
+    cli.ok(['network', 'create', '--label', runLabel, late]);
+    try {
+      const seen = find((await read()).networks, late);
+      expect(seen.usedBy).toBe(0);
+      // A container that never ran has no ID of its network yet: the removal finds it by the name of the network.
+      cli.ok(['create', '--name', lateWeb, '--label', runLabel, '--network', late, TEST_BASE_IMAGE, 'true']);
+      await expect(removeHostObjects(docker, [seen], { logger: log })).resolves.toEqual([{ object: { kind: 'network', name: late }, outcome: 'inUse', detail: 'A container uses this network.' }]);
+      expect(find((await read()).networks, late).usedBy).toBe(1);
+      cli.ok(['rm', lateWeb]);
+      await expect(removeHostObjects(docker, [seen], { logger: log })).resolves.toMatchObject([{ outcome: 'removed' }]);
+    } finally {
+      cli.run(['rm', lateWeb]);
+      cli.run(['network', 'rm', late]);
+    }
   });
 });

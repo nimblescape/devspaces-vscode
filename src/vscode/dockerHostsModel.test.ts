@@ -157,7 +157,7 @@ describe('groupRowLook', () => {
 describe('buildCacheRowLook', () => {
   it('shows the records of the build cache, their size and what no build uses; Remove Unused Build Cache… only when there is some', () => {
     const look = buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 3, bytes: 2_000_000_000, unusedBytes: 1_500_000_000 } });
-    expect(look).toMatchObject({ id: 'buildCache:lab', label: 'Build cache', description: '3 · 2 GB · 1.5 GB unused', contextValue: 'hostsBuildCache;canPrune', collapsible: 'none' });
+    expect(look).toMatchObject({ id: 'buildCache:lab', label: 'Build cache', description: '3 · 2 GB · 1.5 GB can be freed', contextValue: 'hostsBuildCache;canPrune', collapsible: 'none' });
     expect(look.tooltip).toContain('3 records');
     expect(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 500, unusedBytes: 0 } }).contextValue).toBe('hostsBuildCache');
     expect(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 0, bytes: 0, unusedBytes: 0 } }).description).toBe('none');

@@ -56,7 +56,7 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
  * removal of its objects ("Remove Devspaces from This Docker Engine…"), and the read, the Start and the Stop of a
  * container, the removal and the removal of the unused build cache of the view "Docker Hosts" (hostObjects.ts:
  * `docker system df -v`, `docker network ls`, `docker container start` and `stop`, `rm` without force, and
- * `docker builder prune --all`). Its worker starts behind the relay or with
+ * `docker builder prune --all`: with buildx `POST /grpc`, without it `POST /build/prune`). Its worker starts behind the relay or with
  * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [

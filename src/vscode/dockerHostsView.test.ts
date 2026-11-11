@@ -238,7 +238,7 @@ describe('DockerHostsView: the commands of the rows', () => {
     expect(removeObjects.mock.calls[0][1]).toEqual([oldWorker, foreignVolume]);
     await settle();
     // The object of a devspace of this computer and the running container were skipped.
-    expect(window.showInformationMessage).toHaveBeenCalledWith('Removed 2 objects from lab. 2 selected objects were skipped: objects of a devspace of this computer, or running containers.');
+    expect(window.showInformationMessage).toHaveBeenCalledWith('Removed 2 objects from lab. 2 selected objects were skipped: objects of a devspace of this computer, running containers, or networks of Docker itself.');
     await provider.getChildren(await hostRow(provider, 'lab'));
     expect(read).toHaveBeenCalledTimes(2);
   });
@@ -346,6 +346,36 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     await provider.pruneBuildCache({ ...row, cache: { ...row.cache, unusedBytes: 0 } });
     await provider.pruneBuildCache({ hostsNode: 'object', host: 'lab' });
     expect(window.showWarningMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('changes no object of the VM after the VM stopped (each Docker call would start it), and shows its stopped row again', async () => {
+    window.showWarningMessage.mockResolvedValue(DockerHostsCommandTexts.remove);
+    const provider = view();
+    const rows = await objectRowsOf(provider, LIMA_HOST);
+    const cache = await buildCacheRowOf(provider, LIMA_HOST);
+    // Stop the VM… in another window: this view still shows the rows of its last read.
+    vmState = { kind: 'stopped' };
+    fired = [];
+    await provider.stopObject(rowOf(rows, worker));
+    await provider.startObject(rowOf(rows, shopWeb));
+    await provider.removeObjects(rowOf(rows, pgdata));
+    window.showWarningMessage.mockResolvedValue(DockerHostsCommandTexts.prune);
+    await provider.pruneBuildCache(cache);
+    expect(stopContainer).not.toHaveBeenCalled();
+    expect(startContainer).not.toHaveBeenCalled();
+    expect(removeObjects).not.toHaveBeenCalled();
+    expect(pruneBuildCache).not.toHaveBeenCalled();
+    await settle();
+    expect(window.showInformationMessage).toHaveBeenCalledWith(DockerHostsCommandTexts.vmNotRunning);
+    // The whole view again: the VM row with its state of now, and the row that starts the VM.
+    expect(fired).toContain(undefined);
+    const children = (await provider.getChildren(await hostRow(provider, LIMA_HOST))) as MessageRow[];
+    expect(children.map((child) => child.message)).toEqual(['vmStopped']);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // A remote host does not depend on the state of the VM.
+    await provider.startObject(rowOf(await objectRowsOf(provider, 'lab'), shopWeb));
+    expect(startContainer).toHaveBeenCalledWith('lab', shopWeb, expect.any(AbortSignal));
   });
 
   it('says why the build cache could not be removed', async () => {

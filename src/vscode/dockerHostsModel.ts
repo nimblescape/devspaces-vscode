@@ -114,10 +114,10 @@ export const DockerHostsTexts = {
   buildCacheTooltip: (cache: BuildCacheSummary): string =>
     `The cache of the builds of Docker (BuildKit) on this host: ${cache.records} record${cache.records === 1 ? '' : 's'}, ${formatSize(cache.bytes)}. ${formatSize(cache.unusedBytes)} of it can be freed: the records that no build uses now and that share their data with no image. Remove Unused Build Cache… removes the records that no build uses, after one question; the next builds take longer.`,
   none: 'none',
-  vmStopped: 'Start the VM to see its containers, images and volumes',
+  vmStopped: 'Start the VM to see its containers, images, volumes and networks',
   vmStoppedTooltip: 'The VM of Devspaces is stopped. Devspaces does not start it to read it. Click to start it.',
-  vmNotRead: 'Click to read the containers, images and volumes',
-  vmNotReadTooltip: 'The VM of Devspaces runs now. Click to read what Devspaces has in it.',
+  vmNotRead: 'Click to read the containers, images, volumes and networks',
+  vmNotReadTooltip: 'The VM of Devspaces runs now. Click to read what is in it.',
   vmUnknown: 'The state of the VM is not known',
   readFailed: 'Could not be read',
   readFailedTooltip: (detail: string) => `${detail}\n\nClick to open the log of Devspaces. Refresh reads the host again.`,
@@ -269,7 +269,7 @@ const GROUP_ICONS: Readonly<Record<HostObjectKind, string>> = { container: 'pack
 export function buildCacheRowLook(row: BuildCacheRow): RowLook {
   const { cache } = row;
   const parts = cache.records === 0 ? [DockerHostsTexts.none] : [String(cache.records), formatSize(cache.bytes)];
-  if (cache.unusedBytes > 0) parts.push(`${formatSize(cache.unusedBytes)} unused`);
+  if (cache.unusedBytes > 0) parts.push(`${formatSize(cache.unusedBytes)} can be freed`);
   return {
     id: `buildCache:${row.host}`,
     label: DockerHostsTexts.buildCache,

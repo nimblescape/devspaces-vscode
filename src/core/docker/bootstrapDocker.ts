@@ -274,9 +274,19 @@ export function isShellCall(args: readonly string[]): boolean {
 /**
  * The variables of the Docker CLI that a call of an operation on a remote engine goes without: its endpoint is the
  * Docker pipe of the extension or `ssh://<host>` (DOCKER_HOST), and the context and the TLS settings of an endpoint of
- * the user do not apply to it.
+ * the user do not apply to it. BUILDX_BUILDER names a builder of the user (for example a Build Cloud builder): with it,
+ * buildx would run `docker builder prune` on that builder, not on the engine of DOCKER_HOST. callEnv sets it to
+ * REMOTE_BUILDX_BUILDER instead.
  */
-const REMOTE_CLEARED_VARIABLES = ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH'];
+const REMOTE_CLEARED_VARIABLES = ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'BUILDX_BUILDER'];
+
+/**
+ * The buildx builder of a call on a remote engine: `default`, the builder of the context `default`, which is the engine
+ * of DOCKER_HOST. It also applies when the configuration of the user sends `docker builder` to buildx (the alias of the
+ * old `docker buildx install`) with a builder chosen by `docker buildx use --global` (verified with Docker 29.9 and
+ * buildx 0.38). A Docker CLI without buildx does not read it.
+ */
+const REMOTE_BUILDX_BUILDER = 'default';
 
 /** The Docker CLI of the bootstrap (see the module comment). */
 export class BootstrapDocker {
@@ -531,6 +541,7 @@ export class BootstrapDocker {
       const pipe = viaPipe || vm ? this.pipeOf(target) : undefined;
       const env: NodeJS.ProcessEnv = { ...this.env };
       for (const name of REMOTE_CLEARED_VARIABLES) deleteEnv(env, name);
+      env.BUILDX_BUILDER = REMOTE_BUILDX_BUILDER;
       // For the VM of Devspaces without its pipe: `wsl://<distribution>` or `lima://devspaces` (hostEndpoint). No call runs
       // with it (`noEndpoint` below, and `start` starts nothing there); should one run anyway, the Docker CLI refuses it.
       env.DOCKER_HOST = pipe ?? hostEndpoint(target.host);

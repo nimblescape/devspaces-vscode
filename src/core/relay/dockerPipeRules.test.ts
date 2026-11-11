@@ -93,10 +93,11 @@ describe('the filter of the Docker pipe of the extension', () => {
     // The Stop and the Start of a container in the view "Docker Hosts" (R-ENG-008).
     `POST /containers/${ID}/stop`,
     // Its networks (`docker network ls`, and `docker network rm`, which inspects first) and its build cache
-    // (`docker builder prune --all`).
+    // (`docker builder prune --all`: with buildx BuildKit over `POST /grpc`, without buildx `POST /build/prune`).
     'GET /networks',
     'GET /networks/shop_default',
     `DELETE /networks/${ID}`,
+    'POST /grpc',
     'POST /build/prune',
   ])('lets %s through, which Devspaces needs', (line) => {
     expect(allowed(extensionPipeRule, line)).toBe(true);

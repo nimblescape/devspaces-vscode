@@ -357,18 +357,35 @@ function networksOf(item: Record<string, unknown>): Pick<HostObject, 'networks'>
 /** The networks that Docker creates itself on every engine and never removes. */
 const BUILT_IN_NETWORKS = new Set(['bridge', 'host', 'none']);
 
-/** The number of containers of `docker system df -v` on each network, by its name. */
-function networkUsers(containers: readonly unknown[]): Map<string, number> {
-  const users = new Map<string, number>();
+/**
+ * Whether `name` is a network of Docker Swarm, which Docker creates itself on a node of a swarm: `ingress` (its
+ * removal asks a question that the closed input of the Docker CLI answers with No) and `docker_gwbridge`.
+ */
+function isSwarmNetwork(name: string, driver: string | undefined): boolean {
+  return (name === 'ingress' && driver === 'overlay') || name === 'docker_gwbridge';
+}
+
+/**
+ * The number of the containers of `docker system df -v` whose networks (their field `Networks`: names joined with
+ * commas) hold the network `name`. A network name may hold a comma itself, so the name is looked for in the joined
+ * text: a container may count for a network that it does not use (a network `a` next to a network `a,b`), never the
+ * other way around.
+ */
+function networkUsers(containers: readonly unknown[], name: string): number {
+  let users = 0;
   for (const item of containers) {
     if (!isRecord(item)) continue;
-    for (const network of networksOf(item).networks ?? []) users.set(network, (users.get(network) ?? 0) + 1);
+    const joined = (text(item.Networks) ?? '')
+      .split(',')
+      .map((part) => part.trim())
+      .join(',');
+    if (joined === name || joined.startsWith(`${name},`) || joined.endsWith(`,${name}`) || joined.includes(`,${name},`)) users += 1;
   }
   return users;
 }
 
 /** A network of `docker network ls --format '{{json .}}'`. */
-function classifyNetwork(item: Record<string, unknown>, known: readonly KnownDevspace[], users: ReadonlyMap<string, number>): HostObject | undefined {
+function classifyNetwork(item: Record<string, unknown>, known: readonly KnownDevspace[], containers: readonly unknown[]): HostObject | undefined {
   const id = text(item.ID);
   const name = text(item.Name);
   if (id === undefined || name === undefined) return undefined;
@@ -378,11 +395,11 @@ function classifyNetwork(item: Record<string, unknown>, known: readonly KnownDev
     id,
     name,
     purpose: 'notDevspaces',
-    usedBy: users.get(name) ?? 0,
+    usedBy: networkUsers(containers, name),
     ...(text(item.Driver) !== undefined ? { driver: text(item.Driver) } : {}),
     ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
   };
-  if (BUILT_IN_NETWORKS.has(name)) return { ...base, builtIn: true, role: 'network of Docker' };
+  if (BUILT_IN_NETWORKS.has(name) || isSwarmNetwork(name, text(item.Driver))) return { ...base, builtIn: true, role: 'network of Docker' };
   const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
   const project = text(labels.get(COMPOSE_PROJECT_LABEL));
   const byName = devspaceByName(project ?? name, known);
@@ -494,8 +511,7 @@ export function buildInventory(input: InventoryInput): HostInventory {
   const containers = list(df.Containers).flatMap((item) => (isRecord(item) ? (classifyContainer(item, input.known) ?? []) : []));
   const volumes = list(df.Volumes).flatMap((item) => (isRecord(item) ? (classifyVolume(item, input.known) ?? []) : []));
   const images = mergedImages(list(df.Images)).map((image) => classifyImage(image, input));
-  const users = networkUsers(list(df.Containers));
-  const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, users) ?? []) : []));
+  const networks = (input.networks ?? []).flatMap((item) => (isRecord(item) ? (classifyNetwork(item, input.known, list(df.Containers)) ?? []) : []));
   const order = (a: HostObject, b: HostObject): number => Number(a.purpose === 'notDevspaces') - Number(b.purpose === 'notDevspaces') || a.name.localeCompare(b.name);
   return { containers: containers.sort(order), networks: networks.sort(order), images: images.sort(order), volumes: volumes.sort(order), buildCache: buildCacheOf(list(df.BuildCache)) };
 }
@@ -577,21 +593,29 @@ export interface ObjectResult {
   detail?: string;
 }
 
-/** The outcome of a removal, a stop or a start call. */
+/** What Docker says of a container that is not there (anymore), on a stop or a start. */
+const MISSING_CONTAINER_PATTERN = /no such container/i;
+
+/**
+ * The outcome of a removal, a stop or a start call. A stop or a start that fails is `missing` only for a container
+ * that is not there: its other errors (a network that is not there anymore, a port in use) are `failed`, with what
+ * Docker said.
+ */
 function outcomeOf(result: RunResult | undefined, done: 'removed' | 'stopped' | 'started'): ObjectOutcome {
   if (result === undefined) return 'failed';
   if (result.exitCode === 0 && !result.timedOut) return done;
   if (result.timedOut) return 'failed';
   const output = `${result.stderr}\n${result.stdout}`;
+  if (done !== 'removed') return MISSING_CONTAINER_PATTERN.test(output) ? 'missing' : 'failed';
   if (MISSING_PATTERN.test(output)) return 'missing';
   if (REMOVAL_IN_PROGRESS_PATTERN.test(output)) return 'removed';
   if (RUNNING_PATTERN.test(output) || IMAGE_IN_USE_PATTERN.test(output)) return 'inUse';
   return 'failed';
 }
 
-function detailOf(result: RunResult | undefined, error: unknown): string {
+function detailOf(result: RunResult | undefined, error: unknown, timedOut = 'Docker did not answer in time.'): string {
   if (result === undefined) return errorMessage(error).slice(-500);
-  if (result.timedOut) return 'Docker did not answer in time.';
+  if (result.timedOut) return timedOut;
   return (result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode}`).slice(-500);
 }
 
@@ -600,8 +624,15 @@ export function objectText(object: Pick<HostObject, 'kind' | 'name'>): string {
   return `the ${object.kind} ${object.name}`;
 }
 
-/** The time limit of `docker container stop`: Docker waits 10 seconds for the end of the container, then kills it. */
-const STOP_TIMEOUT_MS = 60_000;
+/**
+ * The time limit of `docker container stop`. Docker waits for the end of the container for its stop timeout, then kills
+ * it: 10 seconds by default, but a service may set a longer one (`docker run --stop-timeout`, `stop_grace_period` of
+ * Docker Compose).
+ */
+const STOP_TIMEOUT_MS = 5 * 60_000;
+
+/** What a stop says when the Docker CLI did not end within STOP_TIMEOUT_MS: Docker may still stop the container. */
+const STOP_TIMED_OUT = 'The stop did not end within 5 minutes. Docker may still be stopping the container: click Refresh to see its state.';
 
 /** Runs one call; an AbortError is passed on. */
 async function call(docker: Pick<BootstrapDocker, 'run'>, args: string[], timeoutMs: number, signal: AbortSignal | undefined): Promise<{ result?: RunResult; error?: unknown }> {
@@ -642,7 +673,7 @@ function logResult(logger: Logger, entry: ObjectResult): void {
 export async function stopHostContainer(docker: Pick<BootstrapDocker, 'run'>, object: Pick<HostObject, 'kind' | 'id' | 'name'>, logger: Logger, signal?: AbortSignal): Promise<ObjectResult> {
   const { result, error } = await call(docker, ['container', 'stop', object.id], STOP_TIMEOUT_MS, signal);
   const outcome = outcomeOf(result, 'stopped');
-  const entry: ObjectResult = { object, outcome, ...(outcome === 'inUse' || outcome === 'failed' ? { detail: detailOf(result, error) } : {}) };
+  const entry: ObjectResult = { object, outcome, ...(outcome === 'failed' ? { detail: detailOf(result, error, STOP_TIMED_OUT) } : {}) };
   logResult(logger, entry);
   return entry;
 }
@@ -674,7 +705,7 @@ const START_TIMEOUT_MS = 60_000;
 export async function startHostContainer(docker: Pick<BootstrapDocker, 'run'>, object: Pick<HostObject, 'kind' | 'id' | 'name'>, logger: Logger, signal?: AbortSignal): Promise<ObjectResult> {
   const { result, error } = await call(docker, ['container', 'start', object.id], START_TIMEOUT_MS, signal);
   const outcome = outcomeOf(result, 'started');
-  const entry: ObjectResult = { object, outcome, ...(outcome === 'missing' || outcome === 'failed' || outcome === 'inUse' ? { detail: detailOf(result, error) } : {}) };
+  const entry: ObjectResult = { object, outcome, ...(outcome === 'missing' || outcome === 'failed' ? { detail: detailOf(result, error) } : {}) };
   logResult(logger, entry);
   return entry;
 }
@@ -696,9 +727,18 @@ export async function removeHostObjects(
   for (const object of [...objects].sort((a, b) => order[a.kind] - order[b.kind])) {
     options.onItem?.(objectText(object));
     // An image that a container uses keeps all its tags: Docker would untag the first tags and refuse only the last one.
+    // A container of this removal does not count (it goes first).
     // A network that a container uses stays too: Docker would remove it under a stopped container, which then cannot
-    // start. A container of this removal does not count (it goes first). Docker keeps its own networks.
-    const users = object.kind === 'image' || object.kind === 'network' ? (object.usedBy ?? 0) - removedUsers(object, objects, results) : 0;
+    // start. Its containers are read now, not taken from the read of the view: a container may use it since then.
+    // Docker keeps its own networks.
+    const network = object.kind === 'network' && object.builtIn !== true ? await networkUsersNow(docker, object, options.signal) : undefined;
+    if (network !== undefined && 'detail' in network) {
+      const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome: 'failed', detail: network.detail };
+      logResult(options.logger, entry);
+      results.push(entry);
+      continue;
+    }
+    const users = object.kind === 'image' ? (object.usedBy ?? 0) - removedUsers(object, objects, results) : (network?.users ?? 0);
     if (users > 0 || object.builtIn === true) {
       const detail = object.builtIn === true ? 'Docker keeps its own networks.' : `${users === 1 ? 'A container uses' : `${users} containers use`} this ${object.kind}.`;
       const entry: ObjectResult = { object: { kind: object.kind, name: object.name }, outcome: 'inUse', detail };
@@ -723,15 +763,28 @@ export async function removeHostObjects(
 }
 
 /**
- * The containers of `objects` that this removal removed and that used `used`, an image (by the image of the container
- * in `docker system df`) or a network (by its networks), so that an image or a network whose only containers went is
- * removed too.
+ * The containers of `objects` that this removal removed and that used the image `used` (by the image of the container
+ * in `docker system df`), so that an image whose only containers went is removed too.
  */
 function removedUsers(used: HostObject, objects: readonly HostObject[], results: readonly ObjectResult[]): number {
   const removed = new Set(results.filter((result) => result.object.kind === 'container' && (result.outcome === 'removed' || result.outcome === 'missing')).map((result) => result.object.name));
-  const uses = (container: HostObject): boolean =>
-    used.kind === 'network' ? (container.networks ?? []).includes(used.name) : container.image !== undefined && namesImage(container.image, used);
-  return objects.filter((object) => object.kind === 'container' && removed.has(object.name) && uses(object)).length;
+  return objects.filter((object) => object.kind === 'container' && removed.has(object.name) && object.image !== undefined && namesImage(object.image, used)).length;
+}
+
+/**
+ * `docker container ls --all` of the containers on the network `name` (running or not), by the name of the network:
+ * Docker gives the network of a container that never ran no ID yet, so a filter by the ID of the network misses it
+ * (verified with Docker 29.9). The name must be the whole name of the network (`a` does not find a container on `a,b`).
+ */
+export function networkUsersArgs(name: string): string[] {
+  return ['container', 'ls', '--all', '--quiet', '--no-trunc', '--filter', `network=${name}`];
+}
+
+/** The number of the containers on `network` now; `detail` when Docker could not say. Throws only an AbortError. */
+async function networkUsersNow(docker: Pick<BootstrapDocker, 'run'>, network: HostObject, signal: AbortSignal | undefined): Promise<{ users: number } | { detail: string }> {
+  const { result, error } = await call(docker, networkUsersArgs(network.name), DOCKER_QUERY_TIMEOUT_MS, signal);
+  if (result === undefined || result.exitCode !== 0 || result.timedOut) return { detail: `The containers on this network could not be read: ${detailOf(result, error)}` };
+  return { users: result.stdout.split('\n').filter((line) => line.trim() !== '').length };
 }
 
 /** Whether `name`, the image of a container as Docker names it (a tag, a full or short ID), is `image`. */

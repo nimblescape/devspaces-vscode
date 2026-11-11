@@ -35,10 +35,19 @@ function recorder(): { runner: ProcessRunner; envs: NodeJS.ProcessEnv[]; starts:
 }
 
 describe('BootstrapDocker: the Docker pipe of the extension', () => {
-  it('gives the calls of an operation on an SSH host the pipe as DOCKER_HOST, without the context and the TLS variables', async () => {
+  it('gives the calls of an operation on an SSH host the pipe as DOCKER_HOST, without the context, the TLS variables and the buildx builder of the user', async () => {
     const { runner, envs } = recorder();
     const dockerPipe = vi.fn((target: { host: string }) => (target.host === 'build-box' ? PIPE : undefined));
-    const env = { PATH: '/usr/bin', Docker_Context: 'desktop-linux', DOCKER_HOST: 'ssh://build-box', DOCKER_TLS_VERIFY: '1', DOCKER_CERT_PATH: '/certs', DOCKER_TLS: '1', DOCKER_CONFIG: '/home/me/.docker' };
+    const env = {
+      PATH: '/usr/bin',
+      Docker_Context: 'desktop-linux',
+      DOCKER_HOST: 'ssh://build-box',
+      DOCKER_TLS_VERIFY: '1',
+      DOCKER_CERT_PATH: '/certs',
+      DOCKER_TLS: '1',
+      DOCKER_CONFIG: '/home/me/.docker',
+      BUILDX_BUILDER: 'cloud-org-builder',
+    };
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', env, silentLogger, 'win32', { dockerPipe });
     await runWithDockerTarget(REMOTE, () => docker.run(['container', 'inspect', 'x']));
     expect(dockerPipe).toHaveBeenCalledWith(REMOTE);
@@ -46,6 +55,8 @@ describe('BootstrapDocker: the Docker pipe of the extension', () => {
     expect(keys.sort()).toEqual(['DOCKER_CONFIG', 'DOCKER_HOST']);
     expect(envs[0].DOCKER_HOST).toBe(PIPE);
     expect(envs[0].DOCKER_CONFIG).toBe('/home/me/.docker');
+    // buildx would run `docker builder prune` on the builder of the user, not on the engine of the pipe.
+    expect(envs[0].BUILDX_BUILDER).toBe('default');
   });
 
   it('gives the calls of an operation on an SSH host ssh://<host> without the pipe, and asks for no pipe outside of an operation or for the local Docker', async () => {

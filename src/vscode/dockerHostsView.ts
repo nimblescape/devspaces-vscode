@@ -55,7 +55,7 @@ export const DockerHostsCommandTexts = {
   removeDetail: (names: readonly string[], otherDevspace: boolean, notDevspaces = false) =>
     [
       listed(names),
-      'Docker removes no object that a container uses, and no running container: Devspaces never removes with force. This cannot be undone.',
+      'Devspaces never removes with force: it keeps a running container, and every image, volume and network that a container uses. This cannot be undone.',
       ...(otherDevspace
         ? ['Some of them belong to a devspace that this computer does not know (for example of another computer). A workspace volume holds the changes of that devspace that were not pushed: they are lost with it.']
         : []),
@@ -64,11 +64,15 @@ export const DockerHostsCommandTexts = {
   remove: 'Remove',
   removing: (host: string) => `Removing objects from ${host}…`,
   nothingToRemove:
-    'Remove… removes no object of a devspace of this computer and no running container. Delete the devspace with Delete…, which checks its Git changes first, and stop a running container first.',
-  skipped: (count: number) => (count === 1 ? ' 1 selected object was skipped: an object of a devspace of this computer, or a running container.' : ` ${count} selected objects were skipped: objects of a devspace of this computer, or running containers.`),
+    'Remove… removes no object of a devspace of this computer, no running container, and no network of Docker itself. Delete the devspace with Delete…, which checks its Git changes first, and stop a running container first.',
+  skipped: (count: number) =>
+    count === 1
+      ? ' 1 selected object was skipped: an object of a devspace of this computer, a running container, or a network of Docker itself.'
+      : ` ${count} selected objects were skipped: objects of a devspace of this computer, running containers, or networks of Docker itself.`,
   removed: (removed: number, total: number, host: string) => (removed === total ? `Removed ${total === 1 ? '1 object' : `${total} objects`} from ${host}.` : `Removed ${removed} of ${total} objects from ${host}.`),
   left: (names: readonly string[]) => ` Left: ${listed(names)}. The log says why.`,
   readFailed: (host: string) => `The objects on ${host} could not be read.`,
+  vmNotRunning: 'The VM of Devspaces does not run now, so Devspaces did not change its objects. Start the VM to see them again.',
 };
 
 /** At most five names, then the number of the others. */
@@ -215,6 +219,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     const row = objectRowOf(argument);
     if (row === undefined || !objectActions(row).stop) return;
     const { host, object } = row;
+    if (!(await this.vmRunsFor(host))) return;
     try {
       const result = await withNotificationProgress({ title: DockerHostsCommandTexts.stopping(object.name, host), cancellable: true }, (_progress, token) =>
         withAbort(token, (signal) => this.deps.stopContainer(host, object, signal)),
@@ -233,6 +238,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     const row = objectRowOf(argument);
     if (row === undefined || !objectActions(row).start) return;
     const { host, object } = row;
+    if (!(await this.vmRunsFor(host))) return;
     try {
       const result = await withNotificationProgress({ title: DockerHostsCommandTexts.starting(object.name, host), cancellable: true }, (_progress, token) =>
         withAbort(token, (signal) => this.deps.startContainer(host, object, signal)),
@@ -252,7 +258,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     if (row === undefined || row.cache.unusedBytes <= 0) return;
     const { host } = row;
     const answer = await showWarningMessage(DockerHostsCommandTexts.pruneQuestion(host), { modal: true, detail: DockerHostsCommandTexts.pruneDetail(formatSize(row.cache.unusedBytes)) }, DockerHostsCommandTexts.prune);
-    if (answer !== DockerHostsCommandTexts.prune) return;
+    if (answer !== DockerHostsCommandTexts.prune || !(await this.vmRunsFor(host))) return;
     this.deps.logger.info(`Remove Unused Build Cache… on ${host}.`);
     try {
       await withNotificationProgress({ title: DockerHostsCommandTexts.pruning(host), cancellable: true }, (_progress, token) => withAbort(token, (signal) => this.deps.pruneBuildCache(host, signal)));
@@ -289,7 +295,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
       objects.some((object) => object.purpose === 'notDevspaces'),
     );
     const answer = await showWarningMessage(DockerHostsCommandTexts.removeQuestion(objects.length, host), { modal: true, detail }, DockerHostsCommandTexts.remove);
-    if (answer !== DockerHostsCommandTexts.remove) return;
+    if (answer !== DockerHostsCommandTexts.remove || !(await this.vmRunsFor(host))) return;
     this.deps.logger.info(`Remove… on ${host}: ${objects.map((object) => `${object.kind} ${object.name}`).join(', ')}.`);
     try {
       const results = await withNotificationProgress({ title: DockerHostsCommandTexts.removing(host), cancellable: true }, (progress, token) =>
@@ -309,6 +315,22 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
   }
 
   // -------------------------------------------------------------------------------------------------------------------
+
+  /**
+   * Whether an action on the objects of `host` may run: on the VM of Devspaces only while it runs now. Its rows may come
+   * from a read before the VM stopped (for example by Stop the VM… in another window), and each Docker call to the VM
+   * would start it. A VM that does not run shows its row of now again, and the action does not run.
+   */
+  private async vmRunsFor(host: string): Promise<boolean> {
+    if (host !== this.deps.vmHost) return true;
+    const state = await this.deps.vmState();
+    if (state.kind === 'running') return true;
+    this.deps.logger.info(`The VM of Devspaces does not run now (${state.kind}); the action on its objects did not run.`);
+    this.inform(DockerHostsCommandTexts.vmNotRunning);
+    this.entries.delete(host);
+    this.changed();
+    return false;
+  }
 
   private async hostRows(): Promise<HostRow[]> {
     let hosts: string[] = [];
