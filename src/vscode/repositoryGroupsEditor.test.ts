@@ -4,74 +4,15 @@
 
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-interface FakePanel {
-  webview: {
-    html: string;
-    cspSource: string;
-    options?: unknown;
-    asWebviewUri: (uri: { toString(): string }) => { toString(): string };
-    postMessage: ReturnType<typeof vi.fn>;
-    onDidReceiveMessage: (listener: (message: unknown) => void) => { dispose(): void };
-  };
-  options: unknown;
-  reveal: ReturnType<typeof vi.fn>;
-  dispose: () => void;
-  onDidDispose: (listener: () => void) => { dispose(): void };
-  receive: (message: unknown) => void;
-  posted: Array<{ type: string; [key: string]: unknown }>;
-  disposed: boolean;
-}
-
 const hoisted = vi.hoisted(() => ({
-  panels: [] as unknown[],
   stored: { value: undefined as unknown },
   configurationListeners: [] as Array<(event: { affectsConfiguration(key: string): boolean }) => void>,
 }));
 
 vi.mock('vscode', async () => {
   const { fakeVscode } = await import('./testing/fakeVscode');
-  const createWebviewPanel = (_viewType: string, _title: string, _column: number, options: unknown) => {
-    const messageListeners: Array<(message: unknown) => void> = [];
-    const disposeListeners: Array<() => void> = [];
-    const panel: FakePanel = {
-      webview: {
-        html: '',
-        cspSource: 'vscode-webview://test',
-        asWebviewUri: (uri) => ({ toString: () => `webview:${uri.toString()}` }),
-        postMessage: vi.fn(async (message: { type: string }) => {
-          panel.posted.push(message);
-          return true;
-        }),
-        onDidReceiveMessage: (listener) => {
-          messageListeners.push(listener);
-          return { dispose() {} };
-        },
-      },
-      options,
-      reveal: vi.fn(),
-      dispose: () => {
-        if (panel.disposed) return;
-        panel.disposed = true;
-        for (const listener of disposeListeners) listener();
-      },
-      onDidDispose: (listener) => {
-        disposeListeners.push(listener);
-        return { dispose() {} };
-      },
-      receive: (message) => {
-        for (const listener of messageListeners) listener(message);
-      },
-      posted: [],
-      disposed: false,
-    };
-    hoisted.panels.push(panel);
-    return panel;
-  };
   return {
     ...fakeVscode,
-    ViewColumn: { Active: -1 },
-    Uri: { ...fakeVscode.Uri, joinPath: (base: { toString(): string }, ...parts: string[]) => ({ toString: () => [base.toString(), ...parts].join('/') }) },
-    window: { ...fakeVscode.window, createWebviewPanel },
     workspace: {
       ...fakeVscode.workspace,
       onDidChangeConfiguration: (listener: (event: { affectsConfiguration(key: string): boolean }) => void) => {
@@ -82,7 +23,7 @@ vi.mock('vscode', async () => {
   };
 });
 
-import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+import { fakeVscode, resetFakeVscode, type FakeWebviewPanel as FakePanel } from './testing/fakeVscode';
 import { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import type { PreviewRunner } from './groupsPreviewRunner';
 import { GroupsEditorTexts, describeSettingList, runPreviewJob, type PreviewJobMessage, type PreviewRun } from './repositoryGroupsEditorModel';
@@ -119,7 +60,6 @@ let runner: ReturnType<typeof inlineRunner>;
 
 beforeEach(() => {
   resetFakeVscode();
-  hoisted.panels.length = 0;
   hoisted.configurationListeners.length = 0;
   hoisted.stored.value = [EXAMPLE, { name: 'Web', pattern: '^web-(.+)$' }];
   update = vi.fn(async (_key: string, value: unknown) => {
@@ -142,7 +82,7 @@ async function openEditor(): Promise<{ editor: RepositoryGroupsEditor; panel: Fa
     previewRunner: runner,
   });
   await editor.open();
-  const panel = hoisted.panels[hoisted.panels.length - 1] as FakePanel;
+  const panel = fakeVscode.webviewPanels[fakeVscode.webviewPanels.length - 1];
   panel.receive({ type: 'ready' });
   await flush();
   return { editor, panel };
@@ -197,7 +137,7 @@ describe('RepositoryGroupsEditor', () => {
     expect(panel.posted.some((message) => message.type === 'state')).toBe(true);
     // A second open shows the same panel.
     await editor.open();
-    expect(hoisted.panels).toHaveLength(1);
+    expect(fakeVscode.webviewPanels).toHaveLength(1);
     expect(panel.reveal).toHaveBeenCalled();
   });
 
@@ -520,7 +460,7 @@ describe('RepositoryGroupsEditor', () => {
     expect(panel.disposed).toBe(true);
     expect(update).toHaveBeenCalledTimes(1);
     await editor.open();
-    expect(hoisted.panels).toHaveLength(2);
+    expect(fakeVscode.webviewPanels).toHaveLength(2);
   });
   it('ignores updates of an earlier load and during Save, and gives the test name back with a load', async () => {
     const { panel } = await openEditor();
