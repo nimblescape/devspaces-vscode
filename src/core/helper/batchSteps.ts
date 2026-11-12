@@ -25,7 +25,7 @@ import {
   readFilesCommand,
   writeAndRunCommand,
 } from './scripts';
-import { checkConfigPath, checkRepository, isPassableEnvName, overrideCommand, overrideInput, writeAndRunInput, type HelperFiles } from './stepInputs';
+import { checkConfigPath, checkRepository, isPassableEnvName, overrideCommand, overrideInput, writeAndRunInput, type BuildContext, type HelperFiles } from './stepInputs';
 
 /**
  * Docker Compose fetches no remote `include` (Git or OCI) in the helper: these variables are set on the process of
@@ -128,6 +128,26 @@ function texts(kind: string, value: unknown): string[] {
   return value.map((item) => text(kind, item));
 }
 
+/**
+ * A path relative to the repository folder (R-DS-010: a build context, or a Dockerfile relative to it): segments without
+ * `.` and `..`; `.` alone for the folder itself when `folder`.
+ */
+function relativePath(kind: string, value: unknown, folder: boolean): string {
+  const path = text(kind, value, 4096);
+  if (folder && path === '.') return path;
+  if (path.startsWith('/') || path.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) fail(kind);
+  return path;
+}
+
+/** The build context of a shared image built from a Dockerfile (R-DS-010, WRITE_AND_RUN_SCRIPT): its path, the hash of its key, and its Dockerfile. */
+function buildContext(kind: string, value: unknown): BuildContext | undefined {
+  if (value === undefined) return undefined;
+  const p = fields(kind, value, ['path', 'hash', 'dockerfile']);
+  const hash = text(kind, p.hash, 100);
+  if (!/^sha256:[0-9a-f]{64}$/.test(hash)) fail(kind);
+  return { path: relativePath(kind, p.path, true), hash, dockerfile: relativePath(kind, p.dockerfile, false) };
+}
+
 function jsonObject(kind: string, value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) fail(kind);
   return value as Record<string, unknown>;
@@ -214,11 +234,12 @@ export function batchStepCommand(kind: string, params: unknown): BatchStepComman
       return { command: cloneCommand(p.repository as string, name, branch || undefined), env: {}, git: true, secret: 'stdin' };
     }
     case 'readFiles': {
-      const p = fields(kind, params, ['repository', 'configPath'], ['dockerfile']);
+      const p = fields(kind, params, ['repository', 'configPath'], ['dockerfile', 'context']);
       const { folder } = folderOf(kind, p.repository);
       const configPath = checked(kind, () => checkConfigPath(text(kind, p.configPath)));
+      const context = p.context === undefined ? undefined : relativePath(kind, p.context, true);
       // As the owner of the repository (as Compose reads). READ_FILES_SCRIPT reads below the repository folder only.
-      return { command: readFilesCommand(folder, configPath, optionalText(kind, p.dockerfile)), env: {}, git: false, owner: folder };
+      return { command: readFilesCommand(folder, configPath, optionalText(kind, p.dockerfile), context), env: {}, git: false, owner: folder };
     }
     case 'listConfigs': {
       const p = fields(kind, params, ['repository']);
@@ -248,7 +269,7 @@ export function batchStepCommand(kind: string, params: unknown): BatchStepComman
       };
     }
     case 'build': {
-      const p = fields(kind, params, ['repository', 'configPath', 'imageName'], ['override', 'files', 'env', 'frozenLockfile', 'lockfileText']);
+      const p = fields(kind, params, ['repository', 'configPath', 'imageName'], ['override', 'files', 'env', 'frozenLockfile', 'lockfileText', 'context']);
       const { folder } = folderOf(kind, p.repository);
       const configFile = `${folder}/${checked(kind, () => checkConfigPath(text(kind, p.configPath)))}`;
       const imageName = text(kind, p.imageName, 255);
@@ -264,11 +285,14 @@ export function batchStepCommand(kind: string, params: unknown): BatchStepComman
       // read of the configuration takes (it goes on standard input as JSON, never on a command line).
       if (p.lockfileText !== undefined && p.lockfileText !== null && (typeof p.lockfileText !== 'string' || p.lockfileText.length > MAX_LOCKFILE_LENGTH)) fail(kind);
       const lockfile = p.lockfileText as string | null | undefined;
+      // The build context of a shared image built from a Dockerfile, which our copy of the configuration names.
+      const context = buildContext(kind, p.context);
+      if (context !== undefined && override === undefined) fail(kind);
       const config = override !== undefined ? OVERRIDE_CONFIG_PATH : configFile;
       const args = buildArgs({ workspaceFolder: folder, configPath: config, imageName, ...(p.frozenLockfile === true ? { frozenLockfile: true } : {}) });
       return {
         command: writeAndRunCommand({ repositoryConfig: configFile, config: override !== undefined ? OVERRIDE_CONFIG_PATH : undefined }, args),
-        input: checked(kind, () => writeAndRunInput(files, override, lockfile)),
+        input: checked(kind, () => writeAndRunInput(files, override, lockfile, context)),
         env,
         git: false,
         // The token only masked in the output, as for `up` and run-user-commands.

@@ -27,7 +27,7 @@ import { parseComposeHashes } from './scripts';
 // The checks of the inputs and the inputs of the Dev Container CLI runs are shared with the batch helper
 // (stepInputs.ts). The batch helper builds each command from the kind and the inputs of its step (batchStepCommand);
 // WorkspaceHelper builds none (fixRepositoryOwnership only asks batchStepCommand whether the step takes its paths).
-import { checkConfigPath, checkRepository, isPassableEnvName, writeAndRunInput, type HelperFiles } from './stepInputs';
+import { checkConfigPath, checkRepository, isPassableEnvName, writeAndRunInput, type BuildContext, type HelperFiles } from './stepInputs';
 // The volume steps run only in the batch helper of an operation.
 import { currentBatchScope, type BatchScope } from './batchScope';
 import type { BatchStepKind } from './batchStepKinds';
@@ -152,6 +152,12 @@ export interface ConfigFilesRead {
   lockfileText?: string;
   /** The lockfile next to the configuration is no plain file of the repository, or is too long. */
   lockfileUnreadable?: boolean;
+  /**
+   * R-DS-010: the hash of the build context that the read was asked for (READ_FILES_SCRIPT, contextTree), or why it has
+   * none (`contextUnhashable`).
+   */
+  contextHash?: string;
+  contextUnhashable?: string;
 }
 
 /** Workspace helper. */
@@ -211,13 +217,15 @@ export class WorkspaceHelper {
    * if the configuration file does not exist.
    * `dockerfile`: the Dockerfile that the configuration names after the Dev Container CLI resolved its variables, read
    * rather than the one that the text names. `dockerfileMissing`: the Dockerfile does not exist in the repository
-   * (READ_FILES_SCRIPT).
+   * (READ_FILES_SCRIPT). `context`: the build context relative to the repository folder (`.` for the folder itself)
+   * whose hash the read gives with the Dockerfile (R-DS-010, contextHash or contextUnhashable).
    */
   async readConfigFiles(p: {
     volumeName: string;
     repository: string;
     configPath: string;
     dockerfile?: string;
+    context?: string;
     /** The helper image of the open (HelperImageUse). */
     image?: HelperImageUse;
     signal?: AbortSignal;
@@ -225,7 +233,15 @@ export class WorkspaceHelper {
     checkRepository(p.repository);
     checkConfigPath(p.configPath);
     const result = await this.runStreams(p.volumeName, {
-      batch: { kind: 'readFiles', params: { repository: p.repository, configPath: p.configPath, ...(p.dockerfile !== undefined ? { dockerfile: p.dockerfile } : {}) } },
+      batch: {
+        kind: 'readFiles',
+        params: {
+          repository: p.repository,
+          configPath: p.configPath,
+          ...(p.dockerfile !== undefined ? { dockerfile: p.dockerfile } : {}),
+          ...(p.context !== undefined ? { context: p.context } : {}),
+        },
+      },
       image: p.image,
       signal: p.signal,
       onStderr: this.logOutput,
@@ -244,6 +260,9 @@ export class WorkspaceHelper {
     // The lockfile next to the configuration (for the image key of a shared image), or that it could not be read.
     if (typeof value.lockfileText === 'string') files.lockfileText = value.lockfileText;
     else if (value.lockfileUnreadable === true) files.lockfileUnreadable = true;
+    // The hash of the build context (only with the Dockerfile), or why it has none.
+    if (typeof value.contextHash === 'string' && /^sha256:[0-9a-f]{64}$/.test(value.contextHash)) files.contextHash = value.contextHash;
+    else if (typeof value.contextUnhashable === 'string') files.contextUnhashable = value.contextUnhashable.slice(0, 1000);
     return files;
   }
 
@@ -394,6 +413,12 @@ export class WorkspaceHelper {
      */
     lockfileText?: string | null;
     /**
+     * R-DS-010: the build context of a shared image built from a Dockerfile (BuildContext), which our copy of the
+     * configuration (`override`) names as CONTEXT_COPY_FOLDER: the build reads a copy of it whose hash must be the one
+     * of the key, else it fails (WRITE_AND_RUN_SCRIPT). Only with `override`.
+     */
+    context?: BuildContext;
+    /**
      * The token of the open, removed from the output and from the error like for `up` and run-user-commands (also when
      * it is split across chunks; none of the commands of the build reads it).
      */
@@ -408,7 +433,8 @@ export class WorkspaceHelper {
     this.deps.logger.info(`Building the devspace image ${p.imageName} from ${p.configPath}.`);
     // Every build runs through WRITE_AND_RUN_SCRIPT, for its lockfile rule (batchStepCommand).
     // Only the local check of the files ("Invalid helper file"); the batch helper builds the input of the step itself.
-    writeAndRunInput(p.files, p.override, p.lockfileText);
+    if (p.context !== undefined && p.override === undefined) throw new Error('A build context needs our copy of the configuration.');
+    writeAndRunInput(p.files, p.override, p.lockfileText, p.context);
     return this.runDevcontainer('devcontainer build', p.volumeName, {
       batch: {
         kind: 'build',
@@ -420,6 +446,7 @@ export class WorkspaceHelper {
           ...(p.files !== undefined ? { files: p.files } : {}),
           ...(p.frozenLockfile === true ? { frozenLockfile: true } : {}),
           ...(p.lockfileText !== undefined ? { lockfileText: p.lockfileText } : {}),
+          ...(p.context !== undefined ? { context: p.context } : {}),
         },
       },
       env: p.env,

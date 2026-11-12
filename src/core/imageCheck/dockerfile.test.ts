@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 import { describe, expect, it } from 'vitest';
-import { extractBaseImages, MAX_DOCKERFILE_INSTRUCTIONS, MAX_DOCKERFILE_LENGTH, MAX_REFERENCE_LENGTH, SHELL_NAME } from './dockerfile';
+import { extractBaseImages, keyedDockerfileImages, MAX_DOCKERFILE_INSTRUCTIONS, MAX_DOCKERFILE_LENGTH, MAX_REFERENCE_LENGTH, SHELL_NAME } from './dockerfile';
 
 describe('extractBaseImages', () => {
   it('returns the image of a single FROM', () => {
@@ -399,5 +399,73 @@ describe('the limits of extractBaseImages: skipped for the update check, in line
     expect(timed(() => extractBaseImages(`# check=a${' '.repeat(40_000)}b\nFROM alpine\n`)).ms).toBeLessThan(300);
     expect(timed(() => extractBaseImages(`// syntax=a${' '.repeat(40_000)}b\nFROM alpine\n`)).ms).toBeLessThan(300);
     expect(extractBaseImages('# escape=`\nFROM a`\n:1\n')).toEqual(['a:1']);
+  });
+});
+
+describe('keyedDockerfileImages: the images of the key of a shared image built from a Dockerfile (R-DS-010)', () => {
+  it('gives the FROM images in order, without scratch, stage names and repeats, with ARGs and build arguments', () => {
+    const text = [
+      'ARG BASE=node:24',
+      'ARG TOOLS',
+      'FROM ${BASE} AS build',
+      'COPY --from=0 /a /b',
+      'FROM scratch AS empty',
+      'FROM ${TOOLS} AS tools',
+      'FROM build',
+      'FROM node:24',
+      'COPY --from=build /app /app',
+      'COPY --from=TOOLS /bin/x /bin/x',
+      'RUN --mount=type=cache,target=/root/.npm --mount=type=bind,from=tools,source=/x,target=/x npm ci',
+      'ADD app.tgz /app/',
+    ].join('\n');
+    expect(keyedDockerfileImages(text, { TOOLS: 'alpine:3.22' })).toEqual({ images: ['node:24', 'alpine:3.22'] });
+  });
+
+  it('stops after the target stage (the later stages are not built)', () => {
+    const text = 'FROM node:24 AS build\nFROM alpine:3.22 AS Dev\nFROM ubuntu:24.04\nCOPY --from=image:1 /a /a\n';
+    expect(keyedDockerfileImages(text, {}, { target: 'dev' })).toEqual({ images: ['node:24', 'alpine:3.22'] });
+    expect(keyedDockerfileImages(text)).toMatchObject({ reason: 'its Dockerfile copies from the image image:1 (COPY --from)' });
+  });
+
+  it('takes the Dockerfile frontend of Docker in the syntax directive, by a tag or a digest', () => {
+    for (const syntax of ['docker/dockerfile:1', 'docker.io/docker/dockerfile:1.17', `docker/dockerfile:1@sha256:${'a'.repeat(64)}`, 'docker/dockerfile']) {
+      expect(keyedDockerfileImages(`# syntax=${syntax}\nFROM node:24\n`)).toEqual({ images: ['node:24'] });
+    }
+  });
+
+  it.each([
+    ['# syntax=example.com/frontend:1\nFROM node:24\n', {}, 'its Dockerfile names the frontend example.com/frontend:1'],
+    ['FROM node:24\n', { BUILDKIT_SYNTAX: 'docker/dockerfile:1' }, 'its build arguments name a frontend (BUILDKIT_SYNTAX)'],
+    ['FROM --platform=linux/amd64 node:24\n', {}, 'its Dockerfile has a FROM with --platform=linux/amd64'],
+    ['FROM\n', {}, 'its Dockerfile has a FROM without an image'],
+    ['ARG BASE\nFROM ${BASE}\n', {}, 'its Dockerfile has the FROM ${BASE}, whose image is not known'],
+    ['FROM ${UNKNOWN:-$OTHER}\n', {}, 'its Dockerfile has the FROM ${UNKNOWN:-$OTHER}, whose image is not known'],
+    [`FROM ${'a'.repeat(MAX_REFERENCE_LENGTH + 1)}\n`, {}, `its Dockerfile has the FROM ${'a'.repeat(MAX_REFERENCE_LENGTH + 1)}, whose image is not known`],
+    ['FROM node:24\nCOPY --from=alpine:3.22 /a /a\n', {}, 'its Dockerfile copies from the image alpine:3.22 (COPY --from)'],
+    ['FROM node:24\nADD --from=$IMAGE /a /a\n', {}, 'its Dockerfile copies from the image $IMAGE (ADD --from)'],
+    // A stage that comes later is not a stage yet (BuildKit would take it as an image).
+    ['FROM node:24\nCOPY --from=later /a /a\nFROM alpine:3.22 AS later\n', {}, 'its Dockerfile copies from the image later (COPY --from)'],
+    ['FROM node:24\nADD https://example.com/x.tgz /x\n', {}, 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)'],
+    ['FROM node:24\nADD --checksum=sha256:00 HTTPS://example.com/x /x\n', {}, 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)'],
+    ['FROM node:24\nADD git@github.com:acme/tools.git /tools\n', {}, 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)'],
+    ['FROM node:24\nADD bob@git.example.com:tools.git /tools\n', {}, 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)'],
+    ['FROM node:24\nADD ["git@github.com:acme/tools.git", "/tools"]\n', {}, 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)'],
+    ['FROM node:24\nRUN --mount=type=secret,id=npm cat /run/secrets/npm\n', {}, 'its Dockerfile has a RUN that mounts a secret'],
+    ['FROM node:24\nRUN --mount=type=SSH git clone x\n', {}, 'its Dockerfile has a RUN that mounts an SSH agent'],
+    ['FROM node:24\nRUN --mount=from=alpine:3.22,target=/x ls\n', {}, 'its Dockerfile has a RUN that mounts the image alpine:3.22'],
+    ['FROM node:24\nRUN --mount="type=secret,id=a" ls\n', {}, 'its Dockerfile has a RUN --mount that cannot be read ("type=secret,id=a")'],
+    ['FROM node:24\nRUN --mount=type=$KIND,id=a ls\n', {}, 'its Dockerfile has a RUN --mount that cannot be read (type=$KIND,id=a)'],
+  ])('refuses %j (build arguments %j): %s', (text, buildArgs, reason) => {
+    expect(keyedDockerfileImages(text, buildArgs)).toEqual({ reason });
+  });
+
+  it('refuses a Dockerfile above the limits of the update check', () => {
+    expect(keyedDockerfileImages('#'.repeat(MAX_DOCKERFILE_LENGTH + 1))).toEqual({ reason: 'its Dockerfile is too large' });
+    expect(keyedDockerfileImages('FROM node:24\n' + 'RUN true\n'.repeat(MAX_DOCKERFILE_INSTRUCTIONS))).toEqual({ reason: 'its Dockerfile has too many instructions' });
+  });
+
+  it('keeps the flags of COPY, ADD, and RUN that read nothing outside the key', () => {
+    const text = 'FROM node:24\nCOPY --chown=1000:1000 --chmod=644 --link a /a\nADD --keep-git-dir=false b /b\nRUN --network=none --mount=type=tmpfs,target=/t true\n';
+    expect(keyedDockerfileImages(text)).toEqual({ images: ['node:24'] });
   });
 });

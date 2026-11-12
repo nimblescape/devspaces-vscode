@@ -59,6 +59,16 @@ describe('batchStepCommand', () => {
       git: false,
       owner: FOLDER,
     });
+    // R-DS-010: with the build context whose hash the read gives (relative to the repository folder).
+    for (const context of ['.', '.devcontainer', '.devcontainer/app']) {
+      expect(batchStepCommand('readFiles', { repository: REPO, configPath: '.devcontainer/devcontainer.json', dockerfile: 'Dockerfile', context }).command).toEqual(
+        readFilesCommand(FOLDER, '.devcontainer/devcontainer.json', 'Dockerfile', context),
+      );
+    }
+    expect(readFilesCommand(FOLDER, 'a.json', undefined, '.').slice(3)).toEqual([FOLDER, 'a.json', '', '.']);
+    for (const context of ['', '/', '/etc', '..', 'a/../..', 'a//b', './a', 1]) {
+      expect(() => batchStepCommand('readFiles', { repository: REPO, configPath: 'a.json', context }), String(context)).toThrow(BatchStepError);
+    }
     expect(batchStepCommand('listConfigs', { repository: REPO })).toEqual({ command: listConfigsCommand(FOLDER), env: {}, git: false, owner: FOLDER });
     // Compose reads as the repository owner: the Compose read steps run as the owner of the repository folder
     // (`owner`), which the helper reads at step time; composeHash names its repository for that.
@@ -182,6 +192,27 @@ describe('batchStepCommand', () => {
       expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, lockfileText }), String(lockfileText).slice(0, 10)).toThrow(BatchStepError);
     }
     expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, lockfileText: 'x'.repeat(MAX_LOCKFILE_LENGTH) })).not.toThrow();
+    // R-DS-010: a shared image of a Dockerfile reads a copy of its build context with the hash of its key; only with our
+    // copy of the configuration, which names the copy.
+    const context = { path: '.devcontainer', hash: `sha256:${'c'.repeat(64)}`, dockerfile: 'Dockerfile' };
+    expect(batchStepCommand('build', { repository: REPO, configPath: '.devcontainer/devcontainer.json', imageName: 'devspaces-x:1', override, lockfileText: null, context }).input).toBe(
+      writeAndRunInput(undefined, override, null, context),
+    );
+    expect(JSON.parse(writeAndRunInput(undefined, override, null, context))).toHaveProperty('context', context);
+    expect(JSON.parse(writeAndRunInput(undefined, override, null))).not.toHaveProperty('context');
+    for (const wrong of [
+      { ...context, path: '..' },
+      { ...context, path: '' },
+      { ...context, dockerfile: '.' },
+      { ...context, dockerfile: '../Dockerfile' },
+      { ...context, hash: 'sha256:x' },
+      { ...context, other: 1 },
+      { path: '.', hash: context.hash },
+      '.devcontainer',
+    ]) {
+      expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, context: wrong }), JSON.stringify(wrong)).toThrow(BatchStepError);
+    }
+    expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', context })).toThrow(BatchStepError);
     // Never --frozen-lockfile with our copy: the CLI writes only the copy of the lockfile next to it.
     expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, lockfileText: null, frozenLockfile: true })).toThrow(BatchStepError);
     expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, frozenLockfile: true })).toThrow(BatchStepError);

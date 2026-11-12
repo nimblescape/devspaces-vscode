@@ -534,6 +534,29 @@ describe('WorkspaceHelper file and Git queries', () => {
     expect(await helper.readConfigFiles({ volumeName: 'vol', repository: 'acme/api', configPath: '.devcontainer.json' })).toBeUndefined();
   });
 
+  it('readConfigFiles gives the hash of the build context that it was asked for, or why it has none (R-DS-010)', async () => {
+    const helper = createHelper();
+    const hash = `sha256:${'d'.repeat(64)}`;
+    docker.handler = () => ({ stdout: `{"configText":"{}","dockerfileText":"FROM x","contextHash":"${hash}"}\n` });
+    const p = { volumeName: 'vol', repository: 'acme/api', configPath: '.devcontainer/devcontainer.json', dockerfile: 'Dockerfile', context: '.devcontainer' };
+    expect(await helper.readConfigFiles(p)).toEqual({ configText: '{}', dockerfileText: 'FROM x', contextHash: hash });
+    expect(commandOf(docker.runs[0].args)).toEqual(['node', '-e', READ_FILES_SCRIPT, '/workspaces/api', '.devcontainer/devcontainer.json', 'Dockerfile', '.devcontainer']);
+    docker.handler = () => ({ stdout: '{"configText":"{}","contextUnhashable":"the entry fifo is no file, folder or link"}\n' });
+    expect(await helper.readConfigFiles(p)).toEqual({ configText: '{}', contextUnhashable: 'the entry fifo is no file, folder or link' });
+    // A hash of another form is none.
+    docker.handler = () => ({ stdout: '{"configText":"{}","contextHash":"sha256:x"}\n' });
+    expect(await helper.readConfigFiles(p)).toEqual({ configText: '{}' });
+  });
+
+  it('build passes the build context of a shared image only with our copy of the configuration (R-DS-010)', async () => {
+    const helper = createHelper();
+    const context = { path: '.devcontainer', hash: `sha256:${'d'.repeat(64)}`, dockerfile: 'Dockerfile' };
+    await expect(helper.build({ volumeName: 'vol', repository: 'acme/api', configPath: '.devcontainer/devcontainer.json', imageName: 'devspaces-x:1', context })).rejects.toThrow(
+      'A build context needs our copy of the configuration.',
+    );
+    expect(docker.runs).toHaveLength(0);
+  });
+
   it('readConfigFiles rejects paths outside of the repository', async () => {
     const helper = createHelper();
     for (const configPath of ['../x/devcontainer.json', '/etc/devcontainer.json', '.devcontainer/../../x', '']) {

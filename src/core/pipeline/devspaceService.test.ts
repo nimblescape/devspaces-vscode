@@ -5124,7 +5124,9 @@ describe('single containers: build contexts, images, Dockerfiles and labels', ()
     h.helper.config = { build: { dockerfile: 'Dockerfile' } };
     h.helper.dockerfiles = { '.devcontainer/Dockerfile': `FROM ${THEIRS_2}\n` };
     await h.service.open(TARGET, options());
-    expect(h.helper.dockerfileReads).toEqual(['Dockerfile']);
+    // The read of the update check, and the read again for the image key with the hash of its build context (R-DS-010).
+    expect(h.helper.dockerfileReads).toEqual(['Dockerfile', 'Dockerfile']);
+    expect(h.helper.contextReads).toEqual(['.devcontainer']);
     // There is no previous helper image: the helper image of the open is the current tag with its image ID.
     const previous = { tag: 'devspaces-worker:test', id: h.helper.currentHelperImageId };
     const reads = h.helper.helperImages.filter((entry) => entry.call === 'readConfigFiles');
@@ -5140,7 +5142,8 @@ describe('single containers: build contexts, images, Dockerfiles and labels', ()
     h.helper.dockerfiles = { '.devcontainer/Dockerfile': `FROM ${THEIRS_2}\n` };
     // An image of another devspace in a Dockerfile is not refused.
     await h.service.open(TARGET, options());
-    expect(h.helper.dockerfileReads).toEqual(['Dockerfile']);
+    // The read of the update check, and the read again for the image key (R-DS-010).
+    expect(h.helper.dockerfileReads).toEqual(['Dockerfile', 'Dockerfile']);
     expect(h.helper.builds).toHaveLength(1);
     // Its FROM images are the references of the image check.
     expect(h.checker.calls.at(-1)?.images).toEqual([THEIRS_2]);

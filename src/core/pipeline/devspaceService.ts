@@ -97,7 +97,8 @@ import {
 import { findLocalEnvNames, helperEnvNames } from '../helper/localEnv';
 import type { HelperImageUse } from '../helper/helperImage';
 import { DEVCONTAINER_CLI_VERSION } from '../helper/helperImageBuild';
-import { isLockfileChanged, type HelperFiles } from '../helper/stepInputs';
+import { CONTEXT_COPY_FOLDER } from '../helper/scripts';
+import { isLockfileChanged, type BuildContext, type HelperFiles } from '../helper/stepInputs';
 import {
   compareWithBuildRecord,
   type CheckedOutcome,
@@ -351,6 +352,12 @@ interface LoadedConfiguration {
    */
   written?: Record<string, unknown>;
   lockfile?: Pick<ConfigFiles, 'lockfileText' | 'lockfileUnreadable'>;
+  /**
+   * R-DS-010: the build context of the shared image of a Dockerfile whose key sharedImageKey computed last (its path,
+   * the hash in the key, and the Dockerfile in it), which the build of that key reads as a checked copy
+   * (sharedBuildOptions).
+   */
+  sharedContext?: BuildContext;
 }
 
 /**
@@ -2871,7 +2878,7 @@ export class DevspaceService extends OperationBase {
           // The lockfile changed after the read of the key (the build stopped before the Dev Container CLI started):
           // the image is built for this devspace alone, from the files of the volume, as without a key.
           if (sharedKey === undefined || !isLockfileChanged(error)) throw error;
-          this.logger.info(`The devspace image of ${env.repository} is not shared: its lockfile changed after it was read. It is built for the devspace alone.`);
+          this.logger.info(`The devspace image of ${env.repository} is not shared: its lockfile or its build context changed after it was read. It is built for the devspace alone.`);
           sharedKey = undefined;
           delete builtRecord.imageKey;
           return this.buildDevspaceImage(ctx, loaded, imageName, builtRecord);
@@ -3090,11 +3097,14 @@ export class DevspaceService extends OperationBase {
   /**
    * R-DS-010: the image key of the build of `loaded` in this open (imageKey: the configuration as written and as
    * resolved, the IDs of the local images after the pulls, the digests of the Features that the registry answered in this
-   * open, the lockfile, and the version of the Dev Container CLI), or `undefined` when the build gives no shared image
-   * (sharedImageInputs; the reason goes to the log). A failed read of the local image is no key. `check`: the image check
-   * of this open or prepare (its answered Features).
+   * open, the lockfile, the version of the Dev Container CLI, and for a Dockerfile its text, its path in the build context
+   * and the hash of the build context), or `undefined` when the build gives no shared image (sharedImageInputs; the
+   * reason goes to the log). A failed read of a local image is no key. `check`: the image check of this open or prepare
+   * (its answered Features). For a Dockerfile, the build context of the key is kept in `loaded.sharedContext` for the
+   * build (sharedBuildOptions).
    */
   private async sharedImageKey(ctx: PipelineContext, loaded: LoadedConfiguration, check: ImageCheckState): Promise<string | undefined> {
+    delete loaded.sharedContext;
     const notShared = (reason: string): undefined => {
       this.logger.info(`The devspace image of ${ctx.env.repository} is not shared: ${reason}.`);
       return undefined;
@@ -3103,49 +3113,80 @@ export class DevspaceService extends OperationBase {
       compose: loaded.compose !== undefined,
       written: loaded.written,
       resolved: loaded.config,
-      dockerfile: loaded.dockerfileText !== undefined,
+      configPath: loaded.configPath,
+      ...(loaded.dockerfileText !== undefined ? { dockerfileText: loaded.dockerfileText } : {}),
       hostAccessChecks: ctx.hostAccessChecks,
       lockfileUnreadable: loaded.lockfile?.lockfileUnreadable === true,
       answeredFeatures: check.kind === 'checked' ? check.outcome.features : undefined,
     });
     if ('reason' in inputs) return notShared(inputs.reason);
-    // The ID and the labels of the local image that the build starts from.
-    let found: [string, Record<string, string>] | undefined;
-    try {
-      found = [...(await this.deps.docker.imageLabelsOf([inputs.image], ctx.signal))][0];
-    } catch (error) {
-      if (this.isCancellation(error, ctx.signal)) throw error;
-      return notShared(`its image ${inputs.image} could not be read: ${errorMessage(error)}`);
+    // The ID and the labels of each local image that the build starts from.
+    const images: Record<string, string> = {};
+    for (const reference of inputs.images) {
+      let found: [string, Record<string, string>] | undefined;
+      try {
+        found = [...(await this.deps.docker.imageLabelsOf([reference], ctx.signal))][0];
+      } catch (error) {
+        if (this.isCancellation(error, ctx.signal)) throw error;
+        return notShared(`its image ${reference} could not be read: ${errorMessage(error)}`);
+      }
+      if (found === undefined) return notShared(`its image ${reference} is not on the Docker engine`);
+      const [imageId, labels] = found;
+      // The image of a devspace of the account (the policy allows it as a base): its labels of that devspace would stay on
+      // an image that gets only the key. The build of this devspace alone writes its own labels over them.
+      if (hasDevspaceImageLabel(labels)) return notShared(`its image ${reference} was built for one devspace`);
+      images[reference] = imageId;
     }
-    if (found === undefined) return notShared(`its image ${inputs.image} is not on the Docker engine`);
-    const [imageId, labels] = found;
-    // The image of a devspace of the account (the policy allows it as a base): its labels of that devspace would stay on
-    // an image that gets only the key. The build of this devspace alone writes its own labels over them.
-    if (hasDevspaceImageLabel(labels)) return notShared(`its image ${inputs.image} was built for one devspace`);
-    // The configuration and the lockfile as the build finds them (not of the default image, whose configuration is not in
-    // the volume): a change since they were read, for example while the question of the update was open or during the
-    // pulls, gives no key, so the build reads them as without a key (an image of the devspace alone); the build of a key
-    // fails on a lockfile that changed after this read (sharedBuildOptions).
+    // The configuration, the Dockerfile and the lockfile as the build finds them (not of the default image, whose
+    // configuration is not in the volume): a change since they were read, for example while the question of the update
+    // was open or during the pulls, gives no key, so the build reads them as without a key (an image of the devspace
+    // alone); the build of a key fails on a lockfile or a build context that changed after this read (sharedBuildOptions).
+    // The hash of the build context of a Dockerfile is read here, with them.
+    let contextHash: string | undefined;
     if (loaded.defaultImage === undefined) {
+      const build: Record<string, unknown> = isRecord(loaded.config.build) ? loaded.config.build : {};
+      const raw = loaded.config as Record<string, unknown>;
+      const named = typeof build.dockerfile === 'string' ? build.dockerfile : typeof raw.dockerFile === 'string' ? raw.dockerFile : undefined;
       let now: ConfigFiles | undefined;
       try {
-        now = await this.deps.helper.readConfigFiles({ volumeName: ctx.env.volumeName, repository: ctx.env.repository, configPath: loaded.configPath, image: ctx.helperImage, signal: ctx.signal });
+        now = await this.deps.helper.readConfigFiles({
+          volumeName: ctx.env.volumeName,
+          repository: ctx.env.repository,
+          configPath: loaded.configPath,
+          ...(inputs.dockerfile !== undefined && named !== undefined ? { dockerfile: named, context: inputs.dockerfile.context } : {}),
+          image: ctx.helperImage,
+          signal: ctx.signal,
+        });
       } catch (error) {
         if (this.isCancellation(error, ctx.signal)) throw error;
         return notShared(`its configuration could not be read again: ${errorMessage(error)}`);
       }
       const lockfile = loaded.lockfile?.lockfileText ?? null;
-      if (now === undefined || configHash(now.configText) !== loaded.configHash || now.lockfileUnreadable === true || (now.lockfileText ?? null) !== lockfile) {
-        return notShared('its configuration or its lockfile changed since they were read');
+      const dockerfileText = inputs.dockerfile !== undefined ? now?.dockerfileText : undefined;
+      if (
+        now === undefined ||
+        configHash(now.configText, dockerfileText) !== loaded.configHash ||
+        (inputs.dockerfile !== undefined && dockerfileText !== inputs.dockerfile.text) ||
+        now.lockfileUnreadable === true ||
+        (now.lockfileText ?? null) !== lockfile
+      ) {
+        return notShared(inputs.dockerfile !== undefined ? 'its configuration, its Dockerfile or its lockfile changed since they were read' : 'its configuration or its lockfile changed since they were read');
+      }
+      if (inputs.dockerfile !== undefined) {
+        if (now.contextHash === undefined) return notShared(`its build context ${inputs.dockerfile.context} cannot be part of the key: ${now.contextUnhashable ?? 'it was not read'}`);
+        contextHash = now.contextHash;
       }
     }
+    if (inputs.dockerfile !== undefined && contextHash === undefined) return notShared('the hash of its build context is not known');
+    if (inputs.dockerfile !== undefined) loaded.sharedContext = { path: inputs.dockerfile.context, hash: contextHash!, dockerfile: inputs.dockerfile.path };
     return imageKey({
       cliVersion: DEVCONTAINER_CLI_VERSION,
       written: inputs.written,
       resolved: loaded.config,
-      images: { [inputs.image]: imageId },
+      images,
       features: inputs.features,
       lockfileText: loaded.lockfile?.lockfileText ?? null,
+      ...(inputs.dockerfile !== undefined ? { dockerfile: { text: inputs.dockerfile.text, path: inputs.dockerfile.path, contextHash: contextHash! } } : {}),
     });
   }
 
@@ -3744,13 +3785,22 @@ export class DevspaceService extends OperationBase {
    * was computed (for example from the running dev container of the devspace) never goes into an image of that key.
    * The default image has no lockfile in its key and no Features, so a lockfile of the repository changes nothing in
    * its image: it is not pinned (it is copied next to our copy, as without a key). Only for a key (sharedImageInputs:
-   * the written configuration is an object, the lockfile could be read).
+   * the written configuration is an object, the lockfile could be read). A Dockerfile (`loaded.sharedContext`): our copy
+   * names a copy of its build context (CONTEXT_COPY_FOLDER, next to our copy) and the Dockerfile in it, which the build
+   * makes and checks against the hash of the key (WRITE_AND_RUN_SCRIPT); the older `dockerFile` and `context` become
+   * `build.dockerfile` and `build.context` (the Dev Container CLI reads `context` only next to `dockerFile`).
    */
-  private sharedBuildOptions(loaded: LoadedConfiguration): { override: Record<string, unknown>; lockfileText?: string | null } {
+  private sharedBuildOptions(loaded: LoadedConfiguration): { override: Record<string, unknown>; lockfileText?: string | null; context?: BuildContext } {
     if (!isRecord(loaded.written)) throw new Error('The configuration of a shared image is no JSON object.');
+    const lockfile = loaded.defaultImage === undefined ? { lockfileText: loaded.lockfile?.lockfileText ?? null } : {};
+    const context = loaded.sharedContext;
+    if (context === undefined) return { override: loaded.written, ...lockfile };
+    const { dockerFile: _dockerFile, context: _context, ...written } = loaded.written;
+    const build = isRecord(written.build) ? written.build : {};
     return {
-      override: loaded.written,
-      ...(loaded.defaultImage === undefined ? { lockfileText: loaded.lockfile?.lockfileText ?? null } : {}),
+      override: { ...written, build: { ...build, context: CONTEXT_COPY_FOLDER, dockerfile: `${CONTEXT_COPY_FOLDER}/${context.dockerfile}` } },
+      ...lockfile,
+      context,
     };
   }
 
@@ -3758,7 +3808,8 @@ export class DevspaceService extends OperationBase {
    * The options of `devcontainer build` of the open and of a prepare (`prepare`): Docker Compose builds our copy of
    * devcontainer.json (composeBuildOptions; of a prepare with the build model of the images of a prepare), next to which
    * WRITE_AND_RUN_SCRIPT writes a copy of the lockfile (the CLI writes only there, in the helper); a shared image of the
-   * key `key` our copy of the configuration of its key with the lockfile of its key (sharedBuildOptions); the default
+   * key `key` our copy of the configuration of its key with the lockfile of its key, and for a Dockerfile the checked
+   * copy of its build context (sharedBuildOptions); the default
    * image its synthesized configuration (our copy, like Docker Compose); else the configuration of the volume. Our copy
    * never lets the CLI write the lockfile of the repository (it writes only the copy next to our copy), so only a
    * prepare with the configuration of the volume builds with `--frozen-lockfile`, which keeps the lockfile of the
@@ -3770,7 +3821,7 @@ export class DevspaceService extends OperationBase {
     loaded: LoadedConfiguration,
     key: string | undefined,
     prepare: boolean,
-  ): { override?: Record<string, unknown>; files?: HelperFiles; env?: Record<string, string>; lockfileText?: string | null; frozenLockfile?: true } {
+  ): { override?: Record<string, unknown>; files?: HelperFiles; env?: Record<string, string>; lockfileText?: string | null; context?: BuildContext; frozenLockfile?: true } {
     if (loaded.compose !== undefined) return this.composeBuildOptions(env, loaded.compose, prepare);
     if (key !== undefined) return this.sharedBuildOptions(loaded);
     if (loaded.defaultImage !== undefined) return this.defaultImageBuildOptions(loaded);
