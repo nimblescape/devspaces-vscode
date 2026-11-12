@@ -2,9 +2,10 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// Show Log of the Monitor on the report of the container of the Monitor (docs/requirements.md R-ENG-010): the last lines
-// of the log of the container devspaces-monitor of a host, read with one fixed `docker logs` call on the shared shell of
-// the host (isMonitorLogCall), never followed. No `vscode`.
+// Show Log of the Monitor on the reports of the container and of the volume of the Monitor (docs/requirements.md
+// R-ENG-010): the last lines of the log of the container devspaces-monitor of a host, read with one fixed `docker logs`
+// call (isMonitorLogCall) on the shared shell of the host, or through the Docker pipe of the extension, which lets
+// through the log of that container only; never followed. No `vscode`.
 import type { BootstrapDocker } from '../docker/bootstrapDocker';
 import { CommandError } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';

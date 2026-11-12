@@ -126,11 +126,14 @@ describe('the report page', () => {
     expect(lastView(panel)).toMatchObject({ title: 'nginx:1.27', content: contentOf('nginx:1.27') });
     expect(h.reads.map((read) => read.target.object.name)).toEqual(['devspaces-monitor', 'nginx:1.27']);
     panel.setVisible(false);
-    h.pages.show(row('lab', { ...nginx, name: 'nginx:latest' }));
+    h.pages.show(row('lab', { ...nginx, name: 'nginx:latest', active: true }));
     await flush();
     expect(h.reads).toHaveLength(2);
     expect(panel.visible).toBe(true);
     expect(panel.reveal).toHaveBeenLastCalledWith(undefined, true);
+    // The name and the color of the newer row, without a read.
+    expect(panel.title).toBe('nginx:latest');
+    expect(lastView(panel)).toMatchObject({ title: 'nginx:latest', tone: 'notDevspaces', content: contentOf('nginx:1.27') });
   });
 
   it('drops the result of the read of the resource before', async () => {

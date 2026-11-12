@@ -3,7 +3,8 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The reads of the report of one resource of the view Docker Hosts (docs/requirements.md R-ENG-010), within an operation
-// on its host on the shared shell (runWithDockerTarget with `onShell`): the facts of Docker of the object, and for a
+// on its host on the shared shell (runWithDockerTarget with `onShell`; through the Docker pipe of the extension while a
+// connection of the relay to an SSH host is open): the facts of Docker of the object, and for a
 // report that needs the shared volumes (reportVolumes) the volumes that exist, the helper images that may run the reader,
 // the platform of the engine, and one run of the reader. Only calls that read, and the reader, which only reads; nothing
 // is pulled. No `vscode`.

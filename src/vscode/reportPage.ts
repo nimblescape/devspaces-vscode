@@ -63,7 +63,7 @@ export class ReportPages implements vscode.Disposable {
     // A page that is kept with this resource shows it; the page that follows the clicks shows it too.
     const kept = [...this.pages].find((page) => page.kept && sameTarget(page.target, target));
     if (kept !== undefined) {
-      kept.reveal();
+      kept.showTarget(target);
       return;
     }
     if (this.follow !== undefined) {
@@ -180,10 +180,17 @@ class ReportPage {
     this.panel.reveal(undefined, true);
   }
 
-  /** The page that follows the clicks shows the report of `target` (the same resource again: only a show). */
+  /**
+   * The page shows the report of `target`. The same resource again is only a show, with the name and the state of the
+   * newer row (the view may have read the host again since); another resource (only on the page that follows the clicks)
+   * is read.
+   */
   showTarget(target: ReportTarget): void {
     if (sameTarget(target, this.target)) {
+      this.target = target;
+      this.panel.title = ReportPageTexts.panelTitle(target.object);
       this.reveal();
+      this.post();
       return;
     }
     this.target = target;
