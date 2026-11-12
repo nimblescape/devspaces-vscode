@@ -129,7 +129,8 @@ interface Running {
 function appendOutput(running: Running, chunk: Buffer): void {
   const length = running.stdout.length + chunk.length;
   if (length > running.room.length) {
-    const room = Buffer.allocUnsafe(Math.max(length, 2 * running.room.length));
+    // At most a little more than the largest output that a command may print (tooMuch ends a longer one).
+    const room = Buffer.allocUnsafe(Math.max(length, Math.min(2 * running.room.length, MAX_SHELL_COMMAND_OUTPUT + 64 * 1024)));
     running.stdout.copy(room);
     running.room = room;
   }
@@ -454,9 +455,11 @@ export class RemoteShell {
     }
     const running = this.running;
     if (running === undefined || running.stderrDone) return;
-    running.stderr += text;
     const end = `\n${running.marker}\n`;
-    const at = running.stderr.indexOf(end);
+    // The marker may start in the error output before this text: the search starts there, not at the start.
+    const from = Math.max(0, running.stderr.length - end.length);
+    running.stderr += text;
+    const at = running.stderr.indexOf(end, from);
     if (at >= 0) {
       running.stderr = running.stderr.slice(0, at);
       running.stderrDone = true;

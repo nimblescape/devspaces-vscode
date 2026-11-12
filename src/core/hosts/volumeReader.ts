@@ -62,7 +62,7 @@ export const READER_PROTOCOL = 1;
  * (small, and the most important), the store of VS Code, the cache of the workers:
  * - the Monitor: every file `*.json` at the top, in heartbeats/, extensions/ and extensions/wanted/ with its text (or
  *   why it was left out), and every file of worker-scripts/ (the texts of its records `*.json` only);
- * - the store of VS Code: the markers used/VERSION with their time and the files extensions/FOLDER/NAME first (they
+ * - the store of VS Code: the markers used/QUALITY-PLATFORM-COMMIT with their time and the files extensions/FOLDER/NAME first (they
  *   cost little), then each server folder server/QUALITY/PLATFORM/COMMIT with the version of its product.json, whether
  *   `node` and the script of its quality are there and its size; the sizes of tmp/ and extensions/tmp/ and the number of
  *   the locks;
@@ -110,8 +110,9 @@ function list(dir, checked, max) {
   return result;
 }
 function isFile(file) { const stat = lstat(file); return stat !== undefined && stat.isFile(); }
-// The size of a folder. A file with several hard links counts once (as Docker counts it); an entry that lstat cannot
-// read (a name that is no UTF-8, or one that went meanwhile) makes the size incomplete.
+// The size of a folder. A file with several hard links counts once in it (as Docker counts a volume; its device and
+// inode as bigint, which a number cannot hold exactly); an entry that lstat cannot read (a name that is no UTF-8, or one
+// that went meanwhile) makes the size incomplete.
 function usage(dir) {
   const result = { bytes: 0, files: 0, cut: false };
   const linked = new Set();
@@ -126,7 +127,7 @@ function usage(dir) {
       const stat = lstat(file);
       if (stat === undefined) { result.cut = true; if (stopped) { break; } continue; }
       if (stat.isDirectory()) { stack.push([file, true]); continue; }
-      if (stat.nlink > 1) { const key = stat.dev + ":" + stat.ino; if (linked.has(key)) { continue; } linked.add(key); }
+      if (stat.nlink > 1) { let key; try { const exact = fs.lstatSync(file, { bigint: true }); key = exact.dev + ":" + exact.ino; } catch { key = file; } if (linked.has(key)) { continue; } linked.add(key); }
       result.bytes += stat.size;
       result.files++;
     }
@@ -187,6 +188,7 @@ function vscode(dir) {
   }
   const extensions = [];
   for (const folder of ["universal", "linux-x64", "linux-arm64"]) {
+    if (extensions.length >= LIMITS.rows || stopped) { cut = true; break; }
     for (const name of listed(path.join("extensions", folder))) {
       if (extensions.length >= LIMITS.rows) { cut = true; break; }
       const stat = lstat(path.join(dir, "extensions", folder, name));
@@ -196,7 +198,9 @@ function vscode(dir) {
   }
   const servers = [];
   for (const quality of listed("server")) {
+    if (servers.length >= LIMITS.rows || stopped) { cut = true; break; }
     for (const platform of listed(path.join("server", quality))) {
+      if (servers.length >= LIMITS.rows || stopped) { cut = true; break; }
       for (const commit of listed(path.join("server", quality, platform))) {
         if (servers.length >= LIMITS.rows || stopped) { cut = true; break; }
         const folder = path.join(dir, "server", quality, platform, commit);
@@ -362,7 +366,7 @@ export interface StoredExtensionFile {
 /** What the store of VS Code (devspaces-vscode) contains. */
 export interface VscodeStoreReading {
   servers: StoredServer[];
-  /** The markers of the use of a server version by an open (used/VERSION) and their time. */
+  /** The markers of the use of a server version by an open (used/QUALITY-PLATFORM-COMMIT, serverVersionName) and their time. */
   used: { name: string; at?: number }[];
   extensions: StoredExtensionFile[];
   /** The temporary folders of the downloads of servers (tmp/). */
@@ -610,8 +614,8 @@ export interface VolumeReadInput {
 /** The end of an error output that a failure keeps. */
 const DETAIL_LENGTH = 2000;
 
-/** The failure of a Docker CLI before 20.10 on the host, which has no `--pull` (the reader never pulls). */
-export const OLD_CLI_DETAIL = 'The Docker CLI on the host is older than 20.10: it has no option --pull, which the reader needs so that it never pulls an image.';
+/** The failure of a Docker CLI before 20.10 (on the host, or of this computer), which has no `--pull` (the reader never pulls). */
+export const OLD_CLI_DETAIL = 'The Docker CLI that ran the reader is older than 20.10: it has no option --pull, which the reader needs so that it never pulls an image.';
 
 /**
  * One read of the shared volumes on the host of the current operation (within an operation on that host, as the other
