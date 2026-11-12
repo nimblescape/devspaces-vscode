@@ -738,16 +738,16 @@ export async function readHostInventory(
   const { signal } = options;
   const result = await docker.run(SYSTEM_DF_ARGS, { timeoutMs: SYSTEM_DF_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (result.exitCode !== 0 || result.timedOut) {
-    throw new CommandError(commandText(SYSTEM_DF_ARGS), result.exitCode, result.stdout, result.timedOut ? `${result.stderr}\nThe command did not end within the time limit.`.trim() : result.stderr);
+    throw new CommandError(commandText(SYSTEM_DF_ARGS), result.exitCode, result.stdout, result.timedOut ? `${result.stderr}\nThe command did not end within the time limit.`.trim() : result.stderr, result.timedOut);
   }
   const df = parseJsonOutput(result.stdout);
   if (!isRecord(df)) throw new CommandError(commandText(SYSTEM_DF_ARGS), result.exitCode, result.stdout, 'Unexpected output of docker system df.');
   const devspaceImageIds = new Set((await docker.listImagesByLabel(LABEL_DEVSPACE_ID)).map((image) => image.id));
   const helperImageIds = new Set((await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => image.id));
   const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
-  if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr);
+  if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr, networkList.timedOut);
   const tagList = await docker.run(IMAGE_TAGS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
-  if (tagList.exitCode !== 0 || tagList.timedOut) throw new CommandError(commandText(IMAGE_TAGS_ARGS), tagList.exitCode, tagList.stdout, tagList.stderr);
+  if (tagList.exitCode !== 0 || tagList.timedOut) throw new CommandError(commandText(IMAGE_TAGS_ARGS), tagList.exitCode, tagList.stdout, tagList.stderr, tagList.timedOut);
   const runningIds = runningContainers(Array.isArray(df.Containers) ? df.Containers : []).flatMap((item) => text(item.ID) ?? []);
   const running = runningIds.length > 0 ? await readRunningUses(docker, runningIds, signal) : [];
   return buildInventory({

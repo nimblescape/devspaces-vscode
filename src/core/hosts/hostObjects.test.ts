@@ -680,6 +680,15 @@ describe('readHostInventory', () => {
     const tags = fakeDocker({ 'system df': ok('{}'), 'image ls': fail('Error response from daemon: denied') });
     await expect(readHostInventory(tags, { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/denied/);
   });
+
+  it('says in its error whether a read ended at its time limit', async () => {
+    const options = { known: [], baseImages: new Set<string>(), helperBaseImages: new Set<string>() };
+    const late = fakeDocker({ 'system df': { exitCode: null, stdout: '', stderr: '', timedOut: true } });
+    await expect(readHostInventory(late, options)).rejects.toMatchObject({ timedOut: true, message: expect.stringMatching(/did not end within the time limit/) });
+    const lateNetworks = fakeDocker({ 'system df': ok('{}'), 'network ls': { exitCode: null, stdout: '', stderr: '', timedOut: true } });
+    await expect(readHostInventory(lateNetworks, options)).rejects.toMatchObject({ timedOut: true });
+    await expect(readHostInventory(fakeDocker({ 'system df': fail('permission denied') }), options)).rejects.toMatchObject({ timedOut: false });
+  });
 });
 
 describe('runningDevspaces', () => {

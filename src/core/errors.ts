@@ -92,6 +92,8 @@ export class CommandError extends Error {
     readonly exitCode: number | null,
     readonly stdout: string,
     readonly stderr: string,
+    /** The command did not end within its time limit (RunResult.timedOut). */
+    readonly timedOut = false,
   ) {
     super(`${command} failed with exit code ${exitCode}: ${(stderr || stdout).trim().slice(-2000)}`);
     this.name = 'CommandError';

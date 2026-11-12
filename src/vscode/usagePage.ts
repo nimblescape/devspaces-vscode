@@ -43,6 +43,8 @@ export const VM_CHECK_MS = 30_000;
 export const SIZES_EVERY_MS = 10 * 60_000;
 /** A start (the open, Resume, a show after the end of the samples) reads the sizes again only when they are older. */
 export const SIZES_FRESH_MS = 60_000;
+/** A read in the background that did not reach the host (refused without an open login, the VM did not run): the next try. */
+export const SIZES_RETRY_MS = 60_000;
 /**
  * The VM counts as started by the login of the page only when it is younger than the check by more than this: the
  * answer takes time on its way back, and the age has steps of 1/100 s.
@@ -650,21 +652,21 @@ class UsagePage {
         inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
       }
       ran = true;
+      this.sizesAuto = true;
       // The host started again meanwhile: the objects are of before.
       if (epoch !== this.bootEpoch) return;
       this.sizes = { inventory, at: this.timers.now() };
       this.sizesError = undefined;
-      this.sizesAuto = true;
     } catch (error) {
       // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result. A read
       // in the background without an open login ends with an AbortError too, and the next try comes after a minute.
       if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
       // The VM went to sleep during a read in the background (its shell ended): the samples see it themselves.
-      if (background && this.vm && (await this.vmStateNow()).kind !== 'running') return;
+      if (background && this.vm && ((await this.vmStateNow()).kind !== 'running' || controller.signal.aborted || this.disposed)) return;
       ran = true;
       const detail = errorMessage(error);
-      // A read longer than its time limit (no exit code) stopped the shared shell: only a Refresh Sizes tries it again.
-      const tooLong = error instanceof CommandError && error.exitCode === null;
+      // A read longer than its time limit stopped the shared shell: only a Refresh Sizes tries it again.
+      const tooLong = error instanceof CommandError && error.timedOut;
       if (tooLong) this.sizesAuto = false;
       const next = !this.sizesAuto ? ' (the page reads them by itself again after a Refresh Sizes that works)' : background ? ' (the page tries again in 10 minutes)' : '';
       this.deps.logger.warn(`The sizes of ${this.host} could not be read${next}: ${detail}`);
@@ -678,7 +680,7 @@ class UsagePage {
       const current = epoch === this.bootEpoch;
       if (!current) this.sizesReadAt = undefined;
       else if (ran) this.sizesReadAt = this.timers.now();
-      this.sizesDueAt = !current ? undefined : this.timers.now() + (ran ? SIZES_EVERY_MS : SIZES_FRESH_MS);
+      this.sizesDueAt = !current ? undefined : this.timers.now() + (ran ? SIZES_EVERY_MS : SIZES_RETRY_MS);
       this.post();
     }
   }

@@ -19,7 +19,7 @@ import type { RunResult } from '../core/ports';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { fakeVscode, resetFakeVscode, type FakeWebviewPanel } from './testing/fakeVscode';
-import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, SIZES_EVERY_MS, SIZES_FRESH_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
+import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, SIZES_EVERY_MS, SIZES_FRESH_MS, SIZES_RETRY_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
 import { UsagePageTexts, type UsagePageView } from './usagePageModel';
 
 const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
@@ -908,6 +908,14 @@ describe('UsagePages', () => {
     await timers.advance(2 * SSH_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(2);
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    // A command that failed without an exit code, but not at its time limit (for example an output that is too large).
+    readSizes.mockRejectedValueOnce(new CommandError('docker system df -v', null, '', 'The output is too large.'));
+    await timers.advance(SIZES_EVERY_MS);
+    expect(readSizes).toHaveBeenCalledTimes(3);
+    // A key on the page, so that it does not pause after 30 minutes.
+    panel.receive({ type: 'activity' });
+    await timers.advance(SIZES_EVERY_MS);
+    expect(readSizes).toHaveBeenCalledTimes(4);
   });
 
 
@@ -920,7 +928,7 @@ describe('UsagePages', () => {
   });
 
   it('reads the sizes by itself no more after a read longer than its time limit, until a Refresh Sizes that worked', async () => {
-    const tooLong = () => new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.');
+    const tooLong = () => new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.', true);
     readSizes.mockRejectedValueOnce(tooLong());
     const panel = await openRead(pages(), 'build-box');
     expect(lastView(panel).docker.note).toMatch(/did not end within the time limit/);
@@ -946,6 +954,42 @@ describe('UsagePages', () => {
   });
 
 
+  it('reads by itself again after a Refresh Sizes that worked across a new start of the host', async () => {
+    shells.open.add(LIMA_HOST);
+    readSizes.mockRejectedValueOnce(new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.', true));
+    const panel = await openRead(pages(), LIMA_HOST);
+    let release: (inventory: HostInventory) => void = () => {};
+    readSizes.mockImplementationOnce(() => new Promise<HostInventory>((resolve) => (release = resolve)));
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    release(emptyInventory());
+    await flush();
+    // The new start of the host reads at its next values.
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(3);
+  });
+
+  it('shows no error of a failed read in the background when the VM stops while the page reads its state', async () => {
+    shells.open.add(LIMA_HOST);
+    let hold = false;
+    let release: (state: VmState) => void = () => {};
+    const made = pages(LIMA_HOST, { vmState: () => (hold ? new Promise<VmState>((resolve) => (release = resolve)) : Promise.resolve<VmState>({ kind: 'running' })) });
+    readSizes.mockImplementationOnce(async () => {
+      hold = true;
+      throw new Error('Cannot connect to the Docker daemon');
+    });
+    const panel = await openRead(made, LIMA_HOST);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    made.vmClosing();
+    release({ kind: 'running' });
+    await flush();
+    expect(lastView(panel).docker.note).not.toMatch(/could not be read/);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not be read'));
+  });
+
   it('shows no error of a read in the background that ended because the VM went to sleep, and tries again after a minute', async () => {
     shells.open.add(LIMA_HOST);
     readSizes.mockImplementationOnce(async () => {
@@ -958,7 +1002,7 @@ describe('UsagePages', () => {
     expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not be read'));
     // The VM runs again (a start from somewhere else): the reads by itself stay on.
     vmState = { kind: 'running' };
-    await timers.advance(SIZES_FRESH_MS);
+    await timers.advance(SIZES_RETRY_MS);
     expect(readSizes).toHaveBeenCalledTimes(2);
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
   });
@@ -978,7 +1022,7 @@ describe('UsagePages', () => {
   it('tries again a minute after a read in the background that did not reach the host', async () => {
     readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
     const panel = await openRead(pages(), 'build-box');
-    await timers.advance(SIZES_FRESH_MS - SSH_USAGE_INTERVAL_MS);
+    await timers.advance(SIZES_RETRY_MS - SSH_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(1);
     await timers.advance(SSH_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(2);
