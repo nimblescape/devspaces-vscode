@@ -14,7 +14,7 @@
 // variable in one, its value in the other), give different images.
 import * as crypto from 'crypto';
 import { hasDigest, isOciFeatureReference } from '../imageCheck/reference';
-import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, LABEL_OWNER_ID, LABEL_PREPARED, LABEL_REPOSITORY, isDevspaceImageName } from '../names';
+import { LABEL_IMAGE_KEY, hasDevspaceImageLabel, isSharedImageTag } from '../names';
 import type { DevcontainerConfig } from '../types';
 import { recordedImageKey } from './imageRecord';
 import { isRecord } from '../valueChecks';
@@ -145,19 +145,9 @@ export function sharedImageInputs(facts: SharedImageFacts): SharedImageInputs | 
   return { image: config.image.trim(), features, written: facts.written };
 }
 
-/**
- * The labels of an image that was built for one devspace (imageRecordLabels, preparedImageLabels; imageKey.test.ts
- * compares the lists).
- */
-export const DEVSPACE_IMAGE_LABELS: readonly string[] = [LABEL_DEVSPACE_ID, LABEL_REPOSITORY, LABEL_OWNER_ID, LABEL_BUILD_RECORD, LABEL_PREPARED];
-
-/**
- * Whether `labels` (of an image) hold a label of an image built for one devspace (DEVSPACE_IMAGE_LABELS), whatever its
- * value: such an image is no shared image, and no base image of one (a shared image gets only its key, so the labels
- * of the devspace of its base image would stay on it).
- */
-export function hasDevspaceImageLabel(labels: Readonly<Record<string, string>>): boolean {
-  return DEVSPACE_IMAGE_LABELS.some((label) => Object.prototype.hasOwnProperty.call(labels, label));
+/** Whether the image IDs `a` and `b` name the same image (without case). */
+export function sameImageId(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /**
@@ -165,35 +155,42 @@ export function hasDevspaceImageLabel(labels: Readonly<Record<string, string>>):
  * for it are listed.
  */
 export function isSharedImageCandidate(image: { tags: readonly string[]; labels: Readonly<Record<string, string>> }, key: string): boolean {
-  return image.labels[LABEL_IMAGE_KEY] === key && !hasDevspaceImageLabel(image.labels) && image.tags.some(isDevspaceImageName);
+  return image.labels[LABEL_IMAGE_KEY] === key && !hasDevspaceImageLabel(image.labels) && image.tags.some(isSharedImageTag);
 }
 
 /**
  * Whether the image `image` (listed by the label LABEL_IMAGE_KEY) is a shared devspace image of the key `key` that a
- * build may tag instead of building:
+ * build or a prepare may tag instead of building:
  * - it carries the key, and none of the labels of an image built for one devspace (DEVSPACE_IMAGE_LABELS: such an
  *   image never got the key from the extension, a key label on it comes from its base image or its Dockerfile);
- * - it has the tag of a devspace image (isDevspaceImageName), which only the extension gives;
- * - a dev container of `containers` (the dev containers of every devspace) was created from it (its image ID) and
- *   carries a build record with the key (recordedImageKey). Only the extension writes that record, after it built or
- *   tagged the image as a shared image of the key. The label of the key alone is not enough: the Dockerfile of another
- *   repository can write it into the image that it builds, which has the tag of its devspace image from the end of its
- *   build until the extension adds the labels of the devspace.
+ * - it has the tag of a devspace image or of a prepared devspace image (isSharedImageTag);
+ * - something that only the extension writes vouches for it: a dev container of `containers` (the dev containers of
+ *   every devspace) that was created from it (its image ID) and carries a build record with the key
+ *   (recordedImageKey), which the extension writes after it built or tagged the image as a shared image of the key; or
+ *   the record of a background prepare that built it for the key (`recorded`: the image ID of the record of the key,
+ *   sharedImageRecords.ts, in the volume of the Monitor), before any container was created from it. The label of the
+ *   key and the tag are not enough: the Dockerfile of another repository can write the key into the image that it
+ *   builds, which has the tag of its devspace image (or of its prepared image) from the end of its build until the
+ *   extension adds the labels of the devspace.
  */
 export function isSharedImage(
   image: { id: string; tags: readonly string[]; labels: Readonly<Record<string, string>> },
   key: string,
   containers: ReadonlyArray<{ imageId?: string; labels: Readonly<Record<string, string>> }>,
+  recorded?: string,
 ): boolean {
   if (!isSharedImageCandidate(image, key)) return false;
-  const id = image.id.toLowerCase();
-  return containers.some((container) => container.imageId?.toLowerCase() === id && recordedImageKey(container.labels) === key);
+  if (recorded !== undefined && sameImageId(recorded, image.id)) return true;
+  return containers.some((container) => container.imageId !== undefined && sameImageId(container.imageId, image.id) && recordedImageKey(container.labels) === key);
 }
 
 /**
- * Of the shared images `images` (isSharedImage), the one that a build tags: the newest (the latest rebuild), then the
- * smallest ID, so that every open of the same key takes the same image.
+ * Of the shared images `images` (isSharedImage), the one that a build or a prepare tags: the image of the record of a
+ * prepare for the key (`recorded`, its image ID), which the record keeps vouched after its dev containers are gone; else
+ * the newest (the latest rebuild), then the smallest ID; so that every open and prepare of the same key takes the same
+ * image.
  */
-export function chosenSharedImage<T extends { id: string; createdAt: string }>(images: readonly T[]): T | undefined {
-  return [...images].sort((a, b) => (a.createdAt === b.createdAt ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.createdAt < b.createdAt ? 1 : -1))[0];
+export function chosenSharedImage<T extends { id: string; createdAt: string }>(images: readonly T[], recorded?: string): T | undefined {
+  const ofRecord = recorded !== undefined ? images.find((image) => sameImageId(image.id, recorded)) : undefined;
+  return ofRecord ?? [...images].sort((a, b) => (a.createdAt === b.createdAt ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.createdAt < b.createdAt ? 1 : -1))[0];
 }

@@ -129,6 +129,7 @@ import {
 } from './images';
 import { stopLockDeps, stopLocker, type StopLocker } from './stopLock';
 import { prepareDevspaces, storedPrepareWorker, type PrepareWorker } from './prepares';
+import { sharedImageRecords } from '../core/helperChannel/sharedImageRecords';
 import { MONITOR_WORKER_HASH_ENV } from '../core/remoteMonitor/workerScript';
 
 /** Time limit of the container list (of the list of the engine). */
@@ -1603,6 +1604,7 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
           monotonic,
           lastUsed: () => lastUsedTimes(dir),
           worker: deps.prepareWorker ?? storedPrepareWorker(deps.env[MONITOR_WORKER_HASH_ENV], stateDir, now),
+          sharedImageRecords: sharedImageRecords(stateDir),
         });
       // The workspace helper image of the monitor, after the images in use: its check and its rebuild when its base
       // image changed, with the record of the check in the volume, which the windows read through their heartbeats.

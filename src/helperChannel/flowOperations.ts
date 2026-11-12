@@ -49,7 +49,7 @@ import { workerServices } from '../core/worker/workerServices';
 import { EngineDocker } from '../core/worker/engineDocker';
 import { windowStateFlow } from '../core/worker/windowStateFlow';
 import type { HelperBatchSession } from '../core/helperChannel/helperChannel';
-import { workerDevspaceLock, workerPrepareLock } from './workerLock';
+import { sharedImageRecordsDeps, workerDevspaceLock, workerPrepareLock } from './workerLock';
 import { stopFlow } from '../core/worker/stopFlow';
 import { LOCK_DEPS, takeDevspaceLock, type LockDeps } from './lock';
 import type { DockerEngine } from '../core/worker/dockerEngine';
@@ -812,6 +812,8 @@ export function openOperation(
       devspaceLock: workerDevspaceLock(lockDeps, (p) => openBatch(context, p), context),
       // An update may wait for the prepare of its image.
       prepareLock: workerPrepareLock(lockDeps, context),
+      // A prepared shared image is vouched for by the record of its prepare (R-DS-010).
+      ...sharedImageRecordsDeps(lockDeps, logger),
       analyzer: workerAnalyzer(context),
       settings: openSettingsOf(checked.repository, checked.settings),
       monitorSource: checked.monitorSource,

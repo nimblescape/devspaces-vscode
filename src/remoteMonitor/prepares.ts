@@ -24,7 +24,9 @@
 // - One line of the log per devspace: prepared, skipped and why, failed, or stopped after the time limit, with the
 //   duration; the worker's own log lines and the build output stay out of the monitor's log.
 // - Then the prepared images (`<resource>:prepared` with the label of a prepare) of devspaces that have no volume on
-//   the engine any more are removed, by their tag, never with force, never one that a container uses.
+//   the engine any more are removed, by their tag, never with force, never one that a container uses. So are the tags
+//   `<resource>:prepared` of such devspaces on shared images (R-DS-010: only the image key, no label of a devspace),
+//   and the records of the shared images that a prepare built (sharedImageRecords) whose image is gone.
 // The prepare of the worker holds the prepare lock of its devspace only; the background run (CacheSchedule) runs at
 // most once at a time, so the prepares of two runs never overlap. It never touches a container or the content of a volume.
 import * as fs from 'fs';
@@ -36,7 +38,21 @@ import { HelperChannel } from '../core/helperChannel/helperChannel';
 import { CHANNEL_ENTRY, OP_PREPARE, parsePrepareValue, type PrepareValue } from '../core/helperChannel/protocol';
 import { loaderCommand } from '../core/loader/pipeLoader';
 import { sourceSegment } from '../core/devspaceSource';
-import { LABEL_CONFIG_PATH, LABEL_DEFAULT_IMAGE, LABEL_DEVSPACE_ID, LABEL_PREPARED, LABEL_REPOSITORY, LABEL_VOLUME, PREPARED_IMAGE_TAG, devspaceImageRepository, resourceName } from '../core/names';
+import {
+  LABEL_CONFIG_PATH,
+  LABEL_DEFAULT_IMAGE,
+  LABEL_DEVSPACE_ID,
+  LABEL_IMAGE_KEY,
+  LABEL_PREPARED,
+  LABEL_REPOSITORY,
+  LABEL_VOLUME,
+  PREPARED_IMAGE_TAG,
+  devspaceImageRepository,
+  isKeyOnlyImage,
+  isPreparedImageName,
+  resourceName,
+} from '../core/names';
+import type { SharedImageRecords } from '../core/helperChannel/sharedImageRecords';
 import { DEFAULT_CONFIG_PATH, isRepositoryName } from '../core/pipeline/recordRules';
 import type { DevspaceSource } from '../core/types';
 import { NodeProcessRunner } from '../core/process';
@@ -88,21 +104,47 @@ export interface PreparesDeps {
   lastUsed: () => Promise<Map<string, number>>;
   /** The worker of the prepares, or why there is none (no script). */
   worker: () => PrepareWorker | { reason: string };
+  /** The records of the shared images that a prepare built, in the volume (sharedImageRecords); none without them. */
+  sharedImageRecords?: SharedImageRecords;
+}
+
+/** The volumes of the devspaces of the engine, read once per run (scanDevspaceVolumes). */
+export interface DevspaceVolumes {
+  /**
+   * The devspaces of the engine: one per workspace volume with the labels of a devspace (a valid ID, a repository
+   * `owner/name`, no label of an additional volume) and the name that the extension gives it (resourceName), as the
+   * worker's prepare finds them (devspaceOfVolume).
+   */
+  devspaces: PrepareDevspace[];
+  /**
+   * The names of the devspace images (devspaceImageRepository, lower case) of every volume with the labels of a devspace
+   * (a valid ID and repository; also an additional volume, or one of an older name).
+   */
+  imageRepositories: ReadonlySet<string>;
+  /** Every listed volume could be read (a volume that is gone after the list is none). */
+  complete: boolean;
 }
 
 /**
- * The devspaces of the engine: one per workspace volume with the labels of a devspace (a valid ID, a repository
- * `owner/name`, no label of an additional volume) and the name that the extension gives it (resourceName), as the
- * worker's prepare finds them (devspaceOfVolume). Throws when the volumes cannot be listed.
+ * The volumes with the label of a devspace ID on the engine (DevspaceVolumes): each listed and inspected once. Throws
+ * when the volumes cannot be listed or a volume cannot be inspected.
  */
-export async function workspaceDevspaces(engine: Pick<PrepareEngine, 'volumeNames' | 'inspect'>): Promise<PrepareDevspace[]> {
+export async function scanDevspaceVolumes(engine: Pick<PrepareEngine, 'volumeNames' | 'inspect'>): Promise<DevspaceVolumes> {
   const names = await engine.volumeNames({ label: [LABEL_DEVSPACE_ID] }, AbortSignal.timeout(PREPARE_ENGINE_TIMEOUT_MS));
   const found = new Map<string, PrepareDevspace>();
+  const imageRepositories = new Set<string>();
+  let complete = true;
   for (const name of new Set(names)) {
     const volume = (await engine.inspect('volume', name, AbortSignal.timeout(PREPARE_ENGINE_TIMEOUT_MS))) as { Name?: unknown; Labels?: unknown } | undefined;
-    const labels = volume?.Labels;
-    if (typeof volume?.Name !== 'string' || typeof labels !== 'object' || labels === null) continue;
+    // Removed after the list.
+    if (volume === undefined) continue;
+    const labels = volume.Labels;
+    if (typeof volume.Name !== 'string' || typeof labels !== 'object' || labels === null) {
+      complete = false;
+      continue;
+    }
     const { [LABEL_DEVSPACE_ID]: id, [LABEL_REPOSITORY]: repository, [LABEL_VOLUME]: additional, [LABEL_DEFAULT_IMAGE]: defaultImage, [LABEL_CONFIG_PATH]: configPath } = labels as Record<string, unknown>;
+    if (isStorageId(id) && isPreparedRepository(repository)) imageRepositories.add(devspaceImageRepository(repository, id).toLowerCase());
     if (additional !== undefined || !isStorageId(id) || !isPreparedRepository(repository)) continue;
     // The name of the devspace of these labels: with the word of its source (the labels of the volume name it), or
     // without (a volume of version 0.5.0 or older). The worker's prepare checks the labels in full (devspaceOfVolume).
@@ -112,7 +154,7 @@ export async function workspaceDevspaces(engine: Pick<PrepareEngine, 'volumeName
     if (!expected.includes(volume.Name.toLowerCase())) continue;
     found.set(id, { id, repository });
   }
-  return [...found.values()];
+  return { devspaces: [...found.values()], imageRepositories, complete };
 }
 
 /** A repository as the worker's prepare takes it from the labels of a volume (devspaceOfVolume). */
@@ -182,7 +224,8 @@ function notePrepare(env: PrepareDevspace, value: PrepareValue): void {
  */
 export async function prepareDevspaces(deps: PreparesDeps): Promise<void> {
   const { log } = deps;
-  const devspaces = prepareOrder(await workspaceDevspaces(deps.engine), await deps.lastUsed());
+  const volumes = await scanDevspaceVolumes(deps.engine);
+  const devspaces = prepareOrder(volumes.devspaces, await deps.lastUsed());
   if (devspaces.length > 0) {
     const worker = deps.worker();
     if ('reason' in worker) {
@@ -192,6 +235,9 @@ export async function prepareDevspaces(deps: PreparesDeps): Promise<void> {
     } else await prepareEach(deps, worker, devspaces);
   }
   await removeStalePreparedImages(deps.engine, log);
+  // The volumes as the run found them at its start: a prepare of this run tags only the devspaces of those volumes.
+  await removeStalePreparedSharedTags(deps.engine, log, volumes);
+  if (deps.sharedImageRecords !== undefined) await removeStaleSharedImageRecords(deps.engine, deps.sharedImageRecords, log);
 }
 
 /** The prepares of `devspaces` in their order, each after the end of the one before (one worker, again after a failure). */
@@ -265,6 +311,71 @@ export async function removeStalePreparedImages(engine: Pick<PrepareEngine, 'ima
     } catch (error) {
       log(`The prepared image ${tag} could not be removed: ${engineFailure(error, PREPARE_ENGINE_TIMEOUT_MS)}`);
     }
+  }
+}
+
+/**
+ * R-DS-010: the tags `<resource>:prepared` (isPreparedImageName) on shared images (the image key and no label of a
+ * devspace, isKeyOnlyImage) whose devspace has no volume on the engine: no volume with the labels of a devspace whose
+ * ID and repository give that name (DevspaceVolumes.imageRepositories; any volume of the devspace counts, also an
+ * additional one or one of an older name). The volumes that a run read at its start (`volumes`) find the tags to look
+ * at; they are read again before a removal (else once). Removed by the tag, never with force; the image
+ * keeps its other tags, and with its last tag it goes, unless a container uses it (Docker refuses). Nothing is removed
+ * when the images or the volumes cannot be listed, or when a volume of a devspace cannot be read. A failure of one
+ * removal is one line.
+ */
+export async function removeStalePreparedSharedTags(
+  engine: Pick<PrepareEngine, 'images' | 'volumeNames' | 'inspect' | 'removeImage'>,
+  log: (message: string) => void,
+  volumes?: DevspaceVolumes,
+): Promise<void> {
+  let tags: string[];
+  let known: DevspaceVolumes;
+  try {
+    const images = await engine.images({ label: [LABEL_IMAGE_KEY] }, AbortSignal.timeout(PREPARE_ENGINE_TIMEOUT_MS));
+    tags = images.filter((image) => isKeyOnlyImage(image.labels)).flatMap((image) => image.repoTags.filter(isPreparedImageName));
+    if (tags.length === 0) return;
+    const isKnown = (scan: DevspaceVolumes, tag: string) => scan.imageRepositories.has(tag.slice(0, tag.lastIndexOf(':')).toLowerCase());
+    known = volumes ?? (await scanDevspaceVolumes(engine));
+    if (!known.complete) throw new Error('a volume of a devspace could not be read');
+    tags = [...new Set(tags)].filter((tag) => !isKnown(known, tag));
+    // The volumes of the start of a run can be old by its end: a tag is removed only when its devspace has no volume now.
+    if (tags.length > 0 && volumes !== undefined) {
+      const now = await scanDevspaceVolumes(engine);
+      if (!now.complete) throw new Error('a volume of a devspace could not be read');
+      tags = tags.filter((tag) => !isKnown(now, tag));
+    }
+  } catch (error) {
+    log(`The prepared shared images could not be listed, so no tag is removed: ${engineFailure(error, PREPARE_ENGINE_TIMEOUT_MS)}`);
+    return;
+  }
+  for (const tag of tags) {
+    try {
+      const removed = await engine.removeImage(tag, AbortSignal.timeout(PREPARE_ENGINE_TIMEOUT_MS));
+      if (removed === 'removed') log(`Removed the tag ${tag} of a shared image: its devspace has no volume on this engine.`);
+      else if (removed === 'inUse') log(`The tag ${tag} of a shared image stays: Docker says the image is in use.`);
+    } catch (error) {
+      log(`The tag ${tag} of a shared image could not be removed: ${engineFailure(error, PREPARE_ENGINE_TIMEOUT_MS)}`);
+    }
+  }
+}
+
+/**
+ * R-DS-010: the records of the shared images that a prepare built (`records`) whose image is gone from the engine, or
+ * whose text is no image ID: removed. A record whose image cannot be asked about stays.
+ */
+export async function removeStaleSharedImageRecords(engine: Pick<PrepareEngine, 'inspect'>, records: SharedImageRecords, log: (message: string) => void): Promise<void> {
+  for (const record of records.list()) {
+    if (record.imageId !== undefined) {
+      try {
+        if ((await engine.inspect('image', record.imageId, AbortSignal.timeout(PREPARE_ENGINE_TIMEOUT_MS))) !== undefined) continue;
+      } catch (error) {
+        log(`The image ${record.imageId} of the record of the shared image key ${record.key} could not be asked about: ${engineFailure(error, PREPARE_ENGINE_TIMEOUT_MS)}`);
+        continue;
+      }
+    }
+    records.remove(record.key);
+    log(`Removed the record of the shared image key ${record.key}: ${record.imageId === undefined ? 'it holds no image ID' : `its image ${record.imageId} is gone`}.`);
   }
 }
 

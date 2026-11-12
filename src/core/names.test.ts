@@ -7,8 +7,10 @@ import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { namePair } from './namePairs';
 import {
+  DEVSPACE_IMAGE_LABELS,
   EXTENSION_LABEL_KEYS,
   LABEL_BUILD_RECORD,
+  LABEL_IMAGE_KEY,
   LABEL_OWNER_ID,
   LABEL_PREFIX,
   LABEL_REPOSITORY,
@@ -21,7 +23,11 @@ import {
   isDevspaceImageName,
   isDevspaceResourceName,
   isImageKey,
+  isKeyOnlyImage,
   isOwnDevspaceLabel,
+  isPreparedImageName,
+  preparedImageName,
+  preparedServiceImageName,
   resourceName,
   workerNameStart,
 } from './names';
@@ -331,6 +337,39 @@ describe('isDevspaceImageName', () => {
     ]) {
       expect(isDevspaceImageName(reference)).toBe(false);
     }
+  });
+});
+
+describe('isPreparedImageName', () => {
+  const ID = '11111111-2222-4333-8444-555555555555';
+
+  it('is the name of a devspace and the tag prepared', () => {
+    expect(isPreparedImageName(preparedImageName('acme/api', ID))).toBe(true);
+    expect(isPreparedImageName(`${resourceName('acme/api', ID, 'config')}:prepared`)).toBe(true);
+  });
+
+  it('is no other tag, no other repository, and no name of a registry', () => {
+    for (const reference of [
+      devspaceImageName('acme/api', ID, 3),
+      preparedServiceImageName('acme/api', ID, 'db'),
+      `${resourceName('acme/api', ID)}:Prepared`,
+      resourceName('acme/api', ID),
+      'devspaces-tools:prepared',
+      `ghcr.io/acme/${resourceName('acme/api', ID)}:prepared`,
+      `localhost:5000/${resourceName('acme/api', ID)}:prepared`,
+    ]) {
+      expect(isPreparedImageName(reference)).toBe(false);
+    }
+  });
+});
+
+describe('isKeyOnlyImage', () => {
+  const KEY = `sha256:${'a'.repeat(64)}`;
+
+  it('is an image with the image key and none of the labels of an image built for one devspace', () => {
+    expect(isKeyOnlyImage({ [LABEL_IMAGE_KEY]: KEY, 'org.opencontainers.image.title': 'x' })).toBe(true);
+    expect(isKeyOnlyImage({})).toBe(false);
+    for (const label of DEVSPACE_IMAGE_LABELS) expect(isKeyOnlyImage({ [LABEL_IMAGE_KEY]: KEY, [label]: '' })).toBe(false);
   });
 });
 

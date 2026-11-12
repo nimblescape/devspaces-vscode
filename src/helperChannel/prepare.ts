@@ -20,7 +20,7 @@ import type { DockerEngine } from '../core/worker/dockerEngine';
 import type { OwnHelper } from '../core/worker/ownHelper';
 import { headlessServiceDeps } from '../core/worker/workerServices';
 import type { LockDeps } from './lock';
-import { takePrepareLock } from './workerLock';
+import { sharedImageRecordsDeps, takePrepareLock } from './workerLock';
 
 /** How often a running prepare looks for the stop request of a Delete. */
 export const PREPARE_STOP_POLL_MS = 1_000;
@@ -65,6 +65,8 @@ export async function runPrepare(deps: RunPrepareDeps, devspaceId: string): Prom
       ownHelper: deps.ownHelper,
       analyzer: deps.analyzer,
       ...(deps.registryAnswersDir !== undefined ? { registryAnswersDir: deps.registryAnswersDir } : {}),
+      // R-DS-010: the record of a shared image that the prepare builds, and of the ones that other prepares built.
+      ...sharedImageRecordsDeps(deps.lockDeps, deps.logger),
     }),
   );
   try {

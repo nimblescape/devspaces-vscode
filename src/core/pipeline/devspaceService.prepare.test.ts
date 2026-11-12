@@ -10,6 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LABEL_HOST_ACCESS, LABEL_PREPARED, HOST_ACCESS_UNRESTRICTED, devspaceImageName, preparedImageName } from '../names';
 import { abortError } from '../ports';
+import { CommandError } from '../errors';
+import { LOCKFILE_CHANGED_EXIT, LOCKFILE_CHANGED_TEXT } from '../helper/scripts';
 import type { BuildRecord, Devspace } from '../types';
 import type { PrepareLock } from './devspacePorts';
 import {
@@ -311,6 +313,29 @@ describe('the headless prepare', () => {
     const again = await prepare({ stopped: HASH() });
     expect(again.result).toMatchObject({ outcome: 'skipped', detail: 'a prepare of the same update failed or was stopped by the time limit before (it is tried again when the update changes)' });
     expect(h.helper.builds).toHaveLength(1);
+  });
+
+  it('a build that found another lockfile records no key: the next pass reads the lockfile again', async () => {
+    await seedLabelled();
+    h.helper.buildError = () => new CommandError('devcontainer build', LOCKFILE_CHANGED_EXIT, '', `The lockfile .devcontainer/devcontainer-lock.json ${LOCKFILE_CHANGED_TEXT}\n`);
+    const { result, recorded } = await prepare();
+    expect(result.outcome).toBe('failed');
+    expect(recorded).toEqual([]);
+  });
+
+  it('a failed build is tried again when the lockfile changed (for example one that now matches the configuration)', async () => {
+    await seedLabelled();
+    h.helper.files = { [DEFAULT_CONFIG_PATH]: { configText: DEFAULT_CONFIG_TEXT, lockfileText: '{ "features": {} }' } };
+    h.helper.buildError = () => new Error('the lockfile does not match');
+    const { recorded } = await prepare();
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).not.toBe(`${ENV_ID} ${HASH()}`);
+    const stopped = recorded[0].slice(ENV_ID.length + 1);
+    h.helper.buildError = () => undefined;
+    expect((await prepare({ stopped })).result.outcome).toBe('skipped');
+    h.helper.files = { [DEFAULT_CONFIG_PATH]: { configText: DEFAULT_CONFIG_TEXT, lockfileText: `{ "features": { "${FEATURE}": {} } }` } };
+    expect((await prepare({ stopped })).result.outcome).toBe('prepared');
+    expect(h.helper.builds).toHaveLength(2);
   });
 
   it('a host access refusal or a skip records no key', async () => {

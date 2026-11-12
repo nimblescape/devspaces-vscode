@@ -14,6 +14,7 @@ import { LOCK_BUSY_CODE, LOCK_STATE_DIR } from '../core/helperChannel/protocol';
 import { acquireFlock, flockFailure, openLockFile, openPrepareLockFile, startFlockProcess, type FlockProcess } from '../core/helperChannel/lockFile';
 import { OperationError } from './server';
 import { PREPARE_FILES, type PrepareFiles } from './prepareFiles';
+import { sharedImageRecords, type SharedImageRecords } from '../core/helperChannel/sharedImageRecords';
 
 export interface LockDeps {
   /** The mount point of the volume of the Monitor. */
@@ -30,6 +31,11 @@ export interface LockDeps {
    * Without them, a Delete asks no prepare to stop (it only waits) and no stopped prepare is remembered.
    */
   prepareFiles?: PrepareFiles;
+  /**
+   * The records of the shared images that a prepare built, in the lock folder (R-DS-010, sharedImageRecords). Without
+   * them, no record is read or written (a prepare builds its image for its devspace alone).
+   */
+  sharedImageRecords?: (stateDir: string) => SharedImageRecords;
   closeFile(fd: number): void;
   /** Starts `flock <args>` with `fd` as its file descriptor FLOCK_FD. */
   startFlock(args: readonly string[], fd: number): FlockProcess;
@@ -40,6 +46,7 @@ export const LOCK_DEPS: LockDeps = {
   openLockFile,
   openPrepareLockFile,
   prepareFiles: PREPARE_FILES,
+  sharedImageRecords,
   closeFile: (fd) => fs.closeSync(fd),
   startFlock: startFlockProcess,
 };

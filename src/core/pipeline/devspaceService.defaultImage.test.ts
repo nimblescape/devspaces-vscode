@@ -131,9 +131,10 @@ describe('the default-image devspace of a repository', () => {
     expect(defaultImage.volumeName).toBe(resourceName(REPO, defaultImage.id, 'default'));
     expect(configuration).not.toHaveProperty('defaultImage');
     expect(defaultImage.defaultImage).toBe(IMAGE);
-    // One build each, from its own source; the first devspace is not touched by the second open.
+    // One build each, from its own source; the first devspace is not touched by the second open. Each builds the
+    // configuration of its image key (our copy), the configuration devspace with the lockfile of its key (none).
     expect(h.helper.builds).toEqual([
-      { imageName: devspaceImageName(REPO, configuration.id, 1), configPath: DEFAULT_CONFIG_PATH },
+      { imageName: devspaceImageName(REPO, configuration.id, 1), configPath: DEFAULT_CONFIG_PATH, override: { image: BASE_IMAGE, features: { [FEATURE]: {} }, remoteUser: 'vscode' }, lockfileText: null },
       { imageName: devspaceImageName(REPO, defaultImage.id, 1), configPath: DEFAULT_CONFIG_PATH, override: SYNTHESIZED.config },
     ]);
     expect(h.ui.prompts).toEqual([]);

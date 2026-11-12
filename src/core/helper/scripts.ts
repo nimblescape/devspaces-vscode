@@ -37,6 +37,14 @@ export const OVERRIDE_CONFIG_PATH = `${OVERRIDE_FOLDER}/devcontainer.json`;
  * and a digest per Feature, a few KB).
  */
 export const MAX_LOCKFILE_LENGTH = 1024 * 1024;
+/**
+ * The exit code of WRITE_AND_RUN_SCRIPT when the lockfile of the repository is not the one that the run must find
+ * (R-DS-010: it changed after it was read for the image key), before the Dev Container CLI starts; with
+ * LOCKFILE_CHANGED_TEXT on stderr (isLockfileChanged).
+ */
+export const LOCKFILE_CHANGED_EXIT = 3;
+/** The end of the message of WRITE_AND_RUN_SCRIPT for LOCKFILE_CHANGED_EXIT. */
+export const LOCKFILE_CHANGED_TEXT = 'changed after it was read.';
 
 /**
  * Git credential helper (a shell function, run by Git with `sh -c`). It answers only `get` requests for
@@ -966,6 +974,12 @@ ${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${LOCKFILE_OF}const prepare = ()
     if (text !== undefined && text.length > ${MAX_LOCKFILE_LENGTH}) {
       throw new Error('The lockfile ' + path.posix.relative(root, lockfile) + ' is longer than ${MAX_LOCKFILE_LENGTH} characters.');
     }
+    // The lockfile that the run must find (the one of the image key of a shared image, read before), or none (null).
+    if (Object.prototype.hasOwnProperty.call(input, 'lockfile') && (text === undefined ? null : text) !== input.lockfile) {
+      const changed = new Error('The lockfile ' + path.posix.relative(root, lockfile) + ' ${LOCKFILE_CHANGED_TEXT}');
+      changed.exitCode = ${LOCKFILE_CHANGED_EXIT};
+      throw changed;
+    }
     if (text === undefined) {
       // A frozen lockfile needs one; without one, nothing is written either way.
       const frozen = args.indexOf('--frozen-lockfile');
@@ -1008,7 +1022,7 @@ try {
   prepare();
 } catch (error) {
   process.stderr.write(String(error && error.message ? error.message : error) + '\n');
-  process.exitCode = 2;
+  process.exitCode = error && error.exitCode === ${LOCKFILE_CHANGED_EXIT} ? ${LOCKFILE_CHANGED_EXIT} : 2;
 }
 if (process.exitCode === undefined) {
   removeOldComposeFiles();
