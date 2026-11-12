@@ -87,6 +87,31 @@ function dateAndTime(at: number, timeZone: string): { date: string; time: string
   return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
 }
 
+/** One formatter per time zone for the times of a log (with seconds and milliseconds). */
+const LOG_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+/** A time as `2026-11-12 22:07:25.606` in `timeZone`: the times of the lines of a log (Show Log of the Monitor). */
+export function logTimeText(at: number, timeZone: string): string {
+  let format = LOG_FORMATTERS.get(timeZone);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      fractionalSecondDigits: 3,
+      hourCycle: 'h23',
+      timeZone,
+    });
+    LOG_FORMATTERS.set(timeZone, format);
+  }
+  const parts = format.formatToParts(new Date(at));
+  const part = (type: Intl.DateTimeFormatPartTypes): string => parts.find((entry) => entry.type === type)?.value ?? '';
+  return `${part('year')}-${part('month')}-${part('day')} ${part('hour')}:${part('minute')}:${part('second')}.${part('fractionalSecond')}`;
+}
+
 /** The calendar date `days` after the date `date` (YYYY-MM-DD), by the calendar, so a day of 23 or 25 hours counts as one. */
 function dateAfter(date: string, days: number): string {
   const [year, month, day] = date.split('-').map(Number);

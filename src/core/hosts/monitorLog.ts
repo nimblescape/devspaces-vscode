@@ -5,11 +5,14 @@
 // Show Log of the Monitor on the reports of the container and of the volume of the Monitor (docs/requirements.md
 // R-ENG-010): the last lines of the log of the container devspaces-monitor of a host, read with one fixed `docker logs`
 // call (isMonitorLogCall) on the shared shell of the host, or through the Docker pipe of the extension, which lets
-// through the log of that container only; never followed. No `vscode`.
+// through the log of that container only; never followed. Each line starts with the time of Docker (which also sorts the
+// output and the errors) and the time that the Monitor wrote, both as `2026-11-12 22:07:25.606` in the time zone of this
+// computer, as the report page gives times. No `vscode`.
 import type { BootstrapDocker } from '../docker/bootstrapDocker';
 import { CommandError } from '../errors';
 import { readableStderr } from '../loader/pipeLoader';
 import { REMOTE_MONITOR_CONTAINER } from '../remoteMonitor/protocol';
+import { logTimeText } from './reportModel';
 
 /** The lines of the log of the Monitor that Show Log of the Monitor gives (its log driver keeps at most 2 files of 1 MB). */
 export const MONITOR_LOG_LINES = 2000;
@@ -30,18 +33,44 @@ export function isMonitorLogCall(args: readonly string[]): boolean {
 }
 
 /**
- * The log of the Monitor of the host (Show Log of the Monitor), as Docker gives it: its output and its errors, each line
- * with its time. Throws a CommandError when Docker fails (for example when the Monitor has no container), and an
+ * The log of the Monitor of the host (Show Log of the Monitor): its output and its errors, with the times of each line in
+ * `timeZone` (readableTimes). Throws a CommandError when Docker fails (for example when the Monitor has no container), and an
  * AbortError.
  */
-export async function readMonitorLog(docker: Pick<BootstrapDocker, 'run'>, signal?: AbortSignal): Promise<string> {
+export async function readMonitorLog(docker: Pick<BootstrapDocker, 'run'>, timeZone: string, signal?: AbortSignal): Promise<string> {
   const args = monitorLogArgs();
   const result = await docker.run(args, { timeoutMs: MONITOR_LOG_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (result.exitCode !== 0 || result.timedOut) {
     const stderr = result.timedOut ? 'The command did not end within the time limit.' : readableStderr(result.stderr.slice(-ERROR_LENGTH), ERROR_LENGTH);
     throw new CommandError(`docker logs ${REMOTE_MONITOR_CONTAINER}`, result.exitCode, '', stderr, result.timedOut);
   }
-  return mergedLogLines(result.stdout, result.stderr).join('\n');
+  return mergedLogLines(result.stdout, result.stderr)
+    .map((line) => readableTimes(line, timeZone))
+    .join('\n');
+}
+
+/** A time in UTC at the start of a text and its space: of Docker (`--timestamps`, 9 digits), of the Monitor (`toISOString`). */
+const UTC_TIME = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z /;
+
+/** The time at the start of `text` (UTC_TIME) in milliseconds, and the text after it; undefined without one. */
+function leadingTime(text: string): { at: number; rest: string } | undefined {
+  const match = UTC_TIME.exec(text);
+  if (match === null) return undefined;
+  const at = Date.parse(`${match[1]}.${(match[2] ?? '').slice(0, 3).padEnd(3, '0')}Z`);
+  return Number.isNaN(at) ? undefined : { at, rest: text.slice(match[0].length) };
+}
+
+/**
+ * A line of the log with its times as `2026-11-12 22:07:25.606` in `timeZone`: the time of Docker, and the time that the
+ * Monitor wrote at the start of its text (a line without it, for example of an error of Node.js, has only the time of
+ * Docker). A line without the time of Docker stays as it is.
+ */
+export function readableTimes(line: string, timeZone: string): string {
+  const docker = leadingTime(line);
+  if (docker === undefined) return line;
+  const own = leadingTime(docker.rest);
+  const text = own !== undefined ? `${logTimeText(own.at, timeZone)} ${own.rest}` : docker.rest;
+  return `${logTimeText(docker.at, timeZone)} ${text}`;
 }
 
 /**
