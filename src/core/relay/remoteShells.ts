@@ -208,9 +208,10 @@ export class RemoteShells {
 
   /**
    * `docker <args>` on the shell of `host` (`run` with dockerShellCommand), with the Docker CLI of that computer.
-   * Undefined also for a word that the line of the shell cannot carry.
+   * Undefined also for a word that the line of the shell cannot carry. With `login: false`, only on a shell that is open
+   * or logging in, as `run` does.
    */
-  docker(host: string, args: readonly string[], options: Pick<RunOptions, 'timeoutMs' | 'signal'> = {}): Promise<RunResult | undefined> {
+  docker(host: string, args: readonly string[], options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { login?: boolean } = {}): Promise<RunResult | undefined> {
     const command = dockerShellCommand(args);
     return command === undefined ? Promise.resolve(undefined) : this.run(host, command, options);
   }

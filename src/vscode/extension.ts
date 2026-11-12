@@ -1423,7 +1423,8 @@ async function activateExtension(
   // the host (`onShell`), also the actions of the view and also on the VM, so they share one login of the host instead
   // of one connection each; on an SSH host with an open connection of the relay, they go through its pipe, which shares
   // the login of the relay.
-  const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
+  const onHostShell = <T>(host: string, fn: () => Promise<T>, openLoginOnly?: AbortController): Promise<T> =>
+    runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true, ...(openLoginOnly !== undefined ? { openLoginOnly } : {}) });
   // The base image of the helper image, from its Dockerfile in this extension: read once, and again at the next read of
   // a host after a failed read (then none; the first failure is logged).
   let helperBaseImages: Promise<Set<string>> | undefined;
@@ -1435,11 +1436,16 @@ async function activateExtension(
       helperBaseImagesWarned = true;
       return new Set<string>();
     }));
-  // The objects of a host with their sizes: for the view Docker Hosts and for Read Sizes of the utilization page.
-  const readInventory = async (host: string, signal: AbortSignal) => {
+  // The objects of a host with their sizes: for the view Docker Hosts and for the sizes of the utilization page.
+  // `openLoginOnly`: the read of the page in the background, only on a login that is open (an AbortError without one).
+  const readInventory = async (host: string, signal: AbortSignal, options: { openLoginOnly?: boolean } = {}) => {
     const here = devspacesOfHost(await registry.list(), host);
     const helperBases = await readHelperBaseImages();
-    return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), helperBaseImages: helperBases, signal }));
+    const read = (callSignal: AbortSignal) =>
+      readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), helperBaseImages: helperBases, signal: callSignal });
+    if (options.openLoginOnly !== true) return onHostShell(host, () => read(signal));
+    const refused = new AbortController();
+    return onHostShell(host, () => read(AbortSignal.any([signal, refused.signal])), refused);
   };
   // The utilization pages of the hosts (R-ENG-009): each sample is one command on the shared shell of the host, and the
   // page never starts the VM of Devspaces (R-VM-004). The free space of this computer for the disk of the VM is that of

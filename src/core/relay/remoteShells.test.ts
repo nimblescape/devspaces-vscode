@@ -363,6 +363,16 @@ describeUnix('RemoteShells', () => {
     registry.dispose();
   });
 
+  it('runs a Docker call with login false only on a shell that is open, never with a new login', async () => {
+    const { registry, logins } = shells();
+    await expect(registry.docker('box', ['version'], { login: false })).resolves.toBeUndefined();
+    expect(logins).toEqual([]);
+    await registry.login('box');
+    await expect(registry.docker('box', ['--help'], { login: false })).resolves.toMatchObject({ exitCode: expect.any(Number) });
+    expect(logins).toEqual(['box']);
+    registry.dispose();
+  });
+
   it('holds a shell back from a connection of the relay in a flow of the user while the page samples on it, and gives it again after the last hold', async () => {
     const { registry, logins } = shells();
     await registry.login('box');

@@ -15,7 +15,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { WSL_HOST } from '../core/docker/dockerHost';
-import { errorMessage } from '../core/errors';
+import { CommandError, errorMessage } from '../core/errors';
 import type { HostInventory } from '../core/hosts/hostObjects';
 import type { UsageHeader, UsageBlock } from '../core/hosts/usageSample';
 import { UsageHistory, type DiskValue, type HostUsage } from '../core/hosts/usageRates';
@@ -39,6 +39,12 @@ export const FOCUS_PAUSE_MS = 2 * 60_000;
 export const IDLE_PAUSE_MS = 30 * 60_000;
 /** While the page shows a VM that does not run, visible and with the focus: how often it reads the state of the VM. */
 export const VM_CHECK_MS = 30_000;
+/** While the page reads: how often it reads the sizes in the background, after the read right after the first sample. */
+export const SIZES_EVERY_MS = 10 * 60_000;
+/** A start (the open, Resume, a show after the end of the samples) reads the sizes again only when they are older. */
+export const SIZES_FRESH_MS = 60_000;
+/** A read in the background that did not reach the host (refused without an open login, the VM did not run): the next try. */
+export const SIZES_RETRY_MS = 60_000;
 /**
  * The VM counts as started by the login of the page only when it is younger than the check by more than this: the
  * answer takes time on its way back, and the age has steps of 1/100 s.
@@ -64,8 +70,12 @@ export interface UsagePagesDeps {
   vmStopping: () => boolean;
   /** "Start the VM" (VmCommands.start), which never throws. */
   startVm: () => Promise<void>;
-  /** The objects of the host with their sizes (readHostInventory on the shared shell of the host). */
-  readSizes: (host: string, signal: AbortSignal) => Promise<HostInventory>;
+  /**
+   * The objects of the host with their sizes (readHostInventory on the shared shell of the host). `openLoginOnly`: the
+   * read in the background, only on a login that is open (runWithDockerTarget); without one, it rejects with an
+   * AbortError.
+   */
+  readSizes: (host: string, signal: AbortSignal, options?: { openLoginOnly?: boolean }) => Promise<HostInventory>;
   /** The free space on this computer for the disk of the VM, where known. */
   localDiskFree?: () => Promise<number | undefined>;
   /** Only for the tests. */
@@ -163,6 +173,16 @@ class UsagePage {
   private vmStartedByPageAt: number | undefined;
   /** The last step of the user (touch): the open, a show, a click or a key on the page. */
   private activityAt = 0;
+  /** When the next read of the sizes in the background is due; undefined: after the next sample (a start, a new boot). */
+  private sizesDueAt: number | undefined;
+  /** When the last read of the sizes of this boot of the host ended (also a failed one). */
+  private sizesReadAt: number | undefined;
+  /**
+   * Whether the page reads the sizes by itself: off after a read in the background longer than its time limit (it stops
+   * the shared shell, and with it the samples) until a Refresh Sizes that worked or a new start of the host. After another
+   * failed read, the next read in the background comes 10 minutes later, as after one that worked.
+   */
+  private sizesAuto = true;
   /** Ends the Read Sizes that runs (vmClosing). */
   private sizesAbort: AbortController | undefined;
   /** Raised at each new start of the host, so that a Read Sizes that ran across it keeps nothing. */
@@ -274,6 +294,9 @@ class UsagePage {
     else this.armIdle();
     this.flowPending = flow;
     this.vmStartedByPageAt = undefined;
+    // Each start reads the sizes again after its first sample, unless they were read less than a minute ago (a quick
+    // switch back to the page).
+    if (this.sizesReadAt === undefined || this.timers.now() - this.sizesReadAt >= SIZES_FRESH_MS) this.sizesDueAt = undefined;
     const runAbort = new AbortController();
     this.runAbort = runAbort;
     // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).
@@ -361,10 +384,13 @@ class UsagePage {
     if (known !== undefined && header.bootId !== undefined && header.bootId !== known) {
       this.history.clear();
       this.gapped = false;
-      // The sizes are of the objects before the start: Read Sizes reads them again.
+      // The sizes are of the objects before the start: they are read again after this sample.
       this.bootEpoch += 1;
       this.sizes = undefined;
       this.sizesError = undefined;
+      this.sizesDueAt = undefined;
+      this.sizesReadAt = undefined;
+      this.sizesAuto = true;
     }
     this.header = header.bootId === undefined && known !== undefined ? { ...header, bootId: known } : header;
   }
@@ -405,6 +431,10 @@ class UsagePage {
     this.gapped = false;
     if (this.phase.kind === 'starting') this.phase = { kind: 'live' };
     this.post();
+    // The sizes in the background: after the first values of a start, then every 10 minutes, on the login of the samples.
+    // Not before the first rates (of the CPU, the network, the disks), which need a second sample, so that the read
+    // does not hold that sample back.
+    if (this.sizesAuto && usage.intervalCs !== undefined && (this.sizesDueAt === undefined || this.timers.now() >= this.sizesDueAt)) void this.readSizes(true);
   }
 
   private onEnd(sampler: UsageSampler, end: UsageEnd): void {
@@ -589,14 +619,19 @@ class UsagePage {
     if (generation === this.generation && !this.disposed) this.start(true);
   }
 
-  /** "Read Sizes": the objects of the host with their sizes; never on a VM that does not run. */
-  private async readSizes(): Promise<void> {
+  /**
+   * The objects of the host with their sizes; never on a VM that does not run. `background`: the read after a sample
+   * (onBlock), only on a login that is open, without questions; else Read Sizes or Refresh Sizes, a flow of the user.
+   */
+  private async readSizes(background = false): Promise<void> {
     // Not while the VM stops or is set up again (Stop the VM…, Remove, Reset): a read would log in to it again.
     if (this.sizesReading || this.disposed || (this.phase.kind === 'paused' && this.phase.reason === 'vm')) return;
     const epoch = this.bootEpoch;
     const controller = new AbortController();
     this.sizesAbort = controller;
     this.sizesReading = true;
+    // Whether the read reached the host (a result or its error): only then do the sizes count as read (sizesReadAt).
+    let ran = false;
     this.post();
     try {
       if (this.vm) {
@@ -604,25 +639,51 @@ class UsagePage {
         // The VM stops or is set up again meanwhile (vmClosing), or the page closed: no login to it.
         if (controller.signal.aborted || this.disposed) return;
         if (state.kind !== 'running') {
-          this.sizesError = state.kind === 'stopped' || state.kind === 'notSetUp' ? UsagePageTexts.sizesVmStopped : UsagePageTexts.sizesVmUnusable(state.detail);
+          // The samples see the end of the VM themselves; a read in the background says nothing.
+          if (!background) this.sizesError = state.kind === 'stopped' || state.kind === 'notSetUp' ? UsagePageTexts.sizesVmStopped : UsagePageTexts.sizesVmUnusable(state.detail);
           return;
         }
       }
-      const signal = AbortSignal.any([this.abort.signal, controller.signal]);
-      const inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
+      let inventory: HostInventory;
+      if (background) {
+        // A close of the page does not end it: an end would stop the shared shell with its command (RemoteShell.run).
+        inventory = await this.deps.readSizes(this.host, controller.signal, { openLoginOnly: true });
+      } else {
+        const signal = AbortSignal.any([this.abort.signal, controller.signal]);
+        inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
+      }
+      ran = true;
+      this.sizesAuto = true;
       // The host started again meanwhile: the objects are of before.
       if (epoch !== this.bootEpoch) return;
       this.sizes = { inventory, at: this.timers.now() };
       this.sizesError = undefined;
     } catch (error) {
-      // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result.
+      // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result. A read
+      // in the background without an open login ends with an AbortError too, and the next try comes after a minute.
       if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
+      // The host started again meanwhile: the error is of before, and the new start reads at its next values.
+      if (epoch !== this.bootEpoch) return;
+      // The VM went to sleep during a read in the background (its shell ended): the samples see it themselves.
+      if (background && this.vm && ((await this.vmStateNow()).kind !== 'running' || controller.signal.aborted || this.disposed)) return;
+      ran = true;
       const detail = errorMessage(error);
-      this.deps.logger.warn(`The sizes of ${this.host} could not be read: ${detail}`);
+      // A read in the background longer than its time limit stopped the shared shell: only a Refresh Sizes that works or
+      // a new start of the host reads by itself again. (A Refresh Sizes may also fail at the time limit of its login.)
+      if (background && error instanceof CommandError && error.timedOut) this.sizesAuto = false;
+      const next = !this.sizesAuto ? ' (the page reads them by itself again after a Refresh Sizes that works or a new start of the host)' : background ? ' (the page tries again in 10 minutes)' : '';
+      this.deps.logger.warn(`The sizes of ${this.host} could not be read${next}: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
     } finally {
       this.sizesAbort = undefined;
       this.sizesReading = false;
+      // The next read in the background 10 minutes after this one; after a new start of the host, after the next sample.
+      // A read that did not reach the host (refused without an open login, the VM did not run) leaves the sizes of
+      // before as they are, so that the next start reads, and the next try comes after a minute.
+      const current = epoch === this.bootEpoch;
+      if (!current) this.sizesReadAt = undefined;
+      else if (ran) this.sizesReadAt = this.timers.now();
+      this.sizesDueAt = !current ? undefined : this.timers.now() + (ran ? SIZES_EVERY_MS : SIZES_RETRY_MS);
       this.post();
     }
   }

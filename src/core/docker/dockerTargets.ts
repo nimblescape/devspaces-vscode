@@ -55,6 +55,8 @@ interface OperationScope {
   withoutLogin?: AbortController;
   /** See runWithDockerTarget, `onShell`. */
   onShell?: boolean;
+  /** See runWithDockerTarget, `openLoginOnly`. */
+  openLoginOnly?: AbortController;
 }
 
 const operationTargets = new AsyncLocalStorage<OperationScope>();
@@ -80,6 +82,15 @@ export function operationWithoutLogin(): AbortController | undefined {
 }
 
 /**
+ * The stop of the operation that runs now when its Docker calls may use only a login that is open (runWithDockerTarget,
+ * `openLoginOnly`), if any: BootstrapDocker refuses each of its Docker calls that would log in to the host.
+ */
+export function operationOpenLoginOnly(): AbortController | undefined {
+  const scope = operationTargets.getStore();
+  return scope?.active ? scope.openLoginOnly : undefined;
+}
+
+/**
  * Whether the Docker calls of the operation that runs now go to the shared shell of its host (runWithDockerTarget,
  * `onShell`).
  */
@@ -98,14 +109,30 @@ export function operationOnShell(): boolean {
  * (the shell before the relay), also those that change something (isSharedShellCall) and also on the VM of Devspaces,
  * so that they share one login of the host instead of one connection each. A call on an SSH host still goes through
  * the Docker pipe while a connection of the relay to it is open: that pipe shares the login of the relay. An operation
- * on the same host within it keeps `onShell`.
+ * on the same host within it keeps `onShell`. `openLoginOnly`: the read of the sizes of the utilization page in the
+ * background (R-ENG-009), whose Docker calls run only on a login that is open: on the shared shell of the host while it
+ * is open or logging in (with `onShell`), or through the Docker pipe of an SSH host while a connection of the relay is
+ * open. BootstrapDocker refuses a call that would log in (a new shell, `ssh://<host>`, or the pipe of the VM of
+ * Devspaces, which makes a connection of its own): it aborts this controller, whose signal the read passes on to its
+ * calls, and throws an AbortError. An operation on the same host within it keeps `openLoginOnly`.
  */
-export async function runWithDockerTarget<T>(target: DockerTarget, fn: () => Promise<T>, options: { withoutLogin?: AbortController; onShell?: boolean } = {}): Promise<T> {
+export async function runWithDockerTarget<T>(
+  target: DockerTarget,
+  fn: () => Promise<T>,
+  options: { withoutLogin?: AbortController; onShell?: boolean; openLoginOnly?: AbortController } = {},
+): Promise<T> {
   const outer = operationTargets.getStore();
   const sameHost = outer?.active === true && outer.target.host === target.host;
   const withoutLogin = options.withoutLogin ?? (sameHost ? outer.withoutLogin : undefined);
   const onShell = options.onShell ?? (sameHost ? outer.onShell : undefined);
-  const scope: OperationScope = { target, active: true, ...(withoutLogin !== undefined ? { withoutLogin } : {}), ...(onShell === true ? { onShell } : {}) };
+  const openLoginOnly = options.openLoginOnly ?? (sameHost ? outer.openLoginOnly : undefined);
+  const scope: OperationScope = {
+    target,
+    active: true,
+    ...(withoutLogin !== undefined ? { withoutLogin } : {}),
+    ...(onShell === true ? { onShell } : {}),
+    ...(openLoginOnly !== undefined ? { openLoginOnly } : {}),
+  };
   try {
     return await operationTargets.run(scope, fn);
   } finally {

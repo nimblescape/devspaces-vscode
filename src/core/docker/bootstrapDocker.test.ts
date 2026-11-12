@@ -169,6 +169,7 @@ describe('BootstrapDocker basics', () => {
     const error = (await docker.runChecked(['ps']).catch((e: unknown) => e)) as CommandError;
     expect(error.exitCode).toBeNull();
     expect(error.stderr).toContain('time limit');
+    expect(error.timedOut).toBe(true);
   });
 });
 
