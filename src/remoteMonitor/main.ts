@@ -85,6 +85,7 @@ import {
   monitorExecFailure,
   parseHeartbeatFileName,
   parseHeartbeatInput,
+  type ParseOptions,
   parseHeartbeatRecord,
   type HeartbeatInput,
   type HeartbeatRecord,
@@ -103,7 +104,7 @@ import { ownHelperImage, refreshHelperImage, type HelperRefreshDeps } from './he
 import { EngineCleanup } from './engineCleanup';
 import { SelfUpgrade, upgradeCheckFromEnv } from './selfUpgrade';
 import { CLEANUP_FILE, HELPER_USE_OBSERVE_MS } from './cleanupRules';
-import { VERSION_ENV, takeUserAgentVersion, type HttpTransport } from '../core/http';
+import { VERSION_ENV, takeUserAgentVersion, userAgentVersion, type HttpTransport } from '../core/http';
 import { proxiedHttpsTransport } from '../core/proxyTransport';
 import { storeLock, storeTryLock, unpackServer } from '../core/worker/vscodeServerStore';
 import {
@@ -140,6 +141,12 @@ export const STOP_TIMEOUT_MS = 60_000;
 const MAX_RECORD_BYTES = 4096;
 /** Exit code for an invalid argument. */
 export const EXIT_INVALID = 2;
+/**
+ * The commands of the windows leave out the keys of their input that this version does not know (ParseOptions): a
+ * window of a newer version works with a monitor of an earlier version until it moved to the newer script, and a
+ * newer monitor takes the input of older windows, whose keys it knows (docs/requirements.md R-DS-011).
+ */
+const LENIENT: ParseOptions = { ignoreUnknownKeys: true };
 
 /** The folder of the records in the volume. */
 export function heartbeatDir(stateDir: string = REMOTE_MONITOR_STATE_DIR): string {
@@ -1127,7 +1134,7 @@ export class CurrentCacheSettings {
     }
     if (text === this.stored) return;
     this.stored = text;
-    const settings = parseImageSettingsInput(text);
+    const settings = parseImageSettingsInput(text, LENIENT);
     if (!settings) return;
     this.value = { ...settings, parsed: parseCacheSchedule(settings.schedule)! };
     this.log(`Background run settings: ${scheduleText(this.value)}.`);
@@ -1440,7 +1447,7 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
   const [command, ...args] = argv;
   switch (command) {
     case 'heartbeat': {
-      const input = args.length === 1 ? parseHeartbeatInput(args[0]) : undefined;
+      const input = args.length === 1 ? parseHeartbeatInput(args[0], LENIENT) : undefined;
       if (!input) {
         err('Invalid heartbeat.\n');
         return EXIT_INVALID;
@@ -1464,7 +1471,7 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
     case 'images': {
       // The image references in use of the computer that sent them, on stdin. A list of repositories, which an older
       // extension on another computer may send (alone, or beside the references), is taken and ignored.
-      const input = args.length === 1 && args[0] === '-' ? parseImagesInput(await (deps.readStdin ?? readStdin)()) : undefined;
+      const input = args.length === 1 && args[0] === '-' ? parseImagesInput(await (deps.readStdin ?? readStdin)(), LENIENT) : undefined;
       if (!input) {
         err('Invalid image list.\n');
         return EXIT_INVALID;
@@ -1489,7 +1496,7 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
       // The settings of the background run of the computer that opened last, on stdin. Stored without the prefixes that
       // an older extension may send (parseImageSettingsInput).
       const text = args.length === 1 && args[0] === '-' ? await (deps.readStdin ?? readStdin)() : undefined;
-      const settings = text === undefined ? undefined : parseImageSettingsInput(text);
+      const settings = text === undefined ? undefined : parseImageSettingsInput(text, LENIENT);
       if (!settings) {
         err('Invalid image settings.\n');
         return EXIT_INVALID;
@@ -1615,6 +1622,8 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         helperTag: async () => (await ownHelperImage(deps.helperRefresh?.dockerfile))?.tag,
         busy: () => schedule?.busy === true,
         removals: () => loop.removals,
+        stateDir,
+        version: userAgentVersion,
         checkMs: upgradeCheckFromEnv(deps.env),
       });
       // After the time without use was found, a run that is only due does not start (UnusedEnd.paused); while the

@@ -115,6 +115,12 @@ function connectionOf(): { connection: HelperPrebuildDeps['connection']; open: (
   const connection = vi.fn((host: string, signal: AbortSignal) => {
     waits.push(host);
     return new Promise<void>((resolve, reject) => {
+      // As HostPipes.whenDockerHost: a signal that aborted already rejects at once (a stop during the first check of
+      // the prebuild, on a slow machine).
+      if (signal.aborted) {
+        reject(abortError());
+        return;
+      }
       signal.addEventListener('abort', () => reject(abortError()), { once: true });
       void opened.then(resolve);
     });

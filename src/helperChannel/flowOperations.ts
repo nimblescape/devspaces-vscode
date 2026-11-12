@@ -59,12 +59,13 @@ import type { ExtensionSettings } from '../core/types';
 import { engineMonitor, limited } from '../core/worker/engineMonitor';
 import { WorkerConfigurationAnalyzer, analysisSlots } from '../core/helper/configurationAnalysisRunner';
 import { analysisFailure, type ConfigurationAnalyzer } from '../core/helper/configurationAnalysis';
-import { monitorImageTag } from '../core/helper/helperState';
+import { isHelperImageTag, monitorImageTag } from '../core/helper/helperState';
 import { REMOTE_MONITOR_DOCKER_TIMEOUT_MS, RemoteSessionMonitor } from '../core/remoteMonitor/remoteSessionMonitor';
 import { imageSettingsOf, isSourceId, type MonitorSettings } from '../core/remoteMonitor/protocol';
 import { helperCheckOf, readEngineHelperRecord } from '../core/remoteMonitor/helperCheck';
 import { readOomKills, type OomKills } from '../core/vm/oomKills';
-import { MONITOR_WORKER_HASH_ENV, storeWorkerScript } from '../core/remoteMonitor/workerScript';
+import { MONITOR_WORKER_HASH_ENV, storeWorkerScript, type WorkerScriptRecord } from '../core/remoteMonitor/workerScript';
+import { isDevspacesVersion, userAgentVersion } from '../core/http';
 import { bundleHash } from '../core/loader/pipeLoader';
 import { workerHostSide } from '../core/worker/workerHostSide';
 import type { HostRequest } from '../core/worker/hostSide';
@@ -570,9 +571,11 @@ async function currentBuild(engine: Pick<DockerEngine, 'inspect'>, tag: string, 
  * maintenance of the operation. Rejects with the cause when it cannot. With the mode of the monitor
  * (MonitorSettings.permanent), and with the shared VS Code server store that the worker mounts (OwnHelper.vscodeStore),
  * which the monitor mounts too for its background run. With `worker`, the worker's own script stored in the volume of
- * the monitor first (storeWorkerScript; a failure is one warning and the ensure goes on), and its hash given to a
- * monitor that this ensure creates (MONITOR_WORKER_HASH_ENV), so that the monitor's prepares run this worker; no token,
- * no credential, nothing else.
+ * the monitor first (storeWorkerScript; a failure is one warning and the ensure goes on), with its record (the version
+ * of Devspaces of this program and the worker's helper tag, when it has a version), and its hash given to a monitor
+ * that this ensure creates (MONITOR_WORKER_HASH_ENV), so that the monitor's prepares run this worker, and a running
+ * monitor of an earlier version moves itself to it (docs/requirements.md R-DS-011); no token, no credential, nothing
+ * else.
  */
 export async function ensureWorkerMonitor(
   engine: DockerEngine,
@@ -583,7 +586,11 @@ export async function ensureWorkerMonitor(
   signal: AbortSignal,
   worker?: WorkerScriptSource,
 ): Promise<MonitorEnsureValue['outcome']> {
-  const workerHash = worker === undefined ? undefined : storedWorkerHash(worker, logger);
+  // With the version of Devspaces of the script and the helper tag of this worker, so that a running monitor of an
+  // earlier version moves itself to this script (R-DS-011).
+  const version = userAgentVersion();
+  const record = isDevspacesVersion(version) && isHelperImageTag(own.image.tag) ? { version, helperTag: own.image.tag } : undefined;
+  const workerHash = worker === undefined ? undefined : storedWorkerHash(worker, logger, record);
   const monitor = new RemoteSessionMonitor({
     engine: engineMonitor(engine),
     logger,
@@ -610,7 +617,7 @@ export interface WorkerScriptSource {
  * the script cannot be read (no prepare then). A failed store is a warning too, but the hash is answered (the monitor
  * then says that the script is missing, and the next ensure stores it again).
  */
-function storedWorkerHash(worker: WorkerScriptSource, logger: Logger): string | undefined {
+function storedWorkerHash(worker: WorkerScriptSource, logger: Logger, record: WorkerScriptRecord | undefined): string | undefined {
   let script: string;
   try {
     script = worker.read();
@@ -619,7 +626,7 @@ function storedWorkerHash(worker: WorkerScriptSource, logger: Logger): string | 
     return undefined;
   }
   try {
-    return storeWorkerScript(worker.stateDir, script);
+    return storeWorkerScript(worker.stateDir, script, record);
   } catch (error) {
     logger.warn(`The worker script could not be stored for the prepares of the Monitor: ${errorMessage(error)}`);
     return bundleHash(script);

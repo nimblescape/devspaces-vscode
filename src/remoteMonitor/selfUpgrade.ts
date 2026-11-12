@@ -2,9 +2,12 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The move of the Monitor to the current build of its helper image (docs/requirements.md R-DS-009). When the Monitor
-// (its background run, R-DS-003) or a window built the helper tag again, the Monitor container still runs from the
-// earlier build. Between two ticks of its loop (main.ts), at most once per SELF_UPGRADE_CHECK_MS (a minute), when nothing
+// The move of the Monitor to the current build of its helper image (docs/requirements.md R-DS-009), and to the script
+// of a newer version of Devspaces (R-DS-011). When the Monitor (its background run, R-DS-003) or a window built the
+// helper tag again, the Monitor container still runs from the earlier build; when a window of a newer version opened,
+// the Monitor still runs the script of its own version (a window keeps a running monitor of an earlier version,
+// RemoteSessionMonitor, and stores its own script with its version and helper tag in the volume, storeWorkerScript).
+// Between two ticks of its loop (main.ts), at most once per SELF_UPGRADE_CHECK_MS (a minute), when nothing
 // runs (no part of the background run, no automatic stop, no end after the time without use) and the monitor does not end
 // when idle at this tick (the next open creates it from the current build), check:
 //   1. reads its own helper tag (the tag of its own Dockerfile, ownHelperImage) and its own script, and its own
@@ -13,15 +16,21 @@
 //   2. removes the containers of its name from earlier builds that ended (removeEarlier, below);
 //   3. checks that it was created for its own helper tag: its label is that of its own script, of its helper tag, and
 //      of its mode and store; a monitor of another tag (the Docker tests) never moves;
-//   4. compares its image with the image of the helper tag now; the same image, or no image of the tag: nothing to do;
+//   4. looks for the target of the move: the script of the newest version of Devspaces in the volume (newerVersion:
+//      the records of the worker scripts, readWorkerScriptRecords; a version later than its own, VERSION_ENV, whose
+//      script is there with its hash and whose helper tag has a helper image on the engine, LABEL_HELPER; not its own
+//      script and tag), or
+//      else the current build of its own helper tag (newerBuild: its image differs from the image of the tag now);
+//      neither: nothing to do;
 //   5. waits for the next check while a command of a window runs in its container, and for the removals of records
 //      that run (RemoteMonitorLoop.removals);
 //   6. sets its own restart policy to `no` (Docker never starts it again), and renames its container to
 //      `<name>-earlier-<the first 12 hex digits of its ID>`, so the name is free;
-//   7. tags the current build with its monitor tag, and creates its successor of the name from it, as a window creates
-//      the monitor (RemoteSessionMonitor.createSuccessor: the same script, label, mode, store, schedule, variables and
-//      mounts, the attached create with its ready line); a container of the name that a window created meanwhile
-//      counts as the successor;
+//   7. tags the image of the target with its monitor tag, and creates its successor of the name from it, as a window
+//      creates the monitor (RemoteSessionMonitor.createSuccessor: the script of the target, the label of that script
+//      and helper tag, the same mode, store, schedule, variables and mounts, the version of the target and the hash of
+//      its worker script for a newer version, the attached create with its ready line); a container of the name that a
+//      window created meanwhile counts as the successor;
 //   8. waits until no command of a window runs in its container (SELF_UPGRADE_COMMAND_WAIT_MS at most), and ends: the
 //      loop exits with 0.
 // While it moves (`ending`), no background run starts in it (CacheSchedule `holding`; a request of "Update All Images
@@ -39,6 +48,8 @@
 // cleanup of the Monitor removes it later (engineCleanup.ts).
 import { errorMessage } from '../core/errors';
 import { monitorImageTag } from '../core/helper/helperState';
+import { compareDevspacesVersions, isDevspacesVersion } from '../core/http';
+import { bundleHash } from '../core/loader/pipeLoader';
 import { HELPER_DOCKER_SOCKET, LABEL_HELPER } from '../core/names';
 import { type Logger, silentLogger } from '../core/ports';
 import { LABEL_MONITOR, LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER, REMOTE_MONITOR_STATE_DIR, isMonitorCreateId, monitorModeOf } from '../core/remoteMonitor/protocol';
@@ -55,6 +66,7 @@ import {
   type ImageMaintenanceSettings,
 } from '../core/remoteMonitor/remoteSessionMonitor';
 import { monitorRestartPolicy } from '../core/remoteMonitor/cacheSettings';
+import { MONITOR_WORKER_HASH_ENV, readWorkerScript, readWorkerScriptRecords } from '../core/remoteMonitor/workerScript';
 import { isRecord } from '../core/valueChecks';
 import { engineMonitor } from '../core/worker/engineMonitor';
 import { engineFailure, type UpgradeEngine } from './engine';
@@ -96,6 +108,10 @@ export interface SelfUpgradeDeps {
   busy: () => boolean;
   /** The removals of records that run (RemoteMonitorLoop.removals): a move waits for them. */
   removals: () => Promise<void> | undefined;
+  /** The folder of its volume (REMOTE_MONITOR_STATE_DIR; the tests give their own): the worker scripts of the windows. */
+  stateDir: string;
+  /** The version of Devspaces of this monitor (VERSION_ENV, userAgentVersion); undefined: it never moves to another version. */
+  version: () => string | undefined;
   /** The wait between two looks at the commands of the windows (the tests). */
   sleep?: (ms: number) => Promise<void>;
   /** The time between two checks (default SELF_UPGRADE_CHECK_MS; upgradeCheckFromEnv for the tests of the container). */
@@ -118,6 +134,19 @@ interface OwnContainer {
   execIds: string[];
 }
 
+/**
+ * What the monitor moves to: the helper tag and its image, the script, and for a newer version of Devspaces its version
+ * and the hash of its worker script (MONITOR_WORKER_HASH_ENV of the successor); without them, the current build of its
+ * own helper tag with its own script.
+ */
+interface MoveTarget {
+  tag: string;
+  current: ImageConfig;
+  script: () => Promise<string>;
+  version?: string;
+  workerHash?: string;
+}
+
 /** The image of an inspect: its ID, labels, variables and tags. */
 interface ImageConfig {
   id: string;
@@ -134,6 +163,10 @@ export class SelfUpgrade {
   private disabled = false;
   /** Its helper tag, once its label matched it (then neither its script nor its Dockerfile is read again). */
   private tag: string | undefined;
+  /** The hash of its own script, read with its helper tag. */
+  private ownHash: string | undefined;
+  /** The keys of the reasons why a newer version cannot be taken that were logged (each once). */
+  private readonly logged = new Set<string>();
   /** A failure of the reads was logged (once until a check reads again). */
   private readFailureLogged = false;
   /** It moves now: no background run starts (CacheSchedule `holding`). */
@@ -193,13 +226,14 @@ export class SelfUpgrade {
         return false;
       }
       this.tag = tag;
+      this.ownHash = bundleHash(script);
     }
-    let current: ImageConfig | undefined;
+    let target: MoveTarget | undefined;
     let earlier: ImageConfig | undefined;
     let running: boolean;
     try {
-      current = await this.imageConfig(tag);
-      if (current === undefined || current.id === own.image) {
+      target = (await this.newerVersion(tag)) ?? (await this.newerBuild(own, tag));
+      if (target === undefined) {
         this.readFailureLogged = false;
         return false;
       }
@@ -220,8 +254,12 @@ export class SelfUpgrade {
       this.ending = false;
       return false;
     }
-    log(`The helper image ${tag} was built again (${shortId(own.image)} → ${shortId(current.id)}). The Monitor moves to the current build: it creates its successor ${own.name} from it, and then ends.`);
-    const moved = await this.move(own, tag, current, earlier, images, store);
+    log(
+      target.version === undefined
+        ? `The helper image ${tag} was built again (${shortId(own.image)} → ${shortId(target.current.id)}). The Monitor moves to the current build: it creates its successor ${own.name} from it, and then ends.`
+        : `A window stored the script of Devspaces ${target.version}, a newer version than ${this.deps.version()}. The Monitor moves to it: it creates its successor ${own.name} from the helper image ${target.tag}, and then ends.`,
+    );
+    const moved = await this.move(own, target, earlier, images, store);
     if (moved) await this.waitForCommands(own.id);
     else this.ending = false;
     return moved;
@@ -231,7 +269,8 @@ export class SelfUpgrade {
    * Steps 6 and 7 of the module comment: true when the successor runs (or this monitor must end anyway), false when it
    * goes on (its name and restart policy back; the next try after SELF_UPGRADE_RETRY_MS). Logs the outcome.
    */
-  private async move(own: OwnContainer, tag: string, current: ImageConfig, earlier: ImageConfig | undefined, images: ImageMaintenanceSettings | undefined, store: string | undefined): Promise<boolean> {
+  private async move(own: OwnContainer, target: MoveTarget, earlier: ImageConfig | undefined, images: ImageMaintenanceSettings | undefined, store: string | undefined): Promise<boolean> {
+    const { tag, current } = target;
     const { engine, log } = this.deps;
     const socket = bindSource(own.binds, HELPER_DOCKER_SOCKET);
     const volume = bindSource(own.binds, REMOTE_MONITOR_STATE_DIR);
@@ -260,16 +299,18 @@ export class SelfUpgrade {
     }
     // The image of the earlier build may be gone already (see ownLabels).
     const builds = earlier === undefined ? [current] : [current, earlier];
+    // A newer version: its worker script for the prepares of the successor (the script of the monitor is the worker's).
     const successor = new RemoteSessionMonitor({
       engine: engineMonitor(engine),
       logger: logOnly(log),
-      script: this.deps.script,
+      script: target.script,
+      ...(target.version !== undefined ? { version: target.version } : {}),
       ...(images !== undefined ? { imageMaintenance: () => images } : {}),
       ...(store !== undefined ? { vscodeStoreVolume: store } : {}),
       containerName: own.name,
       volumeName: volume,
       labels: ownLabels(own.labels, builds),
-      containerEnv: { ...ownEnv(own.env, builds), [MONITOR_SUCCESSOR_ENV]: '1' },
+      containerEnv: { ...ownEnv(own.env, builds), [MONITOR_SUCCESSOR_ENV]: '1', ...(target.workerHash !== undefined ? { [MONITOR_WORKER_HASH_ENV]: target.workerHash } : {}) },
     });
     let outcome: Awaited<ReturnType<RemoteSessionMonitor['createSuccessor']>>;
     try {
@@ -279,7 +320,7 @@ export class SelfUpgrade {
     }
     log(
       outcome === 'created'
-        ? `The successor ${own.name} runs from the current build of the helper image. This Monitor (now ${earlierName}) ends; the successor removes it.`
+        ? `The successor ${own.name} runs ${target.version === undefined ? 'from the current build of the helper image' : `Devspaces ${target.version}`}. This Monitor (now ${earlierName}) ends; the successor removes it.`
         : `A window created the Monitor ${own.name} meanwhile. This Monitor (now ${earlierName}) ends; the next Monitor removes it.`,
     );
     return true;
@@ -339,6 +380,62 @@ export class SelfUpgrade {
         log(`The Monitor ${container.name} of an earlier build could not be removed: ${engineFailure(error, SELF_UPGRADE_TIMEOUT_MS)}`);
       }
     }
+  }
+
+  /**
+   * Step 4 of the module comment, a newer version: the script of the newest version of Devspaces that a window stored
+   * in the volume (readWorkerScriptRecords), later than the version of this monitor, not its own script with its own
+   * helper tag `tag`, whose helper tag has a helper image on the engine (LABEL_HELPER) and whose script is there with
+   * its hash (readWorkerScript); a record whose image or script is missing is logged once and the next older one is
+   * tried. The
+   * newest record of a version wins. Undefined when there is none or this monitor has no version. Throws when an image
+   * cannot be read (the check logs it).
+   */
+  private async newerVersion(tag: string): Promise<MoveTarget | undefined> {
+    const { stateDir } = this.deps;
+    const version = this.deps.version();
+    if (!isDevspacesVersion(version) || this.ownHash === undefined) return undefined;
+    const records = readWorkerScriptRecords(stateDir)
+      .filter((record) => compareDevspacesVersions(record.version, version) > 0 && !(record.hash === this.ownHash && record.helperTag === tag))
+      .sort((a, b) => compareDevspacesVersions(b.version, a.version) || b.mtimeMs - a.mtimeMs);
+    for (const record of records) {
+      const current = await this.imageConfig(record.helperTag);
+      if (current === undefined) {
+        this.logOnce(
+          `${record.hash} image`,
+          `The helper image ${record.helperTag} of Devspaces ${record.version} is not on the Docker engine; the Monitor moves to that version once a window of it built the image.`,
+        );
+        continue;
+      }
+      if (current.labels[LABEL_HELPER] !== 'true') {
+        this.logOnce(`${record.hash} label`, `The image of ${record.helperTag} is no helper image of Devspaces (no label ${LABEL_HELPER}); the Monitor does not move to Devspaces ${record.version} from it.`);
+        continue;
+      }
+      const read = readWorkerScript(stateDir, record.hash);
+      if ('reason' in read) {
+        this.logOnce(`${record.hash} script`, `The Monitor cannot move to Devspaces ${record.version}: ${read.reason}.`);
+        continue;
+      }
+      return { tag: record.helperTag, current, script: async () => read.script, version: record.version, workerHash: record.hash };
+    }
+    return undefined;
+  }
+
+  /**
+   * Step 4 of the module comment, the current build: the image of its own helper tag `tag` now, when it is not the
+   * image of its container; undefined when it is, or when the tag is on no image. Throws when it cannot be read.
+   */
+  private async newerBuild(own: OwnContainer, tag: string): Promise<MoveTarget | undefined> {
+    const current = await this.imageConfig(tag);
+    if (current === undefined || current.id === own.image) return undefined;
+    return { tag, current, script: this.deps.script };
+  }
+
+  /** Logs `message` once for `key`. */
+  private logOnce(key: string, message: string): void {
+    if (this.logged.has(key)) return;
+    this.logged.add(key);
+    this.deps.log(message);
   }
 
   /** The settings of the background run of the monitor, as its creator gave them (its variables and owner label). */

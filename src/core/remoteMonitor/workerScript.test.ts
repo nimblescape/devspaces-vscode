@@ -14,11 +14,14 @@ import type { DockerEngine, MonitorRunSpec } from '../worker/dockerEngine';
 import { unusedEngine } from '../worker/dockerEngine.testkit';
 import { ensureWorkerMonitor } from '../../helperChannel/flowOperations';
 import { silentLogger } from '../ports';
+import { setUserAgentVersion } from '../http';
 import {
   MONITOR_WORKER_HASH_ENV,
   WORKER_SCRIPT_FOLDER,
   WORKER_SCRIPT_MAX_AGE_MS,
+  parseWorkerScriptRecord,
   readWorkerScript,
+  readWorkerScriptRecords,
   removeOtherWorkerScripts,
   storeWorkerScript,
   workerScriptPath,
@@ -74,6 +77,72 @@ describe('the worker script in the volume', () => {
     for (const file of [workerScriptPath(stateDir, own), workerScriptPath(stateDir, other), leftover, path.join(folder, 'notes.txt')]) fs.utimesSync(file, old, old);
     expect(removeOtherWorkerScripts(stateDir, own, now).sort()).toEqual([`${other}.js`, `${own}.js.0123456789ab.tmp`].sort());
     expect(fs.readdirSync(folder).sort()).toEqual([`${own}.js`, `${young}.js`, 'notes.txt'].sort());
+  });
+});
+
+describe('the record of a worker script: its version of Devspaces and helper tag (R-DS-011)', () => {
+  const TAG = 'devspaces-worker:0123456789ab';
+
+  it('is stored beside the script, 0600, read back with its hash and the time of its file, and stored again when it changed', () => {
+    const hash = storeWorkerScript(stateDir, 'the worker', { version: '0.7.0', helperTag: TAG });
+    const file = path.join(stateDir, WORKER_SCRIPT_FOLDER, `${hash}.json`);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual({ version: '0.7.0', helperTag: TAG });
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(readWorkerScriptRecords(stateDir)).toEqual([{ hash, version: '0.7.0', helperTag: TAG, mtimeMs: fs.statSync(file).mtimeMs }]);
+    storeWorkerScript(stateDir, 'the worker', { version: '0.7.1', helperTag: TAG });
+    expect(readWorkerScriptRecords(stateDir).map((record) => record.version)).toEqual(['0.7.1']);
+    fs.rmSync(file);
+    storeWorkerScript(stateDir, 'the worker', { version: '0.7.1', helperTag: TAG });
+    expect(readWorkerScriptRecords(stateDir).map((record) => record.version)).toEqual(['0.7.1']);
+  });
+
+  it('refuses an invalid record, and the Monitor leaves out invalid files, links and keys that it does not know', () => {
+    expect(() => storeWorkerScript(stateDir, 'the worker', { version: '0.7', helperTag: TAG })).toThrow('The record of the worker script is invalid.');
+    expect(() => storeWorkerScript(stateDir, 'the worker', { version: '0.7.0', helperTag: 'node:26' })).toThrow('The record of the worker script is invalid.');
+    expect(parseWorkerScriptRecord(JSON.stringify({ version: '0.7.0', helperTag: TAG, later: true }))).toEqual({ version: '0.7.0', helperTag: TAG });
+    expect(parseWorkerScriptRecord('{"version":"0.7.0"}')).toBeUndefined();
+    const folder = path.join(stateDir, WORKER_SCRIPT_FOLDER);
+    // Nothing was stored for an invalid record.
+    expect(fs.existsSync(folder)).toBe(false);
+    fs.mkdirSync(folder);
+    fs.writeFileSync(path.join(folder, `${'1'.repeat(64)}.json`), 'not json');
+    fs.writeFileSync(path.join(stateDir, 'elsewhere.json'), JSON.stringify({ version: '0.7.0', helperTag: TAG }));
+    fs.symlinkSync(path.join(stateDir, 'elsewhere.json'), path.join(folder, `${'2'.repeat(64)}.json`));
+    fs.writeFileSync(path.join(folder, 'other.json'), JSON.stringify({ version: '0.7.0', helperTag: TAG }));
+    expect(readWorkerScriptRecords(stateDir)).toEqual([]);
+  });
+
+  it('the monitor removes the records of other hashes after a day with their scripts, never its own', () => {
+    const own = storeWorkerScript(stateDir, 'own', { version: '0.6.0', helperTag: TAG });
+    const other = storeWorkerScript(stateDir, 'other', { version: '0.7.0', helperTag: TAG });
+    const folder = path.join(stateDir, WORKER_SCRIPT_FOLDER);
+    const now = Date.now();
+    const old = new Date(now - WORKER_SCRIPT_MAX_AGE_MS - 60_000);
+    for (const name of fs.readdirSync(folder)) fs.utimesSync(path.join(folder, name), old, old);
+    expect(removeOtherWorkerScripts(stateDir, own, now).sort()).toEqual([`${other}.js`, `${other}.json`].sort());
+    expect(fs.readdirSync(folder).sort()).toEqual([`${own}.js`, `${own}.json`].sort());
+  });
+
+  it('the ensure of the worker stores it with the version of this program and the helper tag of the worker', async () => {
+    const specs: MonitorRunSpec[] = [];
+    const engine: DockerEngine = {
+      ...unusedEngine(),
+      tagImage: async () => {},
+      inspect: async () => undefined,
+      createAttached: async (spec) => {
+        specs.push(spec);
+        return { kind: 'ready' };
+      },
+    };
+    const own = { image: { tag: TAG, id: `sha256:${'a'.repeat(64)}` }, socket: '/var/run/docker.sock' };
+    setUserAgentVersion('0.7.0');
+    try {
+      await ensureWorkerMonitor(engine, own, silentLogger, () => 'the worker', { schedule: '7 6 * * *', timeZone: 'UTC' }, new AbortController().signal, { read: () => 'the worker', stateDir });
+    } finally {
+      setUserAgentVersion(undefined);
+    }
+    expect(readWorkerScriptRecords(stateDir)).toMatchObject([{ hash: bundleHash('the worker'), version: '0.7.0', helperTag: TAG }]);
+    expect(specs[0].labels['nimblescape.devspaces.monitor-version']).toBe('0.7.0');
   });
 });
 

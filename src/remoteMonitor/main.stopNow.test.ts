@@ -67,6 +67,16 @@ describe('monitor.js heartbeat with stopNow', () => {
   });
 });
 
+describe('monitor.js heartbeat from a window of a newer version (R-DS-011)', () => {
+  it('leaves out the keys that it does not know, and writes the record', async () => {
+    let err = '';
+    const input = { source: SOURCE, limitSeconds: 600, later: 1, devspaces: [{ id: A, keepRunning: true, seq: T0, laterEntry: true }] };
+    expect(await main(['heartbeat', JSON.stringify(input)], { env: {}, stateDir, now: () => T0, err: (text) => (err += text) })).toBe(0);
+    expect(err).toBe('');
+    expect(readRecord(SOURCE)).toEqual({ at: T0, keepRunning: true, limitSeconds: 600, seq: T0 });
+  });
+});
+
 describe('RemoteMonitorLoop with a stopNow record', () => {
   let now: number;
   let lines: string[];

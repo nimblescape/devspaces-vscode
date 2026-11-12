@@ -12,7 +12,7 @@
 // container resumes from it without input. Neither the script line nor any other input is logged.
 import { randomUUID } from 'crypto';
 import { errorMessage } from '../errors';
-import { VERSION_ENV, userAgentVersion } from '../http';
+import { VERSION_ENV, compareDevspacesVersions, isDevspacesVersion, userAgentVersion } from '../http';
 import { LOADER_EXIT_CODE, bundleHash, bundleLine, loaderCommand } from '../loader/pipeLoader';
 import { abortError, isAbortError, sleep, type Logger } from '../ports';
 import { VSCODE_STORE_DIR } from '../names';
@@ -29,6 +29,7 @@ import {
   REMOTE_MONITOR_STATE_DIR,
   REMOTE_MONITOR_VOLUME,
   LABEL_MONITOR_OWNER,
+  LABEL_MONITOR_VERSION,
   PERMANENT_LABEL_PART,
   monitorModeOf,
   remoteMonitorLabelValue,
@@ -66,6 +67,13 @@ export interface RemoteSessionMonitorOptions {
    * leaves the VS Code server out.
    */
   vscodeStoreVolume?: string;
+  /**
+   * The version of Devspaces of `script` (x.y.z): the variable VERSION_ENV and the label LABEL_MONITOR_VERSION of a
+   * container that this ensure creates, and the version that it compares with the label of a running monitor of
+   * another label (docs/requirements.md R-DS-011). Default: the version of this program (userAgentVersion); the
+   * Monitor gives the version of the script of its successor (src/remoteMonitor/selfUpgrade.ts).
+   */
+  version?: string;
   /** Only for the Docker tests: another container and volume name, more labels, and variables of the container. */
   containerName?: string;
   volumeName?: string;
@@ -116,7 +124,7 @@ export const MONITOR_SPEC_ENV: readonly string[] = [
   VERSION_ENV,
 ];
 /** The labels that runSpec sets itself (the successor of a monitor takes the others of its predecessor). */
-export const MONITOR_SPEC_LABELS: readonly string[] = [LABEL_MONITOR, LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER];
+export const MONITOR_SPEC_LABELS: readonly string[] = [LABEL_MONITOR, LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION];
 
 /** What ensure found or did. `failed`: logged as a warning (ensureOrThrow rejects instead). */
 export type EnsureOutcome = 'running' | 'started' | 'created' | 'failed';
@@ -210,8 +218,16 @@ export class RemoteSessionMonitor {
    *   `docker rm -f <ID>`, then create (a container between two failed starts is no healthy monitor to keep without
    *   evidence); restarting with a higher RestartCount (it fails at each start, also with its script) → `docker rm -f
    *   <ID>`, then create, whose ready check reports the cause;
+   * - another label with LABEL_MONITOR_VERSION of a newer version of Devspaces than this ensure (docs/requirements.md
+   *   R-DS-011) → never replaced by this older ensure (keepNewer): running or paused → `running`; exited with an exit
+   *   code other than LOADER_EXIT_CODE → `docker start <ID>`, `started` unless an inspect by its ID gives definite
+   *   evidence that it exits at once (then replaced); anything else → replaced;
+   * - another label with LABEL_MONITOR_VERSION of an earlier version, running or paused → `running`: it moves itself to
+   *   the script of this version that the worker stored in its volume (src/remoteMonitor/selfUpgrade.ts), when nothing
+   *   runs in it, and the window works with it until then; not running → replaced;
    * - the matching label and dead, removing, or exited with LOADER_EXIT_CODE (the loader refused its stored script and
-   *   its input), another label, or none → `docker rm -f <ID>`, then create;
+   *   its input), another label (of the same version, or without LABEL_MONITOR_VERSION: an earlier extension), or none
+   *   → `docker rm -f <ID>`, then create;
    * - missing → create.
    * `docker rm -f` removes the container by the ID that inspect read, so a window never removes a container that
    * another window created meanwhile: its `rm` gets "No such container", and its create meets the name conflict, which
@@ -390,8 +406,19 @@ export class RemoteSessionMonitor {
       return 'replace';
     }
     // A running permanent monitor of the same version counts as current for an ensure that wants one that ends when
-    // idle (accepted.running); anything else of another label is replaced.
+    // idle (accepted.running). A monitor of another version of Devspaces with its label (R-DS-011): a newer one is never
+    // replaced by this older ensure, and a running older one moves itself to the script of this version, which the
+    // worker stored in its volume before this ensure (storeWorkerScript), when nothing runs in it. Anything else of
+    // another label is replaced.
     if (!labelAccepted(current, accepted)) {
+      const other = this.otherVersion(current);
+      if (other === 'newer') return this.keepNewer(current, signal);
+      if (other === 'older' && isRunning(current.status)) {
+        logger.info(
+          `The Monitor on the Docker host runs Devspaces ${current.version}, an earlier version than ${this.version()}; it moves itself to this version when nothing runs in it, and this window works with it until then (${this.containerName}).`,
+        );
+        return 'running';
+      }
       this.idOf(current);
       logger.info(`The Monitor on the Docker host is of another version; it is replaced (${this.containerName}).`);
       return 'replace';
@@ -460,6 +487,37 @@ export class RemoteSessionMonitor {
     this.idOf(current);
     const how = current.status === 'exited' ? `exited with ${current.exitCode}` : current.status;
     logger.info(`The Monitor on the Docker host does not run (${how}); it is replaced (${this.containerName}).`);
+    return 'replace';
+  }
+
+  /**
+   * The container `current` runs a script of a newer version of Devspaces (otherVersion `newer`, R-DS-011): an older
+   * ensure never replaces it with its own. Running or paused → `running` (this window works with it: its commands take
+   * the input of older windows). Exited with an exit code other than LOADER_EXIT_CODE → `docker start <ID>` (the loader
+   * resumes from its stored script, which this ensure cannot compare with its own), then an inspect by the same ID
+   * (checkAgain): definite evidence that it exits at once without its script → `replace`; else `started`. Anything else
+   * (restarting, dead, removing, exited with LOADER_EXIT_CODE: it does not work) → `replace` (the monitor of this
+   * ensure then moves itself to the newest script in its volume).
+   */
+  private async keepNewer(current: Inspected & { exists: true }, signal: AbortSignal | undefined): Promise<'running' | 'started' | 'replace'> {
+    const { logger } = this.options;
+    if (isRunning(current.status)) {
+      logger.info(`The Monitor on the Docker host runs Devspaces ${current.version}, a newer version than ${this.version()}; this window keeps it and works with it (${this.containerName}).`);
+      return 'running';
+    }
+    const id = this.idOf(current);
+    if (current.status === 'exited' && current.exitCode !== LOADER_EXIT_CODE) {
+      await this.options.engine.start(id, signal);
+      // `docker start` resets RestartCount to 0.
+      if ((await this.checkAgain({ ...current, restartCount: 0 }, signal)) === 'unknown') {
+        logger.info(`The Monitor on the Docker host of Devspaces ${current.version}, a newer version than ${this.version()}, was started again (${this.containerName}).`);
+        return 'started';
+      }
+      logger.info(`The Monitor on the Docker host of Devspaces ${current.version}, a newer version, was started again without its script; it is replaced (${this.containerName}).`);
+      return 'replace';
+    }
+    const how = current.status === 'exited' ? `exited with ${current.exitCode}` : current.status;
+    logger.info(`The Monitor on the Docker host of Devspaces ${current.version}, a newer version, does not run (${how}); it is replaced (${this.containerName}).`);
     return 'replace';
   }
 
@@ -550,7 +608,9 @@ export class RemoteSessionMonitor {
    * paused), `missing` (the name is free again), or `other` (anything else, also a container that is still `created`
    * after the waits of REMOTE_MONITOR_CREATED_WAITS_MS, or still `removing` after the waits of
    * REMOTE_MONITOR_CONFLICT_WAITS_MS: CONFLICT_LOOK_BUDGET waits in all, whatever the status, a shorter list repeating
-   * its last wait, so a container that stays `removing` gets 9 waits, 7.75 s, 10 looks in all). Only inspects: it never
+   * its last wait, so a container that stays `removing` gets 9 waits, 7.75 s, 10 looks in all). A running or paused one
+   * of another version of Devspaces with its label LABEL_MONITOR_VERSION is `running` too (as decide keeps it, R-DS-011).
+   * Only inspects: it never
    * removes anything. A cancellation during a wait passes (AbortError). A running or paused one that Docker restarted
    * (RestartCount > 0) is accepted only when it holds the stored script of this version (storedScript `same`);
    * otherwise `other` (the next open's first look decides on evidence).
@@ -564,6 +624,8 @@ export class RemoteSessionMonitor {
         if (found.restartCount === 0) return 'running';
         return (await this.storedScript(script, signal)) === 'same' ? 'running' : 'other';
       }
+      // A running monitor of another version with its label, as decide keeps it (R-DS-011).
+      if (isRunning(found.status) && this.otherVersion(found) !== undefined) return 'running';
       // A `created` one gets the waits of the first look (the create-to-start gap of another window over SSH), a
       // `removing` one the short ones. One counter for both, never reset, so the waits end after the longer list at
       // most, also when the status changes between them. Only CONFLICT_LOOK_BUDGET bounds the looks. A list shorter
@@ -652,11 +714,16 @@ export class RemoteSessionMonitor {
     if (images?.vm === true) env[MONITOR_VM_ENV] = '1';
     const store = this.options.vscodeStoreVolume;
     if (store !== undefined) env[MONITOR_VSCODE_STORE_ENV] = store;
-    // The version of Devspaces that this program got at its start (the worker: from the extension), for the header
-    // User-Agent of the Monitor and of the workers of its prepares. Not part of the label: a new version without a
-    // change of the script keeps the Monitor, which then names the version that created it.
-    const version = userAgentVersion();
-    if (version !== undefined) env[VERSION_ENV] = version;
+    // The version of Devspaces of the script (that this program got at its start, the worker: from the extension; the
+    // one of the script of a successor), for the header User-Agent of the Monitor and of the workers of its prepares,
+    // and as its own label (LABEL_MONITOR_VERSION: the windows of other versions keep it, R-DS-011). Not part of the
+    // label of the script: a new version without a change of the script keeps the Monitor, which then names the
+    // version that created it.
+    const version = this.version();
+    if (version !== undefined) {
+      env[VERSION_ENV] = version;
+      labels[LABEL_MONITOR_VERSION] = version;
+    }
     return {
       name: this.containerName,
       image: helperImage,
@@ -689,6 +756,24 @@ export class RemoteSessionMonitor {
 
   private inspect(signal: AbortSignal | undefined): Promise<Inspected> {
     return this.options.engine.inspect(this.containerName, signal);
+  }
+
+  /** The version of the script of this ensure (RemoteSessionMonitorOptions.version); undefined when it is no version. */
+  private version(): string | undefined {
+    const version = this.options.version ?? userAgentVersion();
+    return isDevspacesVersion(version) ? version : undefined;
+  }
+
+  /**
+   * Whether the container `found` runs a script of a `newer` or an `older` version of Devspaces than this ensure (its
+   * label LABEL_MONITOR_VERSION; docs/requirements.md R-DS-011); undefined when it has no such label (a monitor of an
+   * earlier extension), when this ensure has no version, or for the same version.
+   */
+  private otherVersion(found: Inspected & { exists: true }): 'newer' | 'older' | undefined {
+    const own = this.version();
+    if (own === undefined || found.version === undefined) return undefined;
+    const order = compareDevspacesVersions(found.version, own);
+    return order > 0 ? 'newer' : order < 0 ? 'older' : undefined;
   }
 }
 

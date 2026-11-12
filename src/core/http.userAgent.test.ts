@@ -34,6 +34,7 @@ import {
   VERSION_ENV,
   httpsRequest,
   httpsStream,
+  compareDevspacesVersions,
   isDevspacesVersion,
   nodeHttpsTransport,
   setUserAgentVersion,
@@ -97,6 +98,13 @@ describe('the User-Agent of Devspaces', () => {
     expect(userAgent()).toBe(EXPECTED);
     expect(userAgentVersion()).toBe(VERSION);
     expect(VERSION_ENV).toBe('DEVSPACES_VERSION');
+  });
+
+  it('orders two versions x.y.z by their numbers', () => {
+    expect(compareDevspacesVersions('0.10.0', '0.9.9')).toBeGreaterThan(0);
+    expect(compareDevspacesVersions('0.6.0', '0.6.1')).toBeLessThan(0);
+    expect(compareDevspacesVersions('1.0.0', '0.99.99')).toBeGreaterThan(0);
+    expect(compareDevspacesVersions('0.6.0', '0.6.0')).toBe(0);
   });
 
   it('takes only a version x.y.z; any other value leaves the header without a version', () => {
