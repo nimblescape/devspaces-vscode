@@ -11,6 +11,7 @@ import type { ContainerInfo, ImageInfo, ImageInspection, LabelledImage, ListedCo
 import type { HeldDevspaceLock } from '../docker/devspaceLock';
 import type { UserIds } from '../docker/passwdUsers';
 import type { SECRET_TOKEN, VscodePlatform, VscodeServerRef } from '../helperChannel/protocol';
+import type { MergeRecord } from '../helperChannel/mergeRecords';
 import type { ConfigurationAnalyzer } from '../helper/configurationAnalysis';
 import type { GitHubViewer } from '../helper/containerGit';
 import type { WorkspaceHelper } from '../helper/workspaceHelper';
@@ -279,6 +280,13 @@ export interface DevspaceServiceDeps extends OperationBaseDeps {
    */
   sharedImageRecords?: PreparedSharedImages;
   /**
+   * R-DS-010: the records of the devspaces whose devspace image the Monitor moved to a shared image (in the worker:
+   * mergeRecords of the volume of the Monitor). The record of a devspace is its build record for the new tag, whose
+   * shared image carries none (newestImageRecord). Without it (the tests that are not about it): no record is read, and
+   * such a devspace is built again (as without the record of its dev container).
+   */
+  mergeRecords?: MergedImages;
+  /**
    * The name of the shared VS Code server store of the engine (the volume that the worker mounts read-write,
    * OwnHelper.vscodeStore; default VSCODE_STORE_VOLUME). The host access policy allows its mount in the override
    * configuration (HostAccessInput.vscodeStoreVolume), the creation of the additional volumes never creates or records
@@ -324,6 +332,12 @@ export interface PreparedSharedImages {
   read(key: string): Promise<string | undefined>;
   /** Records `imageId` as the image that a prepare built for `key`: false when it could not (logged). Never rejects. */
   write(key: string, imageId: string): Promise<boolean>;
+}
+
+/** DevspaceServiceDeps.mergeRecords. */
+export interface MergedImages {
+  /** The merge record of the devspace `devspaceId` (MergeRecord), if any. Never rejects. */
+  read(devspaceId: string): Promise<MergeRecord | undefined>;
 }
 
 /**

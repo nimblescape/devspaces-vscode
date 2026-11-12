@@ -7,7 +7,9 @@
 // functions: imageKey.test.ts.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, LABEL_OWNER_ID, LABEL_REPOSITORY } from '../names';
+import type { MergeRecord } from '../helperChannel/mergeRecords';
 import type { BuildRecord } from '../types';
+import { movedBuildRecord } from './imageRecord';
 import type { RepositoryTarget } from './operationBase';
 import { BASE_IMAGE, DEFAULT_CONFIG_TEXT, DIGEST_NEW, FEATURE, FEATURE_DIGEST, REPO, checked, createHarness, imageConfigWithUser, type Harness } from './devspaceService.testkit';
 import { DEFAULT_CONFIG_PATH } from './recordRules';
@@ -230,5 +232,69 @@ describe('a shared devspace image', () => {
     await openRecord(TARGET);
     expect(h.logger.infos).toContain(`The devspace image of ${REPO} is not shared: the digest of its Feature ${FEATURE} is not known in this open.`);
     expect(h.docker.labelFilters).toEqual([]);
+  });
+});
+
+describe('a devspace that the Monitor moved to an identical shared image', () => {
+  /**
+   * What the Monitor leaves after it moved the devspace of `target` (its record `record`) to the shared image `shared`
+   * (imageMerge.ts): no dev container, the tag of the next build number on the shared image, no older tag, and the merge
+   * record (movedBuildRecord). Returns the new tag.
+   */
+  async function moveToShared(merges: Map<string, MergeRecord>, devspaceId: string, record: BuildRecord, shared: string, ownerId = h.account.id): Promise<string> {
+    const devspace = (await h.registry.get(devspaceId))!;
+    for (const [id, container] of h.docker.containers) if (container.name === devspace.containerName) h.docker.containers.delete(id);
+    const moved = movedBuildRecord(record, devspace, record.buildNumber + 1, shared, record.imageKey!);
+    await h.docker.tagImage(shared, moved.devspaceImage);
+    await h.docker.removeImage(record.devspaceImage);
+    merges.set(devspaceId, { ownerId, record: moved });
+    return moved.devspaceImage;
+  }
+
+  it('starts from the shared image with the record of the Monitor, without a build, and creates its dev container again', async () => {
+    const merges = new Map<string, MergeRecord>();
+    h.cleanup();
+    h = createHarness({ mergeRecords: { read: async (id) => merges.get(id) } });
+    const api = await openRecord(TARGET);
+    const first = await h.service.open(WEB, options());
+    const web = (await h.registry.get(first.devspace.id))!.buildRecord!;
+    const tag = await moveToShared(merges, first.devspace.id, web, api.imageId!);
+    const builds = h.helper.builds.length;
+    const again = await openRecord(WEB);
+    expect(h.helper.builds).toHaveLength(builds);
+    expect(again).toMatchObject({ devspaceImage: tag, buildNumber: web.buildNumber + 1, imageId: api.imageId, imageKey: web.imageKey, configHash: web.configHash });
+    expect(h.helper.ups.at(-1)?.image).toBe(tag);
+    expect(h.logger.infos.some((line) => line.includes(`newer devspace image ${tag}`) && line.includes('from the record of the Monitor'))).toBe(true);
+    expect(h.ui.warnings).toEqual([]);
+  });
+
+  it('takes the record also on a computer without a build record of the devspace', async () => {
+    const merges = new Map<string, MergeRecord>();
+    h.cleanup();
+    h = createHarness({ mergeRecords: { read: async (id) => merges.get(id) } });
+    const api = await openRecord(TARGET);
+    const first = await h.service.open(WEB, options());
+    const web = (await h.registry.get(first.devspace.id))!.buildRecord!;
+    const tag = await moveToShared(merges, first.devspace.id, web, api.imageId!);
+    await h.registry.updateDevspace(first.devspace.id, (devspace) => void delete devspace.buildRecord);
+    const builds = h.helper.builds.length;
+    const again = await openRecord(WEB);
+    expect(h.helper.builds).toHaveLength(builds);
+    expect(again).toMatchObject({ devspaceImage: tag, imageId: api.imageId });
+    expect(h.logger.infos).toContain(
+      `The build record of ${WEB_REPO} was taken from the record of the Monitor, which moved it to the shared devspace image ${tag} (${api.imageId}).`,
+    );
+  });
+
+  it('builds again when the record is of another owner or names another image (the shared image alone has no record)', async () => {
+    const merges = new Map<string, MergeRecord>();
+    h.cleanup();
+    h = createHarness({ mergeRecords: { read: async (id) => merges.get(id) } });
+    const api = await openRecord(TARGET);
+    const first = await h.service.open(WEB, options());
+    const web = (await h.registry.get(first.devspace.id))!.buildRecord!;
+    const tag = await moveToShared(merges, first.devspace.id, web, api.imageId!, '9999');
+    await openRecord(WEB);
+    expect(h.logger.warnings).toContain(`The devspace image ${tag} has no build record of ${WEB_REPO} (it is a shared image, whose build record is only on the dev container). The devspace is built again.`);
   });
 });

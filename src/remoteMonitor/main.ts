@@ -104,6 +104,7 @@ import { MAX_RUN_REPORTS_FILE_BYTES, RUN_REPORTS_FILE, parseRunReports, runRepor
 import { ownHelperImage, refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
 import { EngineCleanup } from './engineCleanup';
 import { SelfUpgrade, upgradeCheckFromEnv } from './selfUpgrade';
+import { ImageMerge } from './imageMerge';
 import { CLEANUP_FILE, HELPER_USE_OBSERVE_MS } from './cleanupRules';
 import { VERSION_ENV, takeUserAgentVersion, userAgentVersion, type HttpTransport } from '../core/http';
 import { proxiedHttpsTransport } from '../core/proxyTransport';
@@ -130,6 +131,7 @@ import {
 import { stopLockDeps, stopLocker, type StopLocker } from './stopLock';
 import { prepareDevspaces, storedPrepareWorker, type PrepareWorker } from './prepares';
 import { sharedImageRecords } from '../core/helperChannel/sharedImageRecords';
+import { mergeRecords } from '../core/helperChannel/mergeRecords';
 import { MONITOR_WORKER_HASH_ENV } from '../core/remoteMonitor/workerScript';
 
 /** Time limit of the container list (of the list of the engine). */
@@ -911,6 +913,11 @@ export interface MainDeps {
    * REMOTE_MONITOR_SCRIPT_PATH); the tests give their own.
    */
   monitorScript?: () => Promise<string>;
+  /**
+   * The merge of identical devspace images (default: ImageMerge over the engine, the locks and the records of the
+   * volume); the tests give their own.
+   */
+  imageMerge?: Pick<ImageMerge, 'due' | 'pass'>;
   /** The monotonic clock of the idle time, and the wait between two ticks (the tests). */
   monotonic?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -1655,6 +1662,10 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         version: userAgentVersion,
         checkMs: upgradeCheckFromEnv(deps.env),
       });
+      // The merge of identical devspace images (R-DS-010, D6): when the Monitor is idle, see the loop below.
+      const merge =
+        deps.imageMerge ??
+        new ImageMerge({ engine, log, monotonic, lockDevspace, sharedImageRecords: sharedImageRecords(stateDir), mergeRecords: mergeRecords(stateDir) });
       // After the time without use was found, a run that is only due does not start (UnusedEnd.paused); while the
       // monitor moves to its successor, none starts (SelfUpgrade.ending).
       schedule = new CacheSchedule({
@@ -1713,6 +1724,10 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         // the removals of the records. It ends this monitor once its successor runs. Not when this monitor ends when
         // idle now (below): the next open creates it from the current build.
         const endsIdle = !permanent && loop.idleMs() >= idleExitMs;
+        // The merge of identical devspace images (ImageMerge): between two ticks as the move below, every
+        // MERGE_CHECK_MS, never during a background run or while the end after the time without use waits; each move
+        // under the lock of its devspace. Also right before this monitor ends when idle (below).
+        if (!endsIdle && !schedule.busy && !unused.paused && merge.due()) await merge.pass();
         if (!endsIdle && !schedule.busy && !unused.paused && upgrade.due() && (await upgrade.check())) return 0;
         // Only here, between two ticks, so never while it holds a lock or stops a container; the removals of the
         // records (each under the lock of the records) end first. The records stay in the volume. A permanent monitor
@@ -1742,6 +1757,10 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
           await loop.removals;
           // The timer of the schedule can start a run while the removals end, so the exit looks again; the next idle
           // tick waits for that run as above.
+          if (schedule.busy) continue;
+          // The devspaces are all stopped now: their identical devspace images are merged before the end. A window
+          // that starts a devspace meanwhile starts the Monitor again with its next heartbeat, as after any end.
+          await merge.pass();
           if (schedule.busy) continue;
           // The text names the fresh heartbeats too.
           log(`No devspace container ran and no heartbeat was fresh for ${Math.round(idleExitMs / 1000)} s, and it does not run permanently; the Monitor exits. The next open starts it again.`);
