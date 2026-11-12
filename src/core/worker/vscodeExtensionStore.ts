@@ -38,21 +38,14 @@ import {
   type ExtensionRef,
 } from '../vscodeExtensions';
 import { STORE_LOCK_FOLDER, downloadToFile } from './vscodeServerStore';
+import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from './vscodeStoreLayout';
+
+export { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER };
 
 /** The folder of the extension cache in the store. */
 export const STORE_EXTENSION_FOLDER = 'extensions';
-/** The folder of the extension lists in the volume of the Monitor. */
-export const STATE_EXTENSION_FOLDER = 'extensions';
-/** The folder of the recorded lists (`<state>/extensions/wanted`). */
-export const EXTENSION_WANTED_FOLDER = 'wanted';
 /** The folder of the downloads (`<store>/extensions/tmp`). */
 export const EXTENSION_TEMP_FOLDER = 'tmp';
-/** The file of the monitor's failed entries (`<state>/extensions/failures.json`). */
-export const EXTENSION_FAILURES_FILE = 'failures.json';
-/** The file of the files that the monitor's runs chose (`<state>/extensions/chosen.json`). */
-export const EXTENSION_CHOICES_FILE = 'chosen.json';
-/** The file of the dependencies of the chosen versions (`<state>/extensions/dependencies.json`). */
-export const EXTENSION_DEPENDENCIES_FILE = 'dependencies.json';
 /** The largest `.vsix` that the monitor downloads (200 MiB). */
 export const MAX_VSIX_BYTES = 200 * 1024 * 1024;
 /** The longest download of one `.vsix`, the wait for its lock included. */

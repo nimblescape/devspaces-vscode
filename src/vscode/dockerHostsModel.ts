@@ -79,6 +79,7 @@ export interface RowLook {
 
 /** User-visible texts of the view (plain language). */
 export const DockerHostsTexts = {
+  showReport: 'Show Report',
   /** As the title of the repository view names the VM (DockerHostTexts.vmTitle): it runs on this computer. */
   vmName: 'Local VM of Devspaces',
   vmState: (state: VmState | undefined): string => {
@@ -335,6 +336,8 @@ export function objectRowLook(row: ObjectRow): RowLook {
     icon: object.kind === 'container' ? (isRunningContainer(object) ? 'vm-running' : 'vm-outline') : object.kind === 'image' ? 'file-binary' : object.kind === 'network' ? 'plug' : 'database',
     ...(color !== undefined ? { color } : {}),
     collapsible: 'none',
+    // A click opens its report in the editor (R-ENG-010).
+    command: { command: Commands.showResourceReport, title: DockerHostsTexts.showReport, arguments: [row] },
   };
 }
 

@@ -126,6 +126,13 @@ describe('objectActions', () => {
 });
 
 describe('objectRowLook', () => {
+  it('opens the report of the resource with a click on its row (R-ENG-010), also for an object that is not of Devspaces', () => {
+    for (const object of [container('running'), container('exited', { purpose: 'notDevspaces' }), { kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true } as const]) {
+      const row = objectRow(object);
+      expect(objectRowLook(row).command).toEqual({ command: 'devspaces.showResourceReport', title: 'Show Report', arguments: [row] });
+    }
+  });
+
   it('marks an object that is not of Devspaces, with the service of Docker Compose of a container', () => {
     const look = objectRowLook(objectRow(container('exited', { name: 'shop-web-1', purpose: 'notDevspaces', role: 'service web of shop' })));
     expect(look.description).toBe('not of Devspaces · service web of shop · Stopped');
@@ -288,11 +295,11 @@ describe('the menus of the view (package.json)', () => {
     expect(commandsOf(notSetUp)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings']);
     const remote = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false }).contextValue;
     expect(commandsOf(remote)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeDockerHostFromList']);
-    expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue)).toEqual(['devspaces.stop', 'devspaces.delete']);
-    expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue)).toEqual(['devspaces.stopDockerObject']);
-    expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue)).toEqual(['devspaces.removeDockerObjects']);
-    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue)).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
-    expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue)).toEqual([]);
+    expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.stop', 'devspaces.delete']);
+    expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.stopDockerObject']);
+    expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.removeDockerObjects']);
+    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
+    expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue)).toEqual(['devspaces.showResourceReport']);
     const cache = { records: 1, bytes: 10, unusedBytes: 10 };
     expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache }).contextValue)).toEqual(['devspaces.pruneBuildCache']);
     expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue)).toEqual([]);

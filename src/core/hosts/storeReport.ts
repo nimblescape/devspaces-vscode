@@ -22,8 +22,7 @@ import {
   wantedExtensions,
   type ExtensionFolder,
 } from '../vscodeExtensions';
-import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
-import { serverVersionName } from '../worker/vscodeServerStore';
+import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER, serverVersionName } from '../worker/vscodeStoreLayout';
 import { cacheRunKnown, type MonitorRecords } from './monitorRecords';
 import { ageText, cell, chip, countText, fact, sizeText, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportSection } from './reportModel';
 import type { StoredServer, VscodeStoreReading, WorkerCacheReading } from './volumeReader';

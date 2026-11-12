@@ -90,6 +90,9 @@ export const Commands = {
   // The utilization page of a host row of the view "Docker Hosts" (usagePage.ts, R-ENG-009): one page per host in the
   // editor (hidden in the Command Palette: it takes a row).
   showUtilization: 'devspaces.showUtilization',
+  // The report page of an object row of the view "Docker Hosts" (reportPage.ts, R-ENG-010): the click on the row and
+  // Show Report of its menu (hidden in the Command Palette: it takes a row).
+  showResourceReport: 'devspaces.showResourceReport',
   // The VM of Devspaces in its row of the view "Docker Hosts" (vmCommands.ts, R-VM-010), the same on every platform:
   // Start, Stop, Remove, Remove and Set Up Again, and its settings (macOS and Linux).
   startVm: 'devspaces.startVm',

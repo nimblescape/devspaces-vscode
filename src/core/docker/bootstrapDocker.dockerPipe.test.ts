@@ -9,6 +9,7 @@
 // for the local Docker, the calls go as before.
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
+import { monitorLogArgs } from '../hosts/monitorLog';
 import { volumeReaderArgs } from '../hosts/volumeReader';
 import { BootstrapDocker, isSharedShellCall, isShellCall } from './bootstrapDocker';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from './dockerHost';
@@ -357,6 +358,25 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
     expect(remoteShell).not.toHaveBeenCalled();
   });
 
+  it('sends the reader and the log of the Monitor of a report through the pipe while a connection of the relay is open, and on the shell without it (R-ENG-010)', async () => {
+    const { runner, envs } = recorder();
+    const remoteShell = vi.fn(async (_target: DockerTarget, _args: readonly string[]): Promise<RunResult | undefined> => SHELL);
+    let pipe: string | undefined = PIPE;
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'linux', { dockerPipe: () => pipe, remoteShell });
+    const reader = volumeReaderArgs('devspaces-worker:0123456789ab', { monitor: 'devspaces-monitor' }, 'devspaces-reader-0a1b2c3d');
+    const reads = async () => {
+      await docker.run(reader);
+      await docker.run(monitorLogArgs());
+    };
+    await runWithDockerTarget(REMOTE, reads, { onShell: true });
+    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([PIPE, PIPE]);
+    expect(remoteShell).not.toHaveBeenCalled();
+    pipe = undefined;
+    await runWithDockerTarget(REMOTE, reads, { onShell: true });
+    expect(remoteShell.mock.calls.map(([, args]) => args)).toEqual([reader, monitorLogArgs()]);
+    expect(envs).toHaveLength(2);
+  });
+
   it('runs the calls on the shell of the VM of Devspaces instead of its pipe, and through the pipe only what the shell does not take', async () => {
     const { runner, envs } = recorder();
     const remoteShell = vi.fn(async (_target: DockerTarget, _args: readonly string[]): Promise<RunResult | undefined> => SHELL);
@@ -506,6 +526,14 @@ describe('isSharedShellCall', () => {
       expect(isSharedShellCall(reader, vm)).toBe(true);
       expect(isSharedShellCall([...reader.slice(0, -1), 'sh'], vm)).toBe(false);
       expect(isSharedShellCall(['run', '--rm', '-v', '/:/host', 'devspaces-worker:0123456789ab', 'sh'], vm)).toBe(false);
+    }
+  });
+
+  it('takes the log of the Monitor exactly as monitorLogArgs makes it, no other docker logs', () => {
+    for (const vm of [false, true]) {
+      expect(isSharedShellCall(monitorLogArgs(), vm)).toBe(true);
+      expect(isSharedShellCall(['logs', '--follow', 'devspaces-monitor'], vm)).toBe(false);
+      expect(isSharedShellCall(['logs', 'shop-web-1'], vm)).toBe(false);
     }
   });
 });

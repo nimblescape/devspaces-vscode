@@ -99,11 +99,14 @@ describe('the filter of the Docker pipe of the extension', () => {
     `DELETE /networks/${ID}`,
     'POST /grpc',
     'POST /build/prune',
+    // The report page of the view (R-ENG-010): the reader of the shared volumes (`docker run --rm`, as the build
+    // container), and Show Log of the Monitor, which inspects the container first.
+    'GET /containers/devspaces-monitor/logs',
   ])('lets %s through, which Devspaces needs', (line) => {
     expect(allowed(extensionPipeRule, line)).toBe(true);
   });
 
-  it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/restart`, 'POST /images/load', 'POST /volumes/create', 'GET /events', 'POST /networks/create', `POST /networks/${ID}/disconnect`, 'POST /networks/prune'])(
+  it.each([`GET /containers/${ID}/logs`, 'GET /containers/shop-web-1/logs', `POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/restart`, 'POST /images/load', 'POST /volumes/create', 'GET /events', 'POST /networks/create', `POST /networks/${ID}/disconnect`, 'POST /networks/prune'])(
     'refuses %s, which it does not need',
     (line) => {
       const [method, path] = line.split(' ');

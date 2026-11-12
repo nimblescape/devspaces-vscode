@@ -1,0 +1,303 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * © 2026 Hannes Stauss (scalarion@nimblescape.com)
+ * Licensed under the MIT License. See LICENSE in the repository root for details.
+ */
+
+/* Style of the report page of a resource of the view Docker Hosts (src/vscode/reportPage.ts). Only the theme colors of
+   VS Code, and the colors of the view Docker Hosts (package.json contributes.colors) for the name. */
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+  padding: 0 24px 32px;
+}
+
+main {
+  max-width: 1400px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+h1 {
+  font-size: 1.5em;
+  font-weight: 600;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+h2 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+.muted {
+  color: var(--vscode-descriptionForeground);
+}
+
+button {
+  padding: 4px 12px;
+  color: var(--vscode-button-foreground);
+  background-color: var(--vscode-button-background);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background-color: var(--vscode-button-secondaryBackground);
+}
+
+button.secondary:hover:not(:disabled) {
+  background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* The header: the name, its kind line, the state of the read and the buttons. */
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 16px;
+  padding-top: 20px;
+}
+
+.head-text {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.summary:empty {
+  display: none;
+}
+
+/* A note: a failed read, a VM that does not run. */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 16px;
+  padding: 10px 12px;
+  border-radius: 3px;
+  border-left: 3px solid var(--vscode-notificationsWarningIcon-foreground, var(--vscode-charts-yellow));
+  background-color: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background));
+}
+
+.banner-text {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* What could not be read. */
+.notices {
+  margin: 0;
+  padding: 8px 12px 8px 30px;
+  border-radius: 3px;
+  border-left: 3px solid var(--vscode-notificationsInfoIcon-foreground, var(--vscode-charts-blue));
+  background-color: var(--vscode-textBlockQuote-background, var(--vscode-editorWidget-background));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+/* The content, dimmed while a Refresh reads again. */
+#sections {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+#sections.stale {
+  opacity: 0.55;
+}
+
+section.report {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+section.report h2 .chip {
+  margin-left: 8px;
+}
+
+dl.facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 18px;
+  margin: 0;
+}
+
+dl.facts dt {
+  color: var(--vscode-descriptionForeground);
+}
+
+dl.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.table-box {
+  overflow-x: auto;
+  border: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  border-radius: 3px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 5px 10px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--vscode-panel-border, var(--vscode-widget-border, transparent));
+  overflow-wrap: anywhere;
+}
+
+th {
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+tr.more td,
+p.empty {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+.from {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.92em;
+  max-width: 110ch;
+}
+
+/* A tag with the rule of Devspaces for an item. */
+.chip {
+  display: inline-block;
+  font-size: 0.85em;
+  line-height: 1.45;
+  padding: 0 7px;
+  border-radius: 9px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
+td .chip,
+dd .chip {
+  margin-left: 6px;
+}
+
+.chip.tone-keep {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+}
+
+.chip.tone-remove {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-charts-yellow));
+}
+
+.chip.tone-info {
+  color: var(--vscode-charts-blue, var(--vscode-textLink-foreground));
+}
+
+.chip.tone-warn {
+  color: var(--vscode-errorForeground, var(--vscode-charts-red));
+}
+
+.chip.tone-new {
+  color: var(--vscode-charts-purple, var(--vscode-textLink-foreground));
+}
+
+/* The colors of the name, as in the view Docker Hosts. */
+.name-inactive {
+  color: var(--vscode-devspaces-inactiveForeground, var(--vscode-disabledForeground));
+}
+
+.name-notDevspaces {
+  color: var(--vscode-devspaces-hosts-notDevspacesForeground, var(--vscode-charts-purple));
+}
+
+.name-notDevspacesInactive {
+  color: var(--vscode-devspaces-hosts-notDevspacesInactiveForeground, var(--vscode-charts-purple));
+}
+
+@media (max-width: 600px) {
+  body {
+    padding: 0 14px 24px;
+  }
+
+  dl.facts {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  dl.facts dd {
+    margin-bottom: 6px;
+  }
+}

@@ -11,6 +11,7 @@
 // the build image (buildxImage.ts), and remove Devspaces from the engine. The lists
 // come from the Docker calls of both, measured in CI (test/vscode/attach/remote.test.ts fails on a refused request).
 // Only the method and the path are checked, not the query or the body. No `vscode`.
+import { REMOTE_MONITOR_CONTAINER } from '../remoteMonitor/protocol';
 import type { DockerRequest, DockerRequestRule } from './dockerRequests';
 
 /** A container, an exec, a volume or a network in a path: its ID or its name, without a slash. */
@@ -56,7 +57,9 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
  * removal of its objects ("Remove Devspaces from This Docker Engine…"), and the read, the Start and the Stop of a
  * container, the removal and the removal of the unused build cache of the view "Docker Hosts" (hostObjects.ts:
  * `docker system df -v`, `docker network ls`, `docker image ls` of the tags of the images, `docker container inspect` of the running containers, `docker image inspect` and `docker container ls --filter ancestor=` before the removal of an image, `docker container start` and `stop`, `rm` without force, and
- * `docker builder prune --all`: with buildx `POST /grpc`, without it `POST /build/prune`). Its worker starts behind the relay or with
+ * `docker builder prune --all`: with buildx `POST /grpc`, without it `POST /build/prune`), and the report page of the view
+ * (reportRead.ts: the inspect of the object, the lists of the volumes and the images, `docker info`, the reader of the
+ * shared volumes as a container with `docker run --rm`, and `docker logs` of the Monitor). Its worker starts behind the relay or with
  * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
@@ -72,6 +75,8 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('POST', `/containers/${NAME}/kill`),
   endpoint('POST', `/containers/${NAME}/stop`),
   endpoint('DELETE', `/containers/${NAME}`),
+  // Show Log of the Monitor on its report (monitorLog.ts): the log of the container of the Monitor, of no other container.
+  endpoint('GET', `/containers/${REMOTE_MONITOR_CONTAINER}/logs`),
   endpoint('GET', '/images/json'),
   endpoint('GET', `/images/${IMAGE}/json`),
   endpoint('POST', '/images/create'),

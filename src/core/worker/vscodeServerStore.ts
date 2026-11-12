@@ -33,6 +33,9 @@ import { acquireFlock, flockFailure, openPlainLockFile, startFlockProcess, type 
 import { type VscodePlatform, type VscodeQuality, type VscodeServerRef } from '../helperChannel/protocol';
 import type { HttpResponse, HttpStreamTransport, HttpTransport } from '../http';
 import type { Logger } from '../ports';
+import { serverPlatform, serverVersionName } from './vscodeStoreLayout';
+
+export { serverPlatform, serverVersionName };
 
 /** The update service of Microsoft; the only host whose server the worker fetches (never a parameter). */
 export const VSCODE_UPDATE_SERVICE = 'https://update.code.visualstudio.com';
@@ -55,17 +58,6 @@ export const MAX_SERVER_REDIRECTS = 5;
 export const MAX_UPDATE_SERVICE_BYTES = 64 * 1024;
 /** The longest unpack of the archive by `tar`. */
 export const SERVER_UNPACK_TIMEOUT_MS = 5 * 60_000;
-
-/**
- * The platform of the server for the architecture of the engine (`Architecture` of `GET /info`): x86_64/amd64 →
- * linux-x64, aarch64/arm64 → linux-arm64; anything else has no server in the store.
- */
-export function serverPlatform(architecture: string): VscodePlatform | undefined {
-  const machine = architecture.trim().toLowerCase();
-  if (machine === 'x86_64' || machine === 'amd64') return 'linux-x64';
-  if (machine === 'aarch64' || machine === 'arm64') return 'linux-arm64';
-  return undefined;
-}
 
 /** The request of the update service for the server of `server` on `platform` (JSON: `url`, `sha256hash`). */
 export function serverVersionUrl(server: VscodeServerRef, platform: VscodePlatform): string {
@@ -131,11 +123,6 @@ export interface VscodeStoreDeps {
 
 /** A failure of a fetch, with the text of its log line. */
 class FetchError extends Error {}
-
-/** The name of one server version in the store (its lock file and the prefix of its temporary folders). */
-export function serverVersionName(server: VscodeServerRef, platform: VscodePlatform): string {
-  return `${server.quality}-${platform}-${server.commit}`;
-}
 
 /**
  * Makes sure that the store has the server of `server` for `platform`; the one function of the store, for the open and

@@ -34,7 +34,7 @@ import { PULLED_OVER_IMAGES_FILE, REPLACED_IMAGES_FILE, parseReplacedImages, typ
 import { RUN_REPORTS_FILE, parseRunReports, type RunReport } from '../remoteMonitor/runReport';
 import { WORKER_SCRIPT_FOLDER, isWorkerScriptHash, parseWorkerScriptRecord, type WorkerScriptRecord } from '../remoteMonitor/workerScript';
 import { parseExtensionChoices, parseExtensionDependencies, parseExtensionFailures, parseExtensionRecord, type ExtensionRecord } from '../vscodeExtensions';
-import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
+import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeStoreLayout';
 import { isStorageId } from '../storage/paths';
 import { isRecord } from '../valueChecks';
 import { optional } from './reportModel';

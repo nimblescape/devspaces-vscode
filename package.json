@@ -459,6 +459,12 @@
         "icon": "$(pulse)"
       },
       {
+        "command": "devspaces.showResourceReport",
+        "title": "Show Report",
+        "category": "Devspaces",
+        "icon": "$(preview)"
+      },
+      {
         "command": "devspaces.stopDockerObject",
         "title": "Stop",
         "category": "Devspaces",
@@ -605,6 +611,10 @@
         },
         {
           "command": "devspaces.showUtilization",
+          "when": "false"
+        },
+        {
+          "command": "devspaces.showResourceReport",
           "when": "false"
         },
         {
@@ -794,6 +804,11 @@
           "command": "devspaces.removeDockerObjects",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canRemove(;|$)/",
           "group": "inline@2"
+        },
+        {
+          "command": "devspaces.showResourceReport",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;/",
+          "group": "0_report@1"
         },
         {
           "command": "devspaces.stop",
