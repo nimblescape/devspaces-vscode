@@ -364,13 +364,21 @@ describeUnix('RemoteShells', () => {
   });
 
   it('runs a Docker call with login false only on a shell that is open, never with a new login', async () => {
-    const { registry, logins } = shells();
-    await expect(registry.docker('box', ['version'], { login: false })).resolves.toBeUndefined();
-    expect(logins).toEqual([]);
-    await registry.login('box');
-    await expect(registry.docker('box', ['--help'], { login: false })).resolves.toMatchObject({ exitCode: expect.any(Number) });
-    expect(logins).toEqual(['box']);
-    registry.dispose();
+    // A docker of its own: the docker of the computer that runs the tests can be slow (`docker --help` asks each of its
+    // CLI plugins for its metadata) or missing.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-shells-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'docker'), `#!/bin/sh\nprintf '%s|' "$@"\n`, { mode: 0o755 });
+      const { registry, logins } = shells({ script: `PATH=${dir}:$PATH; export PATH; exec sh -s` });
+      await expect(registry.docker('box', ['version'], { login: false })).resolves.toBeUndefined();
+      expect(logins).toEqual([]);
+      await registry.login('box');
+      await expect(registry.docker('box', ['--help'], { login: false })).resolves.toMatchObject({ exitCode: 0, stdout: '--help|' });
+      expect(logins).toEqual(['box']);
+      registry.dispose();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('holds a shell back from a connection of the relay in a flow of the user while the page samples on it, and gives it again after the last hold', async () => {
