@@ -37,8 +37,11 @@ afterEach(() => {
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
 
-/** `run` of a monitor that ends when idle and whose tag is on `tagImage`; it ends at the latest after `maxTicks` ticks. */
-async function run(tagImage: string, maxTicks = 3) {
+/**
+ * `run` of a monitor that ends when idle and whose tag is on `tagImage`; it ends at the latest after `maxTicks` ticks.
+ * `idle`: no devspace runs, and each tick takes longer than the idle time of the monitor (100 ms).
+ */
+async function run(tagImage: string, maxTicks = 3, idle = false) {
   const dockerfile = path.join(stateDir, 'Dockerfile');
   fs.writeFileSync(dockerfile, DOCKERFILE);
   const created: MonitorRunSpec[] = [];
@@ -50,7 +53,12 @@ async function run(tagImage: string, maxTicks = 3) {
   const own = { Id: OWN_ID, Name: '/devspaces-monitor', Image: EARLIER, Config: { Labels: { [LABEL_MONITOR]: monitorLabel(SCRIPT, TAG, 'idle'), [LABEL_MONITOR_CREATE]: CREATE }, Env: [] }, HostConfig: { Binds: ['/var/run/docker.sock:/var/run/docker.sock', 'devspaces-monitor:/state'] }, ExecIDs: null };
   const engine: DockerEngine = {
     ...unusedEngine(),
-    containerSummaries: async (label): Promise<EngineContainerSummary[]> => (label === LABEL_DEVSPACE_ID ? [{ id: 'b'.repeat(64), name: 'devspace', state: 'running', labels: {} }] : []),
+    containerSummaries: async (label): Promise<EngineContainerSummary[]> => {
+      if (label !== LABEL_DEVSPACE_ID) return [];
+      if (!idle) return [{ id: 'b'.repeat(64), name: 'devspace', state: 'running', labels: {} }];
+      mono += 200;
+      return [];
+    },
     containerIds: async (filters) => (filters.label?.[0] === `${LABEL_MONITOR_CREATE}=${CREATE}` ? [OWN_ID] : []),
     inspect: async (kind, reference) => {
       if (kind === 'container') return reference === OWN_ID ? own : undefined;
@@ -67,7 +75,7 @@ async function run(tagImage: string, maxTicks = 3) {
     },
   };
   const code = await main(['run'], {
-    env: { DEVSPACE_MONITOR_CREATE_ID: CREATE, DEVSPACE_IMAGE_FIRST_MS: '86400000' },
+    env: { DEVSPACE_MONITOR_CREATE_ID: CREATE, DEVSPACE_IMAGE_FIRST_MS: '86400000', ...(idle ? { DEVSPACE_MONITOR_IDLE_MS: '100' } : {}) },
     stateDir,
     engine: engine as never,
     helperRefresh: { dockerfile },
@@ -97,6 +105,14 @@ describe('the loop of run and the move to the current build of the helper image'
     expect(created[0]).toMatchObject({ name: 'devspaces-monitor', imageId: CURRENT, restartPolicy: 'on-failure' });
     expect(out).toContain('The Monitor moves to the current build: it creates its successor devspaces-monitor from it, and then ends.');
     expect(out).toContain('The successor devspaces-monitor runs from the current build of the helper image.');
+  });
+
+  it('does not move when it ends when idle at this tick: the next open creates it from the current build', async () => {
+    const { code, created, calls, out } = await run(CURRENT, 3, true);
+    expect(code).toBe(0);
+    expect(calls).toEqual([]);
+    expect(created).toEqual([]);
+    expect(out).toContain('the Monitor exits. The next open starts it again.');
   });
 
   it('goes on ticking while the tag is on its own build, and looks again only once a minute', async () => {

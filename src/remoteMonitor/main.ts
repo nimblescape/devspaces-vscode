@@ -1672,13 +1672,15 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         }
         // The move to the current build of the helper image (SelfUpgrade): between two ticks as the ends here, at most
         // once a minute, never during a background run or while the end after the time without use waits, and after
-        // the removals of the records. It ends this monitor once its successor runs.
-        if (!schedule.busy && !unused.paused && upgrade.due() && (await upgrade.check())) return 0;
+        // the removals of the records. It ends this monitor once its successor runs. Not when this monitor ends when
+        // idle now (below): the next open creates it from the current build.
+        const endsIdle = !permanent && loop.idleMs() >= idleExitMs;
+        if (!endsIdle && !schedule.busy && !unused.paused && upgrade.due() && (await upgrade.check())) return 0;
         // Only here, between two ticks, so never while it holds a lock or stops a container; the removals of the
         // records (each under the lock of the records) end first. The records stay in the volume. A permanent monitor
         // (a remote host, with stopMonitorWhenIdle off) never exits when idle; one that ends when idle
         // does so also with image updates.
-        if (!permanent && loop.idleMs() >= idleExitMs) {
+        if (endsIdle) {
           // Not during a background run (a download would be cut, and its end not stored). The loop does not wait for
           // the run: it goes on ticking (the stops of devspaces whose windows closed, the heartbeats) and exits at
           // the first idle tick after the run's end. A request of "Update All Images Now" that came after the last

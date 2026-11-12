@@ -4,8 +4,9 @@
 
 // The move of the Monitor to the current build of its helper image (docs/requirements.md R-DS-009). When the Monitor
 // (its background run, R-DS-003) or a window built the helper tag again, the Monitor container still runs from the
-// earlier build. Between two ticks of its loop (main.ts), at most once per SELF_UPGRADE_CHECK_MS (a minute), when nothing runs (no
-// part of the background run, no automatic stop, no end after the time without use), check:
+// earlier build. Between two ticks of its loop (main.ts), at most once per SELF_UPGRADE_CHECK_MS (a minute), when nothing
+// runs (no part of the background run, no automatic stop, no end after the time without use) and the monitor does not end
+// when idle at this tick (the next open creates it from the current build), check:
 //   1. reads its own helper tag (the tag of its own Dockerfile, ownHelperImage) and its own script, and its own
 //      container (found by the nonce of its create, MONITOR_CREATE_ID_ENV): its name, image, labels, variables, mounts,
 //      and the commands of the windows that run in it (`docker exec`);
