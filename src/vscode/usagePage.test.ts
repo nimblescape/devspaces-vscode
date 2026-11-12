@@ -965,6 +965,20 @@ describe('UsagePages', () => {
     expect(readSizes).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps nothing of a read in the background that failed after a new start of the host, and reads again', async () => {
+    shells.open.add(LIMA_HOST);
+    let fail: (error: Error) => void = () => {};
+    readSizes.mockImplementationOnce(() => new Promise<HostInventory>((_resolve, reject) => (fail = reject)));
+    const panel = await openRead(pages(), LIMA_HOST);
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    fail(new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.', true));
+    await flush();
+    expect(lastView(panel).docker.note).not.toMatch(/time limit/);
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+  });
+
   it('reads by itself again after a Refresh Sizes that worked across a new start of the host', async () => {
     shells.open.add(LIMA_HOST);
     readSizes.mockRejectedValueOnce(new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.', true));

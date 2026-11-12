@@ -662,6 +662,8 @@ class UsagePage {
       // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result. A read
       // in the background without an open login ends with an AbortError too, and the next try comes after a minute.
       if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
+      // The host started again meanwhile: the error is of before, and the new start reads at its next values.
+      if (epoch !== this.bootEpoch) return;
       // The VM went to sleep during a read in the background (its shell ended): the samples see it themselves.
       if (background && this.vm && ((await this.vmStateNow()).kind !== 'running' || controller.signal.aborted || this.disposed)) return;
       ran = true;
