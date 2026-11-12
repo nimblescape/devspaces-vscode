@@ -632,15 +632,26 @@ describe('the label nimblescape.devspaces.config-path', () => {
 describe('the labels of the devspace on the dev container', () => {
   const RECORD = JSON.stringify({ builtAt: '2026-11-12T08:00:00.000Z', devspaceImage: `${OWN}:3`, buildNumber: 3, configPath: '.devcontainer/devcontainer.json', configHash: 'sha256:1', images: {}, features: {} });
   const devspace = { repository: 'acme/api', ownerId: DEVSPACE.ownerId, buildRecord: RECORD };
+  const own = { ...DEVSPACE, repository: 'acme/api' };
 
   it('allows the labels of the override configuration: repository, owner, and build record', () => {
     const runArgs = buildOverrideConfig({ devspaceImage: 'img', volumeName: OWN, repositoryName: 'api', containerName: OWN, devspace }).runArgs as string[];
     expect(runArgs).toEqual(
       expect.arrayContaining(['--label', 'nimblescape.devspaces.repository=acme/api', '--label', `nimblescape.devspaces.owner-id=${DEVSPACE.ownerId}`, '--label', `nimblescape.devspaces.build-record=${RECORD}`]),
     );
-    expect(hostAccessProblems({ config: { runArgs }, ownVolume: OWN, overrideConfiguration: true })).toEqual([]);
+    expect(hostAccessProblems({ config: { runArgs }, ownVolume: OWN, overrideConfiguration: true, devspace: own })).toEqual([]);
     // Also in the merged configuration of an existing container, which holds the runArgs of the override configuration.
-    expect(hostAccessProblems({ config: {}, merged: { runArgs }, ownVolume: OWN })).toEqual([]);
+    expect(hostAccessProblems({ config: {}, merged: { runArgs }, ownVolume: OWN, devspace: own })).toEqual([]);
+  });
+
+  it('refuses the repository and the owner of another devspace, or without the devspace of the check, and allows any build record', () => {
+    const check = (label: string, devspaceOfCheck: HostAccessInput['devspace']) =>
+      hostAccessProblems({ config: { runArgs: ['--label', label] }, ownVolume: OWN, overrideConfiguration: true, ...(devspaceOfCheck !== undefined ? { devspace: devspaceOfCheck } : {}) });
+    expect(check('nimblescape.devspaces.repository=acme/web', own)).toEqual(['label nimblescape.devspaces.repository']);
+    expect(check('nimblescape.devspaces.owner-id=2002', own)).toEqual(['label nimblescape.devspaces.owner-id']);
+    expect(check('nimblescape.devspaces.repository=acme/api', undefined)).toEqual(['label nimblescape.devspaces.repository']);
+    expect(check(`nimblescape.devspaces.owner-id=${DEVSPACE.ownerId}`, undefined)).toEqual(['label nimblescape.devspaces.owner-id']);
+    expect(check(`nimblescape.devspaces.build-record=${RECORD}`, undefined)).toEqual([]);
   });
 
   it('refuses the labels in the runArgs of the repository', () => {
@@ -660,7 +671,7 @@ describe('the labels of the devspace on the dev container', () => {
     ['the devspace ID', `nimblescape.devspaces.id=${DEVSPACE.id}`],
   ])('refuses in the override configuration %s', (_name, label) => {
     const key = label.slice(0, label.indexOf('='));
-    expect(hostAccessProblems({ config: { runArgs: ['--label', label] }, ownVolume: OWN, overrideConfiguration: true })).toEqual([`label ${key}`]);
+    expect(hostAccessProblems({ config: { runArgs: ['--label', label] }, ownVolume: OWN, overrideConfiguration: true, devspace: own })).toEqual([`label ${key}`]);
   });
 
   it.each(['nimblescape.devspaces.repository=acme/${localEnv:HOME}', 'nimblescape.devspaces.build-record={"a":"${localEnv:HOME}"}'])(

@@ -6,7 +6,6 @@
 import * as crypto from 'crypto';
 import { namePair, trailingPair } from './namePairs';
 import { LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER, LABEL_MONITOR } from './remoteMonitor/protocol';
-import { isStorageId } from './storage/paths';
 
 /**
  * Labels of the helper channel. Here, not in src/core/helperChannel/protocol.ts, so that the script of the remote
@@ -183,9 +182,9 @@ export const MAX_BUILD_RECORD_LABEL_LENGTH = 8 * 1024;
  * container itself, not only through the labels that it inherits from its devspace image: its repository
  * (LABEL_REPOSITORY), its owner (LABEL_OWNER_ID), and, when the open knows it, the build record of the devspace image
  * that the container is created from (LABEL_BUILD_RECORD, its JSON or empty: buildRecordLabel in
- * ./pipeline/imageRecord.ts). The host access policy accepts exactly these labels in the override configuration and
- * in the merged configuration of an existing container (isOwnDevspaceLabel), never in the configuration of a
- * repository.
+ * ./pipeline/imageRecord.ts). The host access policy accepts exactly these labels, with the repository and the owner
+ * of the devspace, in the override configuration and in the merged configuration of an existing container
+ * (isOwnDevspaceLabel), never in the configuration of a repository.
  */
 export function devspaceContainerLabels(p: { repository: string; ownerId: string; buildRecord?: string }): string[] {
   const labels = [`${LABEL_REPOSITORY}=${p.repository}`, `${LABEL_OWNER_ID}=${p.ownerId}`, ...(p.buildRecord !== undefined ? [`${LABEL_BUILD_RECORD}=${p.buildRecord}`] : [])];
@@ -206,7 +205,9 @@ export function isOwnDevspaceLabel(value: string): boolean {
     case LABEL_REPOSITORY:
       return /^[^/\s=]+\/[^/\s=]+$/.test(text);
     case LABEL_OWNER_ID:
-      return isStorageId(text);
+      // As isStorageId of ./storage/paths.ts, which names.ts does not import: the script of the remote Monitor imports
+      // names.ts.
+      return /^[A-Za-z0-9_-]{1,128}$/.test(text);
     case LABEL_BUILD_RECORD:
       return text.length <= MAX_BUILD_RECORD_LABEL_LENGTH;
     default:

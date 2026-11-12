@@ -109,7 +109,7 @@ describe('host access checks off for the repository', () => {
     expect(runArgs).toEqual(['--label', 'nimblescape.devspaces.container-version=1', '--label', 'nimblescape.devspaces.host-access=unrestricted', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await h.registry.get(devspace.id))?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', name, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     // The labels of the override configuration pass the policy also with the checks on. Checked as the override
     // configuration (its labels of Docker Compose set empty).
-    expect(hostAccessProblems({ config: { runArgs }, ownVolume: devspace.volumeName, overrideConfiguration: true })).toEqual([]);
+    expect(hostAccessProblems({ config: { runArgs }, ownVolume: devspace.volumeName, overrideConfiguration: true, devspace: { id: devspace.id, ownerId: devspace.owner.id, repository: devspace.repository } })).toEqual([]);
     expect(runArgsProblems(runArgs.slice(0, 4), devspace.volumeName)).toEqual([]);
     expect(h.docker.containersOf(devspace.id)[0].labels[LABEL_HOST_ACCESS]).toBe(HOST_ACCESS_UNRESTRICTED);
     // The log states it at every open.

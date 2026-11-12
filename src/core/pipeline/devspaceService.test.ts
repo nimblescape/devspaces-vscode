@@ -5396,7 +5396,7 @@ describe('host access policy in the pipeline', () => {
     // What Docker gets passes the policy as a whole: the extension's --label and --name included.
     const given = h.helper.ups[0].override.runArgs as string[];
     // Checked as the override configuration (its labels of Docker Compose set empty).
-    expect(hostAccessProblems({ config: { runArgs: given }, ownVolume: NAME, overrideConfiguration: true })).toEqual([]);
+    expect(hostAccessProblems({ config: { runArgs: given }, ownVolume: NAME, overrideConfiguration: true, devspace: { id: ENV_ID, ownerId: ACCOUNT.id, repository: REPO } })).toEqual([]);
     // The tmpfs of the token at the end.
     expect(given.slice(-6)).toEqual(['--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     expect(given.filter((arg) => arg === '--name')).toHaveLength(runArgs.includes('--label') ? 2 : 1);

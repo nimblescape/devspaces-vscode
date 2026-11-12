@@ -2611,11 +2611,17 @@ export class DevspaceService extends OperationBase {
   private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
     const [fromContainer, fromImage] = await Promise.all([this.containerImageRecord(env, above), this.newestImageLabelRecord(env, above)]);
     if (fromContainer === undefined) return fromImage;
-    return 'record' in fromImage && fromImage.record.buildNumber > fromContainer.record.buildNumber ? fromImage : fromContainer;
+    // A newer image, also one without a usable record (the open then builds, as before), comes before the container.
+    const newest = 'record' in fromImage ? fromImage.record.buildNumber : fromImage.newest;
+    if (newest !== undefined && newest > fromContainer.record.buildNumber) return fromImage;
+    return fromContainer;
   }
 
-  /** newestImageRecord without the dev container: the record in the labels of the newest devspace image of `env`. */
-  private async newestImageLabelRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
+  /**
+   * newestImageRecord without the dev container: the record in the labels of the newest devspace image of `env`; with a
+   * reason, the build number of that image (`newest`) when there is one higher than `above`.
+   */
+  private async newestImageLabelRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string; newest?: number }> {
     const repository = devspaceImageRepository(env.repository, env.id);
     let tags: string[];
     try {
@@ -2635,7 +2641,7 @@ export class DevspaceService extends OperationBase {
       labels = id === undefined ? undefined : await this.deps.docker.imageLabels(id);
     } catch (error) {
       const warning = `The labels of ${newest.tag} could not be read: ${errorMessage(error)}`;
-      return { reason: warning, warning };
+      return { reason: warning, warning, newest: newest.number };
     }
     const found = labels === undefined ? undefined : imageBuildRecord(labels, env, newest.tag, newest.number);
     if (id === undefined || found === undefined) {
@@ -2643,6 +2649,7 @@ export class DevspaceService extends OperationBase {
       return {
         reason: `its devspace image ${newest.tag} has no build record of it (${why})`,
         warning: `The devspace image ${newest.tag} has no build record of ${env.repository} (${why}). The devspace is built again.`,
+        newest: newest.number,
       };
     }
     return { record: { ...found, imageId: id }, tag: newest.tag };
@@ -3278,7 +3285,8 @@ export class DevspaceService extends OperationBase {
     if ((await docker.devspaceContainers(env.id)).some((container) => isUnrestrictedContainer(container.labels))) {
       throw new PrepareSkipped('the host access checks are off for it (its container was created without them)');
     }
-    // The approved build record: the one of the newest devspace image (its labels), with its ID pinned.
+    // The approved build record: the one of the dev container or of the newest devspace image (their labels), with the
+    // ID of its image pinned (newestImageRecord).
     const newest = await this.newestImageRecord(env);
     if ('reason' in newest) throw new PrepareSkipped(newest.reason);
     const record = newest.record;
@@ -4122,14 +4130,13 @@ export class DevspaceService extends OperationBase {
   /**
    * The label of the build record `record` for a container that `up` creates from `image` (buildRecordLabel), as
    * `buildRecord`, only when the record describes that image: `image` is its tag, and the tag still names the image
-   * that it pins (when it pins one). Otherwise none, and the container keeps the label that its image gives it.
+   * that it pins. Otherwise none (also for a record without a pinned ID), and the container keeps the label that its
+   * image gives it.
    */
   private async upRecordLabel(image: string, record: BuildRecord | undefined): Promise<{ buildRecord?: string }> {
-    if (record === undefined || record.devspaceImage !== image) return {};
-    if (record.imageId !== undefined) {
-      const id = await this.deps.docker.imageId(image).catch(() => undefined);
-      if (id === undefined || id.toLowerCase() !== record.imageId.toLowerCase()) return {};
-    }
+    if (record?.imageId === undefined || record.devspaceImage !== image) return {};
+    const id = await this.deps.docker.imageId(image).catch(() => undefined);
+    if (id === undefined || id.toLowerCase() !== record.imageId.toLowerCase()) return {};
     return { buildRecord: buildRecordLabel(record) };
   }
 
@@ -5419,7 +5426,9 @@ export class DevspaceService extends OperationBase {
     const foreignVolumes = [...others.flatMap((other) => other.additionalVolumes ?? []), ...kept.map((record) => record.name)].filter(
       (name) => !own.has(name),
     );
-    const devspace = { id: env.id, ownerId: env.owner.id };
+    // With its repository: the only values of the labels of the devspace that the override configuration may give the
+    // container (devspaceContainerLabels).
+    const devspace = { id: env.id, ownerId: env.owner.id, repository: env.repository };
     // The networks that the configuration names, with their labels and containers, so that the network of another
     // devspace is refused also under a name of its own.
     const networkNames = [...new Set([...runArgsNetworks(input.config?.runArgs), ...runArgsNetworks(input.merged?.runArgs), ...moreNetworks])];

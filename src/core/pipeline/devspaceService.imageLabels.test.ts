@@ -418,6 +418,16 @@ describe('the build record on the dev container', () => {
     expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(IMAGE_3);
   });
 
+  it('builds, as before, when a newer image than the container has no usable record', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_2, {});
+    addContainerWithRecord(IMAGE_2, recordOf(IMAGE_2, 2));
+    addImage(IMAGE_3, {});
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+    expect(h.logger.warnings.some((line) => line.includes(IMAGE_3) && line.includes('its labels do not fit'))).toBe(true);
+  });
+
   it.each<[string, Record<string, string>]>([
     ['another owner', { [LABEL_OWNER_ID]: OTHER_ACCOUNT.id }],
     ['another repository', { [LABEL_REPOSITORY]: 'acme/web' }],
