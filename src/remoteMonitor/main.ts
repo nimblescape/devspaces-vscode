@@ -99,7 +99,7 @@ import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_VM_ENV, MONITOR_V
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
 import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
 import { ownHelperImage, refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
-import { EngineCleanup, type EngineCleanupDeps } from './engineCleanup';
+import { EngineCleanup } from './engineCleanup';
 import { CLEANUP_FILE, HELPER_USE_OBSERVE_MS } from './cleanupRules';
 import { VERSION_ENV, takeUserAgentVersion, type HttpTransport } from '../core/http';
 import { proxiedHttpsTransport } from '../core/proxyTransport';
@@ -892,8 +892,6 @@ export interface MainDeps {
   prepareWorker?: () => PrepareWorker | { reason: string };
   /** The Dockerfile and the build of the part "the workspace helper image" (refreshHelperImage); the tests give their own. */
   helperRefresh?: Pick<HelperRefreshDeps, 'dockerfile' | 'build'>;
-  /** The pin of the build image of the cleanup of the engine (EngineCleanup; default its own); the tests give their own. */
-  engineCleanup?: Pick<EngineCleanupDeps, 'buildx'>;
   /** The monotonic clock of the idle time, and the wait between two ticks (the tests). */
   monotonic?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -1581,7 +1579,6 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         ownHelper: () => ownHelperImage(deps.helperRefresh?.dockerfile),
         referencesInUse: () => readImagesInUse(stateDir, now()),
         vm: vmFromEnv(deps.env),
-        ...deps.engineCleanup,
       });
       const background = new BackgroundRun({ log, now, images: () => images.pass(), helperImage, cleanup: () => cleanup.pass(), vscode: vscodeOf, state, prepares });
       // With the request of "Update All Images Now" (`run-now`).
