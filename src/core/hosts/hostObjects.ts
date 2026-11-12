@@ -254,9 +254,11 @@ function hasDevspacesLabel(labels: ReadonlyMap<string, string>): boolean {
   return false;
 }
 
-function text(value: unknown): string | undefined {
+/** A string field that is not empty; undefined for anything else. */
+export function nonEmptyText(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
+const text = nonEmptyText;
 
 function count(value: unknown): number | undefined {
   const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
@@ -473,8 +475,8 @@ function mergedImages(items: readonly unknown[], tagRows: readonly unknown[] = [
   return [...images.values()];
 }
 
-/** The short form of an image ID: its first 12 hex digits, as `docker image ls` shows it. */
-function shortImageId(id: string): string {
+/** The short form of an image ID or digest: its first 12 hex digits (`sha256:` left out), as `docker image ls` shows it. */
+export function shortImageId(id: string): string {
   return id.replace(/^sha256:/, '').slice(0, 12);
 }
 

@@ -82,8 +82,8 @@ describe('the report of the store of VS Code', () => {
       ['1.140.2', 'bbbbbbb', '9 days ago', { text: 'kept: one of the 2 newest', tone: 'keep' }],
       ['1.139.1', 'ccccccc', '16 days ago', { text: 'removed at the next cleanup, unless a running container runs it', tone: 'remove' }],
       ['1.138.0', 'ddddddd', '3 days ago', { text: 'kept: used 3 days ago', tone: 'keep' }],
-      // Without a marker, the time of its folder counts (30 days): it goes too, but it is incomplete first.
-      ['1.137.0', 'fffffff', 'none · downloaded 30 days ago', { text: 'incomplete: no window uses it', tone: 'warn' }],
+      // Without a marker, the time of its folder counts (30 days): it goes too, also when it is incomplete.
+      ['1.137.0', 'fffffff', 'none · downloaded 30 days ago', { text: 'removed at the next cleanup (incomplete), unless a running container runs it', tone: 'remove' }],
     ]);
     expect(servers[0][4].text).toBe('230 MB');
   });
@@ -101,7 +101,7 @@ describe('the report of the store of VS Code', () => {
     expect(report.summary).toEqual([
       { text: '5 server versions', tone: 'info' },
       { text: '6 extension files', tone: 'info' },
-      { text: '3 removed at the next cleanup', tone: 'remove' },
+      { text: '4 removed at the next cleanup', tone: 'remove' },
       { text: '2 downloads failed', tone: 'warn' },
     ]);
   });
@@ -117,6 +117,28 @@ describe('the report of the store of VS Code', () => {
     expect([rule(noPlatform, '1.139.1')?.tone, rule(noPlatform, '1.120.0')?.tone]).toEqual(['warn', 'keep']);
     expect(noPlatform.notices).toEqual([expect.stringContaining('platform of the engine is not known')]);
     expect(rule(vscodeStoreReport({ ...other, cut: true }, records, CLOCK, 'linux-x64'), '1.139.1')).toEqual({ text: 'not known: the list of the store is incomplete', tone: 'warn' });
+  });
+
+  it('leaves alone the folders that are no version of the Monitor, and names an incomplete version that stays', () => {
+    const report = vscodeStoreReport(
+      store({ servers: [server(A, '1.141.0', { script: false }), server(B, '1.140.2'), server(C, '1.139.1'), server('leftover', '9.9.9'), server(D, '1.200.0', { quality: 'exploration' })] }),
+      records,
+      CLOCK,
+      'linux-x64',
+    );
+    const rule = (commit: string) => rows(section(report.sections, 'VS Code Server')).find((row) => row[3].text === commit.slice(0, 7))?.[6].chip;
+    expect(rule('leftover')).toEqual({ text: 'no version of the Monitor: left alone', tone: 'info' });
+    expect(rule(D)).toEqual({ text: 'no version of the Monitor: left alone', tone: 'info' });
+    // The folder 9.9.9 does not count as one of the 2 newest: 1.141.0 (incomplete) and 1.140.2 are, and 1.139.1 goes.
+    expect([rule(A), rule(B)?.tone, rule(C)?.tone]).toEqual([{ text: 'incomplete: no window uses it', tone: 'warn' }, 'keep', 'remove']);
+  });
+
+  it('says that the failed downloads and the last cleanup are not known without the text of their records', () => {
+    const textless = monitorRecords({ cut: false, textsDropped: true, files: [{ path: 'cache-run.json', bytes: 10, omitted: 'output' }] });
+    const report = vscodeStoreReport(store(), textless, CLOCK, 'linux-x64');
+    const failed = section(report.sections, 'Downloads that failed');
+    expect(failed.kind === 'table' ? failed.empty : undefined).toBe('Not known: the reader left out the text of cache-run.json or extensions/failures.json.');
+    expect(facts(section(report.sections, 'Cleanup and downloads'))['Last cleanup']).toBe('not known: the reader left out the text of cache-run.json');
   });
 
   it('orders the builds of one version by their download, as the releases come', () => {
@@ -164,7 +186,7 @@ describe('the report of the store of VS Code', () => {
       const report = vscodeStoreReport(store(), partial, CLOCK, 'linux-x64');
       const extensions = rows(section(report.sections, 'Extensions'));
       expect(extensions.map((row) => row[5].chip?.text)).toEqual([undefined, undefined, undefined, undefined, 'no file of the Monitor: left alone', undefined]);
-      expect(report.summary).toContainEqual({ text: '1 removed at the next cleanup', tone: 'remove' });
+      expect(report.summary).toContainEqual({ text: '2 removed at the next cleanup', tone: 'remove' });
       expect(report.notices).toEqual([expect.stringContaining('the rules of the extension files need could not be read whole')]);
     }
   });

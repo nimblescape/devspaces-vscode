@@ -54,10 +54,10 @@ export interface ResourceReportInput {
 
 /** What could not be read, in words, for the notes of a report. */
 function readNotices(outcome: VolumeReadOutcome | undefined): string[] {
-  switch (outcome?.kind) {
-    case undefined:
+  if (outcome === undefined) return [];
+  switch (outcome.kind) {
     case 'read':
-      return outcome === undefined ? [] : readingNotices(outcome.reading);
+      return readingNotices(outcome.reading);
     case 'noImage':
       return ['What the volume contains could not be read: the host has no helper image of Devspaces, which the reader needs (it never downloads one). The next start of a devspace on this host builds it.'];
     case 'noVolume':

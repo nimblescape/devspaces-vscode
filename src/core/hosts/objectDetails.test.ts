@@ -141,6 +141,17 @@ describe('the facts of Docker about an object', () => {
     expect(details.kind === 'volume' ? [details.users.length, details.moreUsers, details.users[0]] : undefined).toEqual([MAX_VOLUME_USERS, true, { id: 'id0', name: 'c0' }]);
   });
 
+  it('keeps the inspect of a volume when the list of the containers that use it fails', async () => {
+    const docker = fakeDocker({
+      'volume inspect': result({ stdout: JSON.stringify({ Name: 'v', Driver: 'local' }) }),
+      'container ls': result({ exitCode: 1, stderr: 'Cannot connect to the Docker daemon' }),
+    });
+    const details = await readObjectDetails(docker, { kind: 'volume', id: 'v' });
+    expect(details).toMatchObject({ kind: 'volume', driver: 'local', users: [], usersProblem: expect.stringContaining('Cannot connect to the Docker daemon') });
+    const usedBy = dockerFactsSections({ kind: 'volume', id: 'v', name: 'v', purpose: 'notDevspaces' }, details, CLOCK).find((entry) => entry.title === 'Used by')?.body;
+    expect(usedBy?.kind === 'table' ? usedBy.empty : undefined).toMatch(/^Not known: Docker could not list them/);
+  });
+
   it('throws an abort during the inspect of the containers that use a volume', async () => {
     const controller = new AbortController();
     const docker = fakeDocker({

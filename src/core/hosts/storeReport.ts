@@ -7,7 +7,7 @@
 // of the Monitor that keeps or removes it) and the cache of the workers (devspaces-worker-cache: its top level). From
 // what the reader of the shared volumes read (volumeReader.ts) and the records of the Monitor (monitorRecords.ts); the
 // rules are those of the Monitor (backgroundRules.ts, vscodeExtensions.ts). Pure; no I/O.
-import type { VscodePlatform, VscodeQuality } from '../helperChannel/protocol';
+import { VSCODE_QUALITIES, type VscodePlatform, type VscodeQuality } from '../helperChannel/protocol';
 import { FETCH_RETRY_MS, KEPT_SERVER_VERSIONS, SERVER_UNUSED_MS, SERVER_VERSION_NAME, STORE_CLEANUP_INTERVAL_MS, cleanupDue, fetchRetryDue, serversToRemove } from '../remoteMonitor/backgroundRules';
 import {
   EXTENSION_FOLDERS,
@@ -22,11 +22,15 @@ import {
   wantedExtensions,
   type ExtensionFolder,
 } from '../vscodeExtensions';
-import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
+import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
+import { CACHE_RUN_FILE } from '../remoteMonitor/protocol';
 import { serverVersionName } from '../worker/vscodeServerStore';
 import type { MonitorRecords } from './monitorRecords';
 import { ageText, cell, chip, countText, fact, sizeText, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportSection } from './reportModel';
 import type { StoredServer, VscodeStoreReading, WorkerCacheReading } from './volumeReader';
+
+/** The folder name of a server version: its commit (removeOldServers of the Monitor). */
+const COMMIT = /^[0-9a-f]{40}$/;
 
 /** At most this many rows of extension files (the others are counted under the table). */
 export const MAX_EXTENSION_ROWS = 300;
@@ -62,8 +66,15 @@ function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string,
   const rules = new Map<StoredServer, ReportChip>();
   const groups = new Map<string, StoredServer[]>();
   for (const server of servers) {
+    // As the Monitor (removeOldServers): only the folders of a commit under a quality of VS Code are its versions.
+    if (!(VSCODE_QUALITIES as readonly string[]).includes(server.quality) || !COMMIT.test(server.commit)) {
+      rules.set(server, chip('no version of the Monitor: left alone', 'info'));
+      continue;
+    }
     const key = `${server.quality}/${server.platform}`;
-    groups.set(key, [...(groups.get(key) ?? []), server]);
+    const group = groups.get(key) ?? [];
+    group.push(server);
+    groups.set(key, group);
   }
   for (const group of groups.values()) {
     const ordered = [...group].sort(newerFirst);
@@ -71,13 +82,15 @@ function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string,
     const removed = new Set(serversToRemove(ordered.map((server) => ({ commit: server.commit, usedAt: usedAt(server) })), ordered.map((server) => server.commit), clock.now));
     ordered.forEach((server, index) => {
       const at = usedAt(server);
-      if (!server.node || !server.script) rules.set(server, chip('incomplete: no window uses it', 'warn'));
-      else if (platform !== undefined && server.platform !== platform) rules.set(server, chip(`kept: the Monitor cleans only the versions for ${platform}, the platform of this engine`, 'info'));
+      const incomplete = !server.node || !server.script;
+      if (platform !== undefined && server.platform !== platform) rules.set(server, chip(`kept: the Monitor cleans only the versions for ${platform}, the platform of this engine`, 'info'));
       else if (removed.has(server.commit)) {
+        // The cleanup of the Monitor removes an incomplete version as any other.
         if (platform === undefined) rules.set(server, chip('not known: the platform of the engine is not known, and the Monitor cleans only the versions for it', 'warn'));
         else if (!complete) rules.set(server, chip('not known: the list of the store is incomplete', 'warn'));
-        else rules.set(server, chip('removed at the next cleanup, unless a running container runs it', 'remove'));
-      } else if (index < KEPT_SERVER_VERSIONS) rules.set(server, chip(index === 0 ? 'kept: newest' : `kept: one of the ${KEPT_SERVER_VERSIONS} newest`, 'keep'));
+        else rules.set(server, chip(`removed at the next cleanup${incomplete ? ' (incomplete)' : ''}, unless a running container runs it`, 'remove'));
+      } else if (incomplete) rules.set(server, chip('incomplete: no window uses it', 'warn'));
+      else if (index < KEPT_SERVER_VERSIONS) rules.set(server, chip(index === 0 ? 'kept: newest' : `kept: one of the ${KEPT_SERVER_VERSIONS} newest`, 'keep'));
       else rules.set(server, chip(`kept: used ${at !== undefined ? ageText(at, clock.now) : 'recently'}`, 'keep'));
     });
   }
@@ -133,11 +146,13 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   for (const [entry, at] of [...(records?.extensionFailures ?? new Map<string, number>())].sort(([, a], [, b]) => b - a)) {
     failures.push([cell(`Extension ${entry}`), cell(timeText(at, clock)), nextTry(at, EXTENSION_RETRY_MS, !extensionRetryWaits(at, clock.now), clock)]);
   }
+  // A record of the failures whose text the reader left out: its failures are not known.
+  const failuresKnown = records !== undefined && !records.textless.includes(CACHE_RUN_FILE) && !records.textless.includes(`${STATE_EXTENSION_FOLDER}/${EXTENSION_FAILURES_FILE}`);
   if (records !== undefined) {
     sections.push({
       title: 'Downloads that failed',
-      ...(failures.length > 0 ? { chip: chip(countText(failures.length, 'failure'), 'warn') } : {}),
-      body: { kind: 'table', columns: ['Item', 'Failed', 'Next try'], rows: failures, empty: 'None: the last downloads of the Monitor worked.' },
+      ...(failures.length > 0 ? { chip: chip(countText(failures.length, 'failure'), 'warn') } : !failuresKnown ? { chip: chip('not known', 'warn') } : {}),
+      body: { kind: 'table', columns: ['Item', 'Failed', 'Next try'], rows: failures, empty: failuresKnown ? 'None: the last downloads of the Monitor worked.' : 'Not known: the reader left out the text of cache-run.json or extensions/failures.json.' },
       from: 'From cache-run.json and extensions/failures.json in devspaces-monitor. The Monitor tries a failed download again after one day.',
     });
   }
@@ -145,7 +160,8 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   sections.push(extensions.section);
   const cleanupFacts = [];
   const lastCleanup = records?.cacheRun?.lastCleanupAt;
-  if (records !== undefined) cleanupFacts.push(fact('Last cleanup', lastCleanup !== undefined ? `${timeText(lastCleanup, clock)} · at most once a day` : 'none yet'));
+  if (records?.textless.includes(CACHE_RUN_FILE) === true) cleanupFacts.push(fact('Last cleanup', 'not known: the reader left out the text of cache-run.json', chip('too large for one read', 'warn')));
+  else if (records !== undefined) cleanupFacts.push(fact('Last cleanup', lastCleanup !== undefined ? `${timeText(lastCleanup, clock)} · at most once a day` : 'none yet'));
   if (lastCleanup !== undefined) cleanupFacts.push(fact('Next cleanup', cleanupDue(lastCleanup, clock.now) ? 'with the next run' : `with the first run after ${timeText(lastCleanup + STORE_CLEANUP_INTERVAL_MS, clock)}`));
   const downloads = store.temporary.files + store.extensionTemporary.files;
   cleanupFacts.push(fact('Downloads now', downloads === 0 ? 'none' : `${countText(downloads, 'temporary file')} (${sizeText(store.temporary.bytes + store.extensionTemporary.bytes, !store.temporary.cut && !store.extensionTemporary.cut)}): a download runs, or the cleanup removes what an ended one left`));

@@ -8,6 +8,7 @@
 // and which server versions the cleanup removes. Pure; no I/O. Here in core, as the reports of the view Docker Hosts
 // read the same state and give the same rules (src/core/hosts/resourceReport.ts).
 import type { VscodeQuality } from '../helperChannel/protocol';
+import { cacheRunDue, type CacheSchedule } from './cacheSettings';
 
 /** The cleanup of the store runs at most once a day. */
 export const STORE_CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
@@ -84,6 +85,23 @@ export function runRetryDelay(retries: number): number {
  */
 export function runRetryDue(retryAt: number, now: number): boolean {
   return now >= retryAt || retryAt - now > RUN_RETRY_DELAYS_MS[RUN_RETRY_DELAYS_MS.length - 1] + CLOCK_RESET_MS;
+}
+
+/** The times of the state that decide when the background run is due (backgroundRunDue). */
+export interface RunTimes {
+  lastEndAt: number | undefined;
+  retryAt: number | undefined;
+  lastAttemptAt: number | undefined;
+}
+
+/**
+ * Whether the background run is due at `now`: while a retry waits (`retryAt`), its time (runRetryDue) or the schedule
+ * counted from the last attempt (when it is known), whichever comes first; else the schedule counted from the end of
+ * the last run (cacheRunDue).
+ */
+export function backgroundRunDue(times: RunTimes, schedule: CacheSchedule, timeZone: string, now: number): boolean {
+  if (times.retryAt === undefined) return cacheRunDue(schedule, times.lastEndAt, now, timeZone);
+  return runRetryDue(times.retryAt, now) || (times.lastAttemptAt !== undefined && cacheRunDue(schedule, times.lastAttemptAt, now, timeZone));
 }
 
 /** A version whose fetch by the run failed is tried again after this long (a day). */

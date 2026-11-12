@@ -29,7 +29,7 @@ const records = monitorRecords({
     monitorFile(`heartbeats/${OTHER_SOURCE}.${OTHER_DEVSPACE}.json`, { at: NOW - 3 * HOUR, keepRunning: true, limitSeconds: 600, seq: 1 }),
     monitorFile(`images-in-use.${SOURCE}.json`, { at: NOW - HOUR, references: ['ghcr.io/a/b:1', `postgres:16@${DIGEST}`, 'ghcr.io/private/x:1'] }),
     monitorFile(`images-in-use.${OTHER_SOURCE}.json`, { at: NOW - 31 * DAY, references: ['ghcr.io/a/b:1', 'old/image:1'] }),
-    monitorFile('registry-digests.json', { digests: { 'ghcr.io/a/b:1': { digest: DIGEST, at: NOW - 2 * HOUR } } }),
+    monitorFile('registry-digests.json', { digests: { 'ghcr.io/a/b:1': { digest: DIGEST, at: NOW - 2 * HOUR } }, schedule: '7 6 * * *', timeZone: 'Europe/Vienna' }),
     monitorFile('helper-image.json', { tag: HELPER, baseImage: 'node:24-trixie-slim', baseDigest: DIGEST, checkedAt: iso(NOW - 3 * HOUR), attemptedAt: iso(NOW - HOUR), builtAt: iso(NOW - 4 * DAY) }),
     monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['dbaeumer.vscode-eslint', 'golang.go'], defaults: ['esbenp.prettier-vscode'] }),
     monitorFile(`extensions/wanted/${OTHER_DEVSPACE}.json`, { at: NOW - 15 * DAY, configuration: [], defaults: [] }),
@@ -130,6 +130,9 @@ describe('the report of the volume of the Monitor', () => {
     const settingsTextless = monitorRecords({ cut: false, textsDropped: false, files: [{ path: 'image-settings.json', bytes: 10, omitted: 'budget' }, monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
     const settings = facts(body(monitorContainerReport(details, settingsTextless, COMPUTER, CLOCK).sections, 'The Monitor'));
     expect([settings.Schedule?.text, settings['Next run']?.text]).toEqual(['not known: the reader left out the text of image-settings.json', 'not known: the schedule is not known']);
+    const invalid = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('image-settings.json', 'no json'), monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
+    const kept = facts(body(monitorContainerReport(details, invalid, COMPUTER, CLOCK).sections, 'The Monitor'));
+    expect([kept.Schedule?.text, kept['Next run']?.text]).toEqual(['not known: image-settings.json cannot be read, and the Monitor keeps the schedule that it had', 'not known: the schedule is not known']);
     const none = monitorRecords({ cut: false, textsDropped: false, files: [] });
     expect(facts(body(monitorVolumeReport(none, COMPUTER, CLOCK).sections, 'Background run'))['Next run']?.text).toBe('at the next check of the Monitor: no run is known');
   });
@@ -148,6 +151,15 @@ describe('the report of the volume of the Monitor', () => {
       ['old/image:1', 'another computer', '', 'remove'],
       [`postgres:16@${DIGEST}`, 'this computer', '', 'info'],
     ]);
+  });
+
+  it('takes an old answer of the registry as no longer kept up to date, as the opens take it', () => {
+    const old = monitorRecords({
+      cut: false,
+      textsDropped: false,
+      files: [monitorFile(`images-in-use.${SOURCE}.json`, { at: NOW - HOUR, references: ['ghcr.io/a/b:1'] }), monitorFile('registry-digests.json', { digests: { 'ghcr.io/a/b:1': { digest: DIGEST, at: NOW - 3 * DAY } }, schedule: '7 6 * * *', timeZone: 'Europe/Vienna' })],
+    });
+    expect(rows(body(monitorVolumeReport(old, COMPUTER, CLOCK).sections, 'Image references in use'))[0][4].chip).toEqual({ text: 'the last answer of the registry is old: the opens check it themselves', tone: 'warn' });
   });
 
   it('keeps a list of image references for exactly 30 days, as the Monitor does', () => {

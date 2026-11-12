@@ -95,8 +95,8 @@ import {
 } from '../core/remoteMonitor/protocol';
 import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, type SelfEngine, type VscodeEngine } from './engine';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
-import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
-import { cacheRunDue, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
+import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, backgroundRunDue, parseCacheRunState, runRetryDelay, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
+import { cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_SUCCESSOR_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
 import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
@@ -1259,7 +1259,7 @@ export class CacheSchedule {
     },
   ) {}
 
-  /** One check: a run when it is due (cacheRunDue). */
+  /** One check: a run when it is due (backgroundRunDue). */
   async check(): Promise<void> {
     if (this.checking) return;
     this.checking = true;
@@ -1301,10 +1301,7 @@ export class CacheSchedule {
     // While a retry waits: its time, or the schedule counted from the last attempt (when it is known), whichever comes
     // first.
     const settings = this.deps.settings.value;
-    const due =
-      this.retryAt !== undefined
-        ? runRetryDue(this.retryAt, time) || (this.lastAttemptAt !== undefined && cacheRunDue(settings.parsed, this.lastAttemptAt, time, settings.timeZone))
-        : cacheRunDue(settings.parsed, this.lastEndAt, time, settings.timeZone);
+    const due = backgroundRunDue({ lastEndAt: this.lastEndAt, retryAt: this.retryAt, lastAttemptAt: this.lastAttemptAt }, settings.parsed, settings.timeZone, time);
     if (!requested && !due) return;
     if (!requested && this.deps.paused?.() === true) {
       if (!this.pauseLogged) this.deps.log('The background run is due, but it does not start: no window used Devspaces on this Docker engine for a long time.');

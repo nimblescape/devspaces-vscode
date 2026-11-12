@@ -13,7 +13,7 @@ import { CommandError } from '../errors';
 import { isRecord } from '../valueChecks';
 import { commandText, parseJsonLines, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
-import { onlyMissingContainers, type HostObject, type HostObjectKind } from './hostObjects';
+import { nonEmptyText as text, onlyMissingContainers, type HostObject, type HostObjectKind } from './hostObjects';
 import { cell, chip, countText, dockerTimeText, fact, itemsText, optional, shortDigest, sizeText, type ReportClock, type ReportFact, type ReportSection } from './reportModel';
 
 /** The label of Docker Compose on a volume: its name in the Compose file. */
@@ -88,6 +88,8 @@ export interface VolumeDetails {
   users: VolumeUser[];
   /** More containers use it than `users` holds (MAX_VOLUME_USERS). */
   moreUsers: boolean;
+  /** Why the containers that use it could not be listed (its other details stay). */
+  usersProblem?: string;
 }
 
 export interface NetworkDetails {
@@ -112,10 +114,6 @@ export function inspectArgs(kind: HostObjectKind, ids: readonly string[]): strin
 /** The containers that use the volume `name`, also stopped ones. */
 export function volumeUsersArgs(name: string): string[] {
   return ['container', 'ls', '--all', '--no-trunc', '--filter', `volume=${name}`, '--format', '{{json .}}'];
-}
-
-function text(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 function labelsOf(value: unknown): Map<string, string> {
@@ -252,7 +250,14 @@ export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, ob
   const details = parseObjectDetails(object.kind, (await run(args))[0]);
   if (details === undefined) throw new CommandError(commandText(args), 0, '', `Unexpected output of docker ${object.kind} inspect.`);
   if (details.kind !== 'volume') return details;
-  const listed = (await run(volumeUsersArgs(object.id))).filter(isRecord);
+  let listed: Record<string, unknown>[];
+  try {
+    listed = (await run(volumeUsersArgs(object.id))).filter(isRecord);
+  } catch (error) {
+    // The inspect of the volume stays; only the containers that use it are not known.
+    if (signal?.aborted === true) throw error;
+    return { ...details, usersProblem: error instanceof Error ? error.message : String(error) };
+  }
   const users: VolumeUser[] = listed.flatMap((entry) => {
     const id = text(entry.ID);
     return id === undefined ? [] : [{ id, name: (text(entry.Names) ?? id).split(',')[0], ...optional('state', text(entry.State)) }];
@@ -376,7 +381,7 @@ export function dockerFactsSections(object: HostObject, details: ObjectDetails |
             kind: 'table',
             columns: ['Container', 'State', 'Mounted at', 'Mode'],
             rows: volume.users.map((user) => [cell(user.name), cell(user.state ?? ''), cell(user.destination ?? ''), cell(user.readOnly === undefined ? '' : user.readOnly ? 'read-only' : 'read-write')]),
-            empty: 'No container uses it now.',
+            empty: volume.usersProblem !== undefined ? `Not known: Docker could not list them (${volume.usersProblem}).` : 'No container uses it now.',
             ...(volume.moreUsers ? { more: `More containers use it; the first ${volume.users.length} are shown.` } : {}),
           },
           from: 'From docker container ls and docker container inspect of the containers that use it.',

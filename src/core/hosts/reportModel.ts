@@ -135,8 +135,11 @@ export function dockerTime(value: string | undefined): number | undefined {
   return Number.isNaN(at) ? undefined : at;
 }
 
-/** A span in its largest unit that rounds to at least 1: `20 s`, `5 minutes`, `3 hours`, `9 days` (hours up to 2 days). */
-function spanParts(ms: number): string {
+/**
+ * A span of time in words, in its largest unit that rounds to at least 1: `20 s`, `5 minutes`, `3 hours`, `9 days`
+ * (hours up to 2 days).
+ */
+export function spanText(ms: number): string {
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds} s`;
   const minutes = Math.round(ms / 60_000);
@@ -149,13 +152,8 @@ function spanParts(ms: number): string {
 
 /** How long ago `at` was: `20 s ago`, `5 minutes ago`, `3 hours ago`, `9 days ago`; `in 5 minutes` for a time ahead. */
 export function ageText(at: number, now: number): string {
-  const text = spanParts(Math.abs(now - at));
+  const text = spanText(Math.abs(now - at));
   return at > now ? `in ${text}` : `${text} ago`;
-}
-
-/** A span of time in words: `30 s`, `10 minutes`, `2 hours`, `14 days`. */
-export function spanText(ms: number): string {
-  return spanParts(ms);
 }
 
 /** A size, `complete: false` with the word "at least" (a size that a limit of the reader cut). */
@@ -169,9 +167,7 @@ export function countText(count: number, noun: string, plural = `${noun}s`): str
 }
 
 /** The first 12 hex digits of a digest or an ID (`sha256:` left out). */
-export function shortDigest(value: string): string {
-  return value.replace(/^sha256:/, '').slice(0, 12);
-}
+export { shortImageId as shortDigest } from './hostObjects';
 
 /** The items of a list as one text: the first `max`, then `and N more`. */
 export function itemsText(items: readonly string[], max = 3): string {

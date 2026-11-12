@@ -10,6 +10,7 @@ import {
   RUN_RETRY_DELAYS_MS,
   SERVER_UNUSED_MS,
   STORE_CLEANUP_INTERVAL_MS,
+  backgroundRunDue,
   cleanupDue,
   parseCacheRunState,
   qualitiesToFetch,
@@ -17,6 +18,7 @@ import {
   runRetryDue,
   serversToRemove,
 } from './backgroundRules';
+import { parseCacheSchedule } from './cacheSettings';
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse('2026-10-09T12:00:00Z');
@@ -63,6 +65,19 @@ describe('the retry of a run that did not reach the network', () => {
     expect(runRetryDue(NOW + 1, NOW)).toBe(false);
     expect(runRetryDue(NOW + 60 * MINUTE + CLOCK_RESET_MS, NOW)).toBe(false);
     expect(runRetryDue(NOW + 60 * MINUTE + CLOCK_RESET_MS + 1, NOW)).toBe(true);
+  });
+
+  it('runs at the retry or at the schedule counted from the last attempt, whichever comes first; else by the schedule from the last end', () => {
+    const hourly = parseCacheSchedule('60')!;
+    const due = (lastEndAt: number | undefined, retryAt: number | undefined, lastAttemptAt: number | undefined) => backgroundRunDue({ lastEndAt, retryAt, lastAttemptAt }, hourly, 'UTC', NOW);
+    expect(due(NOW - 30 * MINUTE, undefined, undefined)).toBe(false);
+    expect(due(NOW - 60 * MINUTE, undefined, undefined)).toBe(true);
+    expect(due(undefined, undefined, undefined)).toBe(true);
+    // A retry that waits: the end of the last run does not count.
+    expect(due(NOW - 2 * 60 * MINUTE, NOW + 10 * MINUTE, NOW - 30 * MINUTE)).toBe(false);
+    expect(due(NOW - 2 * 60 * MINUTE, NOW + 10 * MINUTE, NOW - 60 * MINUTE)).toBe(true);
+    expect(due(NOW - 2 * 60 * MINUTE, NOW - 1, NOW - 30 * MINUTE)).toBe(true);
+    expect(due(NOW - 2 * 60 * MINUTE, NOW + 10 * MINUTE, undefined)).toBe(false);
   });
 });
 

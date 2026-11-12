@@ -10,8 +10,8 @@
 import { CACHE_RUN_FILE, IMAGES_IN_USE_MAX_AGE_MS, IMAGE_SETTINGS_FILE, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, UNUSED_END_MS } from '../remoteMonitor/protocol';
 import { IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
 import { nextCronTime } from '../remoteMonitor/cron';
-import { registryReferenceKey } from '../remoteMonitor/registryAnswers';
-import { runRetryDue } from '../remoteMonitor/backgroundRules';
+import { freshRegistryDigests, registryReferenceKey } from '../remoteMonitor/registryAnswers';
+import { backgroundRunDue, runRetryDue } from '../remoteMonitor/backgroundRules';
 import { RUN_FAILURE_EVENTS, type RunEvent, type RunReport } from '../remoteMonitor/runReport';
 import { compareDevspacesVersions, isDevspacesVersion } from '../http';
 import { RECORDED_LIST_MS } from '../vscodeExtensions';
@@ -42,11 +42,12 @@ export function scheduleText(schedule: string | undefined, timeZone: string | un
 /**
  * The schedule that the Monitor runs with, as it takes it (CurrentCacheSettings of the Monitor): the settings that the
  * last start of a window stored in its volume, else those of its container (cacheScheduleFromEnv: its variables, else
- * the defaults). Undefined without the settings and without the variables of its container (the report of its volume).
+ * the defaults). Undefined when it is not known: the settings are there but cannot be read (the Monitor then keeps the
+ * schedule that it had), or there are none and the report does not know the variables of its container (the report of
+ * its volume).
  */
 function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<string, string> | undefined): { schedule: CacheSchedule; timeZone: string; from: string } | undefined {
-  // Settings whose text the reader left out are there, but not known.
-  if (records.textless.includes(IMAGE_SETTINGS_FILE)) return undefined;
+  if (records.unreadable.includes(IMAGE_SETTINGS_FILE)) return undefined;
   const settings = records.settings;
   const stored = settings !== undefined ? parseCacheSchedule(settings.schedule) : undefined;
   if (settings !== undefined && stored !== undefined) return { schedule: stored, timeZone: settings.timeZone, from: 'sent by the last start of a window' };
@@ -54,43 +55,47 @@ function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<strin
   return { ...cacheScheduleFromEnv(Object.fromEntries(containerEnv)), from: 'of its container: no window has sent one since its start' };
 }
 
+/** The schedule in words when activeSchedule does not know it. */
+function unknownScheduleFact(records: MonitorRecords): ReportFact {
+  if (records.textless.includes(IMAGE_SETTINGS_FILE)) return fact('Schedule', 'not known: the reader left out the text of image-settings.json', chip('too large for one read', 'warn'));
+  if (records.unreadable.includes(IMAGE_SETTINGS_FILE)) return fact('Schedule', 'not known: image-settings.json cannot be read, and the Monitor keeps the schedule that it had', chip('the record cannot be read', 'warn'));
+  return fact('Schedule', 'the one of the container of the Monitor: no window has sent one since its start');
+}
+
 /**
- * The facts of the background run: its schedule, the last end, the next run, a retry that waits, the last cleanup.
- * `containerEnv`: the variables of the container of the Monitor (its schedule), when the report knows them.
+ * The facts of the background run: its schedule, the last end, the next run (when the Monitor runs it,
+ * backgroundRunDue), a retry that waits, the last cleanup. `containerEnv`: the variables of the container of the
+ * Monitor (its schedule), when the report knows them.
  */
 function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerEnv?: ReadonlyMap<string, string>): ReportFact[] {
   const facts: ReportFact[] = [];
   const active = activeSchedule(records, containerEnv);
-  const settingsTextless = records.textless.includes(IMAGE_SETTINGS_FILE);
-  facts.push(
-    active !== undefined
-      ? fact('Schedule', `${scheduleText(active.schedule.text, active.timeZone)} · ${active.from}`)
-      : settingsTextless
-        ? fact('Schedule', 'not known: the reader left out the text of image-settings.json', chip('too large for one read', 'warn'))
-        : fact('Schedule', 'the one of the container of the Monitor: no window has sent one since its start'),
-  );
+  facts.push(active !== undefined ? fact('Schedule', `${scheduleText(active.schedule.text, active.timeZone)} · ${active.from}`) : unknownScheduleFact(records));
   if (records.textless.includes(CACHE_RUN_FILE)) {
     facts.push(fact('Last run ended', 'not known: the reader left out the text of cache-run.json', chip('too large for one read', 'warn')));
     return facts;
   }
   const state = records.cacheRun ?? {};
   facts.push(fact('Last run ended', state.lastEndAt !== undefined ? timeText(state.lastEndAt, clock) : 'no run ended yet'));
+  const retries = state.retryAt !== undefined ? chip(`the last ${countText(state.retries ?? 1, 'run')} did not reach the network`, 'warn') : undefined;
+  const nextFact = (text: string): ReportFact => fact('Next run', text, retries);
   const nextTime = (from: number, { schedule, timeZone }: { schedule: CacheSchedule; timeZone: string }): number | undefined =>
     schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone);
-  if (state.retryAt !== undefined) {
-    // As the Monitor: the retry, or the schedule counted from the last attempt, whichever comes first.
-    const retries = chip(`the last ${countText(state.retries ?? 1, 'run')} did not reach the network`, 'warn');
-    const scheduled = active !== undefined && state.lastAttemptAt !== undefined ? nextTime(state.lastAttemptAt, active) : undefined;
-    if (runRetryDue(state.retryAt, clock.now) || (scheduled !== undefined && scheduled <= clock.now)) facts.push(fact('Next run', 'now: it runs at the next check of the Monitor', retries));
-    else if (scheduled !== undefined && scheduled < state.retryAt) facts.push(fact('Next run', `${timeText(scheduled, clock)} by the schedule, before the retry ${timeText(state.retryAt, clock)}`, retries));
-    else facts.push(fact('Next run', `a retry ${timeText(state.retryAt, clock)}`, retries));
-  } else if (state.lastEndAt === undefined) {
-    facts.push(fact('Next run', 'at the next check of the Monitor: no run is known'));
+  if (state.retryAt === undefined && state.lastEndAt === undefined) {
+    facts.push(nextFact('at the next check of the Monitor: no run is known'));
   } else if (active === undefined) {
-    facts.push(fact('Next run', settingsTextless ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
+    // Without the last attempt, only the retry counts (backgroundRunDue).
+    if (state.retryAt !== undefined) facts.push(nextFact(runRetryDue(state.retryAt, clock.now) ? 'now: it runs at the next check of the Monitor' : `a retry ${timeText(state.retryAt, clock)}${state.lastAttemptAt !== undefined ? ', or before it by the schedule' : ''}`));
+    else facts.push(nextFact(records.unreadable.includes(IMAGE_SETTINGS_FILE) ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
+  } else if (backgroundRunDue({ lastEndAt: state.lastEndAt, retryAt: state.retryAt, lastAttemptAt: state.lastAttemptAt }, active.schedule, active.timeZone, clock.now)) {
+    facts.push(nextFact('now: it runs at the next check of the Monitor'));
+  } else if (state.retryAt !== undefined) {
+    // The retry, or the schedule counted from the last attempt, whichever comes first (backgroundRunDue).
+    const scheduled = state.lastAttemptAt !== undefined ? nextTime(state.lastAttemptAt, active) : undefined;
+    facts.push(nextFact(scheduled !== undefined && scheduled < state.retryAt ? `${timeText(scheduled, clock)} by the schedule, before the retry ${timeText(state.retryAt, clock)}` : `a retry ${timeText(state.retryAt, clock)}`));
   } else {
-    const next = nextTime(state.lastEndAt, active);
-    facts.push(fact('Next run', next === undefined ? 'none: the schedule has no time' : next <= clock.now ? 'now: a time of the schedule has passed, it runs at its next check' : timeText(next, clock)));
+    const next = nextTime(state.lastEndAt!, active);
+    facts.push(nextFact(next === undefined ? 'none: the schedule has no time' : timeText(next, clock)));
   }
   if (state.lastCleanupAt !== undefined) facts.push(fact('Last cleanup of the store', timeText(state.lastCleanupAt, clock)));
   return facts;
@@ -172,7 +177,9 @@ function imagesInUseSection(records: MonitorRecords, computer: ReportComputer, c
     .map(([reference, { sources, at }]): ReportCell[] => {
       const sentBy = sources.size === 1 ? computerText([...sources][0], computer) : `${sources.size} computers`;
       const key = registryReferenceKey(reference);
-      const answer = key !== undefined ? records.registry?.digests[key] : undefined;
+      const answer = key !== undefined && records.registry !== undefined && Object.hasOwn(records.registry.digests, key) ? records.registry.digests[key] : undefined;
+      // An answer counts only while it is fresh, as the opens take it (freshRegistryDigests).
+      const fresh = answer !== undefined && freshRegistryDigests(records.registry, [reference], clock.now).digests[reference] !== undefined;
       const registry = answer !== undefined ? `sha256:${shortDigest(answer.digest)}… · asked ${timeText(answer.at, clock)}` : '';
       const rule: ReportChip =
         clock.now - at > IMAGES_IN_USE_MAX_AGE_MS
@@ -180,9 +187,11 @@ function imagesInUseSection(records: MonitorRecords, computer: ReportComputer, c
           : key === undefined
             ? // The record holds only references that the grammar takes (parseImagesInUseRecord): no key means a digest.
               chip('pinned by a digest: never pulled', 'info')
-            : answer !== undefined
+            : fresh
               ? chip('kept up to date by the Monitor', 'keep')
-              : chip('no answer of the registry yet: a private image, or not asked yet', 'info');
+              : answer !== undefined
+                ? chip('the last answer of the registry is old: the opens check it themselves', 'warn')
+                : chip('no answer of the registry yet: a private image, or not asked yet', 'info');
       return [cell(reference), cell(sentBy), cell(registry), cell(timeText(at, clock)), cell('', rule)];
     });
   return {
