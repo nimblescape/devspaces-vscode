@@ -2558,7 +2558,7 @@ export class DevspaceService extends OperationBase {
     }
     this.entryUpdated(ctx, await this.openRecords.build(env.id, { kind: 'record', record, dropRefused: false }));
     this.logger.info(
-      `The devspace image ${own.devspaceImage} of the build record of ${env.repository} is gone, and the newer devspace image ${tag} (${record.imageId}) exists, for example from another computer that uses this Docker engine. Its build record is used.`,
+      `The devspace image ${own.devspaceImage} of the build record of ${env.repository} is gone, and the newer devspace image ${tag} (${record.imageId}) exists, for example from another computer that uses this Docker engine. Its build record${found.fromContainer === true ? ', from the labels of the dev container,' : ''} is used.`,
     );
     return record;
   }
@@ -2595,7 +2595,8 @@ export class DevspaceService extends OperationBase {
     }
     const { record, tag } = found;
     this.entryUpdated(ctx, await this.openRecords.build(ctx.env.id, { kind: 'record', record, dropRefused: false }));
-    this.logger.info(`The build record of ${env.repository} was taken from its devspace image ${tag} (${record.imageId}).`);
+    const source = found.fromContainer === true ? 'the labels of its dev container, for its devspace image' : 'its devspace image';
+    this.logger.info(`The build record of ${env.repository} was taken from ${source} ${tag} (${record.imageId}).`);
     return record;
   }
 
@@ -2608,7 +2609,7 @@ export class DevspaceService extends OperationBase {
    * the dev container (containerImageRecord) is taken unless the newest image has a record with a higher build number:
    * it is the record of the image that the container runs, also when that image carries no labels of the devspace.
    */
-  private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
+  private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string; fromContainer?: true } | { reason: string; warning?: string }> {
     const [fromContainer, fromImage] = await Promise.all([this.containerImageRecord(env, above), this.newestImageLabelRecord(env, above)]);
     if (fromContainer === undefined) return fromImage;
     // A newer image, also one without a usable record (the open then builds, as before), comes before the container.
@@ -2645,7 +2646,7 @@ export class DevspaceService extends OperationBase {
     }
     const found = labels === undefined ? undefined : imageBuildRecord(labels, env, newest.tag, newest.number);
     if (id === undefined || found === undefined) {
-      const why = found === undefined ? 'its labels do not fit' : 'it is gone';
+      const why = id === undefined ? 'it is gone' : 'its labels do not fit';
       return {
         reason: `its devspace image ${newest.tag} has no build record of it (${why})`,
         warning: `The devspace image ${newest.tag} has no build record of ${env.repository} (${why}). The devspace is built again.`,
@@ -2661,14 +2662,14 @@ export class DevspaceService extends OperationBase {
    * the record is higher than `above`; else `undefined`, and the newest devspace image decides (newestImageRecord). A
    * Docker failure only means that the container gives no record.
    */
-  private async containerImageRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | undefined> {
+  private async containerImageRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string; fromContainer: true } | undefined> {
     const container = await this.deps.docker.findContainer(env.id, env.containerName).catch(() => undefined);
     if (container?.imageId === undefined) return undefined;
     const record = containerBuildRecord(container.labels, env);
     if (record === undefined || record.buildNumber <= above) return undefined;
     // A tag that is gone or that names another image (removed or built again elsewhere) gives no record of the tag.
     if (!(await this.tagNamesImage(record.devspaceImage, container.imageId))) return undefined;
-    return { record: { ...record, imageId: container.imageId }, tag: record.devspaceImage };
+    return { record: { ...record, imageId: container.imageId }, tag: record.devspaceImage, fromContainer: true };
   }
 
   /**

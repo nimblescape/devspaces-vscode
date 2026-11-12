@@ -187,12 +187,12 @@ export const MAX_BUILD_RECORD_LABEL_LENGTH = 8 * 1024;
  * (isOwnDevspaceLabel), never in the configuration of a repository.
  */
 export function devspaceContainerLabels(p: { repository: string; ownerId: string; buildRecord?: string }): string[] {
-  const record = p.buildRecord === undefined ? [] : [`${LABEL_BUILD_RECORD}=${p.buildRecord}`];
-  // A record that the policy would refuse is written empty, so that no label of the image stays; a repository or an
-  // owner that it would refuse is left out (the container then has only the label that it inherits).
-  return [`${LABEL_REPOSITORY}=${p.repository}`, `${LABEL_OWNER_ID}=${p.ownerId}`, ...record].map((label) =>
-    isOwnDevspaceLabel(label) || !label.startsWith(`${LABEL_BUILD_RECORD}=`) ? label : `${LABEL_BUILD_RECORD}=`,
-  ).filter(isOwnDevspaceLabel);
+  // A repository or an owner that the policy would refuse is left out (the container then has only the label that it
+  // inherits); such a record is written empty, so that no record label of the image stays.
+  const labels = [`${LABEL_REPOSITORY}=${p.repository}`, `${LABEL_OWNER_ID}=${p.ownerId}`].filter(isOwnDevspaceLabel);
+  if (p.buildRecord === undefined) return labels;
+  const record = `${LABEL_BUILD_RECORD}=${p.buildRecord}`;
+  return [...labels, isOwnDevspaceLabel(record) ? record : `${LABEL_BUILD_RECORD}=`];
 }
 /**
  * The key and the value of `value` (a `--label` value, `key=value`) when it is one of devspaceContainerLabels:
@@ -208,7 +208,8 @@ export function ownDevspaceLabel(value: string): { key: string; text: string } |
   if (text.includes('${')) return undefined;
   switch (key) {
     case LABEL_REPOSITORY:
-      return /^[^/\s=]+\/[^/\s=]+$/.test(text) ? { key, text } : undefined;
+      // As isRepositoryName of ./pipeline/recordRules.ts.
+      return /^[^/\s]+\/[^/\s]+$/.test(text) ? { key, text } : undefined;
     case LABEL_OWNER_ID:
       // As isStorageId of ./storage/paths.ts, which names.ts does not import: the script of the remote Monitor imports
       // names.ts.

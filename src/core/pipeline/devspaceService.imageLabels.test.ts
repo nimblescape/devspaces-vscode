@@ -385,8 +385,9 @@ describe('the build record on the dev container', () => {
     const env = await h.registry.get(ENV_ID);
     expect(env?.buildRecord).toEqual({ ...recordOf(IMAGE_3, 3), imageId: `sha256:image-of-${IMAGE_3}` });
     expect(env?.lastBuildNumber).toBe(3);
-    // No warning about the labels of the image: the container had the record.
+    // No warning about the labels of the image: the container had the record, and the log says so.
     expect(h.logger.warnings.some((line) => line.includes('its labels do not fit'))).toBe(false);
+    expect(h.logger.infos.some((line) => line.includes('the labels of its dev container') && line.includes(IMAGE_3))).toBe(true);
   });
 
   it('pins the ID of the image that the container was created from, never one of the labels', async () => {

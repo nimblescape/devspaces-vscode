@@ -24,8 +24,8 @@ import { hasOnlyKeys, isRecord } from '../valueChecks';
  * The value of LABEL_BUILD_RECORD for the build record `record`, without its pinned image ID (the labels of an image
  * change its ID): its JSON, or empty when that is longer than MAX_BUILD_RECORD_LABEL_LENGTH. The same value on the
  * devspace image (imageRecordLabels) and on the dev container that `up` creates from it (devspaceContainerLabels, which
- * leaves out a value with `${`: the Dev Container CLI would substitute it in the override configuration, and the
- * container then keeps the same value from its image).
+ * writes a value with `${` empty: the Dev Container CLI would substitute it in the override configuration; the open
+ * then takes the record of the image).
  */
 export function buildRecordLabel(record: BuildRecord): string {
   const { imageId: _pinned, ...stored } = record;
