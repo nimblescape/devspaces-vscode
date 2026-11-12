@@ -37,6 +37,15 @@ export const OVERRIDE_CONFIG_PATH = `${OVERRIDE_FOLDER}/devcontainer.json`;
  * and a digest per Feature, a few KB).
  */
 export const MAX_LOCKFILE_LENGTH = 1024 * 1024;
+/** The most files, folders and links of the build context of a shared image built from a Dockerfile (CONTEXT_TREE, R-DS-010). */
+export const MAX_CONTEXT_ENTRIES = 10_000;
+/** The most bytes of the files of such a build context (CONTEXT_TREE). */
+export const MAX_CONTEXT_BYTES = 64 * 1024 * 1024;
+/**
+ * The folder of the copy of the build context that the build of a shared image from a Dockerfile reads (below
+ * OVERRIDE_FOLDER, next to our copy of the configuration, which names it relative to its folder: WRITE_AND_RUN_SCRIPT).
+ */
+export const CONTEXT_COPY_FOLDER = 'context-copy';
 /**
  * The exit code of WRITE_AND_RUN_SCRIPT when the lockfile of the repository is not the one that the run must find
  * (R-DS-010: it changed after it was read for the image key), before the Dev Container CLI starts; with
@@ -782,6 +791,121 @@ const MISSING_IN_REPOSITORY = String.raw`const missingInRepository = (file) => {
 `;
 
 /**
+ * Script fragment: `contextTree(source, dockerfile, copy)` of READ_FILES_SCRIPT and WRITE_AND_RUN_SCRIPT (they define
+ * `fs`, `path`, `root` and `realPath` of REAL_PATH; R-DS-010): `{ hash, dockerfile }`, the hash (`sha256:<64 hex>`) of the build context
+ * `source` (an absolute folder of the repository) of a shared image built from a Dockerfile. It walks every file, folder
+ * and link below the folder, in the order of their names, and hashes one JSON line per entry: its path, its type, its
+ * mode, and for a file its size and the SHA-256 of its content, for a link its target (never followed). That is a
+ * superset of what Docker reads (the .dockerignore files are in it too), so the same hash always gives the same build
+ * context. Not in the hash: owners and times (a COPY gives its files the owner root, and the times of a checkout differ
+ * from computer to computer). With `copy` (an absolute folder that does not exist), it writes a copy of the build context
+ * there while it hashes it (same modes and times, links as links), which the build reads. Throws an Error that says why
+ * when the build context cannot be hashed: its real folder is not below the real folder of the repository, it has more
+ * than MAX_CONTEXT_ENTRIES entries or more than MAX_CONTEXT_BYTES bytes of files, an entry that is no file, folder or link
+ * (a FIFO, a device), a mode with setuid or setgid, an entry that changed or led out of the folder while it was read
+ * (each folder and each opened file must have the real path of its place, and an opened file the same identity as its
+ * lstat), or no plain file at `dockerfile` (the Dockerfile relative to the build context). `dockerfile` of the result:
+ * the SHA-256 (64 hex) of the content of that Dockerfile as it was hashed.
+ */
+const CONTEXT_TREE = String.raw`const contextTree = (source, dockerfile, copy) => {
+  const crypto = require('crypto');
+  const rootReal = realPath(root);
+  const sourceReal = realPath(source);
+  if (rootReal === null || sourceReal === null || !(sourceReal === rootReal || sourceReal.startsWith(rootReal + '/'))) {
+    throw new Error('its real folder is not in the repository');
+  }
+  const total = crypto.createHash('sha256');
+  const record = (fields) => total.update(JSON.stringify(fields) + '\n');
+  const NOFOLLOW = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK | fs.constants.O_NOCTTY;
+  let entries = 0;
+  let bytes = 0;
+  let found;
+  const mode = (stat, entry) => {
+    if ((stat.mode & 0o6000) !== 0) throw new Error('the entry ' + entry + ' has the setuid or setgid bit');
+    return stat.mode & 0o7777;
+  };
+  const walk = (relative, folder) => {
+    const at = relative === '' ? sourceReal : sourceReal + '/' + relative;
+    const names = fs.readdirSync(at).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const again = fs.lstatSync(at);
+    if (!again.isDirectory() || again.ino !== folder.ino || again.dev !== folder.dev || realPath(at) !== at) {
+      throw new Error('the folder ' + (relative === '' ? '.' : relative) + ' changed while it was read');
+    }
+    for (const name of names) {
+      const entry = relative === '' ? name : relative + '/' + name;
+      const file = sourceReal + '/' + entry;
+      entries += 1;
+      if (entries > ${MAX_CONTEXT_ENTRIES}) throw new Error('it has more than ${MAX_CONTEXT_ENTRIES} files, folders and links');
+      const stat = fs.lstatSync(file);
+      const target = copy === undefined ? undefined : copy + '/' + entry;
+      if (stat.isDirectory()) {
+        const bits = mode(stat, entry);
+        record(['D', entry, bits]);
+        if (target !== undefined) fs.mkdirSync(target, { mode: 0o700 });
+        walk(entry, stat);
+        if (target !== undefined) {
+          fs.chmodSync(target, bits);
+          fs.utimesSync(target, stat.atime, stat.mtime);
+        }
+      } else if (stat.isFile()) {
+        const bits = mode(stat, entry);
+        const fd = fs.openSync(file, NOFOLLOW);
+        let out;
+        try {
+          const opened = fs.fstatSync(fd);
+          const real = realPath(process.platform === 'linux' ? '/proc/self/fd/' + fd : file);
+          if (!opened.isFile() || opened.ino !== stat.ino || opened.dev !== stat.dev || real !== file) {
+            throw new Error('the file ' + entry + ' changed while it was read');
+          }
+          if (target !== undefined) out = fs.openSync(target, 'wx', 0o600);
+          const hash = crypto.createHash('sha256');
+          const buffer = Buffer.alloc(65536);
+          let size = 0;
+          for (;;) {
+            const read = fs.readSync(fd, buffer, 0, buffer.length, null);
+            if (read === 0) break;
+            size += read;
+            bytes += read;
+            if (bytes > ${MAX_CONTEXT_BYTES}) throw new Error('its files have more than ${MAX_CONTEXT_BYTES} bytes');
+            hash.update(buffer.subarray(0, read));
+            if (out !== undefined) fs.writeSync(out, buffer, 0, read);
+          }
+          const digest = hash.digest('hex');
+          record(['F', entry, bits, size, digest]);
+          if (entry === dockerfile) found = digest;
+          if (out !== undefined) {
+            fs.fchmodSync(out, bits);
+            fs.futimesSync(out, stat.atime, stat.mtime);
+          }
+        } finally {
+          fs.closeSync(fd);
+          if (out !== undefined) fs.closeSync(out);
+        }
+      } else if (stat.isSymbolicLink()) {
+        const link = fs.readlinkSync(file);
+        record(['L', entry, link]);
+        if (target !== undefined) fs.symlinkSync(link, target);
+      } else {
+        throw new Error('the entry ' + entry + ' is no file, folder or link');
+      }
+    }
+  };
+  const top = fs.lstatSync(sourceReal);
+  if (!top.isDirectory()) throw new Error('it is no folder');
+  const bits = mode(top, '.');
+  record(['D', '.', bits]);
+  if (copy !== undefined) fs.mkdirSync(copy, { mode: 0o700 });
+  walk('', top);
+  if (copy !== undefined) {
+    fs.chmodSync(copy, bits);
+    fs.utimesSync(copy, top.atime, top.mtime);
+  }
+  if (found === undefined) throw new Error('its Dockerfile ' + dockerfile + ' is no plain file in it');
+  return { hash: 'sha256:' + total.digest('hex'), dockerfile: found };
+};
+`;
+
+/**
  * Script fragment: `lockfileOf(config)`, the lockfile next to the configuration file `config` as the Dev Container CLI
  * reads it (`.devcontainer-lock.json` next to `.devcontainer.json`, else `devcontainer-lock.json`). The build gives it
  * to the CLI (WRITE_AND_RUN_SCRIPT); the read of the configuration reads it for the image key of a shared image
@@ -793,10 +917,13 @@ const LOCKFILE_OF = String.raw`const lockfileOf = (config) =>
 
 /**
  * `node -e` script. `argv[1]` = repository folder (absolute), `argv[2]` = configuration path relative to it, `argv[3]`
- * (optional) = the Dockerfile as the configuration names it after the Dev Container CLI resolved its variables, in
- * place of `build.dockerfile` of the text.
+ * (optional, `''`: none) = the Dockerfile as the configuration names it after the Dev Container CLI resolved its
+ * variables, in place of `build.dockerfile` of the text, `argv[4]` (optional) = the build context relative to the
+ * repository folder (`.` for the folder itself), whose hash it gives with the Dockerfile (R-DS-010).
  * Prints one JSON line: `null` if the configuration file does not exist, otherwise
- * `{ configText, lockfileText?, lockfileUnreadable?, dockerfilePath?, dockerfileText?, dockerfileMissing? }`: the lockfile
+ * `{ configText, lockfileText?, lockfileUnreadable?, dockerfilePath?, dockerfileText?, dockerfileMissing?, contextHash?,
+ * contextUnhashable? }`: `contextHash` the hash of the build context (contextTree, with the Dockerfile in it), or
+ * `contextUnhashable` why it has none (then no image is shared; the read does not fail for it); the lockfile
  * next to the configuration (lockfileOf) as its text, or `lockfileUnreadable: true` when it is no plain file of the
  * repository or longer than MAX_LOCKFILE_LENGTH. `build.dockerfile` (or the old `dockerFile`) is
  * resolved relative to the folder of the configuration; `dockerfilePath` is relative to the repository folder.
@@ -811,7 +938,7 @@ const fs = require('fs');
 const path = require('path');
 const root = path.posix.resolve(process.argv[1]);
 const inside = (file) => file === root || file.startsWith(root + '/');
-${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${MISSING_IN_REPOSITORY}${LOCKFILE_OF}const stripJsonc = (text) => {
+${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${MISSING_IN_REPOSITORY}${LOCKFILE_OF}${CONTEXT_TREE}const stripJsonc = (text) => {
   let result = '';
   let i = 0;
   const skipComment = (j) => {
@@ -900,6 +1027,19 @@ const main = () => {
   // says (../policy/single.ts, dockerfileUnreadable). Checked on the file that was opened (readInRepository).
   const dockerfileText = readInRepository(dockerfileFile, ${MAX_DOCKERFILE_LENGTH});
   if (typeof dockerfileText === 'string') result.dockerfileText = dockerfileText;
+  // R-DS-010: the hash of the build context of a shared image built from the Dockerfile, which must be a plain file in it.
+  if (process.argv[4] && typeof dockerfileText === 'string') {
+    const contextFolder = path.posix.resolve(root, process.argv[4]);
+    try {
+      if (!inside(contextFolder)) throw new Error('it is outside of the repository');
+      const tree = contextTree(contextFolder, path.posix.relative(contextFolder, dockerfileFile));
+      // The Dockerfile in the hash is the text that was read (the key holds both).
+      if (require('crypto').createHash('sha256').update(dockerfileText, 'utf8').digest('hex') !== tree.dockerfile) throw new Error('its Dockerfile is not the text that was read (it changed, or it is no UTF-8 text)');
+      result.contextHash = tree.hash;
+    } catch (error) {
+      result.contextUnhashable = String(error && error.message ? error.message : error);
+    }
+  }
   return result;
 };
 process.stdout.write(JSON.stringify(main()) + '\n');
@@ -927,7 +1067,12 @@ process.stdout.write(JSON.stringify(main()) + '\n');
  * configuration and the Dockerfile that the CLI reads. The rule closes a lockfile link in the content of the repository. Before
  * `devcontainer up`, the compose files that the Dev Container CLI generated in `<--user-data-folder>/docker-compose` (the
  * shared cache volume) and that are older than COMPOSE_FILES_MAX_AGE_MS are removed (nothing else removes them; the CLI
- * writes a missing one again without a build). Then `devcontainer` runs with the output of this process;
+ * writes a missing one again without a build). R-DS-010: with `context` in the standard input (`{ path, hash, dockerfile }`:
+ * the build context of a shared image built from a Dockerfile, relative to the repository folder, the hash of its key,
+ * and the Dockerfile relative to it), the build context is copied to CONTEXT_COPY_FOLDER below the folder while it is
+ * hashed (contextTree), and our copy of the configuration names that copy; a hash that is not the one of the key (the
+ * build context changed after it was read) fails the run with LOCKFILE_CHANGED_EXIT before the CLI starts, as a changed
+ * lockfile does. Then `devcontainer` runs with the output of this process;
  * its exit code is the exit code (128 + the signal number after a signal), and a stop signal is passed on to it.
  */
 export const WRITE_AND_RUN_SCRIPT = String.raw`'use strict';
@@ -942,7 +1087,7 @@ const args = process.argv.slice(4);
 // The repository folder: the workspace folder of the run (buildArgs).
 const workspaceIndex = args.indexOf('--workspace-folder');
 const root = workspaceIndex >= 0 ? args[workspaceIndex + 1] : undefined;
-${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${LOCKFILE_OF}const prepare = () => {
+${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${LOCKFILE_OF}${CONTEXT_TREE}const prepare = () => {
   if (!folder || path.posix.resolve(folder) !== folder || folder === '/') throw new Error('Invalid folder: ' + folder);
   const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const files = input && typeof input.files === 'object' && input.files !== null ? input.files : {};
@@ -990,6 +1135,26 @@ ${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${LOCKFILE_OF}const prepare = ()
       fs.mkdirSync(path.posix.dirname(copy), { recursive: true, mode: 0o700 });
       fs.writeFileSync(copy, text, { mode: 0o600 });
       fs.chmodSync(copy, 0o600);
+    }
+  }
+  // The build context of a shared image built from a Dockerfile: the build reads a copy of it, with the hash of its key.
+  if (Object.prototype.hasOwnProperty.call(input, 'context')) {
+    const context = input.context;
+    if (!ownConfig || typeof root !== 'string' || path.posix.resolve(root) !== root || root === '/') throw new Error('Invalid build context.');
+    if (!context || typeof context.path !== 'string' || typeof context.hash !== 'string' || typeof context.dockerfile !== 'string') throw new Error('Invalid build context.');
+    const source = path.posix.resolve(root, context.path);
+    if (!(source === root || source.startsWith(root + '/'))) throw new Error('Invalid build context: ' + context.path);
+    let hash;
+    let reason = '';
+    try {
+      hash = contextTree(source, context.dockerfile, path.posix.join(folder, '${CONTEXT_COPY_FOLDER}')).hash;
+    } catch (error) {
+      reason = ' (' + String(error && error.message ? error.message : error) + ')';
+    }
+    if (hash !== context.hash) {
+      const changed = new Error('The build context ' + context.path + ' ${LOCKFILE_CHANGED_TEXT}' + reason);
+      changed.exitCode = ${LOCKFILE_CHANGED_EXIT};
+      throw changed;
     }
   }
 };
@@ -1311,8 +1476,12 @@ export function listConfigsCommand(repoFolder: string): string[] {
   return ['node', '-e', LIST_CONFIGS_SCRIPT, repoFolder];
 }
 
-/** `dockerfile`: the Dockerfile that the resolved configuration names (READ_FILES_SCRIPT, `argv[3]`). */
-export function readFilesCommand(repoFolder: string, configPath: string, dockerfile?: string): string[] {
+/**
+ * `dockerfile`: the Dockerfile that the resolved configuration names (READ_FILES_SCRIPT, `argv[3]`); `context`: the build
+ * context relative to the repository folder whose hash the script gives (`argv[4]`, R-DS-010).
+ */
+export function readFilesCommand(repoFolder: string, configPath: string, dockerfile?: string, context?: string): string[] {
+  if (context !== undefined && context !== '') return ['node', '-e', READ_FILES_SCRIPT, repoFolder, configPath, dockerfile ?? '', context];
   return ['node', '-e', READ_FILES_SCRIPT, repoFolder, configPath, ...(dockerfile !== undefined && dockerfile !== '' ? [dockerfile] : [])];
 }
 

@@ -3,8 +3,8 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The image key of a shared devspace image (R-DS-010): the hash of every input of `devcontainer build` for a
-// configuration that names an image, so that devspaces whose builds have the same inputs use one image instead of one
-// identical image each. Pure functions, no I/O.
+// configuration that names an image or builds a Dockerfile, so that devspaces whose builds have the same inputs use one
+// image instead of one identical image each. Pure functions, no I/O.
 //
 // What `devcontainer build` of such a configuration reads (Dev Container CLI 0.90.0): the image and the Features (with
 // their options) of the configuration with its variables resolved, the lockfile next to the configuration, and the
@@ -12,9 +12,18 @@
 // the properties as written, with their variables (the CLI resolves them at `up`), so the key holds the configuration
 // both as written and as resolved: two configurations whose resolved values are the same, but whose text differs (a
 // variable in one, its value in the other), give different images.
+//
+// A configuration with a Dockerfile builds that Dockerfile first, from its build context, then the Features on top. The
+// key then holds the Dockerfile, its path in the build context, the hash of every file and folder of the build context
+// (CONTEXT_TREE of the helper: names, modes, contents, and the targets of links; a superset of what Docker reads, so
+// that the same hash always gives the same build context, whatever its .dockerignore says), and every image that the
+// Dockerfile reads (keyedDockerfileImages). The build reads a copy of the build context whose hash it checked
+// (WRITE_AND_RUN_SCRIPT), so a change of the working copy after the hash never goes into an image of that key.
 import * as crypto from 'crypto';
+import * as path from 'path';
+import { buildArgumentTexts, keyedDockerfileImages } from '../imageCheck/dockerfile';
 import { hasDigest, isOciFeatureReference } from '../imageCheck/reference';
-import { LABEL_IMAGE_KEY, hasDevspaceImageLabel, isSharedImageTag } from '../names';
+import { LABEL_IMAGE_KEY, configurationFolder, hasDevspaceImageLabel, isSharedImageTag } from '../names';
 import type { DevcontainerConfig } from '../types';
 import { recordedImageKey } from './imageRecord';
 import { isRecord } from '../valueChecks';
@@ -45,6 +54,11 @@ export interface ImageKeyInput {
   features: Readonly<Record<string, string>>;
   /** The text of the lockfile next to the configuration; `null` without one. */
   lockfileText: string | null;
+  /**
+   * A build from a Dockerfile (SharedImageInputs.dockerfile): its text, its path in the build context, and the hash of
+   * the build context (CONTEXT_TREE of the helper).
+   */
+  dockerfile?: { text: string; path: string; contextHash: string };
 }
 
 /** The image key (`sha256:<64 hex>`, isImageKey) of the build with the inputs `input`. */
@@ -57,6 +71,8 @@ export function imageKey(input: ImageKeyInput): string {
     images: input.images,
     features: input.features,
     lockfile: input.lockfileText,
+    // Only for a Dockerfile: the key of a configuration with an image stays what it was.
+    ...(input.dockerfile !== undefined ? { dockerfile: input.dockerfile } : {}),
   };
   return `sha256:${crypto.createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
 }
@@ -87,8 +103,10 @@ export interface SharedImageFacts {
   written: Readonly<Record<string, unknown>> | undefined;
   /** The configuration as read-configuration returned it. */
   resolved: DevcontainerConfig;
-  /** The Dockerfile of the configuration was read (its text). */
-  dockerfile: boolean;
+  /** The path of the configuration relative to the repository folder (the build context and the Dockerfile are resolved against its folder). */
+  configPath: string;
+  /** The text of the Dockerfile that the configuration names, when it was read. */
+  dockerfileText?: string;
   /** The state of the host access checks of the repository. */
   hostAccessChecks: 'on' | 'off';
   /** The lockfile next to the configuration could not be read (no plain file of the repository, or too long). */
@@ -99,19 +117,27 @@ export interface SharedImageFacts {
 
 /** What sharedImageInputs gives for a build that gives a shared image. */
 export interface SharedImageInputs {
-  /** The image reference of the configuration (trimmed), whose local image ID the caller reads. */
-  image: string;
+  /**
+   * The image references whose local image IDs the caller reads: the image of the configuration (trimmed), or the
+   * images that its Dockerfile reads (none for a Dockerfile of `scratch` only).
+   */
+  images: string[];
   /** Each Feature reference without a digest → the digest that the registry answered for it in this open. */
   features: Record<string, string>;
   /** SharedImageFacts.written (an object). */
   written: Readonly<Record<string, unknown>>;
+  /**
+   * A build from a Dockerfile: the build context relative to the repository folder (`.` for the folder itself), the
+   * Dockerfile relative to the build context, and its text. The caller adds the hash of the build context.
+   */
+  dockerfile?: { context: string; path: string; text: string };
 }
 
 /**
  * The inputs of the key of a shared image for a build with the facts `facts` (SharedImageInputs); else why the build gives no shared image
  * (`reason`, for the log: the devspace builds an image of its own, as before R-DS-010). A shared image needs:
- * - a configuration with an image: not Docker Compose (its images stay those of the devspace), and no Dockerfile (the
- *   build context of the repository is not part of the key);
+ * - a configuration with an image or a Dockerfile, not Docker Compose (its images stay those of the devspace); for a
+ *   Dockerfile see dockerfileInputs;
  * - the host access checks on;
  * - a lockfile that can be read, or none;
  * - only Features of a registry (OCI references): a local Feature is read from the repository, a URL of a tarball has no
@@ -122,10 +148,19 @@ export interface SharedImageInputs {
 export function sharedImageInputs(facts: SharedImageFacts): SharedImageInputs | { reason: string } {
   if (facts.compose) return { reason: 'it is a Docker Compose configuration' };
   const config = facts.resolved;
-  if (facts.dockerfile || config.dockerFile !== undefined || (isRecord(config.build) && config.build.dockerfile !== undefined)) {
-    return { reason: 'its configuration builds a Dockerfile' };
+  const build: Record<string, unknown> = isRecord(config.build) ? config.build : {};
+  const raw = config as Record<string, unknown>;
+  const named = typeof build.dockerfile === 'string' ? build.dockerfile : typeof raw.dockerFile === 'string' ? raw.dockerFile : undefined;
+  let images: string[];
+  let dockerfile: SharedImageInputs['dockerfile'];
+  if (named !== undefined || build.dockerfile !== undefined || raw.dockerFile !== undefined || facts.dockerfileText !== undefined) {
+    const found = dockerfileInputs(facts, build, raw, named);
+    if ('reason' in found) return found;
+    ({ images, dockerfile } = found);
+  } else {
+    if (typeof config.image !== 'string' || config.image.trim() === '') return { reason: 'its configuration names no image' };
+    images = [config.image.trim()];
   }
-  if (typeof config.image !== 'string' || config.image.trim() === '') return { reason: 'its configuration names no image' };
   if (facts.hostAccessChecks !== 'on') return { reason: 'the host access checks are off for it' };
   if (facts.written === undefined) return { reason: 'its configuration is no JSON object' };
   if (facts.lockfileUnreadable) return { reason: 'its lockfile cannot be read' };
@@ -142,7 +177,44 @@ export function sharedImageInputs(facts: SharedImageFacts): SharedImageInputs | 
       features[reference] = digest;
     }
   }
-  return { image: config.image.trim(), features, written: facts.written };
+  return { images, features, written: facts.written, ...(dockerfile !== undefined ? { dockerfile } : {}) };
+}
+
+/**
+ * sharedImageInputs of a configuration with a Dockerfile (`named`, the Dockerfile as the resolved configuration names
+ * it; `build` and `raw` its `build` and the configuration): the images that the Dockerfile reads, and where the build
+ * context and the Dockerfile are; else why it gives no shared image. The build context and the Dockerfile are resolved
+ * as the Dev Container CLI 0.90.0 resolves them: against the folder of the configuration, and without a build context,
+ * the folder of the Dockerfile. A shared image needs:
+ * - a Dockerfile that was read, inside the build context, which is inside the repository (its files are hashed, and the
+ *   build reads a copy of them), both named by relative paths;
+ * - no options of `docker build` (`build.options`) and no import of a build cache (`build.cacheFrom`): they read what
+ *   the key does not name;
+ * - only images that the key can name (keyedDockerfileImages).
+ */
+function dockerfileInputs(
+  facts: SharedImageFacts,
+  build: Record<string, unknown>,
+  raw: Record<string, unknown>,
+  named: string | undefined,
+): { images: string[]; dockerfile: NonNullable<SharedImageInputs['dockerfile']> } | { reason: string } {
+  if (named === undefined || named === '' || facts.dockerfileText === undefined) return { reason: 'its Dockerfile could not be read' };
+  if (build.options !== undefined && !(Array.isArray(build.options) && build.options.length === 0)) return { reason: 'its build passes options to Docker (build.options)' };
+  if (build.cacheFrom !== undefined) return { reason: 'its build imports a build cache (build.cacheFrom)' };
+  const contextValue = typeof build.context === 'string' ? build.context : typeof raw.context === 'string' ? raw.context : undefined;
+  if (named.includes('${') || contextValue?.includes('${') === true) return { reason: 'its Dockerfile or its build context has a variable that is not resolved' };
+  // Resolved against a folder that stands for the repository folder, so only relative paths.
+  if (path.posix.isAbsolute(named) || (contextValue !== undefined && path.posix.isAbsolute(contextValue))) return { reason: 'its Dockerfile or its build context has an absolute path' };
+  const repository = '/repository';
+  const folder = path.posix.resolve(repository, configurationFolder(facts.configPath));
+  const dockerfileFile = path.posix.resolve(folder, named);
+  const contextFolder = contextValue === undefined || contextValue === '' ? path.posix.dirname(dockerfileFile) : path.posix.resolve(folder, contextValue);
+  if (contextFolder !== repository && !contextFolder.startsWith(`${repository}/`)) return { reason: 'its build context is outside of the repository' };
+  const inContext = path.posix.relative(contextFolder, dockerfileFile);
+  if (inContext === '' || inContext === '..' || inContext.startsWith('../') || path.posix.isAbsolute(inContext)) return { reason: 'its Dockerfile is outside of its build context' };
+  const read = keyedDockerfileImages(facts.dockerfileText, buildArgumentTexts(build.args), typeof build.target === 'string' ? { target: build.target } : {});
+  if ('reason' in read) return read;
+  return { images: read.images, dockerfile: { context: path.posix.relative(repository, contextFolder) || '.', path: inContext, text: facts.dockerfileText } };
 }
 
 /** Whether the image IDs `a` and `b` name the same image (without case). */

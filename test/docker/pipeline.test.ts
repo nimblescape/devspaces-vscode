@@ -62,7 +62,6 @@ import {
   Timings,
   createVolume,
   dockerTestContext,
-  expectLabelledDevspaceImage,
   expectSharedDevspaceImage,
   fakeAuth,
   inConceptOrder,
@@ -388,8 +387,9 @@ describe.skipIf(engineHadMonitor)('open pipeline on a seeded devspace', () => {
       features: {},
     });
     expect(entry?.buildRecord?.configHash).toMatch(/^sha256:[0-9a-f]{64}$/);
-    // The image carries the labels of the devspace and its build record; the record pins its ID.
-    expectLabelledDevspaceImage(cli, entry);
+    // The Dockerfile gives a shared image (R-DS-010): the image carries only its key, the record pins its ID and names
+    // the key, and the dev container carries the labels of the devspace and its build record.
+    expectSharedDevspaceImage(cli, entry, containerName);
     expect(entry?.remoteUser).toBe(REMOTE_USER);
     // The full Git summary after the first creation; no remote, so the commit counts as unpushed.
     expect(entry?.gitSummary).toMatchObject({ branch: 'main', uncommittedFiles: 0, unpushedCommits: 1, stashes: 0 });
@@ -719,8 +719,8 @@ describe.skipIf(engineHadMonitor)('open pipeline on a seeded devspace', () => {
       images: { [TEST_BASE_IMAGE]: await registryDigest(digestChecker, TEST_BASE_IMAGE) },
     });
     expect(Date.parse(entry?.buildRecord?.builtAt ?? '')).toBeGreaterThanOrEqual(started - 1000);
-    // The new image is labelled too, and the record pins its ID.
-    expectLabelledDevspaceImage(cli, entry);
+    // The new image is a shared image too (R-DS-010), and the record pins its ID.
+    expectSharedDevspaceImage(cli, entry, containerName);
     expect(entry?.busy).toBeUndefined();
     expect(result.remoteWorkspaceFolder).toBe(FOLDER);
     // The update of the running container is announced first, through the question of the worker to the window; the

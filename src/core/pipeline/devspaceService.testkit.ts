@@ -26,6 +26,7 @@ import { checkConfiguration } from '../helper/configChecks';
 import { DevcontainerCommandError } from '../helper/devcontainerCli';
 import type { HelperImageUse } from '../helper/helperImage';
 import type { ConfigFilesRead } from '../helper/workspaceHelper';
+import type { BuildContext } from '../helper/stepInputs';
 import type { CheckOutcome, ConfigReferences } from '../imageCheck/imageCheck';
 import { parseJsonc } from '../jsonc';
 import type { ProgressStep } from '../messages';
@@ -705,6 +706,9 @@ export function imageConfigWithUser(
 
 export type FakeFiles = ConfigFilesRead;
 
+/** The hash of a build context that the fake helper reads by default. */
+export const FAKE_CONTEXT_HASH = `sha256:${'c'.repeat(64)}`;
+
 type Maybe<T> = T | undefined;
 
 /** Recreate offer: the configuration hash of a service in the fakes (Compose computes its own). */
@@ -789,6 +793,8 @@ export class FakeHelper implements DevspaceHelper {
     frozenLockfile?: true;
     /** A keyed build passes the lockfile text that its key holds (`null`: none). */
     lockfileText?: string | null;
+    /** A keyed build of a Dockerfile passes the build context of its key. */
+    context?: BuildContext;
   }> = [];
   /** `files` and `env` only for a Docker Compose configuration. */
   readonly ups: Array<{
@@ -907,8 +913,20 @@ export class FakeHelper implements DevspaceHelper {
    * Any other Dockerfile that `dockerfiles` lacks does not exist (`dockerfileMissing`).
    */
   unreadableDockerfiles: string[] = [];
+  /** Each `context` of readConfigFiles. */
+  readonly contextReads: string[] = [];
+  /** The hash of a build context that readConfigFiles reads (READ_FILES_SCRIPT), per context; default FAKE_CONTEXT_HASH. */
+  contextHashes: Record<string, string> = {};
+  /** Why a build context cannot be hashed (READ_FILES_SCRIPT): readConfigFiles then gives no hash. */
+  contextUnhashable: string | undefined;
 
-  async readConfigFiles(p: { volumeName: string; configPath: string; dockerfile?: string; image?: HelperImageUse }): Promise<FakeFiles | undefined> {
+  async readConfigFiles(p: {
+    volumeName: string;
+    configPath: string;
+    dockerfile?: string;
+    context?: string;
+    image?: HelperImageUse;
+  }): Promise<FakeFiles | undefined> {
     this.usedImage('readConfigFiles', p.image);
     this.mount(p.volumeName);
     this.calls.push(`readConfigFiles ${p.configPath}`);
@@ -933,6 +951,14 @@ export class FakeHelper implements DevspaceHelper {
       );
     if (Object.prototype.hasOwnProperty.call(known, result.dockerfilePath)) result.dockerfileText = known[result.dockerfilePath];
     else if (!this.unreadableDockerfiles.includes(result.dockerfilePath)) result.dockerfileMissing = true;
+    // As READ_FILES_SCRIPT: the hash of the build context only next to the text of the Dockerfile.
+    if (p.context !== undefined) {
+      this.contextReads.push(p.context);
+      if (result.dockerfileText !== undefined) {
+        if (this.contextUnhashable !== undefined) result.contextUnhashable = this.contextUnhashable;
+        else result.contextHash = this.contextHashes[p.context] ?? FAKE_CONTEXT_HASH;
+      }
+    }
     return result;
   }
 
@@ -1017,11 +1043,14 @@ export class FakeHelper implements DevspaceHelper {
     env?: Record<string, string>;
     frozenLockfile?: boolean;
     lockfileText?: string | null;
+    context?: BuildContext;
     token?: string;
     image?: HelperImageUse;
     signal?: AbortSignal;
   }): Promise<DevcontainerResult> {
     this.usedImage('build', p.image);
+    // As WorkspaceHelper.build: the copy of a build context is made next to our copy of the configuration only.
+    if (p.context !== undefined && p.override === undefined) throw new Error('A build context needs our copy of the configuration.');
     this.buildTokens.push(p.token);
     this.mount(p.volumeName);
     this.calls.push(`build ${p.imageName}`);
@@ -1033,6 +1062,7 @@ export class FakeHelper implements DevspaceHelper {
       ...(p.env !== undefined ? { env: p.env } : {}),
       ...(p.frozenLockfile === true ? { frozenLockfile: true as const } : {}),
       ...(p.lockfileText !== undefined ? { lockfileText: p.lockfileText } : {}),
+      ...(p.context !== undefined ? { context: p.context } : {}),
     });
     await this.onBuild(p.imageName);
     if (p.signal?.aborted) throw abortError();

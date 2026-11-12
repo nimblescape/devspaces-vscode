@@ -226,7 +226,7 @@ describe('the prepare with shared images', () => {
     await h.service.openDevspace(ENV_ID, { progress: h.progress });
     const record = (await h.registry.get(ENV_ID))!.buildRecord!;
     expect(record.imageKey).toBeUndefined();
-    expect(h.logger.infos).toContain(`The devspace image of ${REPO} is not shared: its lockfile changed after it was read. It is built for the devspace alone.`);
+    expect(h.logger.infos).toContain(`The devspace image of ${REPO} is not shared: its lockfile or its build context changed after it was read. It is built for the devspace alone.`);
     expect(h.helper.builds.map((build) => [build.imageName, build.lockfileText])).toEqual([
       [record.devspaceImage, null],
       [record.devspaceImage, undefined],

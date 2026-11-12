@@ -49,7 +49,7 @@ import {
   Timings,
   createVolume,
   dockerTestContext,
-  expectLabelledDevspaceImage,
+  expectSharedDevspaceImage,
   runInVolume,
   testHelperImage } from './harness';
 import { monitorOfUser, removeTestMonitor, seedTestMonitorRun, testComputer, workerWindow, type WorkerWindow } from './workerWindow';
@@ -329,8 +329,9 @@ describe('Docker on another computer over SSH, a host of the list of Devspaces',
     expect(execIn(REMOTE_USER, `cat ${GITHUB_TOKEN_FILE}`)).toBe(DUMMY_TOKEN);
     // The registry records the Docker host; the devspace is of that host only.
     expect((await registry.get(devspaceId))?.dockerHost).toBe(ALIAS);
-    // The image built through SSH carries the labels of the devspace and its build record; the record pins its ID.
-    expectLabelledDevspaceImage(localCli, await registry.get(devspaceId));
+    // The image built through SSH from the Dockerfile is a shared image (R-DS-010): only its key; the record pins its ID,
+    // and the dev container carries the labels of the devspace and its build record.
+    expectSharedDevspaceImage(localCli, await registry.get(devspaceId), containerName);
 
     // Back on the local Docker, the devspace of the remote host is never acted on.
     await state.setDockerHost(undefined);

@@ -69,21 +69,33 @@ function checkHelperFiles(files: HelperFiles): void {
 }
 
 /**
- * Standard input of WRITE_AND_RUN_SCRIPT: the files, and the override configuration at OVERRIDE_CONFIG_PATH; `lockfile`,
- * the lockfile text that the run must find next to the configuration of the repository (`null`: none), else the script
- * fails (R-DS-010: the lockfile of the image key of a shared image, read before the build).
+ * R-DS-010: the build context of a shared image built from a Dockerfile, for WRITE_AND_RUN_SCRIPT: its path relative to
+ * the repository folder (`.` for the folder itself), the hash of the image key (contextTree of the read), and the
+ * Dockerfile relative to it. The build reads a copy of it (CONTEXT_COPY_FOLDER) whose hash must be that one.
  */
-export function writeAndRunInput(files: HelperFiles | undefined, override: Record<string, unknown> | undefined, lockfile?: string | null): string {
-  const all: Record<string, string> = { ...(files ?? {}) };
-  if (override !== undefined) all[OVERRIDE_CONFIG_PATH] = JSON.stringify(override, null, 2);
-  checkHelperFiles(all);
-  return JSON.stringify({ files: all, ...(lockfile !== undefined ? { lockfile } : {}) });
+export interface BuildContext {
+  path: string;
+  hash: string;
+  dockerfile: string;
 }
 
 /**
- * Whether `error` is the failure of a run of WRITE_AND_RUN_SCRIPT whose lockfile was not the one that it must find
- * (writeAndRunInput: R-DS-010, it changed after it was read for the image key): its exit code LOCKFILE_CHANGED_EXIT
- * and its message, before the Dev Container CLI started.
+ * Standard input of WRITE_AND_RUN_SCRIPT: the files, and the override configuration at OVERRIDE_CONFIG_PATH; `lockfile`,
+ * the lockfile text that the run must find next to the configuration of the repository (`null`: none), else the script
+ * fails (R-DS-010: the lockfile of the image key of a shared image, read before the build); `context`, the build context
+ * of a shared image built from a Dockerfile (BuildContext), whose copy must have the hash of the key, else the script fails.
+ */
+export function writeAndRunInput(files: HelperFiles | undefined, override: Record<string, unknown> | undefined, lockfile?: string | null, context?: BuildContext): string {
+  const all: Record<string, string> = { ...(files ?? {}) };
+  if (override !== undefined) all[OVERRIDE_CONFIG_PATH] = JSON.stringify(override, null, 2);
+  checkHelperFiles(all);
+  return JSON.stringify({ files: all, ...(lockfile !== undefined ? { lockfile } : {}), ...(context !== undefined ? { context } : {}) });
+}
+
+/**
+ * Whether `error` is the failure of a run of WRITE_AND_RUN_SCRIPT whose lockfile or build context was not the one that
+ * it must find (writeAndRunInput: R-DS-010, it changed after it was read for the image key): its exit code
+ * LOCKFILE_CHANGED_EXIT and its message, before the Dev Container CLI started.
  */
 export function isLockfileChanged(error: unknown): boolean {
   return error instanceof CommandError && error.exitCode === LOCKFILE_CHANGED_EXIT && error.stderr.includes(LOCKFILE_CHANGED_TEXT);

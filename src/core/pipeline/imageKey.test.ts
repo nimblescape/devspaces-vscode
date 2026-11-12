@@ -2,6 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -57,6 +58,21 @@ describe('imageKey', () => {
     for (const other of keys) expect(other).not.toBe(key);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  it('stays the key of a configuration with an image that R-DS-010 gave first (no field of a Dockerfile in it)', () => {
+    expect(imageKey(BASE)).toBe(imageKey({ ...BASE, dockerfile: undefined }));
+    expect(imageKey(BASE)).toBe('sha256:' + crypto.createHash('sha256').update(canonicalJson({ v: 1, cli: BASE.cliVersion, written: BASE.written, resolved: BASE.resolved, images: BASE.images, features: {}, lockfile: null })).digest('hex'));
+  });
+
+  it('holds the Dockerfile, its path in the build context and the hash of the build context', () => {
+    const dockerfile = { text: 'FROM node:24\n', path: 'Dockerfile', contextHash: `sha256:${'a'.repeat(64)}` };
+    const key = imageKey({ ...BASE, dockerfile });
+    expect(key).not.toBe(imageKey(BASE));
+    const changes = [{ text: 'FROM node:24\nRUN true\n' }, { path: 'docker/Dockerfile' }, { contextHash: `sha256:${'b'.repeat(64)}` }];
+    const keys = changes.map((change) => imageKey({ ...BASE, dockerfile: { ...dockerfile, ...change } }));
+    for (const other of keys) expect(other).not.toBe(key);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
 });
 
 describe('canonicalJson', () => {
@@ -97,7 +113,7 @@ describe('sharedImageInputs', () => {
     compose: false,
     written: { image: 'ghcr.io/acme/base:1' },
     resolved: { image: 'ghcr.io/acme/base:1' },
-    dockerfile: false,
+    configPath: '.devcontainer/devcontainer.json',
     hostAccessChecks: 'on',
     lockfileUnreadable: false,
     answeredFeatures: {},
@@ -105,10 +121,10 @@ describe('sharedImageInputs', () => {
   });
 
   it('gives the image reference and the answered digests of the Features', () => {
-    expect(sharedImageInputs(facts())).toEqual({ image: 'ghcr.io/acme/base:1', features: {}, written: { image: 'ghcr.io/acme/base:1' } });
+    expect(sharedImageInputs(facts())).toEqual({ images: ['ghcr.io/acme/base:1'], features: {}, written: { image: 'ghcr.io/acme/base:1' } });
     const digest = `sha256:${'4'.repeat(64)}`;
     expect(sharedImageInputs(facts({ resolved: { image: ' ghcr.io/acme/base:1 ', features: { [FEATURE]: { version: '1' } } }, answeredFeatures: { [FEATURE]: digest } }))).toEqual({
-      image: 'ghcr.io/acme/base:1',
+      images: ['ghcr.io/acme/base:1'],
       features: { [FEATURE]: digest },
       written: { image: 'ghcr.io/acme/base:1' },
     });
@@ -117,9 +133,9 @@ describe('sharedImageInputs', () => {
   it('says why a build gives no shared image', () => {
     const reasons: Array<[Partial<SharedImageFacts>, string]> = [
       [{ compose: true }, 'it is a Docker Compose configuration'],
-      [{ dockerfile: true }, 'its configuration builds a Dockerfile'],
-      [{ resolved: { build: { dockerfile: 'Dockerfile' } } }, 'its configuration builds a Dockerfile'],
-      [{ resolved: { image: 'x', dockerFile: 'Dockerfile' } }, 'its configuration builds a Dockerfile'],
+      [{ resolved: { build: { dockerfile: 'Dockerfile' } } }, 'its Dockerfile could not be read'],
+      [{ resolved: { image: 'x', dockerFile: 'Dockerfile' } }, 'its Dockerfile could not be read'],
+      [{ resolved: { image: 'x', build: { dockerfile: 3 } as unknown as Record<string, unknown> }, dockerfileText: 'FROM x' }, 'its Dockerfile could not be read'],
       [{ resolved: { image: ' ' } }, 'its configuration names no image'],
       [{ hostAccessChecks: 'off' }, 'the host access checks are off for it'],
       [{ written: undefined }, 'its configuration is no JSON object'],
@@ -133,6 +149,57 @@ describe('sharedImageInputs', () => {
       [{ resolved: { image: 'x', features: { [PINNED]: {} } }, answeredFeatures: { [PINNED]: `sha256:${'5'.repeat(64)}` } }, `its Feature ${PINNED} has a digest, so the registry was not asked for it in this open`],
     ];
     for (const [change, reason] of reasons) expect(sharedImageInputs(facts(change))).toEqual({ reason });
+  });
+
+  describe('of a configuration with a Dockerfile', () => {
+    const TEXT = 'FROM mcr.microsoft.com/devcontainers/base:trixie\nRUN apt-get update\n';
+    const dockerfile = (build: Record<string, unknown>, change: Partial<SharedImageFacts> = {}) =>
+      facts({ written: { build }, resolved: { build }, dockerfileText: TEXT, ...change });
+
+    it('gives the images of the Dockerfile, the build context, the Dockerfile in it, and its text', () => {
+      // Without a build context: the folder of the Dockerfile (as the Dev Container CLI 0.90.0 resolves it).
+      expect(sharedImageInputs(dockerfile({ dockerfile: 'Dockerfile' }))).toEqual({
+        images: ['mcr.microsoft.com/devcontainers/base:trixie'],
+        features: {},
+        written: { build: { dockerfile: 'Dockerfile' } },
+        dockerfile: { context: '.devcontainer', path: 'Dockerfile', text: TEXT },
+      });
+      expect(sharedImageInputs(dockerfile({ dockerfile: 'docker/Dockerfile', context: '..' })).valueOf()).toMatchObject({ dockerfile: { context: '.', path: '.devcontainer/docker/Dockerfile' } });
+      // The older dockerFile and context; a configuration file at the top of the repository.
+      expect(sharedImageInputs(facts({ resolved: { dockerFile: 'Dockerfile', context: '.' }, written: {}, dockerfileText: TEXT, configPath: '.devcontainer.json' }))).toMatchObject({
+        dockerfile: { context: '.', path: 'Dockerfile' },
+      });
+      // A Dockerfile of `scratch` only reads no image; the Features as with an image.
+      const digest = `sha256:${'4'.repeat(64)}`;
+      expect(sharedImageInputs(facts({ resolved: { build: { dockerfile: 'Dockerfile' }, features: { [FEATURE]: {} } }, dockerfileText: 'FROM scratch\nCOPY a /a\n', answeredFeatures: { [FEATURE]: digest } }))).toMatchObject({
+        images: [],
+        features: { [FEATURE]: digest },
+      });
+    });
+
+    it('says why a Dockerfile gives no shared image', () => {
+      const reasons: Array<[SharedImageFacts, string]> = [
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: undefined }), 'its Dockerfile could not be read'],
+        [dockerfile({ dockerfile: 'Dockerfile', options: ['--network=host'] }), 'its build passes options to Docker (build.options)'],
+        [dockerfile({ dockerfile: 'Dockerfile', cacheFrom: 'ghcr.io/acme/cache' }), 'its build imports a build cache (build.cacheFrom)'],
+        [dockerfile({ dockerfile: 'Dockerfile', context: '../..' }), 'its build context is outside of the repository'],
+        [dockerfile({ dockerfile: 'Dockerfile', context: 'app' }), 'its Dockerfile is outside of its build context'],
+        [dockerfile({ dockerfile: '/etc/Dockerfile' }), 'its Dockerfile or its build context has an absolute path'],
+        // Also an absolute path that happens to name the folder that stands for the repository in the check.
+        [dockerfile({ dockerfile: '/repository/Dockerfile', context: '/repository' }), 'its Dockerfile or its build context has an absolute path'],
+        [dockerfile({ dockerfile: 'Dockerfile', context: '/workspaces/api' }), 'its Dockerfile or its build context has an absolute path'],
+        [dockerfile({ dockerfile: '${localEnv:DOCKERFILE}' }), 'its Dockerfile or its build context has a variable that is not resolved'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: 'FROM --platform=linux/arm64 node:24\n' }), 'its Dockerfile has a FROM with --platform=linux/arm64'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: 'FROM node:$TARGETARCH\n' }), 'its Dockerfile has the FROM node:$TARGETARCH, whose image is not known'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: 'FROM node:24\nCOPY --from=ghcr.io/acme/tools:1 /bin/x /x\n' }), 'its Dockerfile copies from the image ghcr.io/acme/tools:1 (COPY --from)'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: 'FROM node:24\nADD https://example.com/x.tgz /x\n' }), 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: 'FROM node:24\nRUN --mount=type=secret,id=npm npm ci\n' }), 'its Dockerfile has a RUN that mounts a secret'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { dockerfileText: '# syntax=ghcr.io/acme/frontend:1\nFROM node:24\n' }), 'its Dockerfile names the frontend ghcr.io/acme/frontend:1'],
+        [dockerfile({ dockerfile: 'Dockerfile', args: { BUILDKIT_SYNTAX: 'ghcr.io/acme/frontend:1' } }), 'its build arguments name a frontend (BUILDKIT_SYNTAX)'],
+        [dockerfile({ dockerfile: 'Dockerfile' }, { hostAccessChecks: 'off' }), 'the host access checks are off for it'],
+      ];
+      for (const [change, reason] of reasons) expect(sharedImageInputs(change)).toEqual({ reason });
+    });
   });
 });
 

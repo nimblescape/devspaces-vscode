@@ -157,6 +157,116 @@ function readBaseImages(
 }
 
 /**
+ * The frontends of the parser directive `syntax` that a shared image may be built with (R-DS-010): the Dockerfile
+ * frontend of Docker, by a tag or a digest. Any other frontend is an image of its own, which the key does not name.
+ */
+const KEYED_SYNTAX = /^(?:docker\.io\/)?docker\/dockerfile(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-f]{64})?$/;
+
+/**
+ * A source of ADD from the network: a URL (`scheme://`) or a Git address over SSH in the short form `user@host:path`
+ * (BuildKit takes any user name, not only `git`).
+ */
+const NETWORK_SOURCE = /[A-Za-z][A-Za-z0-9+.-]*:\/\/|(?:^|[\s"'[,])[A-Za-z0-9_.-]+@[A-Za-z0-9.-]+:/;
+
+/**
+ * R-DS-010: the images that the build of the Dockerfile `dockerfileText` reads, deduplicated in order, for the image key
+ * of a shared image built from it; or why the key cannot name them all (`reason`, for the log: the image is built for
+ * the devspace alone). The FROM images as extractBaseImages reads them (global ARGs, `buildArgs`, the stages up to
+ * `target`), but stricter, because an image that the key does not name could give another image for the same key:
+ * - every FROM image is known (no variable left, no reference longer than MAX_REFERENCE_LENGTH), and names no platform
+ *   (`--platform` takes another image than the local one of that reference);
+ * - COPY and ADD copy only from a stage (`--from` names a stage or its number), and ADD adds nothing from the network
+ *   (a URL or a Git address);
+ * - RUN mounts only from a stage, and no secret and no SSH agent (each account has its own);
+ * - the frontend of the parser directive `syntax` is the Dockerfile frontend of Docker (KEYED_SYNTAX), and the build
+ *   arguments do not name another one (BUILDKIT_SYNTAX).
+ * The images that the frontend and RUN download themselves are not part of the key, as for any build.
+ */
+export function keyedDockerfileImages(dockerfileText: string, buildArgs: Record<string, string> = {}, options: { target?: string } = {}): { images: string[] } | { reason: string } {
+  if (dockerfileText.length > MAX_DOCKERFILE_LENGTH) return { reason: 'its Dockerfile is too large' };
+  const { escape, instructions, syntax } = parseInstructions(dockerfileText);
+  if (instructions.length > MAX_DOCKERFILE_INSTRUCTIONS) return { reason: 'its Dockerfile has too many instructions' };
+  if (syntax !== undefined && !KEYED_SYNTAX.test(syntax)) return { reason: `its Dockerfile names the frontend ${syntax}` };
+  if (Object.prototype.hasOwnProperty.call(buildArgs, 'BUILDKIT_SYNTAX')) return { reason: 'its build arguments name a frontend (BUILDKIT_SYNTAX)' };
+  return withExpansionBudget((budget) => {
+    const result = readKeyedImages(escape, instructions, buildArgs, options.target?.trim().toLowerCase() || undefined);
+    return budget.exceeded === true ? { reason: 'its Dockerfile expands to too much text' } : result;
+  });
+}
+
+function readKeyedImages(escape: string, instructions: readonly Instruction[], buildArgs: Record<string, string>, target: string | undefined): { images: string[] } | { reason: string } {
+  const globals = new Map<string, string | undefined>();
+  const lookup: Lookup = (name) => {
+    const override = Object.prototype.hasOwnProperty.call(buildArgs, name) ? buildArgs[name] : undefined;
+    if (PLATFORM_ARGS.has(name)) return override !== undefined ? { value: override } : 'unresolved';
+    if (!globals.has(name)) return { value: undefined };
+    return { value: override !== undefined ? override : globals.get(name) };
+  };
+  const stages = new Set<string>();
+  const images: string[] = [];
+  let fromSeen = false;
+  // The stages after the target stage are not built.
+  let targetSeen = false;
+  /** Whether `value` of `--from` names a stage before (its name, or its number). */
+  const isStage = (value: string) => /^[0-9]+$/.test(value) || stages.has(value.toLowerCase());
+  for (const instruction of instructions) {
+    const words = instruction.args.split(/\s+/).filter((word) => word !== '');
+    const flags: string[] = [];
+    while (words.length > 0 && words[0].startsWith('--')) flags.push(words.shift()!);
+    if (instruction.keyword === 'ARG' && !fromSeen) {
+      for (const word of splitWords(instruction.args, escape)) {
+        const equals = word.indexOf('=');
+        const name = equals < 0 ? word : word.slice(0, equals);
+        if (!isArgName(name)) continue;
+        const defaultValue = equals < 0 ? undefined : expand(word.slice(equals + 1), lookup, escape);
+        const override = Object.prototype.hasOwnProperty.call(buildArgs, name) ? buildArgs[name] : undefined;
+        globals.set(name, override !== undefined ? override : defaultValue);
+      }
+      continue;
+    }
+    if (instruction.keyword === 'FROM') {
+      if (targetSeen) break;
+      fromSeen = true;
+      if (flags.length > 0) return { reason: `its Dockerfile has a FROM with ${flags[0]}` };
+      if (words.length === 0) return { reason: 'its Dockerfile has a FROM without an image' };
+      const image = expand(words[0], lookup, escape).trim();
+      if (image === '' || image.includes('$') || image.length > MAX_REFERENCE_LENGTH) return { reason: `its Dockerfile has the FROM ${words[0]}, whose image is not known` };
+      const key = image.toLowerCase();
+      if (key !== 'scratch' && !stages.has(key) && !images.includes(image)) images.push(image);
+      const stage = words.length >= 3 && words[1].toLowerCase() === 'as' ? words[2].toLowerCase() : undefined;
+      if (stage !== undefined) stages.add(stage);
+      if (target !== undefined && stage === target) targetSeen = true;
+      continue;
+    }
+    if (instruction.keyword === 'COPY' || instruction.keyword === 'ADD') {
+      for (const flag of flags) {
+        if (!flag.toLowerCase().startsWith('--from=')) continue;
+        const from = flag.slice('--from='.length);
+        if (from.includes('$') || !isStage(from)) return { reason: `its Dockerfile copies from the image ${from} (${instruction.keyword} --from)` };
+      }
+      if (instruction.keyword === 'ADD' && NETWORK_SOURCE.test(words.join(' '))) return { reason: 'its Dockerfile adds a file from the network (ADD of a URL or a Git address)' };
+      continue;
+    }
+    if (instruction.keyword === 'RUN') {
+      for (const flag of flags) {
+        if (!flag.toLowerCase().startsWith('--mount=')) continue;
+        const spec = flag.slice('--mount='.length);
+        if (/["'$]/.test(spec)) return { reason: `its Dockerfile has a RUN --mount that cannot be read (${spec})` };
+        const fields = new Map(spec.split(',').map((field) => {
+          const equals = field.indexOf('=');
+          return equals < 0 ? [field.toLowerCase(), ''] : [field.slice(0, equals).toLowerCase(), field.slice(equals + 1)];
+        }));
+        const type = (fields.get('type') ?? 'bind').toLowerCase();
+        if (type === 'secret' || type === 'ssh') return { reason: `its Dockerfile has a RUN that mounts ${type === 'ssh' ? 'an SSH agent' : 'a secret'}` };
+        const from = fields.get('from');
+        if (from !== undefined && !isStage(from)) return { reason: `its Dockerfile has a RUN that mounts the image ${from}` };
+      }
+    }
+  }
+  return { images };
+}
+
+/**
  * A parser directive `# name=value` (more lenient than BuildKit: white space before the `#`). The value is taken as it
  * is and trimmed afterwards (parseDirective); BuildKit's `\s*=\s*(.+?)\s*$` backtracks in quadratic time on a value
  * with many spaces.
@@ -175,11 +285,15 @@ function parseDirective(line: string, pattern: RegExp): { name: string; value: s
   return { name: match[1], value: trimmed !== '' ? trimmed : match[2].slice(-1) };
 }
 
-/** Splits the text into instructions: directives, comments, continuation lines, and heredoc bodies are handled here. */
-function parseInstructions(text: string): { escape: string; instructions: Instruction[] } {
+/**
+ * Splits the text into instructions: directives, comments, continuation lines, and heredoc bodies are handled here.
+ * `syntax`: the value of the parser directive `syntax` (the frontend that BuildKit runs), if any.
+ */
+function parseInstructions(text: string): { escape: string; instructions: Instruction[]; syntax?: string } {
   const source = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const lines = source.split(/\r\n|\r|\n/);
   let escape = '\\';
+  let syntax: string | undefined;
   let index = 0;
 
   // Parser directives are only recognized at the very top of the file.
@@ -187,6 +301,7 @@ function parseInstructions(text: string): { escape: string; instructions: Instru
     const directive = parseDirective(lines[index], DIRECTIVE);
     if (!directive || !KNOWN_DIRECTIVES.has(directive.name.toLowerCase())) break;
     if (directive.name.toLowerCase() === 'escape' && (directive.value === '`' || directive.value === '\\')) escape = directive.value;
+    if (directive.name.toLowerCase() === 'syntax') syntax = directive.value;
   }
 
   const continuation = new RegExp(`${escapeRegExp(escape)}[ \\t]*$`);
@@ -234,7 +349,7 @@ function parseInstructions(text: string): { escape: string; instructions: Instru
       }
     }
   }
-  return { escape, instructions };
+  return { escape, instructions, ...(syntax !== undefined ? { syntax } : {}) };
 }
 
 function findHeredocs(args: string): Array<{ name: string; stripTabs: boolean }> {
