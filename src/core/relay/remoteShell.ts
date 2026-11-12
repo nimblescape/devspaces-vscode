@@ -113,13 +113,29 @@ export interface RemoteShellOptions {
 /** The command that runs now: its markers, its output so far, and how it ends. */
 interface Running {
   marker: string;
+  /** The output so far: the start of `room`. */
   stdout: Buffer;
+  /** The memory of `stdout`, which doubles when it is full, so that a long output is not copied again at each chunk. */
+  room: Buffer;
   stderr: string;
   exitCode?: number;
   /** Where the marker of the exit code starts in `stdout`, once it came without the end of its line. */
   endAt?: number;
   stderrDone: boolean;
   finish(result: RunResult): void;
+}
+
+/** Adds `chunk` to the output of `running` (Running.room: in linear time also for an output of many chunks). */
+function appendOutput(running: Running, chunk: Buffer): void {
+  const length = running.stdout.length + chunk.length;
+  if (length > running.room.length) {
+    // At most a little more than the largest output that a command may print (tooMuch ends a longer one).
+    const room = Buffer.allocUnsafe(Math.max(length, Math.min(2 * running.room.length, MAX_SHELL_COMMAND_OUTPUT + 64 * 1024)));
+    running.stdout.copy(room);
+    running.room = room;
+  }
+  chunk.copy(running.room, running.stdout.length);
+  running.stdout = running.room.subarray(0, length);
 }
 
 /** One shell before the relay. Create it with RemoteShell.open. */
@@ -307,7 +323,8 @@ export class RemoteShell {
         if ('result' in outcome) resolve(outcome.result);
         else reject(outcome.error);
       };
-      const running: Running = { marker, stdout: Buffer.alloc(0), stderr: '', stderrDone: false, finish: (result) => done({ result }) };
+      const room = Buffer.alloc(0);
+      const running: Running = { marker, stdout: room, room, stderr: '', stderrDone: false, finish: (result) => done({ result }) };
       const onAbort = () => {
         done({ error: abortError() });
         this.end();
@@ -410,7 +427,7 @@ export class RemoteShell {
     const end = Buffer.from(`\n${running.marker} `, 'utf8');
     // The marker may start in the output before this chunk, or was found there without the end of its line.
     const from = running.endAt ?? Math.max(0, running.stdout.length - end.length);
-    running.stdout = Buffer.concat([running.stdout, chunk]);
+    appendOutput(running, chunk);
     const at = running.stdout.indexOf(end, from);
     if (at < 0) {
       if (running.stdout.length > MAX_SHELL_COMMAND_OUTPUT + end.length) this.tooMuch(running);
@@ -438,9 +455,11 @@ export class RemoteShell {
     }
     const running = this.running;
     if (running === undefined || running.stderrDone) return;
-    running.stderr += text;
     const end = `\n${running.marker}\n`;
-    const at = running.stderr.indexOf(end);
+    // The marker may start in the error output before this text: the search starts there, not at the start.
+    const from = Math.max(0, running.stderr.length - end.length);
+    running.stderr += text;
+    const at = running.stderr.indexOf(end, from);
     if (at >= 0) {
       running.stderr = running.stderr.slice(0, at);
       running.stderrDone = true;
