@@ -90,7 +90,7 @@ describe('readResourceReport', () => {
     const docker = fakeDocker({ 'container inspect': ok(`${JSON.stringify({ Id: 'm1', Name: '/devspaces-monitor', State: { Status: 'running' }, Config: { Labels: {} } })}\n`), 'volume ls': ok('other\n') });
     const report = await readResourceReport(docker, { object: monitorContainer, computer: COMPUTER, clock: CLOCK });
     expect(docker.words()).toEqual(['container inspect', 'volume ls']);
-    expect(report.notices).toContain('What the volume contains could not be read: the volume is not there anymore.');
+    expect(report.notices).toContain('The volume devspaces-monitor is not there: the records of the Monitor are missing from this report.');
   });
 
   it('gives a failed list as a note with its reason, and a list that took too long says so', async () => {
@@ -100,7 +100,7 @@ describe('readResourceReport', () => {
       computer: COMPUTER,
       clock: CLOCK,
     });
-    expect(refused.notices.some((notice) => notice.startsWith('What the volume contains could not be read:') && notice.includes('permission denied'))).toBe(true);
+    expect(refused.notices.some((notice) => notice.startsWith('The records of the Monitor in devspaces-monitor could not be read:') && notice.includes('permission denied'))).toBe(true);
     const slow = await readResourceReport(fakeDocker({ 'container inspect': inspect, 'volume ls': { exitCode: null, stdout: '', stderr: '', timedOut: true } }), {
       object: monitorContainer,
       computer: COMPUTER,
