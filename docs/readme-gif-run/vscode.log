@@ -1,19 +1,19 @@
-[9322:1112/234820.633636:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[9347:1112/235037.880303:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
 
-DevTools listening on ws://127.0.0.1:9222/devtools/browser/bcd06085-0bef-4d9b-8c81-84d0a675a5b5
-[9322:1112/234820.643299:ERROR:dbus/object_proxy.cc:589] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
-[9322:1112/234820.643372:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
-[9322:1112/234820.645279:ERROR:dbus/object_proxy.cc:589] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+DevTools listening on ws://127.0.0.1:9222/devtools/browser/c3d43e9e-bc83-4d30-8819-e938f75ff22c
+[9347:1112/235037.895224:ERROR:dbus/object_proxy.cc:589] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[9347:1112/235037.895321:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[9347:1112/235037.897627:ERROR:dbus/object_proxy.cc:589] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
 Warning: 'remote-debugging-port' is not in the list of known options, but still passed to Electron/Chromium.
-[90m[main 2026-11-12T23:48:20.684Z][0m [node-compile-cache] main: packaged cache enabled (status: enabled, configured: /home/runner/work/devspaces-vscode/devspaces-vscode/.vscode-test/vscode-linux-x64-1.146.0/resources/app/node-compile-cache/main, active: /home/runner/work/devspaces-vscode/devspaces-vscode/.vscode-test/vscode-linux-x64-1.146.0/resources/app/node-compile-cache/main/v24.22.1-x64-7034790f)
-[90m[main 2026-11-12T23:48:20.711Z][0m StorageMainService: creating application shared storage
-[9322:1112/234820.769917:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
-[90m[main 2026-11-12T23:48:20.885Z][0m [shared storage] Creating shared storage database at '/home/runner/.vscode-shared/sharedStorage/state.vscdb' (wasCreated: true)
-[90m[main 2026-11-12T23:48:20.885Z][0m [shared storage] Initializing fallback application storage (path: /home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/user-data/User/globalStorage/state.vscdb)
-[90m[main 2026-11-12T23:48:20.886Z][0m [shared storage] Fallback application storage initialized with 3 items
-[90m[main 2026-11-12T23:48:20.886Z][0m update#setState disabled
-[90m[main 2026-11-12T23:48:20.886Z][0m update#ctor - updates are disabled by the environment
-[9322:1112/234820.897908:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
-[90m[main 2026-11-12T23:48:51.134Z][0m Extension host with pid 9534 exited with code: 0, signal: unknown.
-[9351:1112/235000.233498:ERROR:ui/gfx/x/connection.cc:66] X connection error received.
-[9351:1112/235000.233776:ERROR:ui/gfx/x/connection.cc:66] X connection error received.
+[90m[main 2026-11-12T23:50:37.949Z][0m [node-compile-cache] main: packaged cache enabled (status: enabled, configured: /home/runner/work/devspaces-vscode/devspaces-vscode/.vscode-test/vscode-linux-x64-1.146.0/resources/app/node-compile-cache/main, active: /home/runner/work/devspaces-vscode/devspaces-vscode/.vscode-test/vscode-linux-x64-1.146.0/resources/app/node-compile-cache/main/v24.22.1-x64-7034790f)
+[90m[main 2026-11-12T23:50:37.983Z][0m StorageMainService: creating application shared storage
+[9347:1112/235038.049988:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[90m[main 2026-11-12T23:50:38.376Z][0m [shared storage] Creating shared storage database at '/home/runner/.vscode-shared/sharedStorage/state.vscdb' (wasCreated: true)
+[90m[main 2026-11-12T23:50:38.376Z][0m [shared storage] Initializing fallback application storage (path: /home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/user-data/User/globalStorage/state.vscdb)
+[90m[main 2026-11-12T23:50:38.384Z][0m [shared storage] Fallback application storage initialized with 3 items
+[90m[main 2026-11-12T23:50:38.385Z][0m update#setState disabled
+[90m[main 2026-11-12T23:50:38.385Z][0m update#ctor - updates are disabled by the environment
+[9347:1112/235038.396406:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[90m[main 2026-11-12T23:51:12.676Z][0m Extension host with pid 9587 exited with code: 0, signal: unknown.
+[9384:1112/235440.562258:ERROR:ui/gfx/x/connection.cc:66] X connection error received.
+[9384:1112/235440.563118:ERROR:ui/gfx/x/connection.cc:66] X connection error received.
