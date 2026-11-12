@@ -15,10 +15,12 @@ import * as path from 'path';
 import { Readable } from 'stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { HttpRequest, HttpResponse, HttpStreamResponse } from '../core/http';
+import { RunReportBuilder } from '../core/remoteMonitor/runReport';
 import { MARKETPLACE_QUERY_URL, RECORDED_LIST_MS, formatExtensionRecord, type ExtensionRecord } from '../core/vscodeExtensions';
 import type { StoreLockAttempt } from '../core/worker/vscodeServerStore';
 import { BackgroundRun, type VscodeBackgroundDeps } from './background';
 import { cleanupExtensions, downloadExtensions, newestStableServerVersion, type ExtensionRunDeps } from './extensionDownloads';
+import { withRunNotes } from './runNotes';
 
 const NOW = 400 * 24 * 60 * 60_000;
 const DAY = 24 * 60 * 60_000;
@@ -161,7 +163,10 @@ describe('the part "extensions" of the background run', () => {
             }),
       }),
     });
-    await downloadExtensions(f.deps);
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => downloadExtensions(f.deps));
+    // The report of the run (R-DS-003): each file downloaded.
+    expect(notes.finish(0, true).events).toEqual({ extensionDownloaded: { count: 3, items: ['redhat.vscode-yaml-1.24.0', 'rust.ra-0.3.0-linux-x64', 'pin.ned-1.0.0'] } });
     expect(f.queries).toEqual([
       { ids: ['redhat.vscode-yaml', 'rust.ra'], flags: 0x1 | 0x2 | 0x10 | 0x80 | 0x10000 },
       { ids: ['pin.ned'], flags: 0x1 | 0x2 | 0x10 | 0x80 },
@@ -186,7 +191,15 @@ describe('the part "extensions" of the background run', () => {
     const body = answer({ 'new.ext': [version('2.0.0', { engine: '^1.200.0' })], 'bad.download': [version('1.0.0', { url: 'https://cdn.gallerycdn.vsassets.io/bad.vsix' })], 'good.ext': [version('1.0.0', { url: 'https://cdn.gallerycdn.vsassets.io/good.vsix' })] });
     const download = (url: string): HttpStreamResponse => (url.endsWith('bad.vsix') ? { status: 500, headers: {}, body: Readable.from([]) } : { status: 200, headers: {}, body: Readable.from([VSIX]) });
     const f = fake(root, { answer: () => ({ status: 200, headers: {}, body }), download });
-    await downloadExtensions(f.deps);
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => downloadExtensions(f.deps));
+    expect(notes.finish(0, true).events).toEqual({
+      extensionDownloaded: { count: 1, items: ['good.ext-1.0.0'] },
+      extensionDownloadFailed: {
+        count: 3,
+        items: ['gone.ext: the Marketplace does not have it', 'new.ext: the Marketplace has no release for VS Code 1.105.0 on linux-x64', 'bad.download: the download answered HTTP 500'],
+      },
+    });
     expect(f.logs).toEqual(
       expect.arrayContaining([
         'The extension gone.ext is not in the shared extension cache (the Marketplace does not have it); it is tried again after a day.',
@@ -217,7 +230,10 @@ describe('the part "extensions" of the background run', () => {
     record(root, 'aaaaaaaaaa', { at: NOW, configuration: [{ id: 'a.b' }], defaults: [] });
     for (const response of [{ status: 503, headers: {}, body: '' }, { status: 200, headers: {}, body: '<html>' }]) {
       const f = fake(root, { answer: () => response });
-      await downloadExtensions(f.deps);
+      const notes = new RunReportBuilder(0);
+      await withRunNotes(notes, () => downloadExtensions(f.deps));
+      // The report counts its entries as failed, without an entry of failures.json.
+      expect(notes.finish(0, true).events.extensionDownloadFailed).toMatchObject({ count: 1, items: [expect.stringMatching(/^1 extension\(s\): the Marketplace could not be asked: the Marketplace answered/)] });
       expect(f.logs.some((line) => line.startsWith('The Marketplace could not be asked for 1 extension(s): the Marketplace answered'))).toBe(true);
       expect(f.downloads).toEqual([]);
       expect(fs.existsSync(path.join(root, 'extensions', 'failures.json'))).toBe(false);
@@ -279,7 +295,10 @@ describe('the cleanup of the extension cache', () => {
     fs.mkdirSync(locksFolder);
     fs.writeFileSync(path.join(locksFolder, 'extension-c.d-1.0.0.lock'), '');
     const f = fake(root, { busy: ['busy.one-1.0.0'] });
-    await cleanupExtensions(f.deps);
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => cleanupExtensions(f.deps));
+    expect(notes.finish(0, true).events.extensionRemoved?.count).toBe(3);
+    expect([...(notes.finish(0, true).events.extensionRemoved?.items ?? [])].sort()).toEqual(['a.b-1.5.0', 'c.d-1.0.0', 'e.f-0.9.0-linux-x64']);
     for (const file of keep) expect(fs.existsSync(file)).toBe(true);
     for (const file of gone) expect(fs.existsSync(file)).toBe(false);
     expect(f.locks.sort()).toEqual(['try a.b-1.5.0', 'try busy.one-1.0.0', 'try c.d-1.0.0', 'try e.f-0.9.0-linux-x64']);

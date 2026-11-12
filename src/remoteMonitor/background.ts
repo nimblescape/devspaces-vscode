@@ -28,6 +28,8 @@
 // the most recently used first. It comes after the image pass (whose registry answers it uses) and after the VS Code
 // parts, which are short, so that hours of builds never hold the server and the extensions that the first open of the
 // morning needs.
+// At the end of each run, its short report goes into the volume of the Monitor (runReport.ts; the parts note their
+// events with noteRun of runNotes.ts).
 // The pure rules are in backgroundRules.ts. No `vscode`.
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
@@ -70,6 +72,8 @@ import { isNetworkError, isServerAnswer } from '../core/networkFailure';
 import { engineFailure, type VscodeEngine } from './engine';
 import { cleanupExtensions, downloadExtensions, type ExtensionRunDeps } from './extensionDownloads';
 import { REMOTE_MONITOR_STATE_DIR } from '../core/remoteMonitor/protocol';
+import { RunReportBuilder, type RunReport } from '../core/remoteMonitor/runReport';
+import { noteRun, withRunNotes } from './runNotes';
 
 /** The time limit of a request to the engine of the VS Code part (the architecture, a list, an inspect). */
 export const BACKGROUND_ENGINE_TIMEOUT_MS = 60_000;
@@ -139,6 +143,11 @@ export interface BackgroundRunDeps {
   state: CacheRunStore;
   /** The part "prepares" (prepareDevspaces); none in the tests that leave it out. */
   prepares?: () => Promise<void>;
+  /**
+   * Keeps the report of each run (runReportStore of main.ts: the last MAX_RUN_REPORTS in the volume); none in the tests
+   * that leave it out.
+   */
+  reports?: { add(report: RunReport): Promise<void> };
 }
 
 /**
@@ -173,6 +182,20 @@ export class BackgroundRun {
     this.offline = false;
     this.reached = false;
     log('The background run starts.');
+    const notes = new RunReportBuilder(this.deps.now());
+    await withRunNotes(notes, () => this.parts());
+    const reachedNone = this.offline && !this.reached;
+    // The report before the line of the end, so that the log shows a failed write within the run.
+    await this.deps.reports?.add(notes.finish(this.deps.now(), !reachedNone)).catch((error: unknown) => {
+      log(`The report of the background run could not be kept in the volume: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    log(reachedNone ? 'The background run ended without reaching the network.' : 'The background run ended.');
+    return !reachedNone;
+  }
+
+  /** The parts of one run (see run). */
+  private async parts(): Promise<void> {
+    const { log } = this.deps;
     await this.part('the images', async () => {
       const contact = await this.deps.images();
       if (contact === 'reached') this.network.reached();
@@ -202,9 +225,6 @@ export class BackgroundRun {
     }
     const prepares = this.deps.prepares;
     if (prepares !== undefined) await this.part('the prepares of the devspace images', prepares);
-    const reachedNone = this.offline && !this.reached;
-    log(reachedNone ? 'The background run ended without reaching the network.' : 'The background run ended.');
-    return !reachedNone;
   }
 
   /** What the parts of the current run tell it of the network (RunNetwork). */
@@ -227,7 +247,9 @@ export class BackgroundRun {
       await work();
     } catch (error) {
       if (network) this.network.failed(error);
-      this.deps.log(`The background run could not do ${what}: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      noteRun('partFailed', `${what}: ${message}`);
+      this.deps.log(`The background run could not do ${what}: ${message}`);
     }
   }
 
@@ -274,8 +296,14 @@ export class BackgroundRun {
       // A success needs no entry removed: a version is fetched only once its failure does not wait anymore, and such
       // entries are not kept (storeFailedFetches). The update service answered before this fetch, so the run reached a
       // server and a failed fetch waits a day, also one that failed for the network (RunNetwork).
-      if (await (vscode.ensure ?? ensureServer)(vscode.store, server, platform, this.signal)) await this.linkIntoContainers(vscode, server, platform);
-      else failed[version] = this.deps.now();
+      const named = `${server.commit} (${quality}, ${platform})`;
+      if (await (vscode.ensure ?? ensureServer)(vscode.store, server, platform, this.signal)) {
+        noteRun('serverDownloaded', named);
+        await this.linkIntoContainers(vscode, server, platform);
+      } else {
+        noteRun('serverDownloadFailed', named);
+        failed[version] = this.deps.now();
+      }
     }
     await this.storeFailedFetches(stored, failed);
     return { platform, released, asked };
@@ -294,7 +322,10 @@ export class BackgroundRun {
       // An answer that refuses (HTTP 404) or that is no release list still came from the server.
       if (network && isNetworkError(error)) this.network.failed(error);
       else if (network && isServerAnswer(error)) this.network.reached();
-      this.deps.log(`The newest VS Code server (${quality}, ${platform}) could not be read from the update service: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      // Only part b notes it: the cleanup asks the qualities that no open used, which is no failure of an update.
+      if (network) noteRun('serverCheckFailed', `${quality} (${platform}): ${message}`);
+      this.deps.log(`The newest VS Code server (${quality}, ${platform}) could not be read from the update service: ${message}`);
       return undefined;
     }
   }
@@ -368,6 +399,7 @@ export class BackgroundRun {
         });
         const outcome = vscodeServerLinkOutcome(result);
         if (outcome.kind === 'linked') {
+          noteRun('serverLinked', `${server.commit} into ${label}`);
           log(`The VS Code server ${name} is linked into ${label} (as ${user}).`);
         } else if (outcome.kind === 'present') {
           log(`The VS Code server ${name} is in ${label} already.`);
@@ -454,6 +486,7 @@ export class BackgroundRun {
           const moved = path.posix.join(temp, `${version}-${randomBytes(6).toString('hex')}`);
           await fs.promises.rename(server, moved);
           await fs.promises.rm(moved, { recursive: true, force: true });
+          noteRun('serverRemoved', `${commit} (${quality}, ${platform})`);
           log(`Removed the VS Code server ${commit} (${quality}, ${platform}) from the shared store: no open used it for 14 days, it is not among the two newest, and no running container runs it.`);
         } catch (error) {
           log(`The VS Code server ${commit} (${quality}) could not be removed: ${error instanceof Error ? error.message : String(error)}`);

@@ -41,6 +41,7 @@ import type { NetworkContact } from './backgroundRules';
 import { engineFailure, type ImageEngine } from './engine';
 import { REGISTRY_TIMEOUT_MS, requestsWithin } from './images';
 import { PREPARE_WORKER_PATH } from './prepares';
+import { noteRun } from './runNotes';
 
 /** The copy of the Dockerfile of the helper image in that image (the COPY of resources/helper/Dockerfile). */
 export const HELPER_DOCKERFILE_COPY = '/usr/local/share/devspaces/helper/Dockerfile';
@@ -127,6 +128,7 @@ export async function refreshHelperImage(deps: HelperRefreshDeps): Promise<Netwo
   const answer = await registry.getDigest(reference);
   const now = new Date(deps.now()).toISOString();
   if (answer.kind !== 'digest') {
+    noteRun('helperImageFailed', answer.kind === 'unreachable' ? `${tag}: the registry of ${baseImage} did not answer` : `${tag}: the registry gave no digest for ${baseImage} (${answer.kind})`);
     log(
       answer.kind === 'unreachable'
         ? `The base image ${baseImage} of the workspace helper could not be checked: its registry did not answer (${answer.error}).`
@@ -153,12 +155,14 @@ export async function refreshHelperImage(deps: HelperRefreshDeps): Promise<Netwo
     await (deps.build ?? cliHelperBuild)({ tag, dockerfile, baseDigest: digest }, limit);
   } catch (error) {
     const reason = limit.aborted ? `it did not end within ${HELPER_REBUILD_TIMEOUT_MS / 60_000} minutes` : errorMessage(error);
+    noteRun('helperImageFailed', `${tag}: the build failed: ${reason}`);
     log(`The workspace helper image ${tag} could not be built again, so the existing image stays and the windows check it: ${reason}`);
     await write({ ...base, attemptedAt: now });
     return 'reached';
   }
   const ended = deps.now();
   const builtAt = new Date(ended).toISOString();
+  noteRun('helperImageBuilt', tag);
   log(`The workspace helper image ${tag} was built again from the current base image ${baseImage} in ${Math.round((ended - started) / 1000)} s.`);
   await write({ ...base, baseDigest: digest, checkedAt: builtAt, builtAt });
   return 'reached';

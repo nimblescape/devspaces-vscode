@@ -33,6 +33,7 @@ import type { EngineImage } from '../core/worker/dockerEngine';
 import { isNetworkError } from '../core/networkFailure';
 import type { NetworkContact } from './backgroundRules';
 import { engineFailure, type ImageEngine } from './engine';
+import { noteRun } from './runNotes';
 
 /** Time from the start of the monitor to the first pass. */
 export const REMOTE_IMAGE_FIRST_PASS_MS = 60_000;
@@ -673,11 +674,15 @@ export class ImageMaintenance {
       this.reachedRegistry = true;
     } catch (error) {
       if (isNetworkError(error)) this.pullOffline = true;
-      this.deps.log(`${reference} could not be pulled: ${engineFailure(error, IMAGE_PULL_TIMEOUT_MS)}`);
+      const reason = engineFailure(error, IMAGE_PULL_TIMEOUT_MS);
+      noteRun('imagePullFailed', `${reference}: ${reason}`);
+      this.deps.log(`${reference} could not be pulled: ${reason}`);
       return false;
     }
     // The image that the pull replaced, also when Docker lists it without its repository.
     const now = await this.imageId(reference);
+    // A pull that brought a version (a new one, or the first on the engine); the same version again is no event.
+    if (now !== undefined && before !== now) noteRun('imagePulled', reference);
     if (before !== undefined && now !== undefined && before !== now) {
       this.replaced[repository] = trimReplaced([...(this.replaced[repository] ?? []).filter((id) => id !== before), before], new Set([now]));
       await this.deps.replaced?.write(this.replaced).catch(() => undefined);
@@ -808,7 +813,10 @@ export class ImageMaintenance {
         // this pass.
         if (answer === 'absent' && references.length === 0 && this.cameFromPull(repository, inspected)) {
           const failure = await this.removeReferences([version.id]);
-          if (failure === undefined) this.deps.log(`Removed the old version ${repository} (${label}) (its registry no longer has it; it came from a pull).`);
+          if (failure === undefined) {
+            noteRun('imageRemoved', `${repository} (${label})`);
+            this.deps.log(`Removed the old version ${repository} (${label}) (its registry no longer has it; it came from a pull).`);
+          }
           else this.deps.log(`The unused image ${repository} (${label}) stays: ${failure}`);
           continue;
         }
@@ -816,8 +824,10 @@ export class ImageMaintenance {
         continue;
       }
       const failure = await this.removeReferences(references.length > 0 ? references : [version.id]);
-      if (failure === undefined) this.deps.log(`Removed the unused image ${repository} (${label}).`);
-      else this.deps.log(`The unused image ${repository} (${label}) stays: ${failure}`);
+      if (failure === undefined) {
+        noteRun('imageRemoved', `${repository} (${label})`);
+        this.deps.log(`Removed the unused image ${repository} (${label}).`);
+      } else this.deps.log(`The unused image ${repository} (${label}) stays: ${failure}`);
     }
   }
 

@@ -44,6 +44,7 @@ import type { Logger, StartOptions, StartedProcess } from '../core/ports';
 import { isWorkerScriptHash, readWorkerScript, removeOtherWorkerScripts } from '../core/remoteMonitor/workerScript';
 import { isStorageId } from '../core/storage/paths';
 import { engineFailure, type PrepareEngine } from './engine';
+import { noteRun } from './runNotes';
 
 /** The time limit of a request to the engine of this part (a list, an inspect, a removal). */
 export const PREPARE_ENGINE_TIMEOUT_MS = 60_000;
@@ -162,6 +163,16 @@ export function prepareLine(env: PrepareDevspace, value: PrepareValue): string {
   }
 }
 
+/** The event of the report of the run (noteRun) for the outcome of one prepare. */
+function notePrepare(env: PrepareDevspace, value: PrepareValue): void {
+  const detail = oneLine(value.detail);
+  if (value.outcome === 'prepared') noteRun('devspacePrepared', env.repository);
+  // A cancel is a Delete of the devspace, no failure.
+  else if (value.outcome === 'skipped' || value.outcome === 'cancelled') noteRun('devspacePrepareSkipped', `${env.repository}: ${detail}`);
+  else if (value.outcome === 'stopped') noteRun('devspacePrepareFailed', `${env.repository}: stopped by its time limit`);
+  else noteRun('devspacePrepareFailed', `${env.repository}: ${detail}`);
+}
+
 /**
  * The part of the background run (see the module comment): the prepares, one at a time, the most recently used
  * devspace first, then the removal of the stale prepared images. Throws only when the devspaces cannot be listed
@@ -172,8 +183,11 @@ export async function prepareDevspaces(deps: PreparesDeps): Promise<void> {
   const devspaces = prepareOrder(await workspaceDevspaces(deps.engine), await deps.lastUsed());
   if (devspaces.length > 0) {
     const worker = deps.worker();
-    if ('reason' in worker) log(`No devspace image is prepared: ${worker.reason}.`);
-    else await prepareEach(deps, worker, devspaces);
+    if ('reason' in worker) {
+      // No failure of a prepare: the Monitor cannot prepare (no worker script).
+      noteRun('devspacePrepareSkipped', `${devspaces.length} devspace(s): ${worker.reason}`, devspaces.length);
+      log(`No devspace image is prepared: ${worker.reason}.`);
+    } else await prepareEach(deps, worker, devspaces);
   }
   await removeStalePreparedImages(deps.engine, log);
 }
@@ -188,14 +202,18 @@ async function prepareEach(deps: PreparesDeps, worker: PrepareWorker, devspaces:
         try {
           session = await worker.open();
         } catch (error) {
+          noteRun('devspacePrepareFailed', `${devspaces.length - index} devspace(s): the worker of the prepares could not be started: ${oneLine(errorMessage(error))}`, devspaces.length - index);
           log(`The worker of the prepares could not be started, so ${devspaces.length - index} devspace(s) are prepared at the next run: ${oneLine(errorMessage(error))}.`);
           return;
         }
       }
       const started = deps.monotonic();
       try {
-        log(prepareLine(env, await session.prepare(env.id)));
+        const value = await session.prepare(env.id);
+        notePrepare(env, value);
+        log(prepareLine(env, value));
       } catch (error) {
+        noteRun('devspacePrepareFailed', `${env.repository}: ${oneLine(errorMessage(error))}`);
         log(`${env.repository}: the prepare failed after ${durationText(deps.monotonic() - started)}: ${oneLine(errorMessage(error))}.`);
         // The worker may be lost: the next devspace gets a new one.
         await session.close();
@@ -237,7 +255,10 @@ export async function removeStalePreparedImages(engine: Pick<PrepareEngine, 'ima
         continue;
       }
       const removed = await engine.removeImage(tag, AbortSignal.timeout(PREPARE_ENGINE_TIMEOUT_MS));
-      if (removed === 'removed') log(`Removed the prepared image ${tag}: its devspace ${id} has no volume on this engine.`);
+      if (removed === 'removed') {
+        noteRun('engineObjectRemoved', `the prepared image ${tag} of a devspace without a volume`);
+        log(`Removed the prepared image ${tag}: its devspace ${id} has no volume on this engine.`);
+      }
       else if (removed === 'inUse') log(`The prepared image ${tag} of the removed devspace ${id} stays: Docker says it is in use.`);
     } catch (error) {
       log(`The prepared image ${tag} could not be removed: ${engineFailure(error, PREPARE_ENGINE_TIMEOUT_MS)}`);

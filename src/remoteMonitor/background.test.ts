@@ -19,6 +19,7 @@ import type { EngineContainer, EngineContainerSummary, EngineExecOptions, Engine
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import { formatExtensionRecord } from '../core/vscodeExtensions';
 import { markServerOpened, serverCommitsUrl, serverFolder, serverLockFile, serverScriptName, type StoreLockAttempt, type VscodeStoreDeps } from '../core/worker/vscodeServerStore';
+import type { RunReport } from '../core/remoteMonitor/runReport';
 import { BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
 import { SERVER_UNUSED_MS, type CacheRunState } from './backgroundRules';
 
@@ -79,6 +80,8 @@ function harness(options: {
   vscode?: false;
   /** The list of the containers that mount the store fails. */
   storeContainers?: Error;
+  /** The keeping of the report of the run fails. */
+  reportFails?: Error;
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-background-'));
   temps.push(root);
@@ -96,6 +99,7 @@ function harness(options: {
   const topped: string[] = [];
   let state: CacheRunState = options.state ?? {};
   const imagesCalled: number[] = [];
+  const reports: RunReport[] = [];
   const transport: HttpTransport = {
     request: async (request) => {
       requests.push(request);
@@ -187,8 +191,14 @@ function harness(options: {
     },
     vscode: () => (options.vscode === false ? undefined : vscode),
     state: stateStore,
+    reports: {
+      add: async (report) => {
+        if (options.reportFails) throw options.reportFails;
+        reports.push(report);
+      },
+    },
   });
-  return { run, root, stateDir, log, requests, fetched, execs, inspected, locks, released, listed: () => listed, topped, state: () => state, imagesCalled };
+  return { run, root, stateDir, log, requests, fetched, execs, inspected, locks, released, listed: () => listed, topped, state: () => state, imagesCalled, reports };
 }
 
 const linkCommand = (server: string, quality = 'stable') => scriptCommand('vscodeServerLink', [server, quality, 'linux-x64']);
@@ -583,5 +593,56 @@ describe('the monitor volume of the background run', () => {
     expect(h.log).not.toContain('No open recorded an extension list in the last 14 days; no extension is fetched.');
     // The fetched server of the harness has no product.json: the part reads the list and stops at the version.
     expect(h.log).toContain('The shared store has no stable VS Code server for linux-x64, so the compatible extension versions are not known; no extension is fetched.');
+  });
+});
+
+// The short report of each run (docs/requirements.md R-DS-003): what the parts did, kept in the volume of the Monitor.
+describe('the report of the background run', () => {
+  const containers: Container[] = [{ id: 'a', name: 'dev-a', state: 'running', mounts: [STORE_MOUNT], labels: { 'devcontainer.metadata': METADATA } }];
+  const at = new Date(NOW).toISOString();
+
+  it('names the server that it fetched, the containers that it was linked into, the versions removed and the part that failed', async () => {
+    const h = harness({ images: async () => Promise.reject(new Error('registry down')), commits: { stable: [C5, C4, C3, C2, C1] }, containers });
+    for (const n of [1, 2, 3, 4]) await readyServer(h.root, { commit: commit(n), quality: 'stable' });
+    await h.run.run();
+    expect(h.reports).toEqual([
+      {
+        startedAt: at,
+        endedAt: at,
+        reachedNetwork: true,
+        events: {
+          serverDownloaded: { count: 1, items: [`${C5} (stable, linux-x64)`] },
+          serverLinked: { count: 1, items: [`${C5} into dev-a`] },
+          serverRemoved: { count: 3, items: [C3, C2, C1].map((c) => `${c} (stable, linux-x64)`) },
+          partFailed: { count: 1, items: ['the images: registry down'] },
+        },
+      },
+    ]);
+    // The report is kept before the last line of the run.
+    expect(h.log.at(-1)).toBe('The background run ended.');
+  });
+
+  it('a fetch that failed, and an update service that did not answer', async () => {
+    const failed = harness({ commits: { stable: [C2, C1] }, fetch: () => false });
+    await failed.run.run();
+    expect(failed.reports[0]!.events).toEqual({ serverDownloadFailed: { count: 1, items: [`${C2} (stable, linux-x64)`] } });
+    const offline = harness({ commits: { stable: Object.assign(new Error('getaddrinfo ENOTFOUND update.code.visualstudio.com'), { code: 'ENOTFOUND' }) } });
+    expect(await offline.run.run()).toBe(false);
+    expect(offline.reports[0]).toMatchObject({
+      reachedNetwork: false,
+      events: { serverCheckFailed: { count: 1, items: ['stable (linux-x64): getaddrinfo ENOTFOUND update.code.visualstudio.com'] } },
+    });
+  });
+
+  it('a run with nothing to do has a report without events', async () => {
+    const h = harness({ vscode: false });
+    await h.run.run();
+    expect(h.reports).toEqual([{ startedAt: at, endedAt: at, reachedNetwork: true, events: {} }]);
+  });
+
+  it('a report that cannot be kept is one line, and the run ends as before', async () => {
+    const h = harness({ vscode: false, reportFails: new Error('no space left on device') });
+    expect(await h.run.run()).toBe(true);
+    expect(h.log.slice(-2)).toEqual(['The report of the background run could not be kept in the volume: no space left on device', 'The background run ended.']);
   });
 });

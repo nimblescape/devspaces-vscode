@@ -20,7 +20,9 @@ import { storeWorkerScript, workerScriptPath } from '../core/remoteMonitor/worke
 import type { EngineImage } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import { ChannelServer, type OperationContext } from '../helperChannel/server';
+import { RunReportBuilder } from '../core/remoteMonitor/runReport';
 import type { PrepareEngine } from './engine';
+import { withRunNotes } from './runNotes';
 import {
   PREPARE_OPERATION_TIMEOUT_MS,
   PREPARE_WORKER_PATH,
@@ -153,8 +155,15 @@ describe('the part "prepares" of the background run', () => {
     };
     const { worker, events, most } = fakeWorker(async (id) => answers[id]);
     const lines: string[] = [];
-    await prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => 0, lastUsed: async () => new Map([[C, 3], [A, 2]]), worker: () => worker });
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => 0, lastUsed: async () => new Map([[C, 3], [A, 2]]), worker: () => worker }));
     expect(events).toEqual(['open', `prepare ${C}`, `prepare ${A}`, `prepare ${B}`, 'close']);
+    // The report of the run (R-DS-003): a prepare stopped by its time limit counts as failed.
+    expect(notes.finish(0, true).events).toEqual({
+      devspacePrepared: { count: 1, items: [REPO_A] },
+      devspacePrepareSkipped: { count: 1, items: [`${REPO_B}: its images are current (no update)`] },
+      devspacePrepareFailed: { count: 1, items: [`${REPO_C}: stopped by its time limit`] },
+    });
     expect(most()).toBe(1);
     expect(lines).toEqual([
       `${REPO_C}: the prepare was stopped after 30 min 0 s by its time limit; the next open builds it.`,
@@ -171,7 +180,11 @@ describe('the part "prepares" of the background run', () => {
     });
     const lines: string[] = [];
     let clock = 0;
-    await prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => (clock += 1000), lastUsed: async () => new Map(), worker: () => worker });
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => (clock += 1000), lastUsed: async () => new Map(), worker: () => worker }));
+    expect(notes.finish(0, true).events).toEqual({
+      devspacePrepareFailed: { count: 2, items: [`${REPO_A}: the helper channel was lost`, `${REPO_B}: the lockfile does not match at line 2`] },
+    });
     expect(events).toEqual(['open', `prepare ${A}`, 'close', 'open', `prepare ${B}`, 'close']);
     expect(lines).toEqual([`${REPO_A}: the prepare failed after 1 s: the helper channel was lost.`, `${REPO_B}: the prepare failed after 1 min 1 s: the lockfile does not match at line 2.`]);
   });
@@ -179,8 +192,10 @@ describe('the part "prepares" of the background run', () => {
   it('without a worker script, one line and no prepare; without a devspace, no worker', async () => {
     const lines: string[] = [];
     const { engine } = fakeEngine(volume(REPO_A, A));
-    await prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => 0, lastUsed: async () => new Map(), worker: () => ({ reason: 'the worker script 0123 is not in the volume' }) });
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => 0, lastUsed: async () => new Map(), worker: () => ({ reason: 'the worker script 0123 is not in the volume' }) }));
     expect(lines).toEqual(['No devspace image is prepared: the worker script 0123 is not in the volume.']);
+    expect(notes.finish(0, true).events).toEqual({ devspacePrepareSkipped: { count: 1, items: ['1 devspace(s): the worker script 0123 is not in the volume'] } });
     const none = fakeEngine({});
     const { worker, events } = fakeWorker();
     await prepareDevspaces({ engine: none.engine, log: () => {}, monotonic: () => 0, lastUsed: async () => new Map(), worker: () => worker });
@@ -191,7 +206,11 @@ describe('the part "prepares" of the background run', () => {
     const { engine } = fakeEngine({ ...volume(REPO_A, A), ...volume(REPO_B, B) });
     const lines: string[] = [];
     const worker: PrepareWorker = { open: async () => Promise.reject(new Error('no answer within 120 seconds')) };
-    await prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => 0, lastUsed: async () => new Map(), worker: () => worker });
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => prepareDevspaces({ engine, log: (line) => lines.push(line), monotonic: () => 0, lastUsed: async () => new Map(), worker: () => worker }));
+    expect(notes.finish(0, true).events).toEqual({
+      devspacePrepareFailed: { count: 2, items: ['2 devspace(s): the worker of the prepares could not be started: no answer within 120 seconds'] },
+    });
     expect(lines).toEqual(['The worker of the prepares could not be started, so 2 devspace(s) are prepared at the next run: no answer within 120 seconds.']);
   });
 
@@ -235,8 +254,12 @@ describe('the stale prepared images', () => {
       { [ID_3]: ['f'.repeat(64)] },
     );
     const lines: string[] = [];
-    await removeStalePreparedImages(engine, (line) => lines.push(line));
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => removeStalePreparedImages(engine, (line) => lines.push(line)));
     expect(removed).toEqual([preparedImageName(REPO_B, B)]);
+    expect(notes.finish(0, true).events).toEqual({
+      engineObjectRemoved: { count: 1, items: [`the prepared image ${preparedImageName(REPO_B, B)} of a devspace without a volume`] },
+    });
     expect(lines).toEqual([
       `Removed the prepared image ${preparedImageName(REPO_B, B)}: its devspace ${B} has no volume on this engine.`,
       `The prepared image ${preparedImageName(REPO_C, C)} of the removed devspace ${C} stays: a container uses it.`,

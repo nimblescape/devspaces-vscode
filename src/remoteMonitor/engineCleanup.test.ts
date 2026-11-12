@@ -7,11 +7,13 @@
 import { describe, expect, it } from 'vitest';
 import { SWEEP_FILTERS } from '../core/helperChannel/protocol';
 import { LABEL_HELPER } from '../core/names';
+import { RunReportBuilder } from '../core/remoteMonitor/runReport';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import type { EngineFilters, EngineImage } from '../core/worker/dockerEngine';
 import { BUILD_CACHE_UNUSED_FILTER, HELPER_TAG_UNUSED_MS, parseCleanupState } from './cleanupRules';
 import { EngineCleanup, type EngineCleanupDeps } from './engineCleanup';
 import type { ReferencesInUse } from './images';
+import { withRunNotes } from './runNotes';
 
 const OWN = 'devspaces-worker:aaaaaaaaaaaa';
 const OWN_MONITOR = 'devspaces-monitor:aaaaaaaaaaaa';
@@ -175,8 +177,16 @@ describe('EngineCleanup', () => {
   it('a first pass removes the stopped helper containers, the earlier builds and the older build images, and records the rest', async () => {
     const t = setup();
     typicalEngine(t.engine);
-    await t.cleanup.pass();
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => t.cleanup.pass());
     expect(t.engine.prunes).toEqual([{ what: 'containers', filters: SWEEP_FILTERS }]);
+    // The report of the run (R-DS-003): each object that the cleanup removed.
+    expect(notes.finish(0, true).events).toEqual({
+      engineObjectRemoved: {
+        count: 3,
+        items: ['1 stopped helper container', 'the earlier build eeeeeeeeeeee of the workspace helper image', 'the build image devspaces-buildx:0.29.1 of an older version'],
+      },
+    });
     // The earlier build, and the build image of the older version. The helper tag OLD is new to the record: its grace
     // period starts; node 24 is still the base of OLD.
     expect(t.engine.removals).toEqual([id('e'), 'devspaces-buildx:0.29.1']);
@@ -320,7 +330,9 @@ describe('EngineCleanup', () => {
 
   it('prunes the build cache that no build used for 7 days only on the VM of Devspaces', async () => {
     const t = setup({ vm: true });
-    await t.cleanup.pass();
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => t.cleanup.pass());
+    expect(notes.finish(0, true).events.engineObjectRemoved?.items).toContain('3 records of the build cache (5 MB)');
     expect(t.engine.prunes).toEqual([
       { what: 'containers', filters: SWEEP_FILTERS },
       { what: 'build cache', filters: { until: [BUILD_CACHE_UNUSED_FILTER] } },

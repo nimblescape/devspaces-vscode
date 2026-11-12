@@ -63,6 +63,7 @@ import { STORE_SERVER_FOLDER, isServerReady, serverPlatform, storeLock, storeTry
 import type { RunNetwork } from './backgroundRules';
 import { isNetworkError, isServerAnswer } from '../core/networkFailure';
 import { engineFailure } from './engine';
+import { noteRun } from './runNotes';
 
 /**
  * The most rounds of the dependencies in one run (a dependency that a round finds is asked for in the next one; one
@@ -201,6 +202,7 @@ export async function downloadExtensions(deps: ExtensionRunDeps): Promise<void> 
   const counts = { downloaded: 0, present: 0, failed: 0 };
   const fail = (ref: ExtensionRef, why: string, cause?: unknown) => {
     counts.failed++;
+    noteRun('extensionDownloadFailed', `${extensionEntryText(ref)}: ${why}`);
     // A failure of the network while the run reached no server waits for no day: the next run (its retry, or the next
     // time of the schedule when a later part reaches a server) tries it again.
     if (cause !== undefined && deps.network?.failed(cause) === true) {
@@ -239,6 +241,8 @@ export async function downloadExtensions(deps: ExtensionRunDeps): Promise<void> 
           unreachable = true;
           deps.network?.failed(error);
         } else if (isServerAnswer(error)) deps.network?.reached();
+        // Its entries are left for the next run (no entry of `failures`); the report counts them as failed.
+        noteRun('extensionDownloadFailed', `${unpinned.length} extension(s): the Marketplace could not be asked: ${message(error)}`, unpinned.length);
         log(queryFailure(unpinned.length, error));
       }
       for (const ref of answer !== undefined ? unpinned : []) {
@@ -352,7 +356,10 @@ export async function downloadExtensions(deps: ExtensionRunDeps): Promise<void> 
       const outcome = await ensureExtension(storeDeps, chosen, signal);
       counts[outcome]++;
       inStore(ref, chosen);
-      if (outcome === 'downloaded') log(`Downloaded the extension ${chosen.cacheName} into the shared extension cache.`);
+      if (outcome === 'downloaded') {
+        noteRun('extensionDownloaded', chosen.cacheName);
+        log(`Downloaded the extension ${chosen.cacheName} into the shared extension cache.`);
+      }
     } catch (error) {
       // After an answer of the Marketplace (the run reached the network): a failed download waits a day.
       fail(ref, error instanceof Error ? error.message : String(error));
@@ -427,6 +434,7 @@ export async function cleanupExtensions(deps: ExtensionRunDeps): Promise<void> {
           if ((await fs.promises.lstat(file).catch(() => undefined))?.isFile() !== true) continue;
           await fs.promises.rm(file, { force: true });
           removed++;
+          noteRun('extensionRemoved', name);
         } catch (error) {
           log(`The extension ${name} could not be removed from the shared extension cache: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
