@@ -224,10 +224,11 @@ class Workbench {
 /**
  * The rectangle on the screen of the element of `spec`, run in the workbench page, or undefined while it is not
  * visible. `spec`: `{ activity }` an item of the activity bar; `{ button }` a button of the window (a welcome view, a
- * dialog); `{ paneHeader }` the header of the pane with that index in the side bar; `{ row, pane, under, prefix }` a row
- * of the side bar with that label (`prefix`: the label starts with it), in the pane with that index, below the row
- * `under`; `{ rowAction, row, pane }` the action of a row; `{ tab, preview }` an editor tab, in preview (italic) or
- * not; `{ explorer }` a row of the Explorer; `{ text }` an element of the editor area with that text.
+ * dialog); `{ paneHeader, expanded }` the header of the pane with that index in the side bar, open or closed;
+ * `{ row, pane, under, prefix, expanded }` a row of the side bar with that label (`prefix`: the label starts with it),
+ * in the pane with that index, below the row `under`, open or closed; `{ rowAction, row, pane }` the action of a row;
+ * `{ tab, preview }` an editor tab, in preview (italic) or not; `{ explorer }` a row of the Explorer; `{ text }` an
+ * element of the editor area with that text.
  */
 function locate(spec) {
   const zoom = window.devicePixelRatio;
@@ -239,8 +240,13 @@ function locate(spec) {
   const text = (element) => (element?.textContent ?? '').replace(/\u00a0/g, ' ').trim();
   if (spec.activity) return screen(document.querySelector(`.activitybar .action-item .action-label[aria-label^="${spec.activity}"]`));
   if (spec.button) return screen([...document.querySelectorAll('.monaco-button, .monaco-dialog-box button')].find((b) => text(b) === spec.button && b.getBoundingClientRect().width > 0));
-  const panes = [...document.querySelectorAll('.part.sidebar .pane')];
-  if (spec.paneHeader !== undefined) return screen(panes[spec.paneHeader]?.querySelector('.pane-header'));
+  // The panes of the view container that the side bar shows: the side bar keeps the panes of the other containers hidden.
+  const panes = [...document.querySelectorAll('.part.sidebar .pane')].filter((pane) => pane.getBoundingClientRect().height > 0);
+  if (spec.paneHeader !== undefined) {
+    const header = panes[spec.paneHeader]?.querySelector('.pane-header');
+    if (spec.expanded !== undefined && header?.getAttribute('aria-expanded') !== String(spec.expanded)) return undefined;
+    return screen(header);
+  }
   if (spec.row !== undefined) {
     const rows = [...(panes[spec.pane ?? 0]?.querySelectorAll('.monaco-list-row') ?? [])];
     let start = 0;
@@ -282,8 +288,15 @@ async function setUp(ui) {
   await placeWindow();
   await ui.find({ activity: 'Devspaces' }, 120_000);
   await wait(3000);
-  // A click on Explorer and the drag of the edge of the side bar make it 560 pixels wide.
   await click(await ui.find({ activity: 'Explorer' }), { ms: 1 });
+  await widenSideBar(ui);
+}
+
+/**
+ * The drag of the edge of the side bar makes it 560 pixels wide. The window of the devspace (another workspace) starts
+ * with the default width again.
+ */
+async function widenSideBar(ui) {
   const edge = await ui.evaluate(() => {
     const r = document.querySelector('.part.sidebar').getBoundingClientRect();
     return { x: r.right * window.devicePixelRatio, y: (r.top + r.height / 2) * window.devicePixelRatio };
@@ -294,6 +307,23 @@ async function setUp(ui) {
   xdo('mouseup', 1);
   jump(SCREEN.width - 40, SCREEN.height - 20);
   await wait(1000);
+}
+
+/** The view container `title` in the side bar: a click on its item of the activity bar, unless it shows already. */
+async function showContainer(ui, title) {
+  const shown = await ui.evaluate(() => document.querySelector('.part.sidebar .title-label h2')?.textContent?.trim() ?? '');
+  if (shown.toLowerCase() !== title.toLowerCase()) await click(await ui.find({ activity: title }));
+}
+
+/**
+ * The row or pane header of `spec` (locate) open (`expanded` true) or closed: a click on it when it is not, and the wait
+ * until it is. VS Code opens the groups of a host in the view Docker Hosts by itself.
+ */
+async function setExpanded(ui, spec, expanded, timeoutMs = 30_000) {
+  const rect = await ui.find(spec, timeoutMs);
+  if (await ui.evaluate(locate, { ...spec, expanded })) return;
+  await click(rect);
+  await ui.find({ ...spec, expanded }, 10_000);
 }
 
 /** The palette command `title`, run with the keyboard (only where the take cuts it out). */
@@ -312,12 +342,20 @@ async function paletteCommand(title) {
  */
 async function openedDevspace(ui) {
   const deadline = Date.now() + OPEN_TIMEOUT_MS;
+  let indicator = '';
   while (!(await ui.find({ explorer: 'index.html' }, 2_000).catch(() => undefined))) {
-    if (Date.now() > deadline) throw new Error(`The window of the devspace did not open within ${OPEN_TIMEOUT_MS / 60_000} minutes.`);
+    if (Date.now() > deadline) throw new Error(`The window of the devspace did not open within ${OPEN_TIMEOUT_MS / 60_000} minutes (remote indicator "${indicator}").`);
     const allow = await ui.find({ button: 'Allow' }, 1_000).catch(() => undefined);
     if (allow) {
       log('The window of the devspace asked for the sign-in: Allow.');
       await click(allow, { ms: 200 });
+    }
+    // Connected, but the side bar shows another view than the Explorer: the Explorer shows the files.
+    const now = await ui.evaluate(() => document.querySelector('.statusbar-item.remote-kind')?.textContent?.trim() ?? '').catch(() => '');
+    if (now !== indicator) log(`Remote indicator: "${now}"`);
+    indicator = now;
+    if (indicator !== '' && !/opening|connecting|reconnecting|open a remote/i.test(indicator) && !(await ui.evaluate(() => !!document.querySelector('.explorer-folders-view')).catch(() => true))) {
+      await click(await ui.find({ activity: 'Explorer' }), { ms: 200 });
     }
   }
 }
@@ -361,21 +399,23 @@ async function take(ui, video) {
     await shot('2-opening');
     await openedDevspace(ui);
     await wait(4000);
+    await widenSideBar(ui);
     await paletteCommand('Notifications: Clear All Notifications');
     await wait(1000);
     cuts.push({ ...cut, to: Date.now() - recording.started });
     await wait(2500);
     await shot('2');
-    // 3: the view Docker Hosts with the objects of the host; the pane of the repositories closes.
+    // 3: the view Docker Hosts with the objects of the host; the pane of the repositories and the images close.
     scene(3);
-    await click(await ui.find({ activity: 'Devspaces' }));
+    await showContainer(ui, 'Devspaces');
     await wait(1200);
-    await click(await ui.find({ paneHeader: 0 }));
+    await setExpanded(ui, { paneHeader: 0 }, false);
     await wait(800);
-    await click(await ui.find({ row: 'school-server', pane: 1 }));
-    await click(await ui.find({ row: 'Containers', pane: 1 }, 60_000));
-    await wait(600);
-    await click(await ui.find({ row: 'Volumes', pane: 1 }));
+    await setExpanded(ui, { row: 'school-server', pane: 1 }, true);
+    await ui.find({ row: 'Containers', pane: 1, expanded: true }, 60_000);
+    await wait(1500);
+    await setExpanded(ui, { row: 'Images', pane: 1 }, false);
+    await ui.find({ row: 'Volumes', pane: 1, expanded: true });
     await move(SCREEN.width - 40, SCREEN.height - 20, 600);
     await wait(2500);
     await shot('3');
@@ -416,7 +456,7 @@ async function take(ui, video) {
 
 /** The label of the row of `spec` (locate), run in the workbench page. */
 function locateLabel(spec) {
-  const panes = [...document.querySelectorAll('.part.sidebar .pane')];
+  const panes = [...document.querySelectorAll('.part.sidebar .pane')].filter((pane) => pane.getBoundingClientRect().height > 0);
   const labels = [...(panes[spec.pane ?? 0]?.querySelectorAll('.monaco-list-row .label-name') ?? [])].map((l) => l.textContent.trim());
   return labels.find((label) => (spec.prefix ? label.startsWith(spec.row) : label === spec.row));
 }

@@ -17,7 +17,8 @@
 # screenshot of each scene and the logs as the artifact "readme-gif"; it gets no
 # write scope. The job "commit" then commits the GIF to the branch of the run,
 # never to the default branch, and the screenshots and logs of the run to
-# test/gif/last-run/. A pull request that changes the recorder records too.
+# docs/readme-gif-run/, a path where its push starts no workflow. A pull
+# request that changes the recorder records too.
 
 name: README GIF
 
@@ -66,6 +67,10 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends xvfb xdotool ffmpeg fonts-inter
+
+      # The runner comes with images of GitHub, which the view Docker Hosts would list in the GIF. No container uses them.
+      - name: Remove the images of the runner
+        run: docker image prune --all --force
 
       - name: Prepare the Docker engine, the demo devspace and the test VS Code
         env:
@@ -130,16 +135,16 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           files="$RUNNER_TEMP/readme-gif"
-          rm -rf test/gif/last-run
-          mkdir -p test/gif/last-run docs/images
-          cp "$files"/*.png "$files"/*.log "$files"/take.mkv.marks.json test/gif/last-run/ 2>/dev/null || true
+          rm -rf docs/readme-gif-run
+          mkdir -p docs/readme-gif-run docs/images
+          cp "$files"/*.png "$files"/*.log "$files"/take.mkv.marks.json docs/readme-gif-run/ 2>/dev/null || true
           if [[ "$RESULT" == success && -f "$files/devspaces.gif" ]]; then
             cp "$files/devspaces.gif" docs/images/devspaces.gif
             message="Record the README GIF"
           else
             message="The README GIF failed: the screenshots and logs of the run"
           fi
-          git add -A docs/images test/gif/last-run
+          git add -A docs/images docs/readme-gif-run
           if git diff --cached --quiet; then
             echo "Nothing changed."
             exit 0

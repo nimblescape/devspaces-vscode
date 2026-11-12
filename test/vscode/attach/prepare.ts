@@ -384,10 +384,11 @@ async function sshHostDocker(dockerPath: string, host: string): Promise<Bootstra
 /**
  * The engine host (ENGINE_HOST_START) with the Docker socket of the runner, and the host ENGINE_HOST in the SSH config
  * of the runner. .vscode-test.mjs makes it the Docker host of Devspaces in its storage folder, as "Use a Remote Docker
- * Host…" does. The check that its engine is the engine of the runner: a volume that only the runner made.
+ * Host…" does. The check that its engine is the engine of the runner: a volume that only the runner made. `options`: more
+ * options of its `docker run`.
  */
-async function prepareEngineHost(local: BootstrapDocker, dockerPath: string, host = ENGINE_HOST, container = ENGINE_HOST_CONTAINER): Promise<void> {
-  await startSshHost(local, host, container, ['--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock'], ENGINE_HOST_START);
+async function prepareEngineHost(local: BootstrapDocker, dockerPath: string, host = ENGINE_HOST, container = ENGINE_HOST_CONTAINER, options: string[] = []): Promise<void> {
+  await startSshHost(local, host, container, ['--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock', ...options], ENGINE_HOST_START);
   const remote = await sshHostDocker(dockerPath, host);
   const mark = `attach-test-engine-${crypto.randomBytes(3).toString('hex')}`;
   await local.runChecked(['volume', 'create', mark]);
@@ -399,10 +400,12 @@ async function prepareEngineHost(local: BootstrapDocker, dockerPath: string, hos
 /**
  * The run `gif`: the README GIF (test/gif/record.mjs). The engine host has the name GIF_HOST, as a server of a school,
  * and the devspace is the demo repository GIF_REPOSITORY with a small web page, without container. Its image is built
- * once here, so that the build at the start in the GIF finds its layers in the cache.
+ * once here, so that the build at the start in the GIF finds its layers in the cache. The folder /var/lib/docker of the
+ * engine host (a volume of its image docker:dind, which its engine does not use) is a tmpfs, so that the view Docker
+ * Hosts shows no volume without a name.
  */
 async function prepareGif(docker: BootstrapDocker, dockerPath: string, started: number): Promise<Record<string, unknown>> {
-  await prepareEngineHost(docker, dockerPath, GIF_HOST, GIF_HOST_CONTAINER);
+  await prepareEngineHost(docker, dockerPath, GIF_HOST, GIF_HOST_CONTAINER, ['--mount', 'type=tmpfs,destination=/var/lib/docker']);
   const { devspaceId, name, folder } = await seedDevspace(docker, await helperImage(docker, started), GIF_REPOSITORY, GIF_FILES);
   await docker.runChecked(['build', '-t', GIF_WARM_IMAGE, '-'], { input: DOCKERFILE, timeoutMs: 300_000 });
   return { gif: { repository: GIF_REPOSITORY, volumeName: name, folder, devspaceId, remoteHost: GIF_HOST, computerId: newComputerId(), accountId: TEST_ACCOUNT_ID } };
