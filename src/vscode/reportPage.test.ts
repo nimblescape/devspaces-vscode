@@ -306,18 +306,18 @@ describe('Show Log of the Monitor', () => {
     let flow = false;
     h.readMonitorLog.mockImplementation(async () => {
       flow = sshPromptsAllowed();
-      return '2026-11-12T06:00:00.000000000Z run started';
+      return '2026-11-12 07:00:00.000 2026-11-12 07:00:00.000 run started';
     });
     h.pages.show(row('lab', monitor));
     await flush();
     panels()[0].receive({ type: 'showLog' });
     await flush();
-    expect(h.readMonitorLog).toHaveBeenCalledWith('lab');
+    expect(h.readMonitorLog).toHaveBeenCalledWith('lab', 'Europe/Vienna');
     expect(flow).toBe(true);
     const [document] = fakeVscode.window.showTextDocument.mock.calls[0] as [{ uri: { scheme: string; path: string }; languageId: string; getText(): string }, unknown];
     expect(document.uri).toMatchObject({ scheme: MONITOR_LOG_SCHEME, path: '/lab/devspaces-monitor.log' });
     expect(document.languageId).toBe('log');
-    expect(document.getText()).toBe('2026-11-12T06:00:00.000000000Z run started\n');
+    expect(document.getText()).toBe('2026-11-12 07:00:00.000 2026-11-12 07:00:00.000 run started\n');
     expect(fakeVscode.window.showTextDocument.mock.calls[0][1]).toEqual({ preview: false });
   });
 

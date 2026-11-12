@@ -37,8 +37,8 @@ export interface ReportPagesDeps {
   startVm: () => Promise<void>;
   /** The report of `target`, read now on the shared shell of its host (readResourceReport). */
   read: (target: ReportTarget, clock: ReportClock) => Promise<ReportContent>;
-  /** The last lines of the log of the Monitor of `host` (readMonitorLog on the shared shell of the host). */
-  readMonitorLog: (host: string) => Promise<string>;
+  /** The last lines of the log of the Monitor of `host`, with times in `timeZone` (readMonitorLog on the shared shell of the host). */
+  readMonitorLog: (host: string, timeZone: string) => Promise<string>;
   /** Now, and the time zone of this computer, in which the page gives times. */
   clock: () => ReportClock;
 }
@@ -93,7 +93,7 @@ export class ReportPages implements vscode.Disposable {
   private async showLog(host: string): Promise<void> {
     let text: string;
     try {
-      text = await withSshPrompts(() => this.deps.readMonitorLog(host));
+      text = await withSshPrompts(() => this.deps.readMonitorLog(host, this.deps.clock().timeZone));
     } catch (error) {
       if (isAbortError(error)) return;
       const detail = errorMessage(error);
