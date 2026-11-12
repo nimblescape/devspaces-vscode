@@ -58,8 +58,8 @@ export const GIT_BRANCH_FUNCTION = `git_branch() {
 /**
  * The branch of the repository folder `$1` (GIT_BRANCH_FUNCTION) as one line, empty for a detached HEAD; exit code 127
  * without Git, and that of Git when it fails. The script `branch` of the registry, which readBranch runs
- * (refreshStates.ts: the sidebar, an attached window, the branch after an open) in the running dev container as its
- * user, with the hardening of GIT_SUMMARY_SCRIPT (GIT_SCRIPT_PRELUDE).
+ * (refreshStates.ts: the sidebar when GIT_SUMMARY_SCRIPT fails, an attached window, the branch after an open) in the
+ * running dev container as its user, with the hardening of GIT_SUMMARY_SCRIPT (GIT_SCRIPT_PRELUDE).
  */
 export const GIT_BRANCH_SCRIPT = `${GIT_SCRIPT_PRELUDE}${GIT_BRANCH_FUNCTION}git_branch
 printf '%s\\n' "$branch"
@@ -73,8 +73,10 @@ printf '%s\\n' "$branch"
  * upstream).
  *
  * The script runs in the running dev container as its user (`remoteUser`): before the release of a window on close or
- * switch, and after an open or a stop (and before Delete's confirmation when the container runs). Delete runs no Git
- * anywhere else: no workspace helper runs this script.
+ * switch, after an open or a stop (and before Delete's confirmation when the container runs), and at each refresh of
+ * the states of the sidebar for each running dev container whose branch the sidebar shows (readRunningGitState in
+ * refreshStates.ts: the branch and the counts of the row, R-DS-001). Delete runs no Git anywhere else: no workspace
+ * helper runs this script.
  *
  * Git runs as GIT_SCRIPT_PRELUDE sets it up (no hooks, no fsmonitor, no optional locks, no program for signatures, the C
  * locale). The branch is read by GIT_BRANCH_FUNCTION, the same function as GIT_BRANCH_SCRIPT; a failed read of it is an

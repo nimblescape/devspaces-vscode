@@ -322,37 +322,57 @@ describe('the refresh operation', () => {
     expect(parseRefreshValue(JSON.parse(JSON.stringify(value)), params)).toEqual(EXPECTED_STATES);
     const running = { id: ENV_API, container: 'running', volume: true };
     const one = parseRefreshParams({ devspaces: [env] })!;
-    expect(parseRefreshValue({ runtime: [running], branches: [{ id: ENV_API, branch: 'main' }] }, one)).toEqual({
+    const counts = { id: ENV_API, uncommittedFiles: 1, unpushedCommits: 3, stashes: 0 };
+    expect(parseRefreshValue({ runtime: [running], branches: [{ id: ENV_API, branch: 'main' }], changes: [counts] }, one)).toEqual({
       runtime: new Map([[ENV_API, { container: 'running', volume: true }]]),
       branches: new Map([[ENV_API, 'main']]),
+      changes: new Map([[ENV_API, { uncommittedFiles: 1, unpushedCommits: 3, stashes: 0 }]]),
     });
     for (const bad of [
       undefined,
       { runtime: [running] },
-      { runtime: [running], branches: [], other: 1 },
+      { runtime: [running], branches: [] },
+      { runtime: [running], branches: [], changes: [], other: 1 },
       // Missing, duplicate, or unknown devspaces.
-      { runtime: [], branches: [] },
-      { runtime: [running, running], branches: [] },
-      { runtime: [{ ...running, id: ENV_WEB }], branches: [] },
+      { runtime: [], branches: [], changes: [] },
+      { runtime: [running, running], branches: [], changes: [] },
+      { runtime: [{ ...running, id: ENV_WEB }], branches: [], changes: [] },
       // Invalid states.
-      { runtime: [{ ...running, container: 'paused' }], branches: [] },
-      { runtime: [{ ...running, volume: 'yes' }], branches: [] },
-      { runtime: [{ ...running, servicesRunning: false }], branches: [] },
-      { runtime: [{ ...running, extra: 1 }], branches: [] },
+      { runtime: [{ ...running, container: 'paused' }], branches: [], changes: [] },
+      { runtime: [{ ...running, volume: 'yes' }], branches: [], changes: [] },
+      { runtime: [{ ...running, servicesRunning: false }], branches: [], changes: [] },
+      { runtime: [{ ...running, extra: 1 }], branches: [], changes: [] },
       // Branches of another devspace, of a container that does not run, or invalid names.
-      { runtime: [running], branches: [{ id: ENV_WEB, branch: 'main' }] },
-      { runtime: [{ ...running, container: 'stopped' }], branches: [{ id: ENV_API, branch: 'main' }] },
-      { runtime: [running], branches: [{ id: ENV_API, branch: 'main' }, { id: ENV_API, branch: 'main' }] },
-      { runtime: [running], branches: [{ id: ENV_API, branch: '' }] },
-      { runtime: [running], branches: [{ id: ENV_API, branch: ' main' }] },
-      { runtime: [running], branches: [{ id: ENV_API, branch: 'a\nb' }] },
-      { runtime: [running], branches: [{ id: ENV_API, branch: 'b'.repeat(MAX_REFRESH_BRANCH_LENGTH + 1) }] },
+      { runtime: [running], branches: [{ id: ENV_WEB, branch: 'main' }], changes: [] },
+      { runtime: [{ ...running, container: 'stopped' }], branches: [{ id: ENV_API, branch: 'main' }], changes: [] },
+      { runtime: [running], branches: [{ id: ENV_API, branch: 'main' }, { id: ENV_API, branch: 'main' }], changes: [] },
+      { runtime: [running], branches: [{ id: ENV_API, branch: '' }], changes: [] },
+      { runtime: [running], branches: [{ id: ENV_API, branch: ' main' }], changes: [] },
+      { runtime: [running], branches: [{ id: ENV_API, branch: 'a\nb' }], changes: [] },
+      { runtime: [running], branches: [{ id: ENV_API, branch: 'b'.repeat(MAX_REFRESH_BRANCH_LENGTH + 1) }], changes: [] },
+      // Change counts of another devspace, of a container that does not run, twice, or that are no whole numbers from 0.
+      { runtime: [running], branches: [], changes: [{ ...counts, id: ENV_WEB }] },
+      { runtime: [{ ...running, container: 'stopped' }], branches: [], changes: [counts] },
+      { runtime: [running], branches: [], changes: [counts, counts] },
+      { runtime: [running], branches: [], changes: [{ ...counts, uncommittedFiles: -1 }] },
+      { runtime: [running], branches: [], changes: [{ ...counts, unpushedCommits: 1.5 }] },
+      { runtime: [running], branches: [], changes: [{ ...counts, stashes: '2' }] },
+      { runtime: [running], branches: [], changes: [{ ...counts, unpushedCommits: Number.MAX_SAFE_INTEGER + 1 }] },
+      { runtime: [running], branches: [], changes: [{ id: ENV_API, uncommittedFiles: 1, unpushedCommits: 3 }] },
+      { runtime: [running], branches: [], changes: [{ ...counts, extra: 1 }] },
+      { runtime: [running], branches: [], changes: {} },
     ]) {
       expect(parseRefreshValue(bad, one)).toBeUndefined();
     }
-    // No branch of a devspace whose branch was not asked for.
+    // No branch and no change counts of a devspace whose Git state was not asked for.
     const notAsked = parseRefreshParams({ devspaces: [{ ...env, branch: false }] })!;
-    expect(parseRefreshValue({ runtime: [running], branches: [{ id: ENV_API, branch: 'main' }] }, notAsked)).toBeUndefined();
+    expect(parseRefreshValue({ runtime: [running], branches: [{ id: ENV_API, branch: 'main' }], changes: [] }, notAsked)).toBeUndefined();
+    expect(parseRefreshValue({ runtime: [running], branches: [], changes: [counts] }, notAsked)).toBeUndefined();
+    expect(parseRefreshValue({ runtime: [running], branches: [], changes: [] }, notAsked)).toEqual({
+      runtime: new Map([[ENV_API, { container: 'running', volume: true }]]),
+      branches: new Map(),
+      changes: new Map(),
+    });
   });
 });
 

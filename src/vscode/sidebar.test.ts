@@ -13,6 +13,7 @@ import { GitHubApiError, GitHubRateLimitError } from '../core/discovery/githubAp
 import { LOCAL_DOCKER_TARGET, remoteDockerTarget } from '../core/docker/dockerHost';
 import { operationDockerTarget, runWithDockerTarget } from '../core/docker/dockerTargets';
 import { Actions, Messages, StateTexts } from '../core/messages';
+import type { GitChanges } from '../core/pipeline/refreshStates';
 import { StoragePaths } from '../core/storage/paths';
 import { DevspaceRegistry } from '../core/storage/registry';
 import { SessionFiles } from '../core/storage/sessionFiles';
@@ -152,7 +153,7 @@ function createHarness(): Harness {
   const coordinator = { devspaceId: null as string | null, otherActiveWindows: vi.fn(async (): Promise<WindowStatus[]> => []) };
   // One call for the states and the branches.
   const service = {
-    refreshStates: vi.fn(async (_branchIds: ReadonlySet<string>): Promise<{ runtime: Map<string, DevspaceRuntime> | undefined; branches: Map<string, string> }> => ({
+    refreshStates: vi.fn(async (_branchIds: ReadonlySet<string>): Promise<{ runtime: Map<string, DevspaceRuntime> | undefined; branches: Map<string, string>; changes?: Map<string, GitChanges> }> => ({
       runtime: undefined,
       branches: new Map(),
     })),
@@ -530,6 +531,25 @@ describe('Sidebar', () => {
     expect(rowOf('acme/api').branch).toBe('feature-x');
     expect(h.sidebar.liveBranch(API)).toBe('feature-x');
     expect(refreshed).toHaveBeenCalled();
+  });
+
+  // R-DS-001: the counts of work that is not on GitHub yet come with the states; a later refresh without them (a
+  // failed read) drops them, so that an outdated count does not stay.
+  it('shows the change counts of running containers that the refresh read, until a refresh reads none', async () => {
+    await h.registry.add(devspace(API, 'acme/api', { gitSummary: { branch: 'main', uncommittedFiles: 0, unpushedCommits: 0, stashes: 0, recordedAt: iso(NOW) } }));
+    await signedIn();
+    const running = new Map([[API, { container: 'running' as const, volume: true }]]);
+    h.service.refreshStates.mockResolvedValue({
+      runtime: running,
+      branches: new Map([[API, 'feature-x']]),
+      changes: new Map([[API, { uncommittedFiles: 1, unpushedCommits: 2, stashes: 0 }]]),
+    });
+    await h.sidebar.refreshStates();
+    expect(rowOf('acme/api')).toMatchObject({ description: 'feature-x   Running · 1 uncommitted · 2 unpushed', localWork: true });
+    h.service.refreshStates.mockResolvedValue({ runtime: running, branches: new Map([[API, 'feature-x']]) });
+    await h.sidebar.refreshStates();
+    expect(rowOf('acme/api').description).toBe('feature-x   Running');
+    expect(rowOf('acme/api').localWork).toBeUndefined();
   });
 
   it('reads the states and branches with one call, within one operation of the Docker target', async () => {

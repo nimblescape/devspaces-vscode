@@ -46,7 +46,7 @@ import { HelperChannelError, HelperOperationError } from '../helperChannel/helpe
 import { Steps, type ProgressStep } from '../messages';
 import { repositoryFolder, splitRepository } from '../names';
 import { isAvailableTo } from '../ownership';
-import { type DevspaceRuntimeState, type DevspaceStates, type StateDevspace } from './refreshStates';
+import { type DevspaceRuntimeState, type DevspaceStates, type GitChanges, type StateDevspace } from './refreshStates';
 import { hostAccessChecks } from '../policy/hostAccessChecks';
 import { isoTime } from '../ports';
 import type { Devspace, DevspaceSource, GitHubAccount } from '../types';
@@ -619,10 +619,11 @@ export class DevspaceOperations extends OperationBase {
   }
 
   /**
-   * The states of inspectStates and the branches of the running dev containers of `branchIds` (the sidebar: the
-   * devspaces of the account), in one worker operation (`refresh`; also outside of an operation, never directly). A
-   * worker refresh that cannot be made or fails is never read directly: the refresh fails (logged, with the cause).
-   * `runtime` is `undefined` when Docker does not run or the states could not be read; then there are no branches.
+   * The states of inspectStates and the Git state (the branches and the change counts) of the running dev containers of
+   * `branchIds` (the sidebar: the devspaces of the account), in one worker operation (`refresh`; also outside of an
+   * operation, never directly). A worker refresh that cannot be made or fails is never read directly: the refresh fails
+   * (logged, with the cause). `runtime` is `undefined` when Docker does not run or the states could not be read; then
+   * there are no branches and no change counts (`changes` is only set by a read of the worker).
    * Without a devspace on the current Docker host there is nothing to read: empty maps, without `docker info` and
    * without a worker. On an engine with the removal mark (`engineRemoved`), Docker is not asked either (no `docker
    * info`, no worker): `runtime` is `undefined`, with `engineRemoved`, so that the caller asks Docker nothing too. When
@@ -636,6 +637,7 @@ export class DevspaceOperations extends OperationBase {
   ): Promise<{
     runtime: Map<string, DevspaceRuntimeState> | undefined;
     branches: Map<string, string>;
+    changes?: Map<string, GitChanges>;
     engineRemoved?: true;
     dockerStopped?: true;
     distributionStopped?: true;

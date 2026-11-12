@@ -11,6 +11,7 @@ import {
   buildTreeModel,
   contextValue,
   devspaceState,
+  holdsLocalWork,
   recentDevspaces,
   repositoriesForPicker,
   repositoryEntriesOf,
@@ -932,21 +933,73 @@ describe('buildTreeModel', () => {
     expect(row(groups, 'acme/new').description).toBe('Stopped');
   });
 
-  it('shows the change counts only while the container does not run and the files exist', () => {
+  // R-DS-001: a devspace with work that is not on GitHub yet shows its counts, and the row has the badge (localWork).
+  it('shows the recorded change counts while the container does not run, the counts of the last refresh while it runs, and none without files', () => {
     const env = devspace('e1', 'acme/api', {
       gitSummary: summary({ uncommittedFiles: 2, unpushedCommits: 3, stashes: 1 }),
     });
-    const description = (overrides: Partial<TreeInput>) =>
-      row(buildTreeModel(input({ devspaces: [env], ...overrides })), 'acme/api').description;
-    expect(description({ runtime: runtime({ e1: { container: 'stopped', volume: true } }) })).toBe(
-      'main   Stopped · 2 uncommitted · 3 unpushed · 1 stashed',
+    const entry = (overrides: Partial<TreeInput>) => row(buildTreeModel(input({ devspaces: [env], ...overrides })), 'acme/api');
+    const look = (overrides: Partial<TreeInput>) => {
+      const found = entry(overrides);
+      return [found.description, found.localWork];
+    };
+    const live = new Map([['e1', { uncommittedFiles: 1, unpushedCommits: 0, stashes: 0 }]]);
+    const running = runtime({ e1: { container: 'running', volume: true } });
+    // Recorded at the last stop: the dev container does not run, the files exist.
+    expect(look({ runtime: runtime({ e1: { container: 'stopped', volume: true } }) })).toEqual(['main   Stopped · 2 uncommitted · 3 unpushed · 1 stashed', true]);
+    expect(look({ runtime: runtime({ e1: { container: 'missing', volume: true } }) })).toEqual(['main   No container · 2 uncommitted · 3 unpushed · 1 stashed', true]);
+    // The recorded counts are outdated while it runs, also when the refresh live map has none (not read).
+    expect(look({ runtime: running })).toEqual(['main   Running', undefined]);
+    expect(look({ runtime: running, liveChanges: new Map() })).toEqual(['main   Running', undefined]);
+    // The counts of the last refresh while it runs, in each running state; and none of another devspace.
+    expect(look({ runtime: running, liveChanges: live })).toEqual(['main   Running · 1 uncommitted', true]);
+    expect(look({ currentDevspaceId: 'e1', liveChanges: live })).toEqual(['main   Connected · 1 uncommitted', true]);
+    expect(look({ otherWindowDevspaceIds: new Set(['e1']), liveChanges: live })).toEqual(['main   Connected · other window · 1 uncommitted', true]);
+    expect(look({ busyDevspaceIds: new Set(['e1']), liveChanges: live })).toEqual(['main   Updating · 1 uncommitted', true]);
+    expect(look({ runtime: running, liveChanges: new Map([['e2', live.get('e1')!]]) })).toEqual(['main   Running', undefined]);
+    // No change: no count and no badge, in either state.
+    expect(look({ runtime: running, liveChanges: new Map([['e1', { uncommittedFiles: 0, unpushedCommits: 0, stashes: 0 }]]) })).toEqual(['main   Running', undefined]);
+    const clean = devspace('e1', 'acme/api', { gitSummary: summary() });
+    const cleanRow = row(buildTreeModel(input({ devspaces: [clean], runtime: runtime({ e1: { container: 'stopped', volume: true } }) })), 'acme/api');
+    expect([cleanRow.description, cleanRow.localWork]).toEqual(['main   Stopped', undefined]);
+    // The files are gone, or a refresh has live counts of a stopped container (it stopped since): the recorded ones.
+    expect(look({ runtime: runtime({ e1: { container: 'missing', volume: false } }), liveChanges: live })).toEqual(['main   Files missing', undefined]);
+    expect(look({ runtime: runtime({ e1: { container: 'stopped', volume: true } }), liveChanges: live })).toEqual(['main   Stopped · 2 uncommitted · 3 unpushed · 1 stashed', true]);
+    expect(look({ busyDevspaceIds: new Set(['e1']) })).toEqual(['main   Updating', undefined]);
+  });
+
+  it('says in the tooltip which work is not on GitHub yet, with the time of a recorded count', () => {
+    const env = devspace('e1', 'acme/api', { gitSummary: summary({ uncommittedFiles: 1, unpushedCommits: 2, stashes: 3 }) });
+    const tooltip = (overrides: Partial<TreeInput>, devspaces = [env]) => row(buildTreeModel(input({ devspaces, ...overrides })), 'acme/api').tooltip.split('\n');
+    expect(tooltip({})).toContain(`Not on GitHub yet: 1 uncommitted file, 2 unpushed commits, 3 stashes. Counted at T(${iso(T0)}).`);
+    const live = new Map([['e1', { uncommittedFiles: 2, unpushedCommits: 1, stashes: 1 }]]);
+    const running = tooltip({ runtime: runtime({ e1: { container: 'running', volume: true } }), liveChanges: live });
+    expect(running).toContain('Not on GitHub yet: 2 uncommitted files, 1 unpushed commit, 1 stash.');
+    expect(running.join('\n')).not.toContain('Counted at');
+    // A recorded count without a valid time says no time.
+    const noTime = devspace('e1', 'acme/api', { gitSummary: summary({ unpushedCommits: 1, recordedAt: '' }) });
+    expect(tooltip({}, [noTime])).toContain('Not on GitHub yet: 1 unpushed commit.');
+    // Nothing to say without changes.
+    expect(tooltip({}, [devspace('e1', 'acme/api', { gitSummary: summary() })]).join('\n')).not.toContain('Not on GitHub yet');
+  });
+
+  it('marks each level above a row with work that is not on GitHub yet, and no other level', () => {
+    const configs = ['.devcontainer/devcontainer.json', '.devcontainer/node/devcontainer.json'];
+    const groups = buildTreeModel(
+      input({
+        discovery: discovery([repo('acme/multi', { configPaths: configs }), repo('acme/single'), repo('other/clean')]),
+        devspaces: [
+          devspace('e1', 'acme/multi', { configPath: '.devcontainer/node/devcontainer.json', gitSummary: summary({ unpushedCommits: 1 }) }),
+          devspace('e2', 'acme/single', { gitSummary: summary() }),
+          devspace('e3', 'other/clean', { gitSummary: summary() }),
+        ],
+      }),
     );
-    expect(description({ runtime: runtime({ e1: { container: 'missing', volume: true } }) })).toBe(
-      'main   No container · 2 uncommitted · 3 unpushed · 1 stashed',
-    );
-    expect(description({ runtime: runtime({ e1: { container: 'running', volume: true } }) })).toBe('main   Running');
-    expect(description({ runtime: runtime({ e1: { container: 'missing', volume: false } }) })).toBe('main   Files missing');
-    expect(description({ busyDevspaceIds: new Set(['e1']) })).toBe('main   Updating');
+    expect(childRow(groups, 'acme/multi', 'node').localWork).toBe(true);
+    expect(holdsLocalWork(node(groups, 'acme/multi'))).toBe(true);
+    const [acme, other] = groups;
+    expect([acme.owner, holdsLocalWork(acme)]).toEqual(['acme', true]);
+    expect([other.owner, holdsLocalWork(other)]).toEqual(['other', false]);
   });
 
   it('writes the tooltip with the time of the last use', () => {
@@ -956,7 +1009,15 @@ describe('buildTreeModel', () => {
     });
     const groups = buildTreeModel(input({ discovery: discovery([repo('acme/api')]), devspaces: [env] }));
     expect(row(groups, 'acme/api').tooltip).toBe(
-      ['acme/api', 'Source: the configuration .devcontainer/devcontainer.json', 'Stopped · 3 unpushed', 'Account: me', 'Branch: main', 'Last used: T(2026-09-24T17:10:00.000Z)'].join('\n'),
+      [
+        'acme/api',
+        'Source: the configuration .devcontainer/devcontainer.json',
+        'Stopped · 3 unpushed',
+        `Not on GitHub yet: 3 unpushed commits. Counted at T(${iso(T0)}).`,
+        'Account: me',
+        'Branch: main',
+        'Last used: T(2026-09-24T17:10:00.000Z)',
+      ].join('\n'),
     );
   });
 

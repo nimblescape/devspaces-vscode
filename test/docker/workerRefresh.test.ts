@@ -4,8 +4,8 @@
 
 // The refresh of the sidebar in one operation of the worker (the helper channel) against the real Docker engine of the
 // runner, compared with what the Docker CLI reports. The devspaces: one running from the helper image with a Git
-// repository on a branch, one stopped with a volume without the labels (found by its name), one with nothing, and one
-// running whose branch is not asked for. No worker container is left over.
+// repository on a branch and one file that is not committed, one stopped with a volume without the labels (found by its
+// name), one with nothing, and one running whose Git state is not asked for. No worker container is left over.
 import * as esbuild from 'esbuild';
 import { sharedBundleOptions, workerBundleOptions } from '../../scripts/bundleOptions.mjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -93,6 +93,8 @@ describe('the refresh through the worker', () => {
       '--mount', `type=volume,source=${names.git},target=/workspaces`, helperTag, 'sleep', '3600',
     ]);
     cli.ok(['exec', names.git, 'git', 'init', '-q', '-b', 'feature/refresh', '/workspaces/refresh']);
+    // One file that is not committed: the change count `1 uncommitted`.
+    cli.ok(['exec', names.git, 'touch', '/workspaces/refresh/notes.txt']);
     // Stopped (created, never started), with a volume without the labels of the extension.
     cli.ok(['volume', 'create', '--label', runLabel, names.stopped]);
     cli.ok([
@@ -118,25 +120,36 @@ describe('the refresh through the worker', () => {
   });
 
   /**
-   * The states and branches as the Docker CLI of the test harness reports them (`docker inspect` of each container and
-   * volume, `git branch --show-current` by `docker exec` in each running dev container whose branch is asked for).
+   * The states and the Git states as the Docker CLI of the test harness reports them (`docker inspect` of each container
+   * and volume; `git branch --show-current`, the lines of `git status --porcelain` and of `git stash list`, and `git
+   * rev-list --count --branches --not --remotes` (the repository has no commit yet) by `docker exec` in each running dev
+   * container whose Git state is asked for).
    */
   const reported = (): DevspaceStates => {
     const runtime = new Map<string, DevspaceRuntimeState>();
     const branches = new Map<string, string>();
+    const changes: DevspaceStates['changes'] = new Map();
     for (const devspace of devspaces) {
       const container = cli.container(devspace.containerName);
       const state = container === undefined ? 'missing' : mapContainerState(container.State.Status);
       runtime.set(devspace.id, { container: state, volume: cli.volume(devspace.volumeName) !== undefined });
       if (state !== 'running' || !devspace.branch) continue;
-      const branch = cli.run(['exec', ...(devspace.user ? ['-u', devspace.user] : []), devspace.containerName, 'git', '-C', devspace.folder, 'branch', '--show-current']);
+      const git = (...args: string[]) => cli.run(['exec', ...(devspace.user ? ['-u', devspace.user] : []), devspace.containerName, 'git', '-C', devspace.folder, ...args]);
+      const branch = git('branch', '--show-current');
       if (branch.code === 0 && branch.out !== '') branches.set(devspace.id, branch.out);
+      const lines = (text: string) => (text === '' ? 0 : text.split('\n').length);
+      const status = git('status', '--porcelain', '--untracked-files=normal');
+      const unpushed = git('rev-list', '--count', '--branches', '--not', '--remotes');
+      const stashes = git('stash', 'list');
+      if (status.code === 0 && unpushed.code === 0 && stashes.code === 0) {
+        changes.set(devspace.id, { uncommittedFiles: lines(status.out), unpushedCommits: Number(unpushed.out), stashes: lines(stashes.out) });
+      }
     }
-    return { runtime, branches };
+    return { runtime, branches, changes };
   };
 
   // The same as the Docker CLI reports, which are the states and the branch below.
-  it('gives the states and branches through the worker that the Docker CLI reports, and changes nothing', async () => {
+  it('gives the states and the Git states through the worker that the Docker CLI reports, and changes nothing', async () => {
     const target = await targets.current();
     expect(target.kind).toBe('local');
     expect(await channels.get(target)).toBeDefined();
@@ -156,6 +169,7 @@ describe('the refresh through the worker', () => {
       ]),
     );
     expect(cliStates.branches).toEqual(new Map([[git.id, 'feature/refresh']]));
+    expect(cliStates.changes).toEqual(new Map([[git.id, { uncommittedFiles: 1, unpushedCommits: 0, stashes: 0 }]]));
 
     // It only read: the same containers in the same states.
     expect(cli.lines(['ps', '-a', '--filter', `label=${runLabel}`, '--format', '{{.Names}} {{.State}}']).sort()).toEqual(before);

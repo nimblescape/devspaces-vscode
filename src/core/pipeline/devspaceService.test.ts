@@ -4135,28 +4135,31 @@ describe('refreshStates', () => {
       [OTHER_ID, { container: 'missing', volume: false }],
     ]),
     branches: new Map([[ENV_ID, 'feature-q']]),
+    changes: new Map([[ENV_ID, { uncommittedFiles: 0, unpushedCommits: 2, stashes: 0 }]]),
   };
 
   async function seedTwo(harness: Harness): Promise<void> {
     await seedDevspace(harness, { container: 'running' });
     await seedDevspace(harness, { id: OTHER_ID, repository: 'acme/web', container: null, volume: false });
-    harness.docker.execHandler = () => ({ stdout: 'feature-q\n' });
+    // The answer of the script `gitSummary`: the branch, then the counts of uncommitted files, unpushed commits, stashes.
+    harness.docker.execHandler = () => ({ stdout: 'feature-q\n0\n2\n0\n' });
   }
 
   // The states come from the worker of the test kit (it reads the fake engine).
-  it('reads through the worker: the states, and the branches of the running devspaces that were asked for', async () => {
+  it('reads through the worker: the states, and the Git state of the running devspaces that were asked for', async () => {
     await seedTwo(h);
     expect(await h.operations.refreshStates(new Set([ENV_ID, OTHER_ID]))).toEqual(direct);
+    // One read for the branch and the change counts.
     expect(h.docker.execs).toHaveLength(1);
     // Read from the dev container of the rule, by its ID.
     expect(h.docker.execs[0]).toMatchObject({ container: h.docker.containersOf(ENV_ID)[0].id, user: 'vscode' });
-    // No branch read for a devspace whose branch was not asked for.
-    expect(await h.operations.refreshStates(new Set())).toEqual({ ...direct, branches: new Map() });
+    // No Git state read for a devspace whose Git state was not asked for.
+    expect(await h.operations.refreshStates(new Set())).toEqual({ ...direct, branches: new Map(), changes: new Map() });
     expect(h.docker.execs).toHaveLength(1);
   });
 
   it('takes the states of the worker, with the devspaces of the current host', async () => {
-    const fromWorker = { runtime: new Map([[ENV_ID, { container: 'stopped' as const, volume: true }]]), branches: new Map<string, string>() };
+    const fromWorker = { runtime: new Map([[ENV_ID, { container: 'stopped' as const, volume: true }]]), branches: new Map<string, string>(), changes: new Map() };
     const workerRefresh = vi.fn(async () => fromWorker);
     h = recreate({ workerRefresh });
     await seedTwo(h);
@@ -4192,7 +4195,7 @@ describe('refreshStates', () => {
     let removed = true;
     const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => {
       if (removed) throw new RemovedEngineError('');
-      return { runtime: new Map(), branches: new Map() };
+      return { runtime: new Map(), branches: new Map(), changes: new Map() };
     });
     h = recreate({ workerRefresh });
     await seedTwo(h);
@@ -4217,7 +4220,7 @@ describe('refreshStates', () => {
   // "Remove Devspaces from This Docker Engine…": no `docker info` at each refresh of the sidebar there. Mutation: the
   // check after dockerRunning fails it.
   it('an engine with the removal mark: the refresh asks neither Docker nor the worker, says so once, and names the mark', async () => {
-    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map() }));
+    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map(), changes: new Map() }));
     const dockerRunning = vi.fn(async () => true);
     const engineRemoved = vi.fn(async (host: string) => host === '');
     h = recreate({ workerRefresh, dockerRunning, engineRemoved });
@@ -4239,7 +4242,7 @@ describe('refreshStates', () => {
     // An engine without the mark: Docker and the worker are asked.
     h = recreate({ workerRefresh, dockerRunning, engineRemoved: async () => false });
     await seedTwo(h);
-    expect(await h.operations.refreshStates(new Set([ENV_ID]))).toEqual({ runtime: new Map(), branches: new Map() });
+    expect(await h.operations.refreshStates(new Set([ENV_ID]))).toEqual({ runtime: new Map(), branches: new Map(), changes: new Map() });
     expect(dockerRunning).toHaveBeenCalledTimes(1);
     expect(workerRefresh).toHaveBeenCalledTimes(1);
   });
@@ -4248,7 +4251,7 @@ describe('refreshStates', () => {
   // (it would start the distribution), and the states are known: nothing runs. Mutation: the check after dockerRunning,
   // or without the host of the devspaces, fails it.
   it('a WSL distribution that a call must leave stopped: neither Docker nor the worker is asked, and the answer says that it does not run', async () => {
-    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map() }));
+    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map(), changes: new Map() }));
     const dockerRunning = vi.fn(async () => true);
     const leavesStopped = vi.fn(async (host: string) => host === 'wsl:devspaces');
     const wsl = async () => ({ kind: 'remote' as const, host: 'wsl:devspaces', endpoint: 'wsl://devspaces' });
@@ -4261,13 +4264,13 @@ describe('refreshStates', () => {
     // While it runs (or may be started), the refresh asks as before.
     h = recreate({ workerRefresh, dockerRunning, leavesStopped: async () => false, dockerTarget: wsl });
     await seedDevspace(h, { extra: { dockerHost: 'wsl:devspaces' } });
-    expect(await h.operations.refreshStates(new Set([ENV_ID]))).toEqual({ runtime: new Map(), branches: new Map() });
+    expect(await h.operations.refreshStates(new Set([ENV_ID]))).toEqual({ runtime: new Map(), branches: new Map(), changes: new Map() });
     expect(dockerRunning).toHaveBeenCalledTimes(1);
     expect(workerRefresh).toHaveBeenCalledTimes(1);
   });
 
   it('does not ask the worker when Docker does not run', async () => {
-    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map() }));
+    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map(), changes: new Map() }));
     h = recreate({ workerRefresh });
     await seedTwo(h);
     h.docker.running = false;
@@ -4277,7 +4280,7 @@ describe('refreshStates', () => {
 
   // Before the first Start, a visible sidebar asks Docker nothing and starts no worker.
   it('asks neither Docker nor the worker when the current Docker host has no devspace', async () => {
-    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map() }));
+    const workerRefresh = vi.fn(async (): Promise<DevspaceStates> => ({ runtime: new Map(), branches: new Map(), changes: new Map() }));
     const dockerRunning = vi.fn(async () => true);
     h = recreate({ workerRefresh, dockerRunning });
     // No devspace at all.

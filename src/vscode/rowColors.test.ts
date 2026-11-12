@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import { FileDecoration, ThemeIcon, TreeItem } from './testing/fakeVscode';
-import { colorLabel, colorTreeItem, ROW_COLOR_SCHEME, RowColorDecorations, RowColorIds, rowColorOf, rowColorUri } from './rowColors';
+import { colorLabel, colorTreeItem, LOCAL_WORK_BADGE, ROW_COLOR_SCHEME, RowColorDecorations, RowColorIds, rowColorOf, rowColorUri, rowLookOf } from './rowColors';
 import type * as vscode from 'vscode';
 
 describe('rowColors', () => {
@@ -45,5 +45,49 @@ describe('rowColors', () => {
     expect(plain.resourceUri).toBeUndefined();
     colorLabel(plain as unknown as vscode.TreeItem, 'inactive');
     expect(plain.tooltip).toBe('Container devspaces-monitor');
+  });
+
+  // R-DS-001: the badge of a row whose devspace holds work that is not on GitHub yet.
+  it('names the badge of a row in its URI, with or without a color, and reads both back', () => {
+    expect(rowColorUri('inactive', true)).toMatchObject({ scheme: ROW_COLOR_SCHEME, path: '/inactive/localWork' });
+    expect(rowColorUri(undefined, true)).toMatchObject({ scheme: ROW_COLOR_SCHEME, path: '/plain/localWork' });
+    expect(() => rowColorUri(undefined)).toThrow();
+    expect(rowLookOf(rowColorUri('inactive', true))).toEqual({ color: 'inactive', badge: true });
+    expect(rowLookOf(rowColorUri(undefined, true))).toEqual({ color: undefined, badge: true });
+    expect(rowLookOf(rowColorUri('inactive'))).toEqual({ color: 'inactive', badge: false });
+    expect(rowColorOf(rowColorUri('inactive', true))).toBe('inactive');
+    expect(rowColorOf(rowColorUri(undefined, true))).toBeUndefined();
+    // Any other path is no URI of a row.
+    for (const path of ['/plain', '/inactive/other', '/inactive/localWork/x', '/toString/localWork', '/', '']) {
+      expect(rowLookOf({ scheme: ROW_COLOR_SCHEME, path } as vscode.Uri)).toBeUndefined();
+    }
+    expect(rowLookOf({ scheme: 'file', path: '/plain/localWork' } as vscode.Uri)).toBeUndefined();
+  });
+
+  it('decorates a row with the badge with the arrow up, in the color of the row or of the theme, and without a tooltip', () => {
+    const decorations = new RowColorDecorations();
+    const gray = decorations.provideFileDecoration(rowColorUri('inactive', true)) as unknown as FileDecoration;
+    expect(gray.badge).toBe(LOCAL_WORK_BADGE);
+    expect(LOCAL_WORK_BADGE).toBe('\u2191');
+    expect(gray.color?.id).toBe(RowColorIds.inactive);
+    expect(gray.tooltip).toBeUndefined();
+    const plain = decorations.provideFileDecoration(rowColorUri(undefined, true)) as unknown as FileDecoration;
+    expect(plain.badge).toBe(LOCAL_WORK_BADGE);
+    expect(plain.color).toBeUndefined();
+    expect(plain.tooltip).toBeUndefined();
+  });
+
+  it('gives a tree item with the badge a URI also without a color, and keeps its hover', () => {
+    const item = new TreeItem('acme/api');
+    colorTreeItem(item as unknown as vscode.TreeItem, 'blank', undefined, true);
+    expect((item.iconPath as ThemeIcon).color).toBeUndefined();
+    expect(item.resourceUri).toMatchObject({ path: '/plain/localWork' });
+    expect(item.tooltip).toBe('acme/api');
+    const gray = new TreeItem('acme/web');
+    colorLabel(gray as unknown as vscode.TreeItem, 'inactive', true);
+    expect(gray.resourceUri).toMatchObject({ path: '/inactive/localWork' });
+    const none = new TreeItem('acme/lib');
+    colorLabel(none as unknown as vscode.TreeItem, undefined, false);
+    expect(none.resourceUri).toBeUndefined();
   });
 });

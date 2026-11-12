@@ -3,7 +3,7 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // One Docker engine as a table of answers, for the refresh over the worker's EngineDocker (fixtureEngine), with the
-// answer of the branch of a container (execAnswer) for the exec of fixtureEngine.
+// answer of the Git state and the branch of a container (execAnswer) for the exec of fixtureEngine.
 import { mapContainerState } from '../docker/dockerObjects';
 import { LABEL_COMPOSE_SERVICE, LABEL_DEVSPACE_ID } from '../names';
 import { scriptCommand } from '../worker/containerScripts';
@@ -26,10 +26,11 @@ function env(id: string, name: string, branch: boolean, user?: string): StateDev
 }
 
 /**
- * api: its dev container and a service of Docker Compose run, labelled volume, branch `feature/x` as `node`; web: dev
- * container stopped, a stopped service, a volume without labels (found by its name); lib: nothing; ops: runs, but its
- * branch is not asked for (another account); detached: runs, detached HEAD; git-fails: runs, Git fails. A container of a
- * devspace that is not asked for is ignored.
+ * api: its dev container and a service of Docker Compose run, labelled volume, branch `feature/x` as `node` with 2
+ * uncommitted files, 3 unpushed commits and 1 stash; web: dev container stopped, a stopped service, a volume without
+ * labels (found by its name); lib: nothing; ops: runs, but its Git state is not asked for (another account); detached:
+ * runs, detached HEAD, no changes; git-fails: runs, Git fails. A container of a devspace that is not asked for is
+ * ignored.
  */
 export const REFRESH_DEVSPACES: StateDevspace[] = [
   env(ENV_API, 'api', true, 'node'),
@@ -50,6 +51,10 @@ export const EXPECTED_STATES: DevspaceStates = {
     [ENV_GIT_FAILS, { container: 'running', volume: true }],
   ]),
   branches: new Map([[ENV_API, 'feature/x']]),
+  changes: new Map([
+    [ENV_API, { uncommittedFiles: 2, unpushedCommits: 3, stashes: 1 }],
+    [ENV_DETACHED, { uncommittedFiles: 0, unpushedCommits: 0, stashes: 0 }],
+  ]),
 };
 
 interface Container {
@@ -92,29 +97,33 @@ interface FixtureAnswer {
 
 /**
  * The answer of the engine of the fixture to a process `command` as `user` in `container` (as `docker exec [-u <user>]
- * <container> <command>` answered it): the branch of a running dev container. Anything else fails (exit code 125). The
- * branch is read by the script `branch` of the registry with the folder as its argument. `container` is a name or an
- * ID, as the engine takes it (the refresh reads the branch by the ID of the dev container of the rule).
+ * <container> <command>` answered it): the Git state (the script `gitSummary` of the registry) or the branch (the script
+ * `branch`) of a running dev container, each with the folder as its argument. Anything else fails (exit code 125).
+ * `container` is a name or an ID, as the engine takes it (the refresh reads the Git state by the ID of the dev container
+ * of the rule).
  */
 function execAnswer(reference: string, user: string | undefined, command: readonly string[]): FixtureAnswer {
   const container = CONTAINERS.find((each) => each.name === reference || each.id === reference)?.name ?? reference;
   const ok = (stdout: string): FixtureAnswer => ({ exitCode: 0, stdout, stderr: '' });
   const folder = command[4] ?? '';
-  const branchRead = scriptCommand('branch', [folder]);
-  if (command.length !== branchRead.length || command.some((arg, index) => arg !== branchRead[index])) {
-    return { exitCode: 125, stdout: '', stderr: 'unexpected exec' };
-  }
+  const isScript = (name: 'gitSummary' | 'branch') => {
+    const expected = scriptCommand(name, [folder]);
+    return command.length === expected.length && command.every((arg, index) => arg === expected[index]);
+  };
+  const summary = isScript('gitSummary');
+  if (!summary && !isScript('branch')) return { exitCode: 125, stdout: '', stderr: 'unexpected exec' };
   if (container === 'devspaces-api') {
-    return user === 'node' && folder === '/workspaces/api' ? ok('feature/x\n') : { exitCode: 125, stdout: '', stderr: 'wrong user' };
+    if (user !== 'node' || folder !== '/workspaces/api') return { exitCode: 125, stdout: '', stderr: 'wrong user' };
+    return ok(summary ? 'feature/x\n2\n3\n1\n' : 'feature/x\n');
   }
-  if (container === 'devspaces-detached') return ok('\n');
+  if (container === 'devspaces-detached') return ok(summary ? '\n0\n0\n0\n' : '\n');
   if (container === 'devspaces-git-fails') return { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' };
   return { exitCode: 125, stdout: '', stderr: `unexpected exec in ${container}` };
 }
 
 /**
- * The same engine as a DockerEngine port (the refresh of the worker over EngineDocker); its exec answers the branch of
- * a container (execAnswer). Records the exec calls with their options.
+ * The same engine as a DockerEngine port (the refresh of the worker over EngineDocker); its exec answers the Git state
+ * and the branch of a container (execAnswer). Records the exec calls with their options.
  */
 export function fixtureEngine(): { engine: DockerEngine; execs: { container: string; user?: string; signal?: AbortSignal }[] } {
   const execs: { container: string; user?: string; signal?: AbortSignal }[] = [];

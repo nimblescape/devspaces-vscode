@@ -21,6 +21,7 @@ import { devspacesOfHost } from '../core/docker/dockerHost';
 import { accountIds, availableDevspaces } from '../core/ownership';
 import { systemClock, type Clock, type Logger } from '../core/ports';
 import type { DevspaceOperations } from '../core/pipeline/devspaceOperations';
+import type { GitChanges } from '../core/pipeline/refreshStates';
 import type { DevspaceRegistry } from '../core/storage/registry';
 import type { SessionFiles } from '../core/storage/sessionFiles';
 import type { AccountListing, DiscoveryData, Devspace, ExtensionSettings, GitHubAccount, RepositoryInfo, WindowStatus } from '../core/types';
@@ -140,6 +141,8 @@ export class Sidebar implements vscode.Disposable {
    */
   private statesUnread: { dockerHost: string; reachable: boolean; removed?: true } | undefined;
   private liveBranches: ReadonlyMap<string, string> = new Map();
+  /** The change counts read from the running containers at the last state refresh (TreeInput.liveChanges). */
+  private liveChanges: ReadonlyMap<string, GitChanges> = new Map();
   private lookups: ReadonlyMap<string, RepositoryInfo | null> = new Map();
   private timer: NodeJS.Timeout | undefined;
   /** The one refresh after a rate limit of GitHub (onRateLimited): its timer and time; `undefined` while none waits. */
@@ -182,7 +185,7 @@ export class Sidebar implements vscode.Disposable {
   /** The input of the last render, without the patterns of repositoryGroups (groupingInput). */
   private lastInput: TreeInput | undefined;
 
-  /** Fires after the container states and the branches of running containers were read. */
+  /** Fires after the container states and the Git state (branches, change counts) of running containers were read. */
   readonly onDidRefreshStates: vscode.Event<void> = this.statesEmitter.event;
 
   /** Fires after each render of the view (for the preview of the repository groups editor). */
@@ -262,8 +265,8 @@ export class Sidebar implements vscode.Disposable {
   }
 
   /**
-   * Reads the container and volume states from Docker (without starting it) and the branches of the running containers,
-   * then renders. Call only when the view is visible or after an operation.
+   * Reads the container and volume states from Docker (without starting it) and the Git state of the running containers
+   * (the branches and the change counts), then renders. Call only when the view is visible or after an operation.
    */
   refreshStates(): Promise<void> {
     return this.statesTask.request();
@@ -512,6 +515,7 @@ export class Sidebar implements vscode.Disposable {
         windowStatuses: statuses,
       }),
       liveBranches: this.liveBranches,
+      liveChanges: this.liveChanges,
       signedIn: this.signedIn,
       repositoryLookups: this.lookups,
       formatTime,
@@ -614,9 +618,9 @@ export class Sidebar implements vscode.Disposable {
   private async refreshStatesNow(): Promise<void> {
     if (this.disposed) return;
     const { service, docker, registry, dockerTargets } = this.deps;
-    // The states and the branches of the running dev containers of the account in one call (one operation of the worker
-    // when one is open), on one Docker target (DockerTargets.withOperation), with the Docker host of the operation (the
-    // engine whose states are read).
+    // The states and the Git state (branches and change counts) of the running dev containers of the account in one
+    // call (one operation of the worker when one is open), on one Docker target (DockerTargets.withOperation), with the
+    // Docker host of the operation (the engine whose states are read).
     const read = async () => {
       const dockerHost = await this.currentDockerHost();
       return { dockerHost, target: operationDockerTarget(), states: await service.refreshStates(new Set((await this.availableDevspaces()).map((devspace) => devspace.id))) };
@@ -645,6 +649,7 @@ export class Sidebar implements vscode.Disposable {
     this.runtime = runtime;
     this.statesUnread = unread;
     this.liveBranches = states.branches;
+    this.liveChanges = states.changes ?? new Map();
     await this.render();
     if (!this.disposed) this.statesEmitter.fire();
   }

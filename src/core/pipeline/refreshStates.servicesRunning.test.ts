@@ -28,7 +28,7 @@ function docker(containers: ListedContainer[], execs: string[]): StateDocker {
     listDevspaceContainers: async () => containers,
     listDevspaceVolumes: async () => [{ name: ENV.volumeName, labels: {} }],
     volumeExists: async () => true,
-    exec: async (container) => (execs.push(container), { exitCode: 0, stdout: `branch-of-${container}\n`, stderr: '', timedOut: false }),
+    exec: async (container) => (execs.push(container), { exitCode: 0, stdout: `branch-of-${container}\n0\n0\n0\n`, stderr: '', timedOut: false }),
   };
 }
 
