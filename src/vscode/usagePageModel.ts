@@ -241,7 +241,7 @@ export const UsagePageTexts = {
   dockerCaption: 'Docker disk use',
   canBeFreed: (size: string) => `${size} can be freed`,
   diskKinds: { images: 'Images', containers: 'Containers', volumes: 'Volumes', buildCache: 'Build cache' } as Record<UsageDiskKind, string>,
-  sizesNotRead: 'The page reads them with docker system df -v after the first values and every 10 minutes; it reads every volume and can take a minute.',
+  sizesNotRead: 'The page reads them by itself with docker system df -v while it reads, and Read Sizes reads them now; it reads every volume and can take a minute.',
   sizesReadingNote: 'Reading the sizes with docker system df -v…',
   sizesAt: (at: string) => `Sizes read at ${at}. Refresh Sizes reads them again. Can be freed: what no container uses (an unused volume holds data), and the build cache that no build uses.`,
   sizesFailed: (detail: string) => `The sizes could not be read: ${detail}`,

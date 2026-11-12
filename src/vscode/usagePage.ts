@@ -177,7 +177,7 @@ class UsagePage {
   private sizesReadAt: number | undefined;
   /**
    * Whether the page reads the sizes by itself: off after a read in the background that failed (a host where Docker
-   * cannot be read, or a read longer than its time limit, which stops the shared shell) until the next start or a
+   * cannot be read, or a read longer than its time limit, which stops the shared shell) until a start from a click or a
    * Refresh Sizes that worked.
    */
   private sizesAuto = true;
@@ -295,7 +295,8 @@ class UsagePage {
     // Each start reads the sizes again after its first sample, unless they were read less than a minute ago (a quick
     // switch back to the page).
     if (this.sizesReadAt === undefined || this.timers.now() - this.sizesReadAt >= SIZES_FRESH_MS) this.sizesDueAt = undefined;
-    this.sizesAuto = true;
+    // After a failed read in the background, only a click (the open, Resume, Retry, Start the VM) reads by itself again.
+    if (flow) this.sizesAuto = true;
     const runAbort = new AbortController();
     this.runAbort = runAbort;
     // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).
@@ -626,6 +627,8 @@ class UsagePage {
     const controller = new AbortController();
     this.sizesAbort = controller;
     this.sizesReading = true;
+    // Whether the read reached the host (a result or its error): only then do the sizes count as read (sizesReadAt).
+    let ran = false;
     this.post();
     try {
       if (this.vm) {
@@ -646,6 +649,7 @@ class UsagePage {
         const signal = AbortSignal.any([this.abort.signal, controller.signal]);
         inventory = await withSshPrompts(() => this.deps.readSizes(this.host, signal), signal);
       }
+      ran = true;
       // The host started again meanwhile: the objects are of before.
       if (epoch !== this.bootEpoch) return;
       this.sizes = { inventory, at: this.timers.now() };
@@ -655,16 +659,20 @@ class UsagePage {
       // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result. A read
       // in the background without an open login ends with an AbortError too, and the next one comes in 10 minutes.
       if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
+      ran = true;
       const detail = errorMessage(error);
-      this.deps.logger.warn(`The sizes of ${this.host} could not be read${background ? ' (the page reads them by itself again at its next start)' : ''}: ${detail}`);
+      this.deps.logger.warn(`The sizes of ${this.host} could not be read${background ? ' (the page reads them by itself again after a click on Resume, Retry or Refresh Sizes)' : ''}: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
       if (background) this.sizesAuto = false;
     } finally {
       this.sizesAbort = undefined;
       this.sizesReading = false;
       // The next read in the background 10 minutes after this one; after a new start of the host, after the next sample.
+      // A read that did not reach the host (refused without an open login, the VM did not run) leaves the sizes of
+      // before as they are, so that the next start reads.
       const current = epoch === this.bootEpoch;
-      this.sizesReadAt = current ? this.timers.now() : undefined;
+      if (!current) this.sizesReadAt = undefined;
+      else if (ran) this.sizesReadAt = this.timers.now();
       this.sizesDueAt = current ? this.timers.now() + SIZES_EVERY_MS : undefined;
       this.post();
     }

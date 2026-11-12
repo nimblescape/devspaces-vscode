@@ -872,13 +872,20 @@ describe('UsagePages', () => {
     expect(lastView(second).docker.note).toBe(UsagePageTexts.sizesFailed('docker system df failed'));
   });
 
-  it('reads the sizes by itself no more after a failed read until the next start or a Refresh Sizes that worked', async () => {
+  it('reads the sizes by itself no more after a failed read until a click on Resume or a Refresh Sizes that worked', async () => {
     readSizes.mockRejectedValueOnce(new Error('permission denied'));
     const panel = await open(pages(), 'build-box');
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesFailed('permission denied'));
     await timers.advance(SIZES_EVERY_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(1);
-    // The next start reads again.
+    // A show after the end of the samples (no click) does not read by itself again.
+    panel.setVisible(false);
+    await timers.advance(HIDDEN_STOP_MS + SIZES_FRESH_MS);
+    panel.setVisible(true);
+    await flush();
+    expect(lastView(panel).status.tone).toBe('live');
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    // Resume, a click, reads again.
     panel.receive({ type: 'pause' });
     panel.receive({ type: 'resume' });
     await flush();
@@ -903,6 +910,18 @@ describe('UsagePages', () => {
     const panel = await open(pages(), LIMA_HOST);
     expect(readSizes).not.toHaveBeenCalled();
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
+  });
+
+  it('reads at the next start when a read in the background did not reach the host', async () => {
+    readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
+    const panel = await open(pages(), 'build-box');
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    // Within a minute: no sizes were read, so the start reads.
+    panel.receive({ type: 'pause' });
+    panel.receive({ type: 'resume' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
   });
 
   it('says in the header that it reads the sizes, and does not end a read in the background at a close', async () => {
