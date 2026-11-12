@@ -136,11 +136,10 @@ describe('the behaviors of Devspaces at the top of the Marketplace page', () => 
     expect(text).toContain('guide.md#installing-docker');
   });
 
-  it('has the section Uninstall in the README after Security and privacy, with the command and the shared volumes', () => {
+  it('has the section Uninstall as the last section of the README, with the command and the shared volumes', () => {
     const readme = read('README.md');
     const headings = [...readme.matchAll(/^## (.*)$/gm)].map((match) => match[1]);
-    expect(headings.indexOf('Uninstall')).toBeGreaterThan(headings.indexOf('Security and privacy'));
-    expect(headings.indexOf('Security and privacy')).toBeGreaterThan(0);
+    expect(headings.at(-1)).toBe('Uninstall');
     const text = section(readme, 'Uninstall');
     expect(text).toContain(`**Devspaces: ${REMOVE_COMMAND}**`);
     for (const volume of SHARED_VOLUMES) expect(text).toContain(`\`${volume}\``);
