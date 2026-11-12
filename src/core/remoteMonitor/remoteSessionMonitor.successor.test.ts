@@ -10,7 +10,7 @@ import type { Logger } from '../ports';
 import type { MonitorCreated, MonitorRunSpec } from '../worker/dockerEngine';
 import type { MonitorEngine, MonitorInspected } from './monitorEngine';
 import { LABEL_MONITOR_CREATE } from './protocol';
-import { RemoteSessionMonitor, monitorLabel } from './remoteSessionMonitor';
+import { REMOTE_MONITOR_RESERVED_WAITS_MS, RemoteSessionMonitor, monitorLabel } from './remoteSessionMonitor';
 
 const SCRIPT = 'console.log("monitor")';
 const TAG = 'devspaces-worker:0123456789ab';
@@ -85,13 +85,41 @@ describe('the create of the successor of a Monitor that moves to the current bui
     expect(await conflict.monitor.createSuccessor(TAG, '/sock', CURRENT, CURRENT)).toBe('taken');
   });
 
-  it('a name conflict whose container is gone again is created once more; a second conflict fails', async () => {
+  it('a name conflict whose container is gone again is created once more at once', async () => {
     const create = vi.fn(async (): Promise<MonitorCreated> => ({ kind: 'exited', detail: 'Conflict.', conflict: true }));
     create.mockResolvedValueOnce({ kind: 'exited', detail: 'Conflict.', conflict: true }).mockResolvedValueOnce({ kind: 'ready' });
     const { monitor } = setup({ inspect: async () => ({ exists: false }), create, idsWithLabel: async () => [] });
     expect(await monitor.createSuccessor(TAG, '/sock', CURRENT, CURRENT)).toBe('created');
-    const failing = setup({ inspect: async () => ({ exists: false }), create: async () => ({ kind: 'exited', detail: 'Conflict.', conflict: true }), idsWithLabel: async () => [] });
-    await expect(failing.monitor.createSuccessor(TAG, '/sock', CURRENT, CURRENT)).rejects.toThrow('docker run failed: Conflict.');
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  // Docker reserves the name when a create starts, and an inspect finds that container only when the create has made
+  // it: the repair of a window that creates the Monitor while the name is free.
+  it('a name that stays free at further conflicts gets a create after each wait; the container of a window → taken', async () => {
+    vi.useFakeTimers();
+    try {
+      let looks = 0;
+      const create = vi.fn(async (): Promise<MonitorCreated> => ({ kind: 'exited', detail: 'Conflict.', conflict: true }));
+      // Free at the first look and at the looks after the first two conflicts; the container of the window after that.
+      const { monitor } = setup({ inspect: async () => (looks++ < 3 ? { exists: false } : exited(CURRENT)), create, idsWithLabel: async () => [] });
+      const moved = monitor.createSuccessor(TAG, '/sock', CURRENT, CURRENT);
+      await vi.advanceTimersByTimeAsync(REMOTE_MONITOR_RESERVED_WAITS_MS[0] - 1);
+      expect(create).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await moved).toBe('taken');
+      expect(create).toHaveBeenCalledTimes(3);
+
+      // Free at every look: the creates after each wait, then the failure (12.75 s in all).
+      const conflicts = vi.fn(async (): Promise<MonitorCreated> => ({ kind: 'exited', detail: 'Conflict.', conflict: true }));
+      const failing = setup({ inspect: async () => ({ exists: false }), create: conflicts, idsWithLabel: async () => [] });
+      const failed = expect(failing.monitor.createSuccessor(TAG, '/sock', CURRENT, CURRENT)).rejects.toThrow('docker run failed: Conflict.');
+      await vi.advanceTimersByTimeAsync(REMOTE_MONITOR_RESERVED_WAITS_MS.reduce((sum, ms) => sum + ms, 0));
+      await failed;
+      // The first create, the one once more at once, and one after each wait.
+      expect(conflicts).toHaveBeenCalledTimes(2 + REMOTE_MONITOR_RESERVED_WAITS_MS.length);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a failed create removes its own container by its nonce, and rejects with the cause', async () => {
