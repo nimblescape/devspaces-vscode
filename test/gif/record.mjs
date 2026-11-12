@@ -271,7 +271,8 @@ function locate(spec) {
   if (spec.tab) {
     const tab = [...document.querySelectorAll('.part.editor .tab')].find((t) => text(t.querySelector('.label-name')) === spec.tab);
     if (!tab) return undefined;
-    if (spec.preview !== undefined && tab.classList.contains('italic') !== spec.preview) return undefined;
+    // VS Code writes the title of a preview tab in italics: the class italic of its label.
+    if (spec.preview !== undefined && (tab.querySelector('.tab-label.italic') !== null) !== spec.preview) return undefined;
     if (spec.ready && ![...document.querySelectorAll('iframe.webview.ready')].some((f) => f.getBoundingClientRect().width > 0)) return undefined;
     return screen(tab);
   }
