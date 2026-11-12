@@ -2,9 +2,10 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The states of the devspaces and the branches of their running dev containers, read in one go. It runs in the
-// worker only (the operation `refresh`, src/helperChannel/operations.ts), never directly in the extension. It only
-// reads. Pure: no `vscode`, and nothing of the service, so that the script of the worker stays small.
+// The states of the devspaces and the Git state of their running dev containers (the branch and the change counts),
+// read in one go. It runs in the worker only (the operation `refresh`, src/helperChannel/operations.ts), never directly
+// in the extension. It only reads. Pure: no `vscode`, and nothing of the service, so that the script of the worker
+// stays small.
 import { Semaphore } from '../concurrency';
 import type { ListedContainer } from '../docker/dockerObjects';
 import { errorMessage } from '../errors';
@@ -42,20 +43,28 @@ export interface StateDevspace {
   user?: string;
   /** The folder of the repository in the container (repositoryFolder). */
   folder: string;
-  /** Read the branch when its dev container runs (the sidebar reads it for the devspaces of the account only). */
+  /**
+   * Read the Git state of the repository (readRunningGitState: the branch and the change counts) when its dev container
+   * runs. The sidebar reads it for the devspaces of the accounts only.
+   */
   branch: boolean;
 }
+
+/** The change counts of a Git state (GitSummary without the branch and the time): the work that is not on GitHub yet. */
+export type GitChanges = Pick<GitSummary, 'uncommittedFiles' | 'unpushedCommits' | 'stashes'>;
 
 export interface DevspaceStates {
   runtime: Map<string, DevspaceRuntimeState>;
   /** The branch of each running dev container that has one (none for a detached HEAD or a failed read). */
   branches: Map<string, string>;
+  /** The change counts of each running dev container whose Git state could be read (none for a failed read). */
+  changes: Map<string, GitChanges>;
 }
 
 /** The part of the pipeline's Docker (DevspaceDocker) that readDevspaceStates uses. */
 export type StateDocker = Pick<DevspaceDocker, 'listDevspaceContainers' | 'listDevspaceVolumes' | 'volumeExists' | 'exec'>;
 
-/** At most this many branches are read at the same time. */
+/** At most this many Git states (or branches) are read at the same time. */
 export const BRANCH_READ_CONCURRENCY = 4;
 export const BRANCH_EXEC_TIMEOUT_MS = 15_000;
 
@@ -125,8 +134,36 @@ export async function readGitSummary(
 }
 
 /**
- * The container and volume state of each devspace, and the branches of the running dev containers (at most
- * BRANCH_READ_CONCURRENCY at a time). Throws when the containers or the volumes cannot be listed.
+ * The Git state of the repository at `folder` in a running container, for the refresh: the script `gitSummary` of the
+ * registry (the same script as Stop and Delete run, readGitSummary), as `user` within BRANCH_EXEC_TIMEOUT_MS; it gives
+ * the branch (`null` for a detached HEAD) and the change counts. When that script fails (for example `git status`
+ * fails, or does not end in time in a very large repository), the branch alone is read (readBranch), so that the row
+ * still shows it; the counts are then unknown. Never throws: `{}` when nothing could be read.
+ */
+export async function readRunningGitState(
+  docker: Pick<DevspaceDocker, 'exec'>,
+  container: string,
+  user: string | undefined,
+  folder: string,
+): Promise<{ branch?: string | null; changes?: GitChanges }> {
+  try {
+    const result = await runScript(docker, container, 'gitSummary', [folder], { user, timeoutMs: BRANCH_EXEC_TIMEOUT_MS });
+    if (result.exitCode === 0) {
+      // The time is not used: the refresh shows the counts of now.
+      const { branch, uncommittedFiles, unpushedCommits, stashes } = parseGitSummaryOutput(result.stdout, '');
+      return { branch, changes: { uncommittedFiles, unpushedCommits, stashes } };
+    }
+  } catch {
+    // An output that is not a Git state, or a failed `docker exec`: the branch alone, below.
+  }
+  const branch = await readBranch(docker, container, user, folder);
+  return branch === undefined ? {} : { branch };
+}
+
+/**
+ * The container and volume state of each devspace, and the Git state of the running dev containers whose state was
+ * asked for (readRunningGitState: the branch and the change counts; at most BRANCH_READ_CONCURRENCY at a time). Throws
+ * when the containers or the volumes cannot be listed.
  */
 export async function readDevspaceStates(docker: StateDocker, devspaces: readonly StateDevspace[]): Promise<DevspaceStates> {
   const [containers, volumes] = await Promise.all([docker.listDevspaceContainers(), docker.listDevspaceVolumes()]);
@@ -155,6 +192,7 @@ export async function readDevspaceStates(docker: StateDocker, devspaces: readonl
     runtime.set(env.id, state);
   }
   const branches = new Map<string, string>();
+  const changes = new Map<string, GitChanges>();
   const limit = new Semaphore(BRANCH_READ_CONCURRENCY);
   const running = devspaces.flatMap((env) => {
     const dev = devContainers.get(env.id);
@@ -164,10 +202,11 @@ export async function readDevspaceStates(docker: StateDocker, devspaces: readonl
     running.map(({ env, dev }) =>
       limit.run(async () => {
         // From the dev container of the rule, by its ID.
-        const branch = await readBranch(docker, dev.id, env.user, env.folder);
-        if (branch) branches.set(env.id, branch);
+        const git = await readRunningGitState(docker, dev.id, env.user, env.folder);
+        if (git.branch) branches.set(env.id, git.branch);
+        if (git.changes) changes.set(env.id, git.changes);
       }),
     ),
   );
-  return { runtime, branches };
+  return { runtime, branches, changes };
 }

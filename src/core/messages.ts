@@ -642,6 +642,11 @@ export function listSome(items: readonly string[], max = MAX_LISTED_NAMES, separ
   return `${items.slice(0, max).join(separator)}${separator}and ${items.length - max} more`;
 }
 
+/** Whether a Git summary counts work that is not on GitHub yet: uncommitted files, unpushed commits, or stashes. */
+export function hasChanges(summary: { uncommittedFiles: number; unpushedCommits: number; stashes?: number }): boolean {
+  return summary.uncommittedFiles > 0 || summary.unpushedCommits > 0 || (summary.stashes ?? 0) > 0;
+}
+
 /** Formats the change counts of a Git summary, for example `2 uncommitted · 3 unpushed`. Empty when there are no changes. */
 export function formatChanges(summary: { uncommittedFiles: number; unpushedCommits: number; stashes?: number }): string {
   const parts: string[] = [];

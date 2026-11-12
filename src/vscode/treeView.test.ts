@@ -644,3 +644,97 @@ describe('RepositoriesTreeProvider: rows without an active devspace in gray', ()
     expect((provider.getTreeItem(group) as unknown as TreeItem).resourceUri).toBeUndefined();
   });
 });
+
+// R-DS-001: a devspace with work that is not on GitHub yet has the badge, and so does each level above it.
+describe('RepositoriesTreeProvider: the badge of work that is not on GitHub yet', () => {
+  beforeEach(() => resetFakeVscode());
+
+  const python = '.devcontainer/python/devcontainer.json';
+  function modelOf(options: { running: boolean; recorded?: number; live?: number; configPaths?: string[] }): OwnerGroup[] {
+    const devspace: Devspace = {
+      ...env,
+      ...(options.configPaths ? { configPath: python } : {}),
+      gitSummary: { branch: 'main', uncommittedFiles: 0, unpushedCommits: options.recorded ?? 0, stashes: 0, recordedAt: '2026-09-24T17:00:00.000Z' },
+    };
+    return buildTreeModel({
+      discovery: {
+        version: 1,
+        fetchedAt: '',
+        viewerLogin: 'me',
+        organizations: ['acme'],
+        repositories: [{ ...repo('acme/api'), ...(options.configPaths ? { configPaths: options.configPaths } : {}) }, repo('acme/web')],
+        hints: [],
+        scope: [],
+        withoutConfiguration: [],
+      },
+      settings: { owners: [], includeArchived: false, includeForks: true },
+      devspaces: [devspace],
+      runtime: new Map([['e1', { container: options.running ? 'running' : 'stopped', volume: true }]]),
+      currentDevspaceId: null,
+      otherWindowDevspaceIds: new Set(),
+      busyDevspaceIds: new Set(),
+      liveBranches: new Map([['e1', 'main']]),
+      ...(options.live !== undefined ? { liveChanges: new Map([['e1', { uncommittedFiles: 0, unpushedCommits: options.live, stashes: 0 }]]) } : {}),
+      signedIn: true,
+    });
+  }
+  const uriPath = (item: TreeItem): string | undefined => (item.resourceUri as { scheme: string; path: string } | undefined)?.path;
+
+  it('a running devspace with unpushed commits: the badge in the colors of the theme, on the row and on its owner', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelOf({ running: true, live: 2 }));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const groupItem = provider.getTreeItem(group) as unknown as TreeItem;
+    expect(uriPath(groupItem)).toBe('/plain/localWork');
+    expect(groupItem.tooltip).toBe('acme\nA devspace below holds work that is not on GitHub yet.');
+    // A screen reader reads no badge: the label for it says so.
+    expect(groupItem.accessibilityInformation).toEqual({ label: 'acme, A devspace below holds work that is not on GitHub yet.' });
+    const [api, web] = provider.getChildren(group) as [RepositoryRow, RepositoryRow];
+    const apiItem = provider.getTreeItem(api) as unknown as TreeItem;
+    expect(api.description).toBe('main   Running · 2 unpushed');
+    expect(uriPath(apiItem)).toBe('/plain/localWork');
+    expect(apiItem.tooltip).toContain('Not on GitHub yet: 2 unpushed commits.');
+    // The repository without a devspace stays gray, without the badge.
+    expect(uriPath(provider.getTreeItem(web) as unknown as TreeItem)).toBe('/inactive');
+  });
+
+  it('a stopped devspace with recorded commits: the badge in gray, on the row and on its owner', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelOf({ running: false, recorded: 1 }));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    expect(uriPath(provider.getTreeItem(group) as unknown as TreeItem)).toBe('/inactive/localWork');
+    const [api] = provider.getChildren(group) as [RepositoryRow];
+    expect(uriPath(provider.getTreeItem(api) as unknown as TreeItem)).toBe('/inactive/localWork');
+  });
+
+  it('no badge without changes, and none from recorded counts while the devspace runs', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelOf({ running: true, recorded: 3 }));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const groupItem = provider.getTreeItem(group) as unknown as TreeItem;
+    expect(groupItem.resourceUri).toBeUndefined();
+    expect(groupItem.tooltip).toBeUndefined();
+    expect(groupItem.accessibilityInformation).toBeUndefined();
+    const [api] = provider.getChildren(group) as [RepositoryRow];
+    expect((provider.getTreeItem(api) as unknown as TreeItem).resourceUri).toBeUndefined();
+    provider.setModel(modelOf({ running: false, live: 0 }));
+    const [stoppedGroup] = provider.getChildren() as OwnerGroup[];
+    expect(uriPath(provider.getTreeItem(stoppedGroup) as unknown as TreeItem)).toBe('/inactive');
+  });
+
+  it('the node of a repository with several sources has the badge of its child row, also while it is closed', () => {
+    const provider = new RepositoriesTreeProvider(silentLogger);
+    provider.setModel(modelOf({ running: false, recorded: 1, configPaths: ['.devcontainer/devcontainer.json', python] }));
+    const [group] = provider.getChildren() as OwnerGroup[];
+    const [node] = provider.getChildren(group) as RepositoryNode[];
+    expect(node.kind).toBe('repositoryNode');
+    expect(node.expanded).toBe(true);
+    const nodeItem = provider.getTreeItem(node) as unknown as TreeItem;
+    expect(uriPath(nodeItem)).toBe('/inactive/localWork');
+    expect(String(nodeItem.tooltip).split('\n').at(-1)).toBe('A devspace below holds work that is not on GitHub yet.');
+    expect(nodeItem.accessibilityInformation).toEqual({ label: 'acme/api, A devspace below holds work that is not on GitHub yet.' });
+    const child = (provider.getChildren(node) as RepositoryRow[]).find((entry) => entry.devspace !== undefined)!;
+    expect(uriPath(provider.getTreeItem(child) as unknown as TreeItem)).toBe('/inactive/localWork');
+  });
+});
+

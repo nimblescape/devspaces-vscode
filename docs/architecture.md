@@ -451,7 +451,7 @@ A container whose setup version (`nimblescape.devspaces.container-version`) is o
 
 ### Refresh and window state
 
-The sidebar reads the states of the devspaces of the current engine with `refresh` (at most 200 per call): container states, branches, and Git counts. While the registry has no devspace on the current engine, the sidebar reads nothing: no `docker info` and no worker. A window that is connected to a devspace reads its own container with `windowState`. When the worker cannot be prepared or the engine does not answer, the rows of that engine show `State unknown` and keep their actions; the registry is not changed.
+The sidebar reads the states of the devspaces of the current engine with `refresh` (at most 200 per call): the container states, and for each running dev container of a devspace of the accounts its Git state, with the script `gitSummary` of the registry (the same script as Stop and Delete run): the branch and the change counts (uncommitted files, unpushed commits, stashes). When that script fails, the refresh reads the branch alone, and the row shows no counts. A row whose dev container runs shows the counts of the last refresh; a row whose dev container does not run shows the counts recorded at its last stop ([R-DS-001](requirements.md#r-ds-001)). While the registry has no devspace on the current engine, the sidebar reads nothing: no `docker info` and no worker. A window that is connected to a devspace reads its own container with `windowState`. When the worker cannot be prepared or the engine does not answer, the rows of that engine show `State unknown` and keep their actions; the registry is not changed.
 
 ### Reopen at startup
 

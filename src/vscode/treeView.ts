@@ -10,11 +10,13 @@ import { Commands } from './commands';
 import { coloredIcon, colorLabel, colorTreeItem, type RowColor } from './rowColors';
 import {
   holdsActiveRow,
+  holdsLocalWork,
   isActiveRow,
   MonitorIcons,
   REPOSITORY_NODE_CONTEXT,
   rootNodes,
   stateIcon,
+  TreeTexts,
   type GroupNode,
   type HintRow,
   type OwnerGroup,
@@ -242,11 +244,28 @@ function levelColor(node: OwnerGroup | GroupNode | RepositoryNode): RowColor | u
   return holdsActiveRow(node) ? undefined : 'inactive';
 }
 
+/**
+ * The color of a level and, while a row below it holds work that is not on GitHub yet (holdsLocalWork), the badge
+ * LOCAL_WORK_BADGE (R-DS-001), so that a closed level does not hide it. The tooltip and the label for a screen reader
+ * say so too, because VS Code reads no badge. Call it after the tooltip and the accessibility information are set.
+ */
+function decorateLevel(item: vscode.TreeItem, node: OwnerGroup | GroupNode | RepositoryNode): void {
+  const localWork = holdsLocalWork(node);
+  if (localWork) {
+    const label = typeof item.label === 'string' ? item.label : undefined;
+    const tooltip = typeof item.tooltip === 'string' ? item.tooltip : label;
+    item.tooltip = [tooltip, TreeTexts.levelNotOnGitHubYet].filter((line) => line !== undefined && line !== '').join('\n');
+    const spoken = item.accessibilityInformation?.label ?? label;
+    item.accessibilityInformation = { label: [spoken, TreeTexts.levelNotOnGitHubYet].filter((part) => part !== undefined && part !== '').join(', ') };
+  }
+  colorTreeItem(item, 'blank', levelColor(node), localWork);
+}
+
 function ownerItem(group: OwnerGroup): vscode.TreeItem {
   const item = new vscode.TreeItem(group.owner, vscode.TreeItemCollapsibleState.Expanded);
   item.id = group.id;
   item.contextValue = 'owner';
-  colorTreeItem(item, 'blank', levelColor(group));
+  decorateLevel(item, group);
   return item;
 }
 
@@ -259,7 +278,7 @@ function groupItem(node: GroupNode): vscode.TreeItem {
   item.id = node.id;
   item.contextValue = 'group';
   if (node.tooltip !== undefined) item.tooltip = node.tooltip;
-  colorTreeItem(item, 'blank', levelColor(node));
+  decorateLevel(item, node);
   return item;
 }
 
@@ -276,8 +295,8 @@ function repositoryNodeItem(node: RepositoryNode): vscode.TreeItem {
   item.id = node.id;
   item.tooltip = node.tooltip;
   item.contextValue = REPOSITORY_NODE_CONTEXT;
-  colorTreeItem(item, 'blank', levelColor(node));
   item.accessibilityInformation = { label: node.repository };
+  decorateLevel(item, node);
   item.command = { command: Commands.rowActivated, title: 'Start', arguments: [node] };
   return item;
 }
@@ -298,7 +317,8 @@ function repositoryItem(row: RepositoryRow): vscode.TreeItem {
     // A repository without devspace has no symbol; the blank icon keeps the names aligned.
     item.iconPath = new vscode.ThemeIcon('blank');
   }
-  colorLabel(item, color);
+  // A devspace with work that is not on GitHub yet: the badge at the right edge of the row (R-DS-001).
+  colorLabel(item, color, row.localWork === true);
   item.accessibilityInformation = { label: [row.child ? `${row.repository} ${row.label}` : row.repository, row.description].filter((text) => text !== '').join(', ') };
   // VS Code runs this command on each click (or only on a double-click, per workbench.list.openMode); the controller
   // runs Start on a double-click (rowActivation.ts).

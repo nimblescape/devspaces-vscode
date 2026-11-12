@@ -753,8 +753,8 @@ export function parseSweepValue(value: unknown): SweepValue | undefined {
 
 /**
  * `refresh`: readDevspaceStates (src/core/pipeline/refreshStates.ts) in the worker: the containers and volumes of the
- * devspaces and the branches of their running dev containers, in one operation. It only reads; it carries no
- * secret. Parameters RefreshParams, value RefreshValue.
+ * devspaces and the Git state of their running dev containers (the branches and the change counts), in one operation.
+ * It only reads; it carries no secret. Parameters RefreshParams, value RefreshValue.
  */
 export const OP_REFRESH = 'refresh';
 /** The most devspaces of one refresh (more: it is refused as `unsendable`, never read without the worker). */
@@ -769,6 +769,7 @@ export interface RefreshParams {
 export interface RefreshValue {
   runtime: Array<{ id: string; container: ContainerState; volume: boolean; servicesRunning?: true }>;
   branches: Array<{ id: string; branch: string }>;
+  changes: Array<{ id: string; uncommittedFiles: number; unpushedCommits: number; stashes: number }>;
 }
 
 /** A container or volume name that Docker accepts, never an option. */
@@ -820,19 +821,21 @@ export function refreshValue(states: DevspaceStates): RefreshValue {
       ...(state.servicesRunning === true ? { servicesRunning: true as const } : {}),
     })),
     branches: [...states.branches].map(([id, branch]) => ({ id, branch })),
+    changes: [...states.changes].map(([id, { uncommittedFiles, unpushedCommits, stashes }]) => ({ id, uncommittedFiles, unpushedCommits, stashes })),
   };
 }
 
 /**
  * The strict check of RefreshValue against its parameters (the extension): one state for each devspace and no
- * other, and branches only of the running dev containers whose branch was asked for. Undefined for anything else.
+ * other, and branches and change counts (whole numbers from 0) only of the running dev containers whose Git state was
+ * asked for, each once. Undefined for anything else.
  */
 export function parseRefreshValue(value: unknown, params: RefreshParams): DevspaceStates | undefined {
-  if (!isRecord(value) || !hasOnlyKeys(value, ['runtime', 'branches'])) return undefined;
-  const { runtime, branches } = value;
-  if (!Array.isArray(runtime) || !Array.isArray(branches)) return undefined;
+  if (!isRecord(value) || !hasOnlyKeys(value, ['runtime', 'branches', 'changes'])) return undefined;
+  const { runtime, branches, changes } = value;
+  if (!Array.isArray(runtime) || !Array.isArray(branches) || !Array.isArray(changes)) return undefined;
   const asked = new Map(params.devspaces.map((env) => [env.id, env]));
-  const states: DevspaceStates = { runtime: new Map(), branches: new Map() };
+  const states: DevspaceStates = { runtime: new Map(), branches: new Map(), changes: new Map() };
   for (const item of runtime as unknown[]) {
     if (!isRecord(item) || !hasOnlyKeys(item, ['id', 'container', 'volume'], ['servicesRunning'])) return undefined;
     const { id, container, volume, servicesRunning } = item;
@@ -849,6 +852,14 @@ export function parseRefreshValue(value: unknown, params: RefreshParams): Devspa
     if (states.branches.has(id) || typeof branch !== 'string' || branch === '' || branch.length > MAX_REFRESH_BRANCH_LENGTH) return undefined;
     if (branch !== branch.trim() || /[\0\n\r]/.test(branch)) return undefined;
     states.branches.set(id, branch);
+  }
+  const isCount = (count: unknown): count is number => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+  for (const item of changes as unknown[]) {
+    if (!isRecord(item) || !hasOnlyKeys(item, ['id', 'uncommittedFiles', 'unpushedCommits', 'stashes'])) return undefined;
+    const { id, uncommittedFiles, unpushedCommits, stashes } = item;
+    if (typeof id !== 'string' || asked.get(id)?.branch !== true || states.runtime.get(id)?.container !== 'running' || states.changes.has(id)) return undefined;
+    if (!isCount(uncommittedFiles) || !isCount(unpushedCommits) || !isCount(stashes)) return undefined;
+    states.changes.set(id, { uncommittedFiles, unpushedCommits, stashes });
   }
   return states;
 }

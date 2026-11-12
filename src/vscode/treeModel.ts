@@ -9,8 +9,9 @@ import { defaultImageOf, hasConfiguration, isSourceOf, possibleSources, sourceKe
 import { filterRepositories } from '../core/discovery/discoveryService';
 import { isOnDockerHost } from '../core/docker/dockerHost';
 import { hostAccessChecks, type HostAccessChecks } from '../core/policy/hostAccessChecks';
-import { formatChanges, Messages, StateTexts } from '../core/messages';
+import { formatChanges, hasChanges, Messages, StateTexts } from '../core/messages';
 import { DEFAULT_CONFIG_PATH } from '../core/pipeline/recordRules';
+import type { GitChanges } from '../core/pipeline/refreshStates';
 import { keepFlagsOf, keptWhenClosed } from '../core/session/sessionRules';
 import type {
   BusyOperation,
@@ -36,6 +37,21 @@ export const TreeTexts = {
   /** The brackets of the description of the one row of a repository whose devspace is the default-image devspace. */
   defaultImageShort: 'default image',
   lastUsed: (time: string) => `Last used: ${time}`,
+  /**
+   * Tooltip line of a row whose devspace holds work that is not on GitHub yet (the badge of LOCAL_WORK_BADGE), for
+   * example `Not on GitHub yet: 1 uncommitted file, 3 unpushed commits.`; with `countedAt` (the counts recorded while
+   * the devspace ran, shown for a devspace that does not run) also `Counted at <time>.`
+   */
+  notOnGitHubYet: (counts: GitChanges, countedAt?: string) => {
+    const parts = [
+      counts.uncommittedFiles > 0 ? `${counts.uncommittedFiles} uncommitted ${counts.uncommittedFiles === 1 ? 'file' : 'files'}` : undefined,
+      counts.unpushedCommits > 0 ? `${counts.unpushedCommits} unpushed ${counts.unpushedCommits === 1 ? 'commit' : 'commits'}` : undefined,
+      counts.stashes > 0 ? `${counts.stashes} ${counts.stashes === 1 ? 'stash' : 'stashes'}` : undefined,
+    ].filter(isText);
+    return `Not on GitHub yet: ${parts.join(', ')}.${countedAt !== undefined ? ` Counted at ${countedAt}.` : ''}`;
+  },
+  /** Tooltip line of a level of the tree (an owner, a group, a repository with several sources) that holds such a row. */
+  levelNotOnGitHubYet: 'A devspace below holds work that is not on GitHub yet.',
   /**
    * Tooltip line of the GitHub account of a row: the owner of its devspace, or for a row without devspace the account
    * that Start uses (accountChoice.ts), with its permission on the repository when known (`admin`, `write`, …).
@@ -150,6 +166,12 @@ export interface TreeInput {
   busyDevspaceIds: ReadonlySet<string>;
   /** Devspace ID → branch read from the running container. */
   liveBranches: ReadonlyMap<string, string>;
+  /**
+   * Devspace ID → the change counts read from the running container at the last refresh (uncommitted files, unpushed
+   * commits, stashes). A row whose dev container runs shows these; one whose dev container does not run shows the
+   * counts recorded in the registry (Devspace.gitSummary). Missing: none read.
+   */
+  liveChanges?: ReadonlyMap<string, GitChanges>;
   signedIn: boolean;
   /**
    * The GitHub accounts of Devspaces (docs/security.md "Accounts"). With more than one, the description of each
@@ -229,6 +251,12 @@ export interface RepositoryRow {
   servicesRunning?: true;
   /** Branch shown in the row, if known. */
   branch?: string;
+  /**
+   * The devspace holds work that is not on GitHub yet: uncommitted files, unpushed commits, or stashes, by the counts
+   * that the row shows (R-DS-001). The view gives the row the badge LOCAL_WORK_BADGE, and every level above it too
+   * (holdsLocalWork).
+   */
+  localWork?: true;
   /** The row has a devspace, and GitHub does not list its repository. */
   notOnGitHub: boolean;
   /**
@@ -380,6 +408,24 @@ export function holdsActiveRow(node: OwnerGroup | GroupNode | RepositoryNode): b
         return false;
       default:
         return holdsActiveRow(child);
+    }
+  });
+}
+
+/**
+ * Whether a level of the tree (an owner, a group, a repository with several sources) holds a row whose devspace holds
+ * work that is not on GitHub yet (RepositoryRow.localWork); the view gives the level the same badge, so that a closed
+ * level does not hide it.
+ */
+export function holdsLocalWork(node: OwnerGroup | GroupNode | RepositoryNode): boolean {
+  return node.children.some((child) => {
+    switch (child.kind) {
+      case 'repository':
+        return child.localWork === true;
+      case 'hint':
+        return false;
+      default:
+        return holdsLocalWork(child);
     }
   });
 }
@@ -915,10 +961,17 @@ function devspaceRow(
   const liveBranch = containerRuns(state) || state === 'updating' ? input.liveBranches.get(devspace.id) : undefined;
   const branch = nonEmpty(liveBranch) ?? nonEmpty(devspace.gitSummary?.branch ?? undefined);
   const notOnGitHub = input.signedIn && input.discovery !== undefined && info === undefined && confirmedMissing;
-  // The change counts are recorded at each stop; while the container runs they are outdated, and with a missing volume
-  // the changes are gone. Not while the state is unknown (the volume may be gone).
-  const changes =
-    unknown === undefined && (state === 'stopped' || state === 'noContainer') && devspace.gitSummary ? formatChanges(devspace.gitSummary) : '';
+  // The change counts (R-DS-001): while the dev container runs, the ones that the last refresh read from it (the
+  // recorded ones are outdated then); while it does not run, the ones recorded at its last stop (or close, switch,
+  // open). With a missing volume the changes are gone. None while the state is unknown (the volume may be gone).
+  const recorded = unknown === undefined && (state === 'stopped' || state === 'noContainer') ? devspace.gitSummary : undefined;
+  const counts: GitChanges | undefined =
+    unknown === undefined && (containerRuns(state) || state === 'updating') ? input.liveChanges?.get(devspace.id) : recorded;
+  const changes = counts ? formatChanges(counts) : '';
+  const localWork = counts !== undefined && hasChanges(counts);
+  const formatTime = input.formatTime ?? defaultFormatTime;
+  // A recorded count says when it was counted; a count of the last refresh is the one of now.
+  const countedAt = recorded !== undefined && timeValue(recorded.recordedAt) > 0 ? formatTime(recorded.recordedAt) : undefined;
 
   // After a rename or transfer on GitHub the row shows the current name, while the pipeline reads the switch under the
   // registry name: the row shows the state of the switch under that name, as the pipeline applies it.
@@ -953,7 +1006,6 @@ function devspaceRow(
   const right = [shownState, services, changes, notOnGitHub ? StateTexts.notOnGitHub : undefined, unrestricted].filter(isText).join(' · ');
   const description = [left, right].filter(isText).join('   ');
 
-  const formatTime = input.formatTime ?? defaultFormatTime;
   const tooltip = [
     devspaceName(repository, source, child),
     // The configuration of the devspace itself (the root configuration under the file name it was created with); for
@@ -962,6 +1014,7 @@ function devspaceRow(
     [unknown !== undefined ? [StateTexts.unknown, keptAny ? StateTexts.kept : undefined].filter(isText).join(' · ') : rowStateText(state, keptAny), services, changes]
       .filter(isText)
       .join(' · '),
+    localWork && counts !== undefined ? TreeTexts.notOnGitHubYet(counts, countedAt) : undefined,
     unknown !== undefined ? TreeTexts.unknownDetail(engine, unknown.reason) : undefined,
     kept ? TreeTexts.kept : undefined,
     keptOnce ? TreeTexts.keptOnce : undefined,
@@ -991,6 +1044,7 @@ function devspaceRow(
     ...(unknown !== undefined ? { stateUnknown: true as const } : {}),
     ...(servicesRunning ? { servicesRunning: true as const } : {}),
     branch,
+    ...(localWork ? { localWork: true as const } : {}),
     notOnGitHub,
     hostAccessChecks: checks,
     actions,
