@@ -14,16 +14,28 @@ import { nextBackgroundRunAt } from '../remoteMonitor/backgroundRules';
 import { RUN_FAILURE_EVENTS, type RunEvent, type RunReport } from '../remoteMonitor/runReport';
 import { compareDevspacesVersions, isDevspacesVersion } from '../http';
 import { RECORDED_LIST_MS, RECORD_AHEAD_MS } from '../vscodeExtensions';
-import { cacheRunKnown, type MonitorRecords } from './monitorRecords';
+import type { Devspace } from '../types';
+import { cacheRunKnown, type HeartbeatFile, type MonitorRecords } from './monitorRecords';
 import type { ContainerDetails } from './objectDetails';
 import { ageText, cell, chip, countText, dockerTimeText, fact, itemsText, shortDigest, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportFact, type ReportSection } from './reportModel';
 
-/** What the report knows of this computer: its ID (the source of its heartbeats) and the repositories of its devspaces. */
+/** The entry of a devspace in the registry of this computer, as far as the reports need it. */
+export type ReportDevspace = Pick<
+  Devspace,
+  'id' | 'repository' | 'volumeName' | 'configPath' | 'defaultImage' | 'createdAt' | 'lastUsedAt' | 'lastSeenInUseAt' | 'gitSummary' | 'buildRecord' | 'owner' | 'keepRunning' | 'keepRunningOnce' | 'additionalVolumes' | 'serviceVolumes'
+>;
+
+/**
+ * What the report knows of this computer: its ID (the source of its heartbeats), the repositories of its devspaces, and
+ * the entries of its devspaces on the host of the report.
+ */
 export interface ReportComputer {
   /** The ID of this computer (computer.id), the source of its records. */
   id: string;
   /** The repository (`owner/name`) of each devspace of this computer, by its ID. */
   repositories: ReadonlyMap<string, string>;
+  /** The entries of the devspaces of this computer in its registry, by their ID (for the reports of their objects). */
+  devspaces?: ReadonlyMap<string, ReportDevspace>;
   /** The version of this extension (x.y.z). */
   version: string;
 }
@@ -109,6 +121,23 @@ function computerText(source: string, computer: ReportComputer): string {
   return source === computer.id ? 'this computer' : 'another computer';
 }
 
+/**
+ * The cells of a heartbeat record: its computer, its last sign, and what the Monitor does when the last window of that
+ * computer closes (its rule of the stop: Keep Running When Closed, a manual Stop, or the time without a sign).
+ */
+export function windowCells(heartbeat: HeartbeatFile, computer: ReportComputer, clock: ReportClock): ReportCell[] {
+  const record = heartbeat.record;
+  const closes: ReportCell =
+    record === undefined
+      ? cell('', chip('the record cannot be read', 'warn'))
+      : record.keepRunning
+        ? cell('keeps running', chip('Keep Running When Closed', 'info'))
+        : record.stopNow === true
+          ? cell('stopped by Stop')
+          : cell(`stops after ${spanText(record.limitSeconds * 1000)} without a sign${record.release === true ? ' · the window left' : ''}`);
+  return [cell(computerText(heartbeat.source, computer)), cell(record !== undefined ? ageText(record.at, clock.now) : ''), closes];
+}
+
 /** A devspace by its repository on this computer, else as one of another computer or profile. */
 function devspaceText(id: string, computer: ReportComputer): string {
   return computer.repositories.get(id) ?? `a devspace of another computer or profile (${id.slice(0, 8)})`;
@@ -124,18 +153,7 @@ export function monitorVolumeReport(records: MonitorRecords, computer: ReportCom
     body: {
       kind: 'table',
       columns: ['Devspace', 'Computer', 'Last sign', 'When the last window closes'],
-      rows: heartbeats.map((heartbeat) => {
-        const record = heartbeat.record;
-        const closes: ReportCell =
-          record === undefined
-            ? cell('', chip('the record cannot be read', 'warn'))
-            : record.keepRunning
-              ? cell('keeps running', chip('Keep Running When Closed', 'info'))
-              : record.stopNow === true
-                ? cell('stopped by Stop')
-                : cell(`stops after ${spanText(record.limitSeconds * 1000)} without a sign${record.release === true ? ' · the window left' : ''}`);
-        return [cell(devspaceText(heartbeat.devspaceId, computer)), cell(computerText(heartbeat.source, computer)), cell(record !== undefined ? ageText(record.at, clock.now) : ''), closes];
-      }),
+      rows: heartbeats.map((heartbeat) => [cell(devspaceText(heartbeat.devspaceId, computer)), ...windowCells(heartbeat, computer, clock)]),
       empty: 'No window has sent a sign.',
     },
     from: 'From the heartbeat records heartbeats/COMPUTER.DEVSPACE-ID.json. A window sends a sign every 30 seconds; the Monitor stops a devspace when no sign came within its time.',

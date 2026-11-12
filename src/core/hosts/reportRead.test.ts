@@ -63,6 +63,15 @@ describe('readResourceReport', () => {
     expect(docker.words()).toEqual(['container inspect', 'volume ls', 'image ls', 'run --rm']);
   });
 
+  it('passes the helper tag of this version to the report of a helper container', async () => {
+    const worker: HostObject = { kind: 'container', id: 'w1', name: 'devspaces-window-worker1', purpose: 'worker', image: HELPER };
+    const docker = fakeDocker({ 'container inspect': failed('Error response from daemon: No such container: w1\n') });
+    const report = await readResourceReport(docker, { object: worker, currentHelperTag: HELPER, computer: COMPUTER, clock: CLOCK });
+    expect(docker.words()).toEqual(['container inspect']);
+    const image = report.sections[0]?.body.kind === 'facts' ? report.sections[0].body.facts.find((entry) => entry.label === 'Image') : undefined;
+    expect(image).toEqual({ label: 'Image', value: { text: HELPER, chip: { text: 'the helper image of this version of Devspaces', tone: 'keep' } } });
+  });
+
   it('runs the reader with the helper image of this version first, mounts only the volumes that exist, and reads the platform for the store of VS Code', async () => {
     const docker = fakeDocker({
       'volume inspect': ok(`${JSON.stringify({ Name: 'devspaces-vscode', Driver: 'local', Scope: 'local', Labels: {} })}\n`),
@@ -90,7 +99,7 @@ describe('readResourceReport', () => {
     const docker = fakeDocker({ 'container inspect': ok(`${JSON.stringify({ Id: 'm1', Name: '/devspaces-monitor', State: { Status: 'running' }, Config: { Labels: {} } })}\n`), 'volume ls': ok('other\n') });
     const report = await readResourceReport(docker, { object: monitorContainer, computer: COMPUTER, clock: CLOCK });
     expect(docker.words()).toEqual(['container inspect', 'volume ls']);
-    expect(report.notices).toContain('What the volume contains could not be read: the volume is not there anymore.');
+    expect(report.notices).toContain('The volume devspaces-monitor is not there: the records of the Monitor are missing from this report.');
   });
 
   it('gives a failed list as a note with its reason, and a list that took too long says so', async () => {
@@ -100,7 +109,7 @@ describe('readResourceReport', () => {
       computer: COMPUTER,
       clock: CLOCK,
     });
-    expect(refused.notices.some((notice) => notice.startsWith('What the volume contains could not be read:') && notice.includes('permission denied'))).toBe(true);
+    expect(refused.notices.some((notice) => notice.startsWith('The records of the Monitor in devspaces-monitor could not be read:') && notice.includes('permission denied'))).toBe(true);
     const slow = await readResourceReport(fakeDocker({ 'container inspect': inspect, 'volume ls': { exitCode: null, stdout: '', stderr: '', timedOut: true } }), {
       object: monitorContainer,
       computer: COMPUTER,

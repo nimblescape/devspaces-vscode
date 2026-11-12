@@ -237,7 +237,7 @@ function sameDigests(a: Record<string, string>, b: Record<string, string>): bool
 }
 
 /** The PreparedImageLabel of the label text `text`; `undefined` when it is missing, too long, or not of that shape. */
-function preparedImageLabel(text: string | undefined): PreparedImageLabel | undefined {
+export function preparedImageLabel(text: string | undefined): PreparedImageLabel | undefined {
   if (text === undefined || text === '' || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
   let value: unknown;
   try {

@@ -1489,9 +1489,12 @@ async function activateExtension(
     vmState: readVmState,
     startVm: () => vmCommands.start(),
     read: async (target, clock) => {
-      const repositories = new Map((await registry.list()).map((devspace) => [devspace.id, devspace.repository] as const));
+      const listed = await registry.list();
+      const repositories = new Map(listed.map((devspace) => [devspace.id, devspace.repository] as const));
+      // The objects of a devspace of this computer report its entry; only of the devspaces of the host of the report.
+      const devspaces = new Map(devspacesOfHost(listed, target.host).map((devspace) => [devspace.id, devspace] as const));
       const helperTag = await readCurrentHelperTag();
-      const computer = { id: computerId(), repositories, version: userAgentVersion() ?? '0.0.0' };
+      const computer = { id: computerId(), repositories, devspaces, version: userAgentVersion() ?? '0.0.0' };
       return onHostShell(target.host, () => readResourceReport(docker, { object: target.object, ...(helperTag !== undefined ? { currentHelperTag: helperTag } : {}), computer, clock }));
     },
     readMonitorLog: (host) => onHostShell(host, () => readMonitorLog(docker)),

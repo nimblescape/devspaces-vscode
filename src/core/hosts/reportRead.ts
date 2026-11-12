@@ -117,6 +117,7 @@ export async function readResourceReport(docker: Pick<BootstrapDocker, 'run'>, i
     ...(detailsProblem !== undefined ? { detailsProblem } : {}),
     ...(read !== undefined ? { volumes: read.volumes } : {}),
     ...(read?.platform !== undefined ? { platform: read.platform } : {}),
+    ...(input.currentHelperTag !== undefined ? { currentHelperTag: input.currentHelperTag } : {}),
     computer: input.computer,
     clock: input.clock,
   });
