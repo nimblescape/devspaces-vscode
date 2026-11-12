@@ -60,7 +60,7 @@ import {
   type MarketplaceVersion,
 } from '../core/vscodeExtensions';
 import { STORE_SERVER_FOLDER, isServerReady, serverPlatform, storeLock, storeTryLock, type StoreLockAttempt } from '../core/worker/vscodeServerStore';
-import type { RunNetwork } from './backgroundRules';
+import type { RunNetwork } from '../core/remoteMonitor/backgroundRules';
 import { isNetworkError, isServerAnswer } from '../core/networkFailure';
 import { engineFailure } from './engine';
 import { noteRun } from './runNotes';

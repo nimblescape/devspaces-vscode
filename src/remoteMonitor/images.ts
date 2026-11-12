@@ -27,12 +27,13 @@ import { RegistryClient, type DigestResult, type RegistryFailure } from '../core
 import { parseImageReference as parseRegistryReference } from '../core/imageCheck/reference';
 import type { HttpTransport } from '../core/http';
 import { abortError } from '../core/ports';
-import { isListedRepository, parseImageReference, type ImageReferenceParts } from '../core/remoteMonitor/protocol';
+import { parseImageReference, type ImageReferenceParts } from '../core/remoteMonitor/protocol';
+import { MAX_REPLACED_PER_REPOSITORY, type ReplacedImages } from '../core/remoteMonitor/replacedImages';
 import { referenceText, type RegistryAnswer as TagAnswer } from '../core/remoteMonitor/registryAnswers';
 import type { EngineImage } from '../core/worker/dockerEngine';
 import { errorMessage } from '../core/errors';
 import { isNetworkError } from '../core/networkFailure';
-import type { NetworkContact } from './backgroundRules';
+import type { NetworkContact } from '../core/remoteMonitor/backgroundRules';
 import { engineFailure, type ImageEngine } from './engine';
 import { noteRun } from './runNotes';
 
@@ -186,9 +187,6 @@ export interface ImageMaintenanceDeps {
   now?: () => number;
 }
 
-/** Image IDs that a pull replaced, by repository. */
-export type ReplacedImages = Record<string, string[]>;
-
 /** The image references in use as the monitor read them (ImageMaintenanceDeps.referencesInUse). */
 export interface ReferencesInUse {
   references: string[];
@@ -244,11 +242,6 @@ function repoDigestsOf(inspected: InspectedImage): Array<{ name: string; digest:
   }
   return result;
 }
-/**
- * At most this many IDs are kept per repository; beyond it the IDs that are tagged now go first (the listing finds them
- * again), then the oldest untagged ones (trimReplaced).
- */
-const MAX_REPLACED_PER_REPOSITORY = 200;
 
 /** Trims the IDs of a repository to MAX_REPLACED_PER_REPOSITORY: tagged ones first, then the oldest. */
 function trimReplaced(ids: string[], tagged: ReadonlySet<string>): string[] {
@@ -259,23 +252,9 @@ function trimReplaced(ids: string[], tagged: ReadonlySet<string>): string[] {
   }
   return result;
 }
-const IMAGE_ID = /^[A-Za-z0-9:]{1,100}$/;
 
-/** The stored replaced IDs; an empty record for anything invalid. */
-export function parseReplacedImages(text: string): ReplacedImages {
-  try {
-    const value = JSON.parse(text) as unknown;
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-    const result: ReplacedImages = {};
-    for (const [repository, ids] of Object.entries(value)) {
-      // Any repository as the engine lists it (those of Docker Hub too, which a reference in use can name).
-      if (isListedRepository(repository) && Array.isArray(ids)) result[repository] =ids.filter((id): id is string => typeof id === 'string' && IMAGE_ID.test(id)).slice(-MAX_REPLACED_PER_REPOSITORY);
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
+/** An image ID as the engine and the records name it. */
+const IMAGE_ID = /^[A-Za-z0-9:]{1,100}$/;
 
 /**
  * The stored IDs without the repositories that keep none. A new record; the given one is not changed. Every other

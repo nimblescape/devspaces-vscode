@@ -16,7 +16,7 @@ import { silentLogger } from '../core/ports';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import { serverFolder, serverScriptName, type StoreLockAttempt, type VscodeStoreDeps } from '../core/worker/vscodeServerStore';
 import { BackgroundRun, type VscodeBackgroundDeps } from './background';
-import type { CacheRunState } from './backgroundRules';
+import type { CacheRunState } from '../core/remoteMonitor/backgroundRules';
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const DAY = 24 * 60 * 60_000;

@@ -8,8 +8,8 @@
 // refuses it). And the rules of the state of the failed fetches, of a version that no open used or that a running
 // container runs, and of the commits in the processes of a container.
 import { describe, expect, it } from 'vitest';
-import { cacheRunDue } from '../core/remoteMonitor/cacheSettings';
-import { parseCronSchedule } from '../core/remoteMonitor/cron';
+import { cacheRunDue } from './cacheSettings';
+import { parseCronSchedule } from './cron';
 import {
   CLOCK_RESET_MS,
   FETCH_RETRY_MS,

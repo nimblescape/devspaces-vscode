@@ -30,7 +30,7 @@
 // morning needs.
 // At the end of each run, its short report goes into the volume of the Monitor (runReport.ts; the parts note their
 // events with noteRun of runNotes.ts).
-// The pure rules are in backgroundRules.ts. No `vscode`.
+// The pure rules are in src/core/remoteMonitor/backgroundRules.ts. No `vscode`.
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -67,7 +67,7 @@ import {
   type NetworkContact,
   type RunNetwork,
   type StoredServer,
-} from './backgroundRules';
+} from '../core/remoteMonitor/backgroundRules';
 import { isNetworkError, isServerAnswer } from '../core/networkFailure';
 import { errorMessage } from '../core/errors';
 import { engineFailure, type VscodeEngine } from './engine';

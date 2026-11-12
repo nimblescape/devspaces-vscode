@@ -13,7 +13,8 @@ import { IMAGES_IN_USE_MAX_AGE_MS, LAST_USE_FILE, imagesInUseFileName } from '..
 import type { HttpResponse } from '../core/http';
 import type { EngineContainerSummary } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
-import { EXIT_INVALID, PULLED_OVER_IMAGES_FILE, STATE_TEMPORARY_FILE, main, readImagesInUse, writeImagesInUse } from './main';
+import { EXIT_INVALID, STATE_TEMPORARY_FILE, main, readImagesInUse, writeImagesInUse } from './main';
+import { PULLED_OVER_IMAGES_FILE } from '../core/remoteMonitor/replacedImages';
 
 const T0 = Date.parse('2026-10-11T10:00:00Z');
 const A = '0123456789abcdef0123456789abcdef';

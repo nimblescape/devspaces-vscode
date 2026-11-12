@@ -18,13 +18,12 @@ import {
   IMAGE_REMOVE_TIMEOUT_MS,
   ImageMaintenance,
   localImagesOf,
-  parseReplacedImages,
   pruneReplacedImages,
   requestsWithin,
   imagesById,
   type LocalImage,
-  type ReplacedImages,
 } from './images';
+import { parseReplacedImages, type ReplacedImages } from '../core/remoteMonitor/replacedImages';
 
 const DEV = 'ghcr.io/majikmate/devcontainer-dev';
 const WEB = 'ghcr.io/majikmate/devcontainer-classroom-web';

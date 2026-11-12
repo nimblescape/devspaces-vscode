@@ -37,7 +37,7 @@ import { NodeProcessRunner } from '../core/process';
 import type { ProcessRunner } from '../core/ports';
 import { engineHelperRecordText, parseEngineHelperRecordText, type EngineHelperRecord } from '../core/remoteMonitor/helperCheck';
 import { isRecord } from '../core/valueChecks';
-import type { NetworkContact } from './backgroundRules';
+import type { NetworkContact } from '../core/remoteMonitor/backgroundRules';
 import { engineFailure, type ImageEngine } from './engine';
 import { REGISTRY_TIMEOUT_MS, requestsWithin } from './images';
 import { PREPARE_WORKER_PATH } from './prepares';

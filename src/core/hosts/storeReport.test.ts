@@ -1,0 +1,167 @@
+// SPDX-License-Identifier: MIT
+// © 2026 Hannes Stauss (scalarion@nimblescape.com)
+// Licensed under the MIT License. See LICENSE in the repository root for details.
+
+// The reports of the store of VS Code and of the cache of the workers (docs/requirements.md R-ENG-008): each server
+// version and each extension file with the rule of the cleanup of the Monitor that keeps or removes it, the failed
+// downloads with their next try, the cleanup, and the top level of the cache.
+import { describe, expect, it } from 'vitest';
+import { monitorRecords } from './monitorRecords';
+import { CLOCK, DAY, DEVSPACE, HOUR, NOW, OTHER_DEVSPACE, monitorFile } from './reportFixtures.testkit';
+import type { ReportBody, ReportCell, ReportSection } from './reportModel';
+import { MAX_EXTENSION_ROWS, vscodeStoreReport, workerCacheReport } from './storeReport';
+import type { StoredServer, VscodeStoreReading } from './volumeReader';
+
+const [A, B, C, D, E, F] = ['a', 'b', 'c', 'd', 'e', 'f'].map((digit) => digit.repeat(40));
+
+function server(commit: string, version: string, overrides: Partial<StoredServer> = {}): StoredServer {
+  return { quality: 'stable', platform: 'linux-x64', commit, version, modifiedAt: NOW - 30 * DAY, node: true, script: true, usage: { bytes: 230_000_000, files: 1000, cut: false }, ...overrides };
+}
+
+const empty = { bytes: 0, files: 0, cut: false };
+
+function store(overrides: Partial<VscodeStoreReading> = {}): VscodeStoreReading {
+  return {
+    servers: [server(C, '1.139.1'), server(A, '1.141.0'), server(D, '1.138.0'), server(B, '1.140.2'), server(F, '1.137.0', { node: false })],
+    used: [
+      { name: `stable-linux-x64-${A}`, at: NOW - HOUR },
+      { name: `stable-linux-x64-${B}`, at: NOW - 9 * DAY },
+      { name: `stable-linux-x64-${C}`, at: NOW - 16 * DAY },
+      { name: `stable-linux-x64-${D}`, at: NOW - 3 * DAY },
+    ],
+    extensions: [
+      { folder: 'universal', name: 'dbaeumer.vscode-eslint-3.0.10', bytes: 1_700_000, modifiedAt: NOW - 20 * DAY },
+      { folder: 'universal', name: 'dbaeumer.vscode-eslint-3.0.16', bytes: 1_700_000, modifiedAt: NOW - DAY },
+      { folder: 'linux-x64', name: 'golang.go-0.48.0-linux-x64', bytes: 14_000_000 },
+      { folder: 'linux-x64', name: 'golang.go-0.47.2-linux-x64', bytes: 14_000_000 },
+      { folder: 'universal', name: 'some.unlisted-1.0.0', bytes: 1000 },
+      { folder: 'universal', name: 'README', bytes: 10 },
+    ],
+    temporary: empty,
+    extensionTemporary: { bytes: 4096, files: 1, cut: false },
+    locks: 7,
+    cut: false,
+    ...overrides,
+  };
+}
+
+const records = monitorRecords({
+  cut: false,
+  textsDropped: false,
+  files: [
+    monitorFile('cache-run.json', { lastEndAt: NOW - 2 * HOUR, lastCleanupAt: NOW - 3 * HOUR, failedFetches: { [`stable-linux-x64-${E}`]: NOW - 30 * HOUR } }),
+    monitorFile('extensions/failures.json', { 'ms-python.python': NOW - 2 * HOUR }),
+    monitorFile('extensions/chosen.json', { 'dbaeumer.vscode-eslint': 'universal/dbaeumer.vscode-eslint-3.0.16' }),
+    monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['dbaeumer.vscode-eslint', 'golang.go'], defaults: [] }),
+    monitorFile(`extensions/wanted/${OTHER_DEVSPACE}.json`, { at: NOW - 2 * DAY, configuration: ['golang.go@0.47.2'], defaults: [] }),
+  ],
+});
+
+function section(sections: readonly ReportSection[], title: string): ReportBody {
+  const found = sections.find((candidate) => candidate.title === title);
+  if (found === undefined) throw new Error(`No section ${title}`);
+  return found.body;
+}
+
+function rows(body: ReportBody): ReportCell[][] {
+  if (body.kind !== 'table') throw new Error('No table');
+  return body.rows;
+}
+
+function facts(body: ReportBody): Record<string, string> {
+  if (body.kind !== 'facts') throw new Error('No facts');
+  return Object.fromEntries(body.facts.map((entry) => [entry.label, entry.value.text]));
+}
+
+describe('the report of the store of VS Code', () => {
+  it('gives each server version, newest first, with the rule of the cleanup of the Monitor', () => {
+    const report = vscodeStoreReport(store(), records, CLOCK);
+    const servers = rows(section(report.sections, 'VS Code Server'));
+    expect(servers.map((row) => [row[0].text, row[3].text, row[5].text, row[6].chip])).toEqual([
+      ['1.141.0', 'aaaaaaa', '1 hour ago', { text: 'kept: newest', tone: 'keep' }],
+      ['1.140.2', 'bbbbbbb', '9 days ago', { text: 'kept: one of the 2 newest', tone: 'keep' }],
+      ['1.139.1', 'ccccccc', '16 days ago', { text: 'removed at the next cleanup, unless a running container runs it', tone: 'remove' }],
+      ['1.138.0', 'ddddddd', '3 days ago', { text: 'kept: used 3 days ago', tone: 'keep' }],
+      // Without a marker, the time of its folder counts (30 days): it goes too, but it is incomplete first.
+      ['1.137.0', 'fffffff', 'none · downloaded 30 days ago', { text: 'incomplete: no window uses it', tone: 'warn' }],
+    ]);
+    expect(servers[0][4].text).toBe('230 MB');
+  });
+
+  it('gives each extension file with the rule of the cleanup of the Monitor', () => {
+    const report = vscodeStoreReport(store(), records, CLOCK);
+    expect(rows(section(report.sections, 'Extensions')).map((row) => [row[0].text, row[1].text, row[2].text, row[5].chip?.text])).toEqual([
+      ['dbaeumer.vscode-eslint', '3.0.16', 'universal', 'kept: the version that the runs chose'],
+      ['dbaeumer.vscode-eslint', '3.0.10', 'universal', 'removed at the next cleanup: an older version'],
+      ['golang.go', '0.48.0', 'linux-x64', 'kept: newest'],
+      ['golang.go', '0.47.2', 'linux-x64', 'kept: a list pins @0.47.2'],
+      ['README', '', 'universal', 'no file of the Monitor: left alone'],
+      ['some.unlisted', '1.0.0', 'universal', 'removed at the next cleanup: no list of the last 14 days names it'],
+    ]);
+    expect(report.summary).toEqual([
+      { text: '5 server versions', tone: 'info' },
+      { text: '6 extension files', tone: 'info' },
+      { text: '3 removed at the next cleanup', tone: 'remove' },
+      { text: '2 downloads failed', tone: 'warn' },
+    ]);
+  });
+
+  it('keeps the files of the extensions that no list names while a list cannot be read, as the Monitor does', () => {
+    const unreadable = monitorRecords({
+      cut: false,
+      textsDropped: false,
+      files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['dbaeumer.vscode-eslint'], defaults: [] }), monitorFile(`extensions/wanted/${OTHER_DEVSPACE}.json`, 'no json')],
+    });
+    const extensions = rows(section(vscodeStoreReport(store(), unreadable, CLOCK).sections, 'Extensions'));
+    expect(extensions.find((row) => row[0].text === 'some.unlisted')?.[5].chip?.text).toBe('kept: newest');
+  });
+
+  it('gives the failed downloads with their next try, and the cleanup', () => {
+    const report = vscodeStoreReport(store(), records, CLOCK);
+    expect(rows(section(report.sections, 'Downloads that failed')).map((row) => row.map((entry) => entry.text))).toEqual([
+      ['VS Code Server eeeeeee (stable, linux-x64)', 'yesterday 03:00', 'with the next run'],
+      ['Extension ms-python.python', 'today 07:00', 'with the first run after tomorrow 07:00'],
+    ]);
+    expect(facts(section(report.sections, 'Cleanup and downloads'))).toMatchObject({
+      'Last cleanup': 'today 06:00 · at most once a day',
+      'Next cleanup': 'with the first run after tomorrow 06:00',
+      'Downloads now': expect.stringMatching(/^1 temporary file \(4\.1 kB\)/),
+    });
+    expect(report.notices).toEqual([]);
+  });
+
+  it('says what it misses without the records of the Monitor, and when a list is incomplete', () => {
+    const report = vscodeStoreReport(store({ cut: true }), undefined, CLOCK);
+    expect(report.sections.map((entry) => entry.title)).toEqual(['VS Code Server', 'Extensions', 'Cleanup and downloads']);
+    expect(rows(section(report.sections, 'Extensions'))[1][5].chip).toBeUndefined();
+    expect(report.notices).toEqual([expect.stringContaining('more entries than the reader lists'), expect.stringContaining('devspaces-monitor could not be read')]);
+  });
+
+  it('shows at most MAX_EXTENSION_ROWS extension files and counts the others', () => {
+    const many = Array.from({ length: MAX_EXTENSION_ROWS + 2 }, (_, index) => ({ folder: 'universal', name: `pub.ext${index}-1.0.0`, bytes: 1 }));
+    const body = section(vscodeStoreReport(store({ extensions: many }), records, CLOCK).sections, 'Extensions');
+    expect(rows(body)).toHaveLength(MAX_EXTENSION_ROWS);
+    expect(body.kind === 'table' ? body.more : undefined).toBe('2 more files, sorted by extension');
+  });
+});
+
+describe('the report of the cache of the workers', () => {
+  it('gives its top level, the largest first, and says when it holds more', () => {
+    const report = workerCacheReport(
+      {
+        entries: [
+          { name: 'small', kind: 'file', modifiedAt: NOW - HOUR, usage: { bytes: 10, files: 1, cut: false } },
+          { name: 'cli', kind: 'folder', modifiedAt: NOW - DAY, usage: { bytes: 48_000_000, files: 300, cut: true } },
+        ],
+        more: true,
+      },
+      CLOCK,
+    );
+    const body = section(report.sections, 'Top level');
+    expect(rows(body).map((row) => row.map((entry) => entry.text))).toEqual([
+      ['cli', 'folder', 'at least 48 MB', '300', 'yesterday 09:00'],
+      ['small', 'file', '10 B', '1', 'today 08:00'],
+    ]);
+    expect(body.kind === 'table' ? body.more : undefined).toBe('It holds more entries than the reader lists.');
+  });
+});

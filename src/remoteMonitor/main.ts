@@ -95,7 +95,7 @@ import {
 } from '../core/remoteMonitor/protocol';
 import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, type SelfEngine, type VscodeEngine } from './engine';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
-import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from './backgroundRules';
+import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_SUCCESSOR_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
@@ -124,9 +124,9 @@ import { DEFAULT_IMAGE_TIME_ZONE, isTimeZone, nextCronTime } from '../core/remot
 import {
   ImageMaintenance,
   REMOTE_IMAGE_FIRST_PASS_MS,
-  parseReplacedImages,
   type ReferencesInUse,
 } from './images';
+import { PULLED_OVER_IMAGES_FILE, REPLACED_IMAGES_FILE, parseReplacedImages } from '../core/remoteMonitor/replacedImages';
 import { stopLockDeps, stopLocker, type StopLocker } from './stopLock';
 import { prepareDevspaces, storedPrepareWorker, type PrepareWorker } from './prepares';
 import { MONITOR_WORKER_HASH_ENV } from '../core/remoteMonitor/workerScript';
@@ -1082,13 +1082,6 @@ export function vmFromEnv(env: NodeJS.ProcessEnv): boolean {
   return env[MONITOR_VM_ENV] === '1';
 }
 
-/** The IDs of images that pulls replaced, in the volume. */
-export const REPLACED_IMAGES_FILE = 'replaced-images.json';
-/**
- * Of those, the IDs that the monitor's own pull replaced (ImageMaintenanceDeps.pulledOver), in the volume, in the same
- * form.
- */
-export const PULLED_OVER_IMAGES_FILE = 'pulled-over-images.json';
 /** How often the monitor looks whether a time of the schedule has come (as cron: every minute). */
 export const IMAGE_CHECK_MS = 60_000;
 

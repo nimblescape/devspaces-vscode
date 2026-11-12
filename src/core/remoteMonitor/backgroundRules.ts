@@ -2,10 +2,12 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The pure rules of the Monitor's background run (background.ts does the I/O): its stored state in the volume
-// (the end of the last run, the last cleanup, the retry of a run that did not reach the network), when the cleanup of the shared VS Code server store is due (at most once
-// a day), which qualities of the server it keeps new, and which server versions the cleanup removes. Pure; no I/O.
-import type { VscodeQuality } from '../core/helperChannel/protocol';
+// The pure rules of the Monitor's background run (src/remoteMonitor/background.ts does the I/O): its stored state in
+// the volume (the end of the last run, the last cleanup, the retry of a run that did not reach the network), when the
+// cleanup of the shared VS Code server store is due (at most once a day), which qualities of the server it keeps new,
+// and which server versions the cleanup removes. Pure; no I/O. Here in core, as the reports of the view Docker Hosts
+// read the same state and give the same rules (src/core/hosts/resourceReport.ts).
+import type { VscodeQuality } from '../helperChannel/protocol';
 
 /** The cleanup of the store runs at most once a day. */
 export const STORE_CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;

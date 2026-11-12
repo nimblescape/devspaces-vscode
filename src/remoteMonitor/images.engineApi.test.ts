@@ -8,7 +8,8 @@ import { abortError } from '../core/ports';
 import type { EngineFilters, EngineImage } from '../core/worker/dockerEngine';
 import type { ImageEngine } from './engine';
 import type { HttpResponse, HttpTransport } from '../core/http';
-import { ImageMaintenance, localImagesOf, type ReplacedImages } from './images';
+import { ImageMaintenance, localImagesOf } from './images';
+import type { ReplacedImages } from '../core/remoteMonitor/replacedImages';
 
 const DEV = 'ghcr.io/majikmate/devcontainer-dev';
 /**
