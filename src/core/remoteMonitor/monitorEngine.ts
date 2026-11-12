@@ -16,7 +16,9 @@ import type { MonitorCreated, MonitorRunSpec } from '../worker/dockerEngine';
  * its restart policy since its last start by a client (`RestartCount`; 0 when it cannot be read), its ID (64 hex digits;
  * undefined when it cannot be read), when the daemon created it (milliseconds since the epoch on the clock of the
  * daemon; undefined when it cannot be read), its restart policy (`no`, `on-failure`, `unless-stopped`, …; missing
- * when it cannot be read), and the ID of its image (`sha256:` and 64 hex digits; missing when it cannot be read).
+ * when it cannot be read), the ID of its image (`sha256:` and 64 hex digits; missing when it cannot be read), and the
+ * version of Devspaces of its script (LABEL_MONITOR_VERSION, x.y.z; missing for a monitor of an earlier extension or a
+ * label that is no version).
  */
 export type MonitorInspected =
   | { exists: false }
@@ -31,6 +33,7 @@ export type MonitorInspected =
       owner?: string;
       restartPolicy?: string;
       image?: string;
+      version?: string;
     };
 
 /**

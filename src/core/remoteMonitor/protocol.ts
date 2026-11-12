@@ -35,6 +35,14 @@ export const LABEL_MONITOR_CREATE = 'nimblescape.devspaces.monitor-create';
  */
 export const LABEL_MONITOR_OWNER = 'nimblescape.devspaces.monitor-owner';
 /**
+ * The label with the version of Devspaces (x.y.z) of the script that the monitor container runs (not part of
+ * remoteMonitorLabelValue; docs/requirements.md R-DS-011). A monitor with it moves itself to the script of a newer
+ * version that a window stored in its volume, and accepts the input of the commands of older and newer windows, so an
+ * ensure keeps a running monitor of another version that has it (RemoteSessionMonitor) instead of replacing it. A
+ * monitor without it (created by an earlier extension) is replaced as before.
+ */
+export const LABEL_MONITOR_VERSION = 'nimblescape.devspaces.monitor-version';
+/**
  * Where the pipe loader stores the script (its own file system, so it matches the container version). A
  * restart of the container starts it from there without new input (resume); the `docker exec` subcommands run it too.
  */
@@ -141,6 +149,22 @@ export interface HeartbeatRecord {
   stopNow?: true;
 }
 
+/**
+ * How a parser of the input of a command of the Monitor treats a key that it does not know: strict (refused) by
+ * default, as between the extension and its worker (one version); with `ignoreUnknownKeys` it is left out, as the
+ * commands of the Monitor take the input of windows of other versions (docs/requirements.md R-DS-011).
+ */
+export interface ParseOptions {
+  ignoreUnknownKeys?: boolean;
+}
+
+/** A copy of `value` with only the keys of `keys` that it has. */
+function knownKeys(value: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const kept: Record<string, unknown> = {};
+  for (const key of keys) if (Object.hasOwn(value, key)) kept[key] = value[key];
+  return kept;
+}
+
 function isSeq(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
@@ -157,9 +181,11 @@ export function clampLimitSeconds(value: number): number {
  * MAX_HEARTBEAT_DEVSPACES objects with exactly `id` (isRemoteDevspaceId), `keepRunning` (a boolean), and `seq` (a
  * safe non-negative integer), and optionally `clearOnly` (a boolean; true only with keepRunning false) or `stopNow`
  * (only `true`, only with keepRunning false and without `clearOnly`)), and optionally `release` (only `true`, and then
- * no entry with `stopNow`). `undefined` for anything else; then nothing is written.
+ * no entry with `stopNow`). `undefined` for anything else; then nothing is written. With `ignoreUnknownKeys` (the
+ * command of the Monitor), the keys that it does not know are left out first, in the object and in each entry, so a
+ * window of a newer version that sends a new key still gets its heartbeat written (docs/requirements.md R-DS-011).
  */
-export function parseHeartbeatInput(text: string): HeartbeatInput | undefined {
+export function parseHeartbeatInput(text: string, options: ParseOptions = {}): HeartbeatInput | undefined {
   if (text.length > MAX_HEARTBEAT_LENGTH) return undefined;
   let value: unknown;
   try {
@@ -169,6 +195,11 @@ export function parseHeartbeatInput(text: string): HeartbeatInput | undefined {
   }
   // Optionally `release` (true only).
   if (!isRecord(value)) return undefined;
+  if (options.ignoreUnknownKeys === true) {
+    value = knownKeys(value, ['source', 'limitSeconds', 'devspaces', 'release']);
+    if (!isRecord(value)) return undefined;
+    if (Array.isArray(value.devspaces)) value.devspaces = value.devspaces.map((entry: unknown) => (isRecord(entry) ? knownKeys(entry, ['id', 'keepRunning', 'seq', 'clearOnly', 'stopNow']) : entry));
+  }
   const keys = 'release' in value ? ['source', 'limitSeconds', 'devspaces', 'release'] : ['source', 'limitSeconds', 'devspaces'];
   if (!hasExactKeys(value, keys)) return undefined;
   if ('release' in value && value.release !== true) return undefined;
@@ -467,9 +498,10 @@ function referencesOf(references: unknown): string[] | undefined {
  * the computer `source` (isSourceId), at most MAX_IMAGE_REFERENCES; optionally
  * `"digests": { "<reference>": ["sha256:…"] }`, their recorded digests (parseReferenceDigests). An older extension on
  * another computer may send a list of repositories, alone (`{ "repositories": [...] }`) or as `"repositories"` beside
- * the references; the list is an array and is ignored. Undefined for anything else.
+ * the references; the list is an array and is ignored. Undefined for anything else. With `ignoreUnknownKeys` (the
+ * command of the Monitor), the keys that it does not know are left out first (docs/requirements.md R-DS-011).
  */
-export function parseImagesInput(text: string): ImagesInput | undefined {
+export function parseImagesInput(text: string, options: ParseOptions = {}): ImagesInput | undefined {
   if (text.length > MAX_IMAGE_LIST_LENGTH) return undefined;
   let value: unknown;
   try {
@@ -477,6 +509,8 @@ export function parseImagesInput(text: string): ImagesInput | undefined {
   } catch {
     return undefined;
   }
+  if (!isRecord(value)) return undefined;
+  if (options.ignoreUnknownKeys === true) value = knownKeys(value, ['source', 'references', 'repositories', 'digests']);
   if (!isRecord(value)) return undefined;
   if ('repositories' in value && !Array.isArray(value.repositories)) return undefined;
   if (hasExactKeys(value, ['repositories'])) return {};
@@ -602,9 +636,10 @@ export function parseMonitorSettings(value: unknown): MonitorSettings | undefine
  * The input of `monitor.js settings -` and the stored image-settings.json: `{ "schedule": "…", "timeZone": "…" }`,
  * strict. The schedule a cron expression or an interval in minutes (parseCacheSchedule), as the setting gives it. An
  * older extension on another computer, and the file that an older monitor stored, may still carry `"prefixes": [...]`;
- * that array is ignored.
+ * that array is ignored. With `ignoreUnknownKeys` (the command of the Monitor and its stored file), the keys that it
+ * does not know are left out first (docs/requirements.md R-DS-011).
  */
-export function parseImageSettingsInput(text: string): ImageSettings | undefined {
+export function parseImageSettingsInput(text: string, options: ParseOptions = {}): ImageSettings | undefined {
   if (text.length > MAX_IMAGE_LIST_LENGTH) return undefined;
   let value: unknown;
   try {
@@ -612,6 +647,7 @@ export function parseImageSettingsInput(text: string): ImageSettings | undefined
   } catch {
     return undefined;
   }
+  if (isRecord(value) && options.ignoreUnknownKeys === true) value = knownKeys(value, ['schedule', 'timeZone', 'prefixes']);
   if (!isRecord(value) || !hasOnlyKeys(value, ['schedule', 'timeZone'], ['prefixes'])) return undefined;
   if ('prefixes' in value && !Array.isArray(value.prefixes)) return undefined;
   return scheduleSettingsOf(value);

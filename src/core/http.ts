@@ -55,6 +55,19 @@ export function isDevspacesVersion(value: unknown): value is string {
   return typeof value === 'string' && EXACT_VERSION.test(value);
 }
 
+/**
+ * The order of two versions x.y.z (isDevspacesVersion), by their numbers: negative when `a` is earlier, 0 when they are
+ * the same, positive when `a` is later.
+ */
+export function compareDevspacesVersions(a: string, b: string): number {
+  const left = a.split('.').map(Number);
+  const right = b.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
 /** The version of this program for the header User-Agent (setUserAgentVersion); none until it is set. */
 let version: string | undefined;
 

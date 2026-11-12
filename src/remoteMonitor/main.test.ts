@@ -1731,11 +1731,25 @@ describe('monitor.js images', () => {
 
   // The entries of the ignored list are not checked; it must be an array, alone or beside the references.
   it('refuses anything else and writes nothing', async () => {
-    for (const input of ['not json', '{}', JSON.stringify({ repositories: 'ghcr.io/a/b' }), JSON.stringify({ repositories: ['ghcr.io/a/b'], extra: 1 }), JSON.stringify({ repositories: null })]) {
+    for (const input of [
+      'not json',
+      '{}',
+      JSON.stringify({ repositories: 'ghcr.io/a/b' }),
+      JSON.stringify({ repositories: null }),
+      // A key that this version does not know does not lift the checks of the keys that it knows.
+      JSON.stringify({ repositories: 'ghcr.io/a/b', extra: 1 }),
+    ]) {
       expect((await images(input)).code, input).toBe(EXIT_INVALID);
     }
     expect(fs.readdirSync(stateDir)).toEqual([]);
     expect((await main(['images'], { env: {}, stateDir, readStdin: async () => '{}', err: () => {} }))).toBe(EXIT_INVALID);
+  });
+
+  // The input of a window of a newer version (docs/requirements.md R-DS-011): a key that this version does not know is
+  // left out.
+  it('leaves out a key that it does not know (a window of a newer version)', async () => {
+    expect(await images(JSON.stringify({ repositories: ['ghcr.io/a/b'], extra: 1 }))).toEqual({ code: 0, out: '', err: '' });
+    expect(fs.readdirSync(stateDir)).toEqual([LAST_USE_FILE]);
   });
 
   // One minute after the monitor starts, then by the schedule (by default daily at 06:07).
@@ -1812,13 +1826,21 @@ describe('the settings and the schedule of the image maintenance', () => {
       JSON.stringify({ ...SETTINGS, timeZone: 'Mars/Base' }),
       // The ignored prefixes of an older extension must be an array.
       JSON.stringify({ ...SETTINGS, prefixes: 'ghcr.io/acme/' }),
-      JSON.stringify({ ...SETTINGS, extra: 1 }),
+      // A key that this version does not know does not lift the checks of the keys that it knows.
+      JSON.stringify({ ...SETTINGS, schedule: '05:00', extra: 1 }),
     ]) {
       expect(await settings(input), input).toBe(EXIT_INVALID);
     }
     const current = new CurrentCacheSettings(ENV, stateDir, () => {});
     await current.refresh();
     expect(current.value).toMatchObject(SETTINGS);
+  });
+
+  // The input of a window of a newer version (docs/requirements.md R-DS-011): a key that this version does not know is
+  // left out, and not stored.
+  it('takes the settings of a window of a newer version without the keys that it does not know', async () => {
+    expect(await settings(JSON.stringify({ ...SETTINGS, extra: 1 }))).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(stateDir, 'image-settings.json'), 'utf8'))).toEqual(SETTINGS);
   });
 
   // An older extension on another computer may send prefixes of images, and an older monitor stored them in the volume:

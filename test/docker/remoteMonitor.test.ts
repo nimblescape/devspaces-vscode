@@ -39,6 +39,7 @@ import { NodeProcessRunner } from '../../src/core/process';
 import { LOADER_EXIT_CODE, PIPE_LOADER, bundleHash } from '../../src/core/loader/pipeLoader';
 import {
   LABEL_MONITOR,
+  LABEL_MONITOR_VERSION,
   MIN_LIMIT_SECONDS,
   REMOTE_MONITOR_READY_TEXT,
   REMOTE_MONITOR_SCRIPT_PATH,
@@ -52,7 +53,8 @@ import { engineMonitor } from '../../src/core/worker/engineMonitor';
 import type { MonitorRunSpec } from '../../src/core/worker/dockerEngine';
 import { engineApi, engineHijack } from '../../src/helperChannel/engineApi';
 import { dockerEngine } from '../../src/helperChannel/engineClient';
-import { RemoteSessionMonitor } from '../../src/core/remoteMonitor/remoteSessionMonitor';
+import { RemoteSessionMonitor, monitorLabel } from '../../src/core/remoteMonitor/remoteSessionMonitor';
+import { WORKER_SCRIPT_FOLDER, storeWorkerScript } from '../../src/core/remoteMonitor/workerScript';
 import { WindowHeartbeats } from '../../src/core/session/windowHeartbeats';
 import { RELEASE_LIMIT_SECONDS, SWITCH_RELEASE_BOUNDS, releaseDevspace } from '../../src/core/session/windowRelease';
 import type { Devspace } from '../../src/core/types';
@@ -888,5 +890,91 @@ describe('the Monitor container: its move to the current build of its helper ima
     expect(cli.run(['logs', containerName]).out).toContain(`Removed the Monitor ${earlierName} of an earlier build of the helper image.`);
     // An ensure of a window takes the successor as current.
     expect(await monitor.ensure(ownTag, socket, undefined, monitorTag, second)).toBe('running');
+  });
+});
+
+// The move of the Monitor to the script of a newer version of Devspaces (docs/requirements.md R-DS-011), on the engine
+// of the runner: a Monitor of Devspaces 0.6.0 runs from a helper tag of this run; a window of 0.7.0 stores its script
+// (another script) with its version and its own helper tag (a second tag of this run) in the volume, as its ensure
+// does (storeWorkerScript; here copied into the volume with `docker cp`); the Monitor creates its successor with that
+// script from that helper image and ends, and the successor removes the earlier container. A window of 0.6.0 then keeps
+// the newer Monitor. The checks of the move are shortened with DEVSPACE_MONITOR_UPGRADE_CHECK_MS.
+describe('the Monitor container: its move to the script of a newer version of Devspaces', () => {
+  const { run, env, cli, log } = dockerTestContext('remoteMonitor');
+  const containerName = `devspaces-test-monitor-version-${run.runId}`;
+  const socket = helperDockerSocket(env, process.platform, run.dockerHost);
+  const runLabel = `${TEST_RUN_LABEL}=${run.runId}`;
+  let script = '';
+  let volumeName = '';
+  const tags: string[] = [];
+
+  /** A helper tag of this run whose image carries a copy of a Dockerfile of `name`, so the Monitor reads it as its own. */
+  const helperTagOf = (helperTag: string, name: string): string => {
+    const context = path.join(run.runDir, `monitor-version-${name}`);
+    const copy = `FROM ${TEST_BASE_IMAGE}\n# The helper Dockerfile of ${name} of the run ${run.runId}\n`;
+    const tag = helperImageTag(copy);
+    fs.mkdirSync(context, { recursive: true });
+    fs.writeFileSync(path.join(context, 'helper.Dockerfile'), copy);
+    fs.writeFileSync(path.join(context, 'Dockerfile'), `FROM ${helperTag}\nCOPY helper.Dockerfile ${HELPER_DOCKERFILE_COPY}\n`);
+    cli.ok(['build', '-q', '--label', runLabel, '-t', tag, context]);
+    return tag;
+  };
+
+  beforeAll(async () => {
+    script = await bundleScript();
+    const docker = new BootstrapDocker(new NodeProcessRunner(), run.dockerPath, env, log);
+    const helperTag = (await testHelperImage(docker, log, env)).tag;
+    volumeName = testStateVolume({ run, cli }, 'remoteMonitor-version');
+    tags.push(helperTagOf(helperTag, '0.6.0'), helperTagOf(helperTag, '0.7.0'));
+  });
+
+  afterAll(() => {
+    log.output(`docker logs ${containerName}:\n${cli.run(['logs', containerName]).out}\n`);
+    removeRunObjects(cli, run.runId);
+    expect(cli.container(containerName)).toBeUndefined();
+  });
+
+  it('creates its successor with the newer script from its helper image and ends; a window of the earlier version keeps it', async () => {
+    const [oldTag, newTag] = tags;
+    const monitorOf = (version: string) =>
+      new RemoteSessionMonitor({
+        engine: engineMonitor(dockerEngine(engineApi(helperDockerSocket(env, process.platform)), engineHijack(helperDockerSocket(env, process.platform)))),
+        logger: log,
+        script: async () => script,
+        version,
+        containerName,
+        volumeName,
+        labels: { [TEST_RUN_LABEL]: run.runId },
+        containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_IMAGE_FIRST_MS: '86400000', DEVSPACE_MONITOR_UPGRADE_CHECK_MS: '1000' },
+      });
+    const older = monitorOf('0.6.0');
+    expect(await older.ensureOrThrow(oldTag, socket)).toBe('created');
+    const before = cli.container(containerName) as unknown as { Id: string; Config: { Labels: Record<string, string> } };
+    expect(before.Config.Labels[LABEL_MONITOR_VERSION]).toBe('0.6.0');
+    const earlierName = `${containerName}-earlier-${before.Id.slice(0, 12)}`;
+
+    // The window of 0.7.0 stores its script, its version and its helper tag in the volume.
+    const newScript = `${script}\n// Devspaces 0.7.0 of the run ${run.runId}\n`;
+    const local = path.join(run.runDir, 'monitor-version-volume');
+    fs.mkdirSync(local, { recursive: true });
+    const hash = storeWorkerScript(local, newScript, { version: '0.7.0', helperTag: newTag });
+    cli.ok(['cp', path.join(local, WORKER_SCRIPT_FOLDER), `${containerName}:/state/`]);
+
+    await waitUntil(() => (cli.container(containerName) as unknown as { Config?: { Labels?: Record<string, string> } } | undefined)?.Config?.Labels?.[LABEL_MONITOR_VERSION] === '0.7.0', 'the successor of Devspaces 0.7.0', 60_000);
+    const after = cli.container(containerName) as unknown as { Id: string; Image: string; Config: { Image: string; Labels: Record<string, string>; Env: string[] }; State: { Running: boolean } };
+    expect(after.Id).not.toBe(before.Id);
+    expect(after.State.Running).toBe(true);
+    expect(after.Image).toBe(cli.ok(['image', 'inspect', '-f', '{{.Id}}', newTag]));
+    expect(after.Config.Image).toBe(monitorImageTag(newTag));
+    expect(after.Config.Labels[LABEL_MONITOR]).toBe(monitorLabel(newScript, newTag, 'idle'));
+    expect(after.Config.Env).toEqual(expect.arrayContaining(['DEVSPACES_VERSION=0.7.0', `DEVSPACE_WORKER_HASH=${hash}`, 'DEVSPACE_MONITOR_SUCCESSOR=1']));
+    // It runs the newer script (the loader stored it).
+    expect(cli.ok(['exec', containerName, 'tail', '-c', '200', REMOTE_MONITOR_SCRIPT_PATH])).toContain(`Devspaces 0.7.0 of the run ${run.runId}`);
+
+    // The earlier Monitor ended, and the successor removes its container.
+    await waitUntil(() => cli.container(earlierName) === undefined, 'the removal of the earlier container', 60_000);
+    // A window of the earlier version keeps the newer Monitor.
+    expect(await older.ensure(oldTag, socket)).toBe('running');
+    expect(cli.container(containerName)?.Id).toBe(after.Id);
   });
 });

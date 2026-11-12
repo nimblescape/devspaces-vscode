@@ -12,7 +12,8 @@ import { errorMessage } from '../errors';
 import { MAX_BUNDLE_LINE_LENGTH } from '../loader/pipeLoader';
 import { isAbortError, withTimeLimit } from '../ports';
 import { REMOVAL_IN_PROGRESS, parseDockerTime, type MonitorEngine, type MonitorInspected } from '../remoteMonitor/monitorEngine';
-import { LABEL_MONITOR, LABEL_MONITOR_OWNER, REMOTE_MONITOR_SCRIPT_PATH } from '../remoteMonitor/protocol';
+import { LABEL_MONITOR, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, REMOTE_MONITOR_SCRIPT_PATH } from '../remoteMonitor/protocol';
+import { isDevspacesVersion } from '../http';
 import { REMOTE_MONITOR_CHECK_TIMEOUT_MS, REMOTE_MONITOR_DOCKER_TIMEOUT_MS } from '../remoteMonitor/remoteSessionMonitor';
 import { EngineError, type DockerEngine } from './dockerEngine';
 
@@ -39,6 +40,7 @@ export function monitorInspected(value: unknown): MonitorInspected {
   const labels = raw.Config?.Labels;
   const label = typeof labels === 'object' && labels !== null ? (labels as Record<string, unknown>)[LABEL_MONITOR] : undefined;
   const owner = typeof labels === 'object' && labels !== null ? (labels as Record<string, unknown>)[LABEL_MONITOR_OWNER] : undefined;
+  const version = typeof labels === 'object' && labels !== null ? (labels as Record<string, unknown>)[LABEL_MONITOR_VERSION] : undefined;
   const { RestartCount: restartCount, Id: id, Image: image } = raw;
   const exitCode = raw.State?.ExitCode;
   // An empty name is the policy `no` (as Docker shows a container created without one).
@@ -54,6 +56,7 @@ export function monitorInspected(value: unknown): MonitorInspected {
     ...(typeof owner === 'string' ? { owner } : {}),
     ...(typeof policy === 'string' ? { restartPolicy: policy === '' ? 'no' : policy } : {}),
     ...(typeof image === 'string' && IMAGE_ID.test(image) ? { image } : {}),
+    ...(isDevspacesVersion(version) ? { version } : {}),
   };
 }
 

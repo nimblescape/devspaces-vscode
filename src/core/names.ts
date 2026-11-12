@@ -5,7 +5,7 @@
 // Names and labels (docs/architecture.md "Naming").
 import * as crypto from 'crypto';
 import { namePair, trailingPair } from './namePairs';
-import { LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER, LABEL_MONITOR } from './remoteMonitor/protocol';
+import { LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER, LABEL_MONITOR, LABEL_MONITOR_VERSION } from './remoteMonitor/protocol';
 
 /**
  * Labels of the helper channel. Here, not in src/core/helperChannel/protocol.ts, so that the script of the remote
@@ -262,6 +262,7 @@ export const EXTENSION_LABEL_KEYS: ReadonlySet<string> = new Set([
   LABEL_MONITOR,
   LABEL_MONITOR_CREATE,
   LABEL_MONITOR_OWNER,
+  LABEL_MONITOR_VERSION,
   LABEL_HELPER_CHANNEL,
   LABEL_CHANNEL_STEP,
 ]);

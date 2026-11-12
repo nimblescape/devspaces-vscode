@@ -160,6 +160,9 @@ function setup(overrides: (fake: Fake & { sleeps: number[] }) => Partial<SelfUpg
     helperTag: async () => TAG,
     busy: () => busy,
     removals: () => undefined,
+    // No worker scripts of windows (a folder that does not exist), and no version of its own.
+    stateDir: '/nonexistent/devspaces-monitor-state',
+    version: () => undefined,
     sleep: async (ms) => {
       sleeps.push(ms);
     },

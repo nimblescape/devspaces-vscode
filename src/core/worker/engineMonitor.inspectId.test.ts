@@ -21,6 +21,12 @@ describe('engineMonitor: the IDs of an inspect and a null answer', () => {
     for (const odd of ['b'.repeat(64), `sha256:${'B'.repeat(64)}`, 'devspaces-monitor:0123456789ab', 7]) expect(monitorInspected({ Image: odd })).not.toHaveProperty('image');
   });
 
+  it('reads the version of Devspaces of its script from its label (R-DS-011): only a version x.y.z', () => {
+    expect(monitorInspected({ Config: { Labels: { 'nimblescape.devspaces.monitor-version': '0.7.0' } } })).toMatchObject({ version: '0.7.0' });
+    for (const odd of ['0.7', 'v0.7.0', 7, '']) expect(monitorInspected({ Config: { Labels: { 'nimblescape.devspaces.monitor-version': odd } } })).not.toHaveProperty('version');
+    expect(monitorInspected({ Config: { Labels: {} } })).not.toHaveProperty('version');
+  });
+
   it('an inspect answer of null fails the inspect', async () => {
     const monitor = engineMonitor({ ...unusedEngine(), inspect: async () => null });
     await expect(monitor.inspect('devspaces-monitor')).rejects.toThrow(/^docker container inspect failed: /);
