@@ -275,12 +275,12 @@ describe('the menus of the view (package.json)', () => {
     };
   };
   const items = manifest.contributes.menus['view/item/context'].filter((item) => item.when?.startsWith(`view == ${DOCKER_HOSTS_VIEW_ID} `));
-  /** The commands of the context menu of a row with `contextValue` (only the clause viewItem of each `when`). */
-  const commandsOf = (contextValue: string): string[] =>
+  /** The commands of a row with `contextValue` (only the clause viewItem of each `when`): its context menu, or its buttons. */
+  const commandsOf = (contextValue: string, buttons = false): string[] =>
     items
       .filter((item) => {
         const regex = /viewItem =~ \/(.+?)\//.exec(item.when ?? '');
-        return regex !== null && new RegExp(regex[1]).test(contextValue) && !item.group?.startsWith('inline');
+        return regex !== null && new RegExp(regex[1]).test(contextValue) && (item.group?.startsWith('inline') ?? false) === buttons;
       })
       .map((item) => item.command ?? '');
 
@@ -303,5 +303,15 @@ describe('the menus of the view (package.json)', () => {
     const cache = { records: 1, bytes: 10, unusedBytes: 10 };
     expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache }).contextValue)).toEqual(['devspaces.pruneBuildCache']);
     expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue)).toEqual([]);
+  });
+
+  it('offers Stop of a container only in the context menu, never as a button on the row', () => {
+    const devspace = objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue;
+    expect(commandsOf(devspace)).toContain('devspaces.stop');
+    expect(commandsOf(devspace, true)).toEqual([]);
+    const other = objectRowLook(objectRow(container('running'))).contextValue;
+    expect(commandsOf(other)).toContain('devspaces.stopDockerObject');
+    expect(commandsOf(other, true)).toEqual([]);
+    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue, true)).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
   });
 });

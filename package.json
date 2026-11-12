@@ -781,16 +781,6 @@
           "group": "4_removeVm@2"
         },
         {
-          "command": "devspaces.stop",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStopDevspace(;|$)/",
-          "group": "inline@1"
-        },
-        {
-          "command": "devspaces.stopDockerObject",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStop(;|$)/",
-          "group": "inline@1"
-        },
-        {
           "command": "devspaces.startDockerObject",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/",
           "group": "inline@1"
