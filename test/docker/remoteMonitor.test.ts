@@ -123,7 +123,7 @@ describe('the Monitor container of a remote Docker host', () => {
   let script = '';
   let helperTag = '';
   // The ensure as the worker runs it, over the Engine API of the local engine (engineMonitor).
-  const monitor = new RemoteSessionMonitor({
+  const monitorOptions: ConstructorParameters<typeof RemoteSessionMonitor>[0] = {
     engine: engineMonitor(dockerEngine(engineApi(helperDockerSocket(env, process.platform)), engineHijack(helperDockerSocket(env, process.platform)))),
     logger: log,
     script: async () => script,
@@ -133,7 +133,8 @@ describe('the Monitor container of a remote Docker host', () => {
     // Its first background run is a day away (DEVSPACE_IMAGE_FIRST_MS), so it never builds the helper image of the
     // tests again (its part "the workspace helper image": that image has no label of its base digest).
     containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_IMAGE_FIRST_MS: '86400000' },
-  });
+  };
+  const monitor = new RemoteSessionMonitor(monitorOptions);
   const socket = helperDockerSocket(env, process.platform, run.dockerHost);
   const ids = { stale: crypto.randomUUID(), kept: crypto.randomUUID(), fresh: crypto.randomUUID(), unrecorded: crypto.randomUUID() };
   const names = {
@@ -305,6 +306,24 @@ describe('the Monitor container of a remote Docker host', () => {
     const deadline = Date.now() + 30_000;
     while ((kept = await records(ids.kept)) === undefined && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 250));
     expect(kept?.records.map((record) => record.source)).toEqual([OTHER_SOURCE]);
+  });
+
+  // Two windows that create the monitor at the same time (or a window and the successor of a Monitor that moves). Docker
+  // reserves the name when a create starts, and an inspect finds that container only when the create has made it, so
+  // the ensure whose create meets the name conflict can find the name free at its look: it creates once more, after a
+  // wait at a further conflict, and takes the container of the other ensure once it runs. Several rounds, because the
+  // race is short: with a single create once more and no wait, the 16th round failed in a run on a local engine.
+  it('two ensures at the same time: one creates the container, the other takes it', async () => {
+    const other = new RemoteSessionMonitor(monitorOptions);
+    for (let round = 0; round < 20; round += 1) {
+      cli.ok(['rm', '-f', containerName]);
+      const outcomes = await Promise.all([monitor.ensure(helperTag, socket), other.ensure(helperTag, socket)]);
+      expect(outcomes.sort()).toEqual(['created', 'running']);
+      expect(running(containerName)).toBe(true);
+      // Only the one container of the name: the create that met the conflict made none.
+      expect(cli.run(['ps', '-aq', '--filter', `label=${TEST_RUN_LABEL}=${run.runId}`, '--filter', `label=${LABEL_MONITOR}`]).out.trim().split('\n')).toHaveLength(1);
+    }
+    await waitUntil(() => cli.run(['logs', containerName]).out.includes(REMOTE_MONITOR_READY_TEXT), 'the start of the monitor', 30_000);
   });
 
   // A restart starts the stored script without new input.

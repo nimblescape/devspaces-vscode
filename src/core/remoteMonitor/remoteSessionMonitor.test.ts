@@ -30,6 +30,7 @@ import {
   REMOTE_MONITOR_CREATED_WAITS_MS,
   REMOTE_MONITOR_DOCKER_TIMEOUT_MS,
   REMOTE_MONITOR_LOG,
+  REMOTE_MONITOR_RESERVED_WAITS_MS,
   REMOTE_MONITOR_STALE_CREATED_MS,
   RemoteSessionMonitor,
 } from './remoteSessionMonitor';
@@ -1008,13 +1009,73 @@ describe('RemoteSessionMonitor.ensure: two windows at the same time', () => {
     expect(removals(docker)).toEqual([]);
   });
 
-  it('when the name is free after a conflict, the create is tried once more only', async () => {
+  it('when the name stays free at each conflict, the create is tried once more at once and after each wait, then fails', async () => {
+    vi.useFakeTimers();
     const docker = new FakeDocker(() => MISSING, CONFLICTED);
-    expect(await monitor(docker).ensure(TAG, SOCKET)).toBe('failed');
-    // The nonce check after each conflict, and the cleanup by the nonce before the failure.
-    expect(docker.commands()).toEqual(['inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect', 'ps']);
+    let settled = false;
+    const ensured = monitor(docker)
+      .ensure(TAG, SOCKET)
+      .finally(() => (settled = true));
+    // The create once more at once, then one after each wait of REMOTE_MONITOR_RESERVED_WAITS_MS (12.75 s in all).
+    const total = REMOTE_MONITOR_RESERVED_WAITS_MS.reduce((sum, ms) => sum + ms, 0);
+    expect(total).toBe(12_750);
+    await vi.advanceTimersByTimeAsync(total - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await ensured).toBe('failed');
+    // The nonce check and a look after each conflict, and the cleanup by the nonce before the failure.
+    const creates = 2 + REMOTE_MONITOR_RESERVED_WAITS_MS.length;
+    expect(docker.commands()).toEqual(['inspect', ...Array.from({ length: creates }, () => ['run', 'ps', 'inspect']).flat(), 'ps']);
     expect(removals(docker)).toEqual([]);
     noncePs(docker);
+    // One nonce for all creates: a create that met the conflict made no container.
+    const nonces = new Set(docker.calls.filter((call) => call.args[0] === 'run').map((call) => createIdOf(call.spec)));
+    expect(nonces.size).toBe(1);
+  });
+
+  // Docker reserves the name when a create starts, and an inspect finds that container only when the create has made it:
+  // the create of the successor of a Monitor that moves (or of another window), seen from the repair of a window.
+  it('a name that a create in progress reserved, which looks free at two conflicts, is accepted once that container runs', async () => {
+    vi.useFakeTimers();
+    const logger = new Log();
+    const next = inspects(MISSING, MISSING, MISSING, inspected('created', LABEL), inspected(true, LABEL));
+    const docker = new FakeDocker((args) => (args[0] === 'inspect' ? next() : undefined), CONFLICTED);
+    const ensured = monitor(docker, logger).ensure(TAG, SOCKET);
+    await vi.advanceTimersByTimeAsync(REMOTE_MONITOR_RESERVED_WAITS_MS[0] - 1);
+    // The create once more followed at once; the third waits.
+    expect(docker.commands()).toEqual(['inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect']);
+    await vi.advanceTimersByTimeAsync(1 + REMOTE_MONITOR_CREATED_WAITS_MS[0]);
+    expect(await ensured).toBe('running');
+    // The third create meets the conflict too; its look finds the container `created`, then running.
+    expect(docker.commands()).toEqual(['inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect', 'inspect']);
+    expect(removals(docker)).toEqual([]);
+    noncePs(docker);
+    expect(logger.lines.some((line) => line.startsWith('warn'))).toBe(false);
+  });
+
+  it('a create once more after a wait that starts creates the monitor', async () => {
+    vi.useFakeTimers();
+    const docker = new FakeDocker(() => MISSING, (call, index) => (index < 2 ? CONFLICTED(call, index) : STARTS(call, index)));
+    const ensured = monitor(docker).ensure(TAG, SOCKET);
+    await vi.advanceTimersByTimeAsync(REMOTE_MONITOR_RESERVED_WAITS_MS[0]);
+    expect(await ensured).toBe('created');
+    expect(docker.commands()).toEqual(['inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect', 'run']);
+    expect(removals(docker)).toEqual([]);
+  });
+
+  it('a cancellation during a wait for a reserved name passes at once; no further create, nothing removed', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const docker = new FakeDocker(() => MISSING, CONFLICTED);
+    const ensured = monitor(docker).ensure(TAG, SOCKET, controller.signal);
+    const rejected = expect(ensured).rejects.toMatchObject({ name: 'AbortError' });
+    await vi.advanceTimersByTimeAsync(REMOTE_MONITOR_RESERVED_WAITS_MS[0] - 1);
+    expect(docker.commands()).toEqual(['inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect']);
+    controller.abort();
+    await rejected;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(docker.commands()).toEqual(['inspect', 'run', 'ps', 'inspect', 'run', 'ps', 'inspect']);
+    expect(removals(docker)).toEqual([]);
   });
 
   it('a create once more that fails otherwise removes only the container of its own nonce', async () => {

@@ -159,6 +159,16 @@ export const REMOTE_MONITOR_CONFLICT_WAITS_MS: readonly number[] = [250, 500, 1_
 export const REMOTE_MONITOR_CREATED_WAITS_MS: readonly number[] = [250, 500, 1_000, 1_000, 2_000, 2_000, 2_000, 2_000, 2_000];
 
 /**
+ * The waits (ms) before each further create after a name conflict whose look finds the name free (resolveConflict
+ * `missing`) once more: the daemon reserves the name when a create starts, and an inspect finds that container only
+ * when the create has made it (its layer and its mounts; longer on a busy host). So a name that looks free after a
+ * conflict is the create of another window, or of the successor of a Monitor that moves
+ * (src/remoteMonitor/selfUpgrade.ts), still in progress, or a removal that ended. The first create once more follows at
+ * once, then one after each wait: 12.75 s in all.
+ */
+export const REMOTE_MONITOR_RESERVED_WAITS_MS: readonly number[] = [250, 500, 1_000, 1_000, 2_000, 2_000, 2_000, 2_000, 2_000];
+
+/**
  * The most waits of one look after a name conflict (resolveConflict), whatever the status of the container between
  * them: that of the longer list.
  */
@@ -241,19 +251,22 @@ export class RemoteSessionMonitor {
    * and looks again (`created` 12.75 s at most, REMOTE_MONITOR_CREATED_WAITS_MS; `removing`
    * REMOTE_MONITOR_CONFLICT_WAITS_MS; one counter for both; only the budget of 9 waits ends the looks, a shorter list
    * repeats its last wait, so a container that stays `removing` gets 9 waits, 7.75 s, 10 looks in all); a matching one
-   * that runs or is paused is accepted; when the name is free, the create is tried once more (once only); anything else
-   * (still `created` after the waits, another label, another status) fails. Nothing is removed there: the container is
-   * not ours. A conflict is only the daemon's refusal of the name (its status 409 with that message), and only when no
-   * container has the nonce of this create (a list that fails is a failure); a matching running container that Docker
-   * restarted is accepted only with the stored script of this version; a conflict that fails removes the container of
-   * its nonce (none after a true conflict). Any other failure (no ready line in time, the container ended, a
-   * cancellation) removes the container of this create (by the nonce label LABEL_MONITOR_CREATE, best effort; never by
-   * its name). A create request that the time limit or the cancel cut off may still make its container after this
-   * removal; that `created` container is replaced as abandoned after REMOTE_MONITOR_STALE_CREATED_MS. `socketPath`: the
-   * source of the socket mount on the host of the engine (as for the workspace helper, rootless aware). `helperImage`:
-   * the image of the container when it is not `helperTag`: the checked image ID of the helper image of the open, or its
-   * monitor tag, with `imageId`, the image ID that the created container must have (checked by the create before its
-   * start); the label and the log lines keep the tag. Never throws, except an AbortError; a failure is logged as a
+   * that runs or is paused is accepted; when the name is free, the create is tried once more at once, and after each
+   * further conflict with a free name once more after each wait of REMOTE_MONITOR_RESERVED_WAITS_MS (the daemon reserves
+   * the name before an inspect finds the container of a create in progress: of another window, or of the successor of a
+   * Monitor that moves); anything else (still `created` after the waits, another label, another status, the name still
+   * reserved after the waits) fails. Nothing is removed there: the container is not ours. A conflict is only the
+   * daemon's refusal of the name (its status 409 with that message), and only when no container has the nonce of this
+   * create (a list that fails is a failure); a matching running container that Docker restarted is accepted only with
+   * the stored script of this version; a conflict that fails removes the container of its nonce (none after a true
+   * conflict). Any other failure (no ready line in time, the container ended, a cancellation) removes the container of
+   * this create (by the nonce label LABEL_MONITOR_CREATE, best effort; never by its name). A create request that the
+   * time limit or the cancel cut off may still make its container after this removal; that `created` container is
+   * replaced as abandoned after REMOTE_MONITOR_STALE_CREATED_MS. `socketPath`: the source of the socket mount on the
+   * host of the engine (as for the workspace helper, rootless aware). `helperImage`: the image of the container when it
+   * is not `helperTag`: the checked image ID of the helper image of the open, or its monitor tag, with `imageId`, the
+   * image ID that the created container must have (checked by the create before its start); the label and the log lines
+   * keep the tag. Never throws, except an AbortError; a failure is logged as a
    * warning.
    */
   async ensure(helperTag: string, socketPath: string, signal?: AbortSignal, helperImage?: string, imageId?: string): Promise<EnsureOutcome> {
@@ -306,7 +319,7 @@ export class RemoteSessionMonitor {
       await this.options.engine.remove(this.idOf(current), signal);
     }
     let created = await this.create(spec, scriptLine, signal);
-    let triedAgain = false;
+    let freeLooks = 0;
     // Another window creates or removes it at the same time: accept it when it is the same version and runs. It is not
     // ours, so it is not removed. Wait while it is being created or removed, and create once more when the name became
     // free. A create that met the conflict made no container, so the nonce of this create stays that of the next one.
@@ -320,8 +333,12 @@ export class RemoteSessionMonitor {
       }
       const found = await this.resolveConflict(accepted, script, signal);
       if (found === 'running') return 'running';
-      if (found === 'missing' && !triedAgain) {
-        triedAgain = true;
+      if (found === 'missing' && freeLooks <= REMOTE_MONITOR_RESERVED_WAITS_MS.length) {
+        // The name became free (a removal ended): create once more at once. A free name at a further conflict is a
+        // create in progress whose container an inspect does not find yet: wait, then create once more, so the next
+        // look finds that container (accepted when it runs with a matching label or another version).
+        if (freeLooks > 0) await sleep(REMOTE_MONITOR_RESERVED_WAITS_MS[freeLooks - 1], signal);
+        freeLooks += 1;
         created = await this.create(spec, scriptLine, signal);
         continue;
       }
@@ -347,9 +364,11 @@ export class RemoteSessionMonitor {
    * mode, store, schedule, variables and mounts; the attached create with its ready line), but never in place of another
    * container: a container of the name (a window created the monitor meanwhile, while the name was free) is not ours and
    * stays → `taken`. On a name conflict it looks again: a container of the name → `taken`; the name free again → one
-   * more create. `helperImage` and `imageId` as for ensure: the monitor tag of the current build, and its ID. Rejects
-   * with the cause otherwise; the container of this create is removed then (by its nonce). Logs nothing: the caller
-   * says what happened.
+   * more create at once, and at each further conflict with a free name one more after each wait of
+   * REMOTE_MONITOR_RESERVED_WAITS_MS (the create of a window in progress, whose container an inspect does not find
+   * yet). `helperImage` and `imageId` as for ensure: the monitor tag of the current build, and its ID. Rejects with the
+   * cause otherwise; the container of this create is removed then (by its nonce). Logs nothing: the caller says what
+   * happened.
    */
   async createSuccessor(helperTag: string, socketPath: string, helperImage: string, imageId: string): Promise<SuccessorOutcome> {
     const script = await this.options.script();
@@ -361,15 +380,17 @@ export class RemoteSessionMonitor {
     const spec = this.runSpec(helperImage, socketPath, label, script, images, createId, imageId);
     if ((await this.inspect(undefined)).exists) return 'taken';
     let created = await this.create(spec, scriptLine, undefined);
-    let triedAgain = false;
+    let freeLooks = 0;
     while (created.kind === 'exited' && created.conflict) {
       // As in ensure: a container with the nonce of this create means that it made one (no conflict), and a list that
       // fails is no evidence.
       const own = await this.listOwn(createId, undefined);
       if (own === undefined || own.length > 0) break;
       if ((await this.inspect(undefined)).exists) return 'taken';
-      if (triedAgain) break;
-      triedAgain = true;
+      // As in ensure: once more at once, then after each wait while the name stays reserved but looks free.
+      if (freeLooks > REMOTE_MONITOR_RESERVED_WAITS_MS.length) break;
+      if (freeLooks > 0) await sleep(REMOTE_MONITOR_RESERVED_WAITS_MS[freeLooks - 1]);
+      freeLooks += 1;
       created = await this.create(spec, scriptLine, undefined);
     }
     if (created.kind === 'ready') return 'created';
