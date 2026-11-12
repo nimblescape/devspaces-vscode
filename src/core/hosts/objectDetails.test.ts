@@ -141,6 +141,21 @@ describe('the facts of Docker about an object', () => {
     expect(details.kind === 'volume' ? [details.users.length, details.moreUsers, details.users[0]] : undefined).toEqual([MAX_VOLUME_USERS, true, { id: 'id0', name: 'c0' }]);
   });
 
+  it('throws an abort during the inspect of the containers that use a volume', async () => {
+    const controller = new AbortController();
+    const docker = fakeDocker({
+      'volume inspect': result({ stdout: JSON.stringify({ Name: 'v' }) }),
+      'container ls': result({ stdout: JSON.stringify({ ID: 'id0', Names: 'c0' }) }),
+    });
+    const run = docker.run;
+    docker.run = async (args, options) => {
+      if (args[0] !== 'container' || args[1] !== 'inspect') return run(args, options);
+      controller.abort();
+      throw Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' });
+    };
+    await expect(readObjectDetails(docker, { kind: 'volume', id: 'v' }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('throws the failure of Docker, also for an object that went', async () => {
     const docker = fakeDocker({ 'image inspect': result({ exitCode: 1, stderr: 'Error: No such image: sha256:x' }) });
     await expect(readObjectDetails(docker, { kind: 'image', id: 'sha256:x' })).rejects.toBeInstanceOf(CommandError);

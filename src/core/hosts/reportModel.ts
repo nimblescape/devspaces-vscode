@@ -93,6 +93,9 @@ function dateAfter(date: string, days: number): string {
   return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
+/** The dates of today, yesterday and tomorrow of a clock, found once for all the times of a report. */
+const DAYS = new WeakMap<ReportClock, { now: number; timeZone: string; today: string; yesterday: string; tomorrow: string }>();
+
 /**
  * A time as `today 06:07`, `yesterday 06:07`, `tomorrow 06:07`, else `2026-11-10 06:07`, in the time zone of the clock;
  * `an invalid time` for a number that is no time of a Date (a record can hold one).
@@ -100,10 +103,15 @@ function dateAfter(date: string, days: number): string {
 export function timeText(at: number, clock: ReportClock): string {
   if (Number.isNaN(new Date(at).getTime())) return 'an invalid time';
   const { date, time } = dateAndTime(at, clock.timeZone);
-  const today = dateAndTime(clock.now, clock.timeZone).date;
-  if (date === today) return `today ${time}`;
-  if (date === dateAfter(today, -1)) return `yesterday ${time}`;
-  if (date === dateAfter(today, 1)) return `tomorrow ${time}`;
+  let days = DAYS.get(clock);
+  if (days === undefined || days.now !== clock.now || days.timeZone !== clock.timeZone) {
+    const today = dateAndTime(clock.now, clock.timeZone).date;
+    days = { now: clock.now, timeZone: clock.timeZone, today, yesterday: dateAfter(today, -1), tomorrow: dateAfter(today, 1) };
+    DAYS.set(clock, days);
+  }
+  if (date === days.today) return `today ${time}`;
+  if (date === days.yesterday) return `yesterday ${time}`;
+  if (date === days.tomorrow) return `tomorrow ${time}`;
   return `${date} ${time}`;
 }
 
@@ -127,20 +135,27 @@ export function dockerTime(value: string | undefined): number | undefined {
   return Number.isNaN(at) ? undefined : at;
 }
 
-/** How long ago `at` was: `20 s ago`, `5 minutes ago`, `3 hours ago`, `9 days ago`; `in 5 minutes` for a time ahead. */
-export function ageText(at: number, now: number): string {
-  const ahead = at > now;
-  const span = Math.abs(now - at);
-  const [count, unit] =
-    span < 60_000 ? [Math.round(span / 1000), 's'] : span < 3_600_000 ? [Math.round(span / 60_000), 'minute'] : span < 2 * DAY_MS ? [Math.round(span / 3_600_000), 'hour'] : [Math.round(span / DAY_MS), 'day'];
-  const text = unit === 's' ? `${count} s` : `${count} ${unit}${count === 1 ? '' : 's'}`;
-  return ahead ? `in ${text}` : `${text} ago`;
+/** A span in its largest unit that rounds to at least 1: `20 s`, `5 minutes`, `3 hours`, `9 days` (hours up to 2 days). */
+function spanParts(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.round(ms / 3_600_000);
+  if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'}`;
+  const days = Math.round(ms / DAY_MS);
+  return `${days} day${days === 1 ? '' : 's'}`;
 }
 
-/** A span of time in words: `10 minutes`, `2 hours`, `14 days`. */
+/** How long ago `at` was: `20 s ago`, `5 minutes ago`, `3 hours ago`, `9 days ago`; `in 5 minutes` for a time ahead. */
+export function ageText(at: number, now: number): string {
+  const text = spanParts(Math.abs(now - at));
+  return at > now ? `in ${text}` : `${text} ago`;
+}
+
+/** A span of time in words: `30 s`, `10 minutes`, `2 hours`, `14 days`. */
 export function spanText(ms: number): string {
-  const [count, unit] = ms < 3_600_000 ? [Math.round(ms / 60_000), 'minute'] : ms < 2 * DAY_MS ? [Math.round(ms / 3_600_000), 'hour'] : [Math.round(ms / DAY_MS), 'day'];
-  return `${count} ${unit}${count === 1 ? '' : 's'}`;
+  return spanParts(ms);
 }
 
 /** A size, `complete: false` with the word "at least" (a size that a limit of the reader cut). */

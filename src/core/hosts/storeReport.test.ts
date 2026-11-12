@@ -197,6 +197,10 @@ describe('the report of the store of VS Code', () => {
     const report = vscodeStoreReport(store({ cut: true }), undefined, CLOCK, 'linux-x64');
     expect(report.sections.map((entry) => entry.title)).toEqual(['VS Code Server', 'Extensions', 'Cleanup and downloads']);
     expect(rows(section(report.sections, 'Extensions'))[1][5].chip).toBeUndefined();
+    // With the records of the Monitor, an incomplete list of the store still gives no rule of an extension file: its newest file can be missing.
+    const cut = vscodeStoreReport(store({ cut: true }), records, CLOCK, 'linux-x64');
+    expect(rows(section(cut.sections, 'Extensions')).map((row) => row[5].chip?.tone)).toEqual([undefined, undefined, undefined, undefined, 'info', undefined]);
+    expect(cut.notices).toEqual(['The store holds more entries than the reader lists: some lists are incomplete, and the rules of the extension files are missing.']);
     expect(report.notices).toEqual([expect.stringContaining('more entries than the reader lists'), expect.stringContaining('devspaces-monitor could not be read')]);
   });
 

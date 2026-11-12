@@ -43,6 +43,10 @@ describe('the texts of a report', () => {
     expect(ageText(NOW - 3 * HOUR, NOW)).toBe('3 hours ago');
     expect(ageText(NOW - 9 * DAY, NOW)).toBe('9 days ago');
     expect(ageText(NOW + 5 * 60_000, NOW)).toBe('in 5 minutes');
+    // A value that rounds to the limit of its unit takes the next unit.
+    expect(ageText(NOW - 59_700, NOW)).toBe('1 minute ago');
+    expect(ageText(NOW - 59.6 * 60_000, NOW)).toBe('1 hour ago');
+    expect(spanText(20_000)).toBe('20 s');
     expect(spanText(600_000)).toBe('10 minutes');
     expect(spanText(14 * DAY)).toBe('14 days');
     expect(sizeText(1024 * 1024)).toBe('1 MB');

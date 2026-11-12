@@ -7,7 +7,7 @@
 // of the Monitor that keeps or removes it) and the cache of the workers (devspaces-worker-cache: its top level). From
 // what the reader of the shared volumes read (volumeReader.ts) and the records of the Monitor (monitorRecords.ts); the
 // rules are those of the Monitor (backgroundRules.ts, vscodeExtensions.ts). Pure; no I/O.
-import type { VscodePlatform } from '../helperChannel/protocol';
+import type { VscodePlatform, VscodeQuality } from '../helperChannel/protocol';
 import { FETCH_RETRY_MS, KEPT_SERVER_VERSIONS, SERVER_UNUSED_MS, SERVER_VERSION_NAME, STORE_CLEANUP_INTERVAL_MS, cleanupDue, fetchRetryDue, serversToRemove } from '../remoteMonitor/backgroundRules';
 import {
   EXTENSION_FOLDERS,
@@ -23,6 +23,7 @@ import {
   type ExtensionFolder,
 } from '../vscodeExtensions';
 import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
+import { serverVersionName } from '../worker/vscodeServerStore';
 import type { MonitorRecords } from './monitorRecords';
 import { ageText, cell, chip, countText, fact, sizeText, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportSection } from './reportModel';
 import type { StoredServer, VscodeStoreReading, WorkerCacheReading } from './volumeReader';
@@ -32,9 +33,10 @@ export const MAX_EXTENSION_ROWS = 300;
 /** At most this many entries of the top level of the cache of the workers. */
 export const MAX_CACHE_ROWS = 50;
 
-/** The name of the marker of the use of a server version (used/QUALITY-PLATFORM-COMMIT). */
+/** The name of the marker of the use of a server version (used/QUALITY-PLATFORM-COMMIT, serverVersionName). */
 function markerName(server: Pick<StoredServer, 'quality' | 'platform' | 'commit'>): string {
-  return `${server.quality}-${server.platform}-${server.commit}`;
+  // The reader lists any folder name; the casts only give serverVersionName its types.
+  return serverVersionName({ commit: server.commit, quality: server.quality as VscodeQuality }, server.platform as VscodePlatform);
 }
 
 /**
@@ -154,9 +156,9 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   if (removedSoon > 0) summary.push(chip(`${removedSoon} removed at the next cleanup`, 'remove'));
   if (failures.length > 0) summary.push(chip(countText(failures.length, 'download failed', 'downloads failed'), 'warn'));
   const notices: string[] = [];
-  if (store.cut) notices.push('The store holds more entries than the reader lists: some lists are incomplete.');
+  if (store.cut) notices.push('The store holds more entries than the reader lists: some lists are incomplete, and the rules of the extension files are missing.');
   if (records === undefined) notices.push('The volume devspaces-monitor could not be read: the failed downloads, the last cleanup and the rules of the extension files are missing.');
-  else if (!extensions.known) notices.push('Some records of the Monitor that the rules of the extension files need could not be read whole: these rules are missing.');
+  else if (!extensionRecordsKnown(records)) notices.push('Some records of the Monitor that the rules of the extension files need could not be read whole: these rules are missing.');
   if (platform === undefined && store.servers.length > 0) notices.push('The platform of the engine is not known: the server versions that the next cleanup removes are not known.');
   return { summary, sections, notices, monitorLog: false };
 }
@@ -166,13 +168,18 @@ function isExtensionRuleRecord(path: string): boolean {
   return path.startsWith(`${STATE_EXTENSION_FOLDER}/${EXTENSION_WANTED_FOLDER}/`) || path === `${STATE_EXTENSION_FOLDER}/${EXTENSION_CHOICES_FILE}` || path === `${STATE_EXTENSION_FOLDER}/${EXTENSION_DEPENDENCIES_FILE}`;
 }
 
+/** The records of the Monitor were read whole for the rules of the extension files: their list and the texts that they need. */
+function extensionRecordsKnown(records: MonitorRecords): boolean {
+  return !records.cut && !records.textless.some(isExtensionRuleRecord);
+}
+
 /**
- * The rows of the extension files with the rule of the cleanup of the Monitor (cleanupExtensions of the Monitor).
- * `known`: the rules are known (the records of the Monitor were read, their list is complete, and the reader left out
- * none of the texts that the rules need).
+ * The rows of the extension files with the rule of the cleanup of the Monitor (cleanupExtensions of the Monitor). The
+ * rules are known when the records of the Monitor were read whole (extensionRecordsKnown) and the list of the store is
+ * complete (the newest file of an extension needs all of its files).
  */
-function extensionRows(store: VscodeStoreReading, records: MonitorRecords | undefined, clock: ReportClock): { section: ReportSection; removed: number; known: boolean } {
-  const known = records !== undefined && !records.cut && !records.textless.some(isExtensionRuleRecord);
+function extensionRows(store: VscodeStoreReading, records: MonitorRecords | undefined, clock: ReportClock): { section: ReportSection; removed: number } {
+  const known = records !== undefined && extensionRecordsKnown(records) && !store.cut;
   const lists = (records?.extensionLists ?? []).flatMap((list) => (list.record !== undefined ? [list.record] : []));
   const wanted = wantedExtensions(lists, clock.now);
   const pinned = new Set(wanted.filter((ref) => ref.version !== undefined).map(extensionEntryText));
@@ -203,7 +210,6 @@ function extensionRows(store: VscodeStoreReading, records: MonitorRecords | unde
   };
   return {
     removed: removedNames.size,
-    known,
     section: {
       title: 'Extensions',
       body: {

@@ -14,7 +14,7 @@ import { isRecord } from '../valueChecks';
 import { commandText, parseJsonLines, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { onlyMissingContainers, type HostObject, type HostObjectKind } from './hostObjects';
-import { cell, chip, countText, dockerTimeText, fact, optional, shortDigest, sizeText, type ReportClock, type ReportFact, type ReportSection } from './reportModel';
+import { cell, chip, countText, dockerTimeText, fact, itemsText, optional, shortDigest, sizeText, type ReportClock, type ReportFact, type ReportSection } from './reportModel';
 
 /** The label of Docker Compose on a volume: its name in the Compose file. */
 export const COMPOSE_VOLUME_LABEL = 'com.docker.compose.volume';
@@ -237,7 +237,7 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
 /**
  * The details of `object` read now on the host: its inspect, for a volume also the containers that use it (at most
  * MAX_VOLUME_USERS of them inspected). Throws a CommandError when Docker fails, also when the object is not there
- * anymore.
+ * anymore, and an AbortError when `signal` aborts.
  */
 export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, object: Pick<HostObject, 'kind' | 'id'>, signal?: AbortSignal): Promise<ObjectDetails> {
   const options = { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) };
@@ -261,7 +261,10 @@ export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, ob
   if (shown.length > 0) {
     // The place and the mode of the mount; a container that went meanwhile keeps its row without them, and the others
     // keep theirs.
-    const inspected = await run(inspectArgs('container', shown.map((user) => user.id)), true).catch(() => []);
+    const inspected = await run(inspectArgs('container', shown.map((user) => user.id)), true).catch((error: unknown) => {
+      if (signal?.aborted === true) throw error;
+      return [];
+    });
     for (const entry of inspected) {
       if (!isRecord(entry)) continue;
       const user = shown.find((candidate) => candidate.id === entry.Id);
@@ -292,7 +295,7 @@ function restartFact(policy: string | undefined): ReportFact | undefined {
 
 /** The text of a list, at most MAX_LIST entries. */
 function listText(values: readonly string[]): string {
-  return values.length <= MAX_LIST ? values.join(', ') : `${values.slice(0, MAX_LIST).join(', ')} and ${values.length - MAX_LIST} more`;
+  return itemsText(values, MAX_LIST);
 }
 
 /**

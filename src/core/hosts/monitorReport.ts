@@ -11,8 +11,9 @@ import { CACHE_RUN_FILE, IMAGES_IN_USE_MAX_AGE_MS, IMAGE_SETTINGS_FILE, LABEL_MO
 import { IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
 import { nextCronTime } from '../remoteMonitor/cron';
 import { registryReferenceKey } from '../remoteMonitor/registryAnswers';
+import { runRetryDue } from '../remoteMonitor/backgroundRules';
 import { RUN_FAILURE_EVENTS, type RunEvent, type RunReport } from '../remoteMonitor/runReport';
-import { compareDevspacesVersions } from '../http';
+import { compareDevspacesVersions, isDevspacesVersion } from '../http';
 import { RECORDED_LIST_MS } from '../vscodeExtensions';
 import type { MonitorRecords } from './monitorRecords';
 import type { ContainerDetails } from './objectDetails';
@@ -74,15 +75,21 @@ function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerE
   }
   const state = records.cacheRun ?? {};
   facts.push(fact('Last run ended', state.lastEndAt !== undefined ? timeText(state.lastEndAt, clock) : 'no run ended yet'));
+  const nextTime = (from: number, { schedule, timeZone }: { schedule: CacheSchedule; timeZone: string }): number | undefined =>
+    schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone);
   if (state.retryAt !== undefined) {
-    facts.push(fact('Next run', `a retry ${timeText(state.retryAt, clock)}`, chip(`the last ${countText(state.retries ?? 1, 'run')} did not reach the network`, 'warn')));
+    // As the Monitor: the retry, or the schedule counted from the last attempt, whichever comes first.
+    const retries = chip(`the last ${countText(state.retries ?? 1, 'run')} did not reach the network`, 'warn');
+    const scheduled = active !== undefined && state.lastAttemptAt !== undefined ? nextTime(state.lastAttemptAt, active) : undefined;
+    if (runRetryDue(state.retryAt, clock.now) || (scheduled !== undefined && scheduled <= clock.now)) facts.push(fact('Next run', 'now: it runs at the next check of the Monitor', retries));
+    else if (scheduled !== undefined && scheduled < state.retryAt) facts.push(fact('Next run', `${timeText(scheduled, clock)} by the schedule, before the retry ${timeText(state.retryAt, clock)}`, retries));
+    else facts.push(fact('Next run', `a retry ${timeText(state.retryAt, clock)}`, retries));
   } else if (state.lastEndAt === undefined) {
     facts.push(fact('Next run', 'at the next check of the Monitor: no run is known'));
   } else if (active === undefined) {
     facts.push(fact('Next run', settingsTextless ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
   } else {
-    const { schedule, timeZone } = active;
-    const next = schedule.kind === 'interval' ? state.lastEndAt + schedule.minutes * 60_000 : nextCronTime(state.lastEndAt, schedule.cron, timeZone);
+    const next = nextTime(state.lastEndAt, active);
     facts.push(fact('Next run', next === undefined ? 'none: the schedule has no time' : next <= clock.now ? 'now: a time of the schedule has passed, it runs at its next check' : timeText(next, clock)));
   }
   if (state.lastCleanupAt !== undefined) facts.push(fact('Last cleanup of the store', timeText(state.lastCleanupAt, clock)));
@@ -171,7 +178,8 @@ function imagesInUseSection(records: MonitorRecords, computer: ReportComputer, c
         clock.now - at > IMAGES_IN_USE_MAX_AGE_MS
           ? chip(`sent more than ${spanText(IMAGES_IN_USE_MAX_AGE_MS)} ago: no longer kept up to date`, 'remove')
           : key === undefined
-            ? chip('pinned by a digest: never pulled', 'info')
+            ? // The record holds only references that the grammar takes (parseImagesInUseRecord): no key means a digest.
+              chip('pinned by a digest: never pulled', 'info')
             : answer !== undefined
               ? chip('kept up to date by the Monitor', 'keep')
               : chip('no answer of the registry yet: a private image, or not asked yet', 'info');
@@ -300,11 +308,11 @@ function runRow(run: RunReport, clock: ReportClock): ReportCell[] {
  * script of a newer one that a window stored, and a window of this version keeps one of a newer version.
  */
 function versionChip(version: string, own: string): ReportChip {
+  if (!isDevspacesVersion(version) || !isDevspacesVersion(own)) return chip('another version', 'info');
   const order = compareDevspacesVersions(version, own);
   if (order === 0) return chip('this version', 'keep');
   if (order < 0) return chip('an earlier version: it moves to the script of a newer one that a window stored', 'info');
-  if (order > 0) return chip('newer than this extension: the windows of this version keep it', 'info');
-  return chip('another version', 'info');
+  return chip('newer than this extension: the windows of this version keep it', 'info');
 }
 
 /** The report of the container of the Monitor (devspaces-monitor). `records`: those of its volume, when it could be read. */

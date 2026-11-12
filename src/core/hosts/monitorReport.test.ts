@@ -104,6 +104,19 @@ describe('the report of the volume of the Monitor', () => {
     expect(facts(body(monitorVolumeReport(retrying, COMPUTER, CLOCK).sections, 'Background run'))['Next run']).toEqual({ text: 'a retry today 09:10', chip: { text: 'the last 2 runs did not reach the network', tone: 'warn' } });
   });
 
+  it('gives the time of the schedule after the last attempt when it comes before the retry, as the Monitor runs', () => {
+    const next = (state: Record<string, number>): string | undefined => {
+      const retrying = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('image-settings.json', { schedule: '120', timeZone: 'Europe/Vienna' }), monitorFile('cache-run.json', { lastEndAt: LAST_END, ...state })] });
+      return facts(body(monitorVolumeReport(retrying, COMPUTER, CLOCK).sections, 'Background run'))['Next run']?.text;
+    };
+    // Every 2 hours: after the attempt at 08:30, the schedule runs at 10:30, before the retry at 11:00.
+    expect(next({ retryAt: NOW + 2 * HOUR, retries: 6, lastAttemptAt: NOW - 30 * 60_000 })).toBe('today 10:30 by the schedule, before the retry today 11:00');
+    expect(next({ retryAt: NOW + 10 * 60_000, retries: 1, lastAttemptAt: NOW - 30 * 60_000 })).toBe('a retry today 09:10');
+    // A retry whose time has passed, or a time of the schedule that has passed, runs at the next check.
+    expect(next({ retryAt: NOW - 60_000, retries: 1, lastAttemptAt: NOW - 30 * 60_000 })).toBe('now: it runs at the next check of the Monitor');
+    expect(next({ retryAt: NOW + 2 * HOUR, retries: 6, lastAttemptAt: NOW - 3 * HOUR })).toBe('now: it runs at the next check of the Monitor');
+  });
+
   it('names the schedule of the container when no window has sent one, and a run that is due at once', () => {
     const unsent = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
     const background = facts(body(monitorVolumeReport(unsent, COMPUTER, CLOCK).sections, 'Background run'));
@@ -203,6 +216,8 @@ describe('the report of the container of the Monitor', () => {
     expect(monitor['Version of Devspaces']?.chip?.text).toBe('newer than this extension: the windows of this version keep it');
     const earlierVersion = monitorContainerReport({ ...details, labels: new Map([[LABEL_MONITOR_VERSION, '0.3.9']]) }, undefined, COMPUTER, CLOCK);
     expect(facts(body(earlierVersion.sections, 'The Monitor'))['Version of Devspaces']?.chip?.text).toBe('an earlier version: it moves to the script of a newer one that a window stored');
+    const otherText = monitorContainerReport({ ...details, labels: new Map([[LABEL_MONITOR_VERSION, '0.4.1-dev']]) }, undefined, COMPUTER, CLOCK);
+    expect(facts(body(otherText.sections, 'The Monitor'))['Version of Devspaces']?.chip?.text).toBe('another version');
     expect(permanent.sections.map((section) => section.title)).toEqual(['The Monitor']);
     expect(permanent.notices).toEqual([expect.stringContaining('devspaces-monitor could not be read')]);
     const earlier = monitorContainerReport({ ...details, labels: new Map() }, records, COMPUTER, CLOCK);
