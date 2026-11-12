@@ -41,6 +41,8 @@ export const IDLE_PAUSE_MS = 30 * 60_000;
 export const VM_CHECK_MS = 30_000;
 /** While the page reads: how often it reads the sizes in the background, after the read right after the first sample. */
 export const SIZES_EVERY_MS = 10 * 60_000;
+/** A start (the open, Resume, a show after the end of the samples) reads the sizes again only when they are older. */
+export const SIZES_FRESH_MS = 60_000;
 /**
  * The VM counts as started by the login of the page only when it is younger than the check by more than this: the
  * answer takes time on its way back, and the age has steps of 1/100 s.
@@ -171,6 +173,8 @@ class UsagePage {
   private activityAt = 0;
   /** When the next read of the sizes in the background is due; undefined: after the next sample (a start, a new boot). */
   private sizesDueAt: number | undefined;
+  /** When the last read of the sizes of this boot of the host ended (also a failed one). */
+  private sizesReadAt: number | undefined;
   /** Ends the Read Sizes that runs (vmClosing). */
   private sizesAbort: AbortController | undefined;
   /** Raised at each new start of the host, so that a Read Sizes that ran across it keeps nothing. */
@@ -282,8 +286,9 @@ class UsagePage {
     else this.armIdle();
     this.flowPending = flow;
     this.vmStartedByPageAt = undefined;
-    // Each start reads the sizes again after its first sample.
-    this.sizesDueAt = undefined;
+    // Each start reads the sizes again after its first sample, unless they were read less than a minute ago (a quick
+    // switch back to the page).
+    if (this.sizesReadAt === undefined || this.timers.now() - this.sizesReadAt >= SIZES_FRESH_MS) this.sizesDueAt = undefined;
     const runAbort = new AbortController();
     this.runAbort = runAbort;
     // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).
@@ -376,6 +381,7 @@ class UsagePage {
       this.sizes = undefined;
       this.sizesError = undefined;
       this.sizesDueAt = undefined;
+      this.sizesReadAt = undefined;
     }
     this.header = header.bootId === undefined && known !== undefined ? { ...header, bootId: known } : header;
   }
@@ -648,7 +654,9 @@ class UsagePage {
       this.sizesAbort = undefined;
       this.sizesReading = false;
       // The next read in the background 10 minutes after this one; after a new start of the host, after the next sample.
-      this.sizesDueAt = epoch === this.bootEpoch ? this.timers.now() + SIZES_EVERY_MS : undefined;
+      const current = epoch === this.bootEpoch;
+      this.sizesReadAt = current ? this.timers.now() : undefined;
+      this.sizesDueAt = current ? this.timers.now() + SIZES_EVERY_MS : undefined;
       this.post();
     }
   }

@@ -82,8 +82,8 @@ describe('usagePageView', () => {
     expect(view.title).toBe(LIMA_HOST);
     expect(view.description).toBe('Local VM of Devspaces · Linux 6.12.48-cloud-amd64 · up 3 h 12 min');
     expect(view.status).toEqual({ text: 'Live · every 2 s · updated 10:41:05', tone: 'live' });
-    // While the sizes are read on the same login, the values wait, and the header says so.
-    expect(usagePageView(input({ usage: hostUsage(), updatedAt: at, sizesReading: true })).status.text).toBe('Live · every 2 s · updated 10:41:05 · reading the sizes, the values wait');
+    // While the sizes are read (the values may wait behind the read on the same login), the header says so.
+    expect(usagePageView(input({ usage: hostUsage(), updatedAt: at, sizesReading: true })).status.text).toBe('Live · every 2 s · updated 10:41:05 · reading the sizes');
     expect(view.pause).toEqual({ action: 'pause', label: 'Pause' });
     expect(view.banner).toBeUndefined();
     expect(view.stale).toBe(false);

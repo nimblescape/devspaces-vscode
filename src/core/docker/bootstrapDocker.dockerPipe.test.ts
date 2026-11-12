@@ -411,7 +411,7 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
     ]);
     expect(refused.signal.aborted).toBe(true);
     expect(envs).toEqual([]);
-    expect(lines).toContain('docker volume ls --format {{json .}} does not run: it may use only a login to build-box that is open, and none is.');
+    expect(lines).toContain('docker volume ls --format {{json .}} does not run: it may use only a login to build-box that is open (the shared shell, or the connection of the relay), and it cannot run there.');
   });
 
   it('runs a read with `openLoginOnly` through the pipe of an SSH host (the login of the relay), never through the pipe of the VM', async () => {

@@ -18,7 +18,7 @@ import type { RunResult } from '../core/ports';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { fakeVscode, resetFakeVscode, type FakeWebviewPanel } from './testing/fakeVscode';
-import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, SIZES_EVERY_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
+import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, SIZES_EVERY_MS, SIZES_FRESH_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
 import { UsagePageTexts, type UsagePageView } from './usagePageModel';
 
 const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
@@ -406,10 +406,11 @@ describe('UsagePages', () => {
     shells.open.add(LIMA_HOST);
     const panel = await open(pages(), LIMA_HOST);
     panel.receive({ type: 'pause' });
+    await timers.advance(SIZES_FRESH_MS);
     shells.boot = 'unreadable';
     panel.receive({ type: 'resume' });
     await flush();
-    // Each start reads the sizes after its first sample.
+    // Each start reads the sizes after its first sample (here more than a minute after the last read).
     expect(readSizes).toHaveBeenCalledTimes(2);
     // The sampler of the resume saw no boot ID before: the page compares with the boot ID of before the pause.
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
@@ -850,6 +851,16 @@ describe('UsagePages', () => {
     panel.setVisible(true);
     await flush();
     expect(readSizes).toHaveBeenCalledTimes(3);
+    // A switch back within a minute of the last read does not read again; a pause and Resume after a minute does.
+    panel.receive({ type: 'pause' });
+    panel.receive({ type: 'resume' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(3);
+    panel.receive({ type: 'pause' });
+    await timers.advance(SIZES_FRESH_MS);
+    panel.receive({ type: 'resume' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(4);
   });
 
   it('shows the error of a read in the background, and nothing when it found no open login', async () => {
@@ -876,7 +887,7 @@ describe('UsagePages', () => {
       return new Promise<HostInventory>(() => {});
     });
     const panel = await open(pages(), 'build-box');
-    expect(lastView(panel).status.text).toMatch(/^Live · every 5 s · updated .* · reading the sizes, the values wait$/);
+    expect(lastView(panel).status.text).toMatch(/^Live · every 5 s · updated .* · reading the sizes$/);
     panel.dispose();
     expect(signal?.aborted).toBe(false);
   });

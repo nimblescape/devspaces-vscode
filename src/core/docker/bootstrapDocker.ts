@@ -513,7 +513,7 @@ export class BootstrapDocker {
       if (onShell !== undefined) return onShell;
       const target = operationDockerTarget();
       if (openLoginOnly !== undefined && target?.kind === 'remote' && reachesEngine(args) && (call.shellTarget !== undefined || call.login !== undefined || isVmHost(target.host))) {
-        this.logger.info(`${commandText(args)} does not run: it may use only a login to ${target.host} that is open, and none is.`);
+        this.logger.info(`${commandText(args)} does not run: it may use only a login to ${target.host} that is open (the shared shell, or the connection of the relay), and it cannot run there.`);
         openLoginOnly.abort(abortError());
         throw abortError();
       }

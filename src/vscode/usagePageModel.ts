@@ -4,7 +4,7 @@
 
 // The utilization page of a Docker host (docs/requirements.md R-ENG-009): what the page shows, as texts and numbers,
 // from the state of the page, the values of the last sample (src/core/hosts/usageRates.ts), the history of the CPU use,
-// and the sizes of the last Read Sizes (readHostInventory); the HTML of the webview, and the check of its messages. The
+// and the sizes of the last read of the sizes (readHostInventory); the HTML of the webview, and the check of its messages. The
 // webview only shows these texts (resources/usagePage/page.js). No `vscode`: usagePage.ts is the glue.
 import { formatSize, totalSize, type HostInventory, type HostObject } from '../core/hosts/hostObjects';
 import type { UsageHeader } from '../core/hosts/usageSample';
@@ -148,7 +148,7 @@ export interface UsagePageInput {
   busy: Array<number | null>;
   sizes?: { inventory: HostInventory; at: number };
   sizesReading: boolean;
-  /** Why the last Read Sizes failed (its first line). */
+  /** Why the last read of the sizes failed (its first line). */
   sizesError?: string;
 }
 
@@ -179,9 +179,9 @@ export const UsagePageTexts = {
       ? 'The page uses the shell of Devspaces to the VM. It does not start the VM.'
       : 'The page uses the shell of Devspaces to the host. When none is open, it logs in once over SSH; a host that needs a password asks for it in VS Code.',
   live: (seconds: number, at: string | undefined) => `Live · every ${seconds} s${at !== undefined ? ` · updated ${at}` : ''}`,
-  liveReadingSizes: ' · reading the sizes, the values wait',
+  liveReadingSizes: ' · reading the sizes',
   secondReading: (seconds: number) => `Reading the CPU use: it needs two readings, ${seconds} seconds apart.`,
-  secondReadingDetail: 'Memory and disk show at once. The sizes of Docker show after Read Sizes.',
+  secondReadingDetail: 'Memory and disk show at once. The sizes of Docker show when their read ends.',
   paused: (at: string | undefined) => (at !== undefined ? `Paused · values of ${at}` : 'Paused'),
   pausedMessage: {
     button: 'Paused: you clicked Pause. The page reads nothing while it is paused.',
@@ -241,7 +241,7 @@ export const UsagePageTexts = {
   dockerCaption: 'Docker disk use',
   canBeFreed: (size: string) => `${size} can be freed`,
   diskKinds: { images: 'Images', containers: 'Containers', volumes: 'Volumes', buildCache: 'Build cache' } as Record<UsageDiskKind, string>,
-  sizesNotRead: 'Read Sizes reads them with docker system df -v, which reads every volume and can take a minute.',
+  sizesNotRead: 'The page reads them with docker system df -v after the first values and every 10 minutes; it reads every volume and can take a minute.',
   sizesReadingNote: 'Reading the sizes with docker system df -v…',
   sizesAt: (at: string) => `Sizes read at ${at}. Refresh Sizes reads them again. Can be freed: what no container uses (an unused volume holds data), and the build cache that no build uses.`,
   sizesFailed: (detail: string) => `The sizes could not be read: ${detail}`,
@@ -253,7 +253,7 @@ export const UsagePageTexts = {
   moreRows: (count: number) => `And ${count} more.`,
   moreObjects: (count: number) => `And ${count} more: the view Docker Hosts lists all of them.`,
   noNames: 'The names show when docker ps answers on the host. Without access to Docker there (a user who is not in the group docker), the page shows the short IDs.',
-  purposeAfterSizes: 'The purpose of each container shows after Read Sizes.',
+  purposeAfterSizes: 'The purpose of each container shows when the sizes are read.',
   hostNetwork: 'network of the host',
   noNetwork: 'no network',
   stopped: (count: number, names: string) => `Stopped containers · ${count}${names !== '' ? ` · ${names}` : ''}`,
