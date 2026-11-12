@@ -296,6 +296,8 @@ A small container on each Docker engine, the **Monitor** (`devspaces-monitor`), 
 
 The monitor sends `User-Agent: nimblescape-devspaces/<version>` with each request to the update service of VS Code and to the Visual Studio Marketplace.
 
+At the end of each run, the monitor keeps a short report of the run on its engine, for the last 7 runs: when the run started and ended, whether it reached the network, and what it did, for example "2 images pulled", "a new VS Code Server downloaded and linked into 1 container" or "3 extensions downloaded", with the names of the first ones, and what failed and why. The full details of each step stay in the log of the monitor.
+
 How long the monitor runs depends on the Docker engine. Devspaces asks no question about the monitor.
 
 - **On a remote host** (see [Remote Docker host](#remote-docker-host)), the monitor keeps running, also while no devspace runs there and VS Code is closed, and Docker starts it again when Docker or the host restarts. Its background work runs at the scheduled time even when no devspace runs. With the setting `devspaces.stopMonitorWhenIdle` on, it ends when idle, as on your computer.

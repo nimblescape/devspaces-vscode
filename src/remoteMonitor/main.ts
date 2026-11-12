@@ -100,6 +100,7 @@ import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type Ca
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_SUCCESSOR_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
 import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
+import { MAX_RUN_REPORTS_FILE_BYTES, RUN_REPORTS_FILE, parseRunReports, runReportsText, type RunReport } from '../core/remoteMonitor/runReport';
 import { ownHelperImage, refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
 import { EngineCleanup } from './engineCleanup';
 import { SelfUpgrade, upgradeCheckFromEnv } from './selfUpgrade';
@@ -1014,10 +1015,11 @@ export async function readImagesInUse(stateDir: string, now: number): Promise<Re
  * The temporary files of writeStateFile (`<name>.<pid>.<count>.tmp`) that a killed write left behind: of
  * image-settings.json, replaced-images.json, pulled-over-images.json, cache-run.json (written at the end of every
  * background run), registry-digests.json (REGISTRY_ANSWERS_FILE), last-use.json (LAST_USE_FILE), helper-image.json
- * (HELPER_CHECK_FILE), cleanup.json (CLEANUP_FILE) and the files of the images in use (`images-in-use.<source>.json`).
- * images.json is not written by this monitor; the leftovers of an older monitor are removed too.
+ * (HELPER_CHECK_FILE), cleanup.json (CLEANUP_FILE), runs.json (RUN_REPORTS_FILE) and the files of the images in use
+ * (`images-in-use.<source>.json`). images.json is not written by this monitor; the leftovers of an older monitor are
+ * removed too.
  */
-export const STATE_TEMPORARY_FILE = /^(images|image-settings|replaced-images|pulled-over-images|cache-run|registry-digests|last-use|helper-image|cleanup|images-in-use\.[0-9a-f]{32})\.json\.\d+\.\d+\.tmp$/;
+export const STATE_TEMPORARY_FILE = /^(images|image-settings|replaced-images|pulled-over-images|cache-run|registry-digests|last-use|helper-image|cleanup|runs|images-in-use\.[0-9a-f]{32})\.json\.\d+\.\d+\.tmp$/;
 /**
  * Such a file whose modification time is more than this from now is removed at the start of `run` (only then: a younger
  * one stays until the next start).
@@ -1159,6 +1161,31 @@ export function cacheRunStore(stateDir: string): CacheRunStore {
   return {
     read,
     update: async (change) => writeStateFile(stateDir, CACHE_RUN_FILE, JSON.stringify({ ...(await read()), ...change })),
+  };
+}
+
+/**
+ * The reports of the background runs in the volume (RUN_REPORTS_FILE): `add` puts a report first and keeps the newest
+ * MAX_RUN_REPORTS (runReportsText), written atomically (writeStateFile). No file, and a file that holds no valid report
+ * (a link, too large, not valid), count as no earlier report, so the next write replaces it; a read that fails (another
+ * error of the volume) rejects, and `add` then writes nothing, so that it never drops the earlier reports.
+ */
+export function runReportStore(stateDir: string): { add(report: RunReport): Promise<void>; read(): Promise<RunReport[]> } {
+  const read = async (): Promise<RunReport[]> => {
+    const file = path.join(stateDir, RUN_REPORTS_FILE);
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.lstat(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    if (!stat.isFile() || stat.size > MAX_RUN_REPORTS_FILE_BYTES) return [];
+    return parseRunReports(await fs.promises.readFile(file, 'utf8'));
+  };
+  return {
+    read,
+    add: async (report) => writeStateFile(stateDir, RUN_REPORTS_FILE, runReportsText(report, await read())),
   };
 }
 
@@ -1605,7 +1632,7 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
         referencesInUse: () => readImagesInUse(stateDir, now()),
         vm: vmFromEnv(deps.env),
       });
-      const background = new BackgroundRun({ log, now, images: () => images.pass(), helperImage, cleanup: () => cleanup.pass(), vscode: vscodeOf, state, prepares });
+      const background = new BackgroundRun({ log, now, images: () => images.pass(), helperImage, cleanup: () => cleanup.pass(), vscode: vscodeOf, state, prepares, reports: runReportStore(stateDir) });
       // With the request of "Update All Images Now" (`run-now`).
       const runRequest = runRequestStore(stateDir, log);
       const permanent = permanentFromEnv(deps.env);

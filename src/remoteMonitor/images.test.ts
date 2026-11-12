@@ -10,6 +10,8 @@ import { EngineError, type EngineFilters, type EngineImage } from '../core/worke
 import { MAX_ENGINE_LIST_ANSWER_CHARACTERS, type EngineApi, type EngineAnswer, type EngineRequest } from '../helperChannel/engineApi';
 import { dockerEngine } from '../helperChannel/engineClient';
 import type { ImageEngine } from './engine';
+import { RunReportBuilder } from '../core/remoteMonitor/runReport';
+import { withRunNotes } from './runNotes';
 import {
   IMAGE_LIST_TIMEOUT_MS,
   IMAGE_PULL_TIMEOUT_MS,
@@ -270,22 +272,47 @@ describe('the images of the remote Monitor', () => {
     // The registry has a newer `latest` than the engine (another digest), so it is pulled.
     const registry = fakeRegistry({}, { manifests: { ...CURRENT.manifests, 'majikmate/devcontainer-classroom-web:latest': `sha256:${'f'.repeat(64)}` } });
     const log: string[] = [];
-    await new ImageMaintenance({
+    const notes = new RunReportBuilder(0);
+    const maintenance = new ImageMaintenance({
       engine: engine.engine,
       registryTransport: registry.transport,
       log: (message) => log.push(message),
       ...inUse(`${DEV}:2`, `${WEB}:1`, `${WEB}:latest`),
-    }).pass();
+    });
+    await withRunNotes(notes, () => maintenance.pass());
     expect(engine.calls.filter((call) => call[0] === 'pull')).toEqual([
       ['pull', `${WEB}:1`],
       ['pull', `${WEB}:latest`],
     ]);
+    // The report of the run (R-DS-003): the pull that brought a version, not the one that found the same image again,
+    // and each removed version.
+    expect(notes.finish(0, true).events).toEqual({
+      imagePulled: { count: 1, items: [`${WEB}:1`] },
+      imageRemoved: { count: 4, items: [`${DEV} (2.0.14)`, `${DEV} (2.0.13)`, `${WEB} (1.0.0)`, `${WEB} (0.9.0)`] },
+    });
     expect(removed(engine.calls)).toEqual([
       ['removeImage', `${DEV}:2.0.14`],
       ['removeImage', `${DEV}:2.0.13`],
       ['removeImage', `${WEB}:1.0.0`],
       ['removeImage', `${WEB}:0.9.0`],
     ]);
+  });
+
+  // The report of the run (R-DS-003) names a new version only when the version before the pull is known.
+  it('an inspect that fails before the pull names no new version in the report', async () => {
+    // `${WEB}:1` is not on the engine, so it is pulled (as in the test above); the inspect of the pull before it fails.
+    const engine = fakeEngine({ pulled: { [`${WEB}:1`]: 'sha256:w101' }, images: [image(WEB, '1.0.1', 'sha256:w101', '2020-01-02')] });
+    let inspects = 0;
+    const inspect: ImageEngine['inspect'] = async (kind, name, signal) => {
+      if (name === `${WEB}:1` && ++inspects === 2) throw new Error('Docker did not answer within 60 seconds');
+      return engine.engine.inspect(kind, name, signal);
+    };
+    const notes = new RunReportBuilder(0);
+    const maintenance = new ImageMaintenance({ engine: { ...engine.engine, inspect }, registryTransport: fakeRegistry({}, CURRENT).transport, log: () => {}, ...inUse(`${WEB}:1`) });
+    await withRunNotes(notes, () => maintenance.pass());
+    expect(engine.calls.filter((call) => call[0] === 'pull')).toEqual([['pull', `${WEB}:1`]]);
+    expect(inspects).toBeGreaterThanOrEqual(2);
+    expect(notes.finish(0, true).events.imagePulled).toBeUndefined();
   });
 
   // `latest` works as any other tag: an image of `latest` that no reference in use names is removed, as is every other
@@ -574,9 +601,12 @@ describe('the images of the remote Monitor', () => {
     await new ImageMaintenance({ engine, registryTransport, log: () => {}, ...inUse() }).pass();
     expect(calls).toEqual([]);
     const log: string[] = [];
-    await new ImageMaintenance({ engine, registryTransport, log: (message) => log.push(message), ...inUse(`${DEV}:2`) }).pass();
-    // The failure of the list of the engine.
+    const notes = new RunReportBuilder(0);
+    const maintenance = new ImageMaintenance({ engine, registryTransport, log: (message) => log.push(message), ...inUse(`${DEV}:2`) });
+    await withRunNotes(notes, () => maintenance.pass());
+    // The failure of the list of the engine, also in the report of the run (the pass catches it itself).
     expect(log).toEqual(['The images could not be maintained: the list of the images failed: connect ECONNREFUSED /var/run/docker.sock']);
+    expect(notes.finish(0, true).events).toEqual({ partFailed: { count: 1, items: ['the images: the list of the images failed: connect ECONNREFUSED /var/run/docker.sock'] } });
     expect(calls).toEqual(['images']);
   });
 });
@@ -593,14 +623,17 @@ describe('the image maintenance over the Engine API', () => {
     const engine = fakeEngine({ images: [...VERSIONS, image(DEV, '2.0.12', 'sha256:old', '2026-09-01')], pulled: { [`${DEV}:2`]: 'sha256:newer' } });
     let stored: ReplacedImages = {};
     const log: string[] = [];
-    await new ImageMaintenance({
+    const notes = new RunReportBuilder(0);
+    const maintenance = new ImageMaintenance({
       // The engine answers 200, and its stream carries the error (the port rejects with its message).
       engine: { ...engine.engine, pull: async (reference) => (engine.calls.push(['pull', reference]), Promise.reject(new EngineError('manifest unknown', 200))) },
       registryTransport: fakeRegistry({}, NEWER).transport,
       log: (message) => log.push(message),
       ...inUse(`${DEV}:2`),
       replaced: { read: async () => stored, write: async (value) => void (stored = JSON.parse(JSON.stringify(value)) as ReplacedImages) },
-    }).pass();
+    });
+    await withRunNotes(notes, () => maintenance.pass());
+    expect(notes.finish(0, true).events).toMatchObject({ imagePullFailed: { count: 1, items: [`${DEV}:2: manifest unknown`] } });
     // Every image but that of the tag in use on the engine (`2`, kept as the pull failed) is removed.
     expect(log).toEqual([`${DEV}:2 could not be pulled: manifest unknown`, `Removed the unused image ${DEV} (2.0.13).`, `Removed the unused image ${DEV} (2.0.12).`]);
     // The pull did not move the reference: no ID is recorded as replaced by it (the store has the tagged IDs only).

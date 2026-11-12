@@ -142,5 +142,9 @@ describe('the small rules of the store', () => {
       `The VS Code server ${COMMIT} (stable) for linux-x64 could not be fetched into the shared store (the run was ended).`,
       `The VS Code server ${COMMIT} (stable) for linux-x64 could not be fetched into the shared store (the open was cancelled); the Dev Containers extension installs it in the container.`,
     ]);
+    // The reason also goes to onFailure (the report of the Monitor's run).
+    const reasons: string[] = [];
+    expect(await ensureServer({ ...deps(true), onFailure: (why) => void reasons.push(why) }, server, 'linux-x64', new AbortController().signal)).toBe(false);
+    expect(reasons).toEqual(['lock refused']);
   });
 });

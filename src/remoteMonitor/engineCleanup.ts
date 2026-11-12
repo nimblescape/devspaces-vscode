@@ -45,6 +45,7 @@ import {
 } from './cleanupRules';
 import { engineFailure, type CleanupEngine } from './engine';
 import { IMAGE_LIST_TIMEOUT_MS, IMAGE_REMOVE_TIMEOUT_MS, type ReferencesInUse } from './images';
+import { noteRun } from './runNotes';
 
 /** The time limit of the prune of the stopped helper containers. */
 export const CONTAINER_PRUNE_TIMEOUT_MS = 60_000;
@@ -97,6 +98,9 @@ export class EngineCleanup {
 
   private serial(work: () => Promise<void>): Promise<void> {
     const next = this.queue.then(work, work).catch((error: unknown) => {
+      // The cleanup catches its own failure, so the run does not see it (BackgroundRun.part); outside a run (observe)
+      // noteRun notes nothing.
+      noteRun('partFailed', `the cleanup of the engine: ${errorMessage(error)}`);
       this.deps.log(`The cleanup of the engine failed: ${errorMessage(error)}`);
     });
     this.queue = next;
@@ -134,7 +138,11 @@ export class EngineCleanup {
   private async pruneHelperContainers(): Promise<void> {
     try {
       const removed = await this.deps.engine.pruneContainers(SWEEP_FILTERS, AbortSignal.timeout(CONTAINER_PRUNE_TIMEOUT_MS));
-      if (removed.length > 0) this.deps.log(`Removed ${removed.length} stopped helper ${removed.length === 1 ? 'container' : 'containers'}.`);
+      if (removed.length > 0) {
+        const what = `${removed.length} stopped helper ${removed.length === 1 ? 'container' : 'containers'}`;
+        noteRun('engineObjectRemoved', what, removed.length);
+        this.deps.log(`Removed ${what}.`);
+      }
     } catch (error) {
       this.deps.log(`The stopped helper containers could not be removed: ${engineFailure(error, CONTAINER_PRUNE_TIMEOUT_MS)}`);
     }
@@ -331,7 +339,13 @@ export class EngineCleanup {
   private async pruneBuildCache(): Promise<void> {
     try {
       const { records, bytes } = await this.deps.engine.pruneBuildCache({ until: [BUILD_CACHE_UNUSED_FILTER] }, AbortSignal.timeout(BUILD_CACHE_PRUNE_TIMEOUT_MS));
-      if (records > 0) this.deps.log(`Removed ${records} ${records === 1 ? 'record' : 'records'} of the build cache that no build used for 7 days (Docker counts ${Math.round(bytes / 1_000_000)} MB).`);
+      if (records > 0) {
+        const what = `${records} ${records === 1 ? 'record' : 'records'} of the build cache`;
+        const size = `${Math.round(bytes / 1_000_000)} MB`;
+        // One event for the prune: its records are no objects of the view, and would hide the images in the count.
+        noteRun('engineObjectRemoved', `${what} (${size})`);
+        this.deps.log(`Removed ${what} that no build used for 7 days (Docker counts ${size}).`);
+      }
     } catch (error) {
       this.deps.log(`The build cache could not be pruned: ${engineFailure(error, BUILD_CACHE_PRUNE_TIMEOUT_MS)}`);
     }
@@ -341,7 +355,10 @@ export class EngineCleanup {
   private async remove(reference: string, what: string, inUse: string[]): Promise<Removal> {
     try {
       const outcome = await this.deps.engine.removeImage(reference, AbortSignal.timeout(IMAGE_REMOVE_TIMEOUT_MS));
-      if (outcome === 'removed') this.deps.log(`Removed ${what}.`);
+      if (outcome === 'removed') {
+        noteRun('engineObjectRemoved', what);
+        this.deps.log(`Removed ${what}.`);
+      }
       if (outcome === 'inUse') inUse.push(what);
       return outcome;
     } catch (error) {

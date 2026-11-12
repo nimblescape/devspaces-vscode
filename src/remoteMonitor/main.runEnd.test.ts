@@ -14,9 +14,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CACHE_RUN_FILE } from '../core/remoteMonitor/protocol';
+import { MAX_RUN_REPORTS, MAX_RUN_REPORTS_FILE_BYTES, RUN_REPORTS_FILE, type RunReport } from '../core/remoteMonitor/runReport';
 import type { EngineContainerSummary } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
-import { CacheSchedule, CurrentCacheSettings, STATE_TEMPORARY_FILE, cacheRunStore, main, removeStaleStateTemporaryFiles, vmFromEnv, vscodeBackgroundDeps } from './main';
+import { CacheSchedule, CurrentCacheSettings, STATE_TEMPORARY_FILE, cacheRunStore, main, removeStaleStateTemporaryFiles, runReportStore, vmFromEnv, vscodeBackgroundDeps } from './main';
 
 const T0 = Date.parse('2026-10-09T10:00:00Z');
 let stateDir: string;
@@ -144,6 +145,55 @@ describe('the leftover temporary files of the state of the background run', () =
   it('include those of the record of the cleanup of the engine', () => {
     expect(STATE_TEMPORARY_FILE.test('cleanup.json.123.4.tmp')).toBe(true);
     expect(STATE_TEMPORARY_FILE.test('cleanup.json')).toBe(false);
+  });
+
+  // The reports of the runs (runs.json, docs/requirements.md R-DS-003) too.
+  it('include those of the reports of the runs', () => {
+    expect(STATE_TEMPORARY_FILE.test(`${RUN_REPORTS_FILE}.123.4.tmp`)).toBe(true);
+    expect(STATE_TEMPORARY_FILE.test(RUN_REPORTS_FILE)).toBe(false);
+  });
+});
+
+// The short report of each run in the volume (docs/requirements.md R-DS-003): the newest first, the last 7.
+describe('the reports of the background runs in the volume', () => {
+  const made = (n: number): RunReport => ({ startedAt: new Date(T0 + n * 60_000).toISOString(), endedAt: new Date(T0 + n * 60_000 + 1000).toISOString(), reachedNetwork: n % 2 === 0, events: { imagePulled: { count: 1, items: [`node:${n}`] } } });
+
+  it('adds each report first and keeps the newest MAX_RUN_REPORTS, written at once', async () => {
+    const store = runReportStore(stateDir);
+    expect(await store.read()).toEqual([]);
+    for (let n = 1; n <= MAX_RUN_REPORTS + 2; n++) await store.add(made(n));
+    const kept = await store.read();
+    expect(kept).toEqual(Array.from({ length: MAX_RUN_REPORTS }, (_, i) => made(MAX_RUN_REPORTS + 2 - i)));
+    expect(fs.readdirSync(stateDir)).toEqual([RUN_REPORTS_FILE]);
+  });
+
+  it('a read that fails writes nothing, so the earlier reports stay', async () => {
+    // The volume folder is a file: the read of the reports fails (ENOTDIR), not "no file".
+    const notAFolder = path.join(stateDir, 'not-a-folder');
+    fs.writeFileSync(notAFolder, 'x');
+    await expect(runReportStore(notAFolder).add(made(1))).rejects.toThrow(/ENOTDIR/);
+    expect(fs.readFileSync(notAFolder, 'utf8')).toBe('x');
+  });
+
+  it('a file that is not valid, too large or a link counts as no earlier report, and is replaced', async () => {
+    const file = path.join(stateDir, RUN_REPORTS_FILE);
+    const store = runReportStore(stateDir);
+    for (const content of ['not json', JSON.stringify({ runs: [made(1)] }) + ' '.repeat(MAX_RUN_REPORTS_FILE_BYTES)]) {
+      fs.writeFileSync(file, content);
+      expect(await store.read()).toEqual([]);
+      await store.add(made(2));
+      expect(await store.read()).toEqual([made(2)]);
+    }
+    const target = path.join(stateDir, 'elsewhere.json');
+    fs.writeFileSync(target, JSON.stringify({ runs: [made(3)] }));
+    fs.rmSync(file);
+    fs.symlinkSync(target, file);
+    expect(await store.read()).toEqual([]);
+    await store.add(made(4));
+    // The write replaces the link; the file that it pointed to stays as it was.
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(await store.read()).toEqual([made(4)]);
+    expect(JSON.parse(fs.readFileSync(target, 'utf8'))).toEqual({ runs: [made(3)] });
   });
 });
 

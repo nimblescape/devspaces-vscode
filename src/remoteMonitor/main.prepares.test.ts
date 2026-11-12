@@ -10,6 +10,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LABEL_DEVSPACE_ID, LABEL_REPOSITORY, resourceName } from '../core/names';
+import { RUN_REPORTS_FILE, parseRunReports } from '../core/remoteMonitor/runReport';
 import type { DockerEngine, EngineContainerSummary } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import { heartbeatDir, lastUsedTimes, main, writeHeartbeat, type MainDeps } from './main';
@@ -91,6 +92,10 @@ describe('the prepares of the background run of `run`', () => {
     expect(api).toBeGreaterThan(lines.indexOf('The background run starts.'));
     expect(lines[api + 1]).toBe('acme/app: no prepare (0 s): its images are current (no update).');
     expect(lines[api + 2]).toBe('The background run ended.');
+    // The report of the run in the volume (docs/requirements.md R-DS-003).
+    const reports = parseRunReports(fs.readFileSync(path.join(stateDir, RUN_REPORTS_FILE), 'utf8'));
+    expect(reports).toHaveLength(1);
+    expect(reports[0]!.events.devspacePrepareSkipped).toEqual({ count: 2, items: ['acme/api: its images are current (no update)', 'acme/app: its images are current (no update)'] });
   });
 
   it('without the hash of a worker script, one line and no prepare', async () => {

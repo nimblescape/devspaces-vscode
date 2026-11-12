@@ -125,6 +125,8 @@ export interface VscodeStoreDeps {
    * Dev Containers extension).
    */
   background?: boolean;
+  /** Called with the reason of a fetch that failed, next to its line of the log (the report of the Monitor's run). */
+  onFailure?: (why: string) => void;
 }
 
 /** A failure of a fetch, with the text of its log line. */
@@ -199,6 +201,7 @@ async function ensureServerWithin(
     // The background run of the Monitor names no fallback (it fetches ahead of any open).
     const fallback = deps.background === true ? '' : '; the Dev Containers extension installs it in the container';
     deps.logger.warn(`The VS Code server ${name} for ${platform} could not be fetched into the shared store (${why})${fallback}.`);
+    deps.onFailure?.(why);
     return false;
   }
 }

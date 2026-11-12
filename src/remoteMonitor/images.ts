@@ -30,9 +30,11 @@ import { abortError } from '../core/ports';
 import { isListedRepository, parseImageReference, type ImageReferenceParts } from '../core/remoteMonitor/protocol';
 import { referenceText, type RegistryAnswer as TagAnswer } from '../core/remoteMonitor/registryAnswers';
 import type { EngineImage } from '../core/worker/dockerEngine';
+import { errorMessage } from '../core/errors';
 import { isNetworkError } from '../core/networkFailure';
 import type { NetworkContact } from './backgroundRules';
 import { engineFailure, type ImageEngine } from './engine';
+import { noteRun } from './runNotes';
 
 /** Time from the start of the monitor to the first pass. */
 export const REMOTE_IMAGE_FIRST_PASS_MS = 60_000;
@@ -442,7 +444,10 @@ export class ImageMaintenance {
       // The untagged images of this pass are the ones that the next pass may remove.
       this.seenUntagged = this.untaggedNow;
     } catch (error) {
-      this.deps.log(`The images could not be maintained: ${error instanceof Error ? error.message : String(error)}`);
+      const message = errorMessage(error);
+      // The pass catches its own failure, so the run does not see it (BackgroundRun.part).
+      noteRun('partFailed', `the images: ${message}`);
+      this.deps.log(`The images could not be maintained: ${message}`);
     } finally {
       // No empty lists (the other repositories stay: pruneReplacedImages).
       this.replaced = pruneReplacedImages(this.replaced);
@@ -492,17 +497,18 @@ export class ImageMaintenance {
    * The inspect JSON of an image (as `docker image inspect`), within the time limit of a list; undefined when it does
    * not exist or cannot be read (the engine does not answer).
    */
-  private async inspectImage(reference: string): Promise<InspectedImage | undefined> {
+  private async inspectImage(reference: string, onFailure?: () => void): Promise<InspectedImage | undefined> {
     try {
       return (await this.deps.engine.inspect('image', reference, AbortSignal.timeout(IMAGE_LIST_TIMEOUT_MS))) as InspectedImage | undefined;
     } catch {
+      onFailure?.();
       return undefined;
     }
   }
 
-  /** The ID of an image reference, or undefined. */
-  private async imageId(reference: string): Promise<string | undefined> {
-    const id = (await this.inspectImage(reference))?.Id;
+  /** The ID of an image reference, or undefined; `onFailure` is called when its inspect fails (not for a missing image). */
+  private async imageId(reference: string, onFailure?: () => void): Promise<string | undefined> {
+    const id = (await this.inspectImage(reference, onFailure))?.Id;
     return typeof id === 'string' && IMAGE_ID.test(id) ? id : undefined;
   }
 
@@ -666,18 +672,24 @@ export class ImageMaintenance {
    * Pulls `reference` of `repository`, a tag in use; false when the pull failed (logged).
    */
   private async pull(repository: string, reference: string): Promise<boolean> {
-    const before = await this.imageId(reference);
+    // An inspect that fails leaves the version before the pull unknown: the report then names no new version.
+    let beforeKnown = true;
+    const before = await this.imageId(reference, () => void (beforeKnown = false));
     // The pull of the engine without a login (anonymous); an error in its stream fails it.
     try {
       await this.deps.engine.pull(reference, { signal: AbortSignal.timeout(IMAGE_PULL_TIMEOUT_MS) });
       this.reachedRegistry = true;
     } catch (error) {
       if (isNetworkError(error)) this.pullOffline = true;
-      this.deps.log(`${reference} could not be pulled: ${engineFailure(error, IMAGE_PULL_TIMEOUT_MS)}`);
+      const reason = engineFailure(error, IMAGE_PULL_TIMEOUT_MS);
+      noteRun('imagePullFailed', `${reference}: ${reason}`);
+      this.deps.log(`${reference} could not be pulled: ${reason}`);
       return false;
     }
     // The image that the pull replaced, also when Docker lists it without its repository.
     const now = await this.imageId(reference);
+    // A pull that brought a version (a new one, or the first on the engine); the same version again is no event.
+    if (beforeKnown && now !== undefined && before !== now) noteRun('imagePulled', reference);
     if (before !== undefined && now !== undefined && before !== now) {
       this.replaced[repository] = trimReplaced([...(this.replaced[repository] ?? []).filter((id) => id !== before), before], new Set([now]));
       await this.deps.replaced?.write(this.replaced).catch(() => undefined);
@@ -808,7 +820,10 @@ export class ImageMaintenance {
         // this pass.
         if (answer === 'absent' && references.length === 0 && this.cameFromPull(repository, inspected)) {
           const failure = await this.removeReferences([version.id]);
-          if (failure === undefined) this.deps.log(`Removed the old version ${repository} (${label}) (its registry no longer has it; it came from a pull).`);
+          if (failure === undefined) {
+            noteRun('imageRemoved', `${repository} (${label})`);
+            this.deps.log(`Removed the old version ${repository} (${label}) (its registry no longer has it; it came from a pull).`);
+          }
           else this.deps.log(`The unused image ${repository} (${label}) stays: ${failure}`);
           continue;
         }
@@ -816,8 +831,10 @@ export class ImageMaintenance {
         continue;
       }
       const failure = await this.removeReferences(references.length > 0 ? references : [version.id]);
-      if (failure === undefined) this.deps.log(`Removed the unused image ${repository} (${label}).`);
-      else this.deps.log(`The unused image ${repository} (${label}) stays: ${failure}`);
+      if (failure === undefined) {
+        noteRun('imageRemoved', `${repository} (${label})`);
+        this.deps.log(`Removed the unused image ${repository} (${label}).`);
+      } else this.deps.log(`The unused image ${repository} (${label}) stays: ${failure}`);
     }
   }
 

@@ -11,7 +11,9 @@ import { DEVCONTAINER_CLI_VERSION, helperImageTag } from '../core/helper/helperI
 import type { HttpRequest, HttpResponse, HttpTransport } from '../core/http';
 import type { ProcessRunner, RunOptions, RunResult } from '../core/ports';
 import { engineHelperRecordText, parseEngineHelperRecordText, type EngineHelperRecord } from '../core/remoteMonitor/helperCheck';
+import { RunReportBuilder } from '../core/remoteMonitor/runReport';
 import { BackgroundRun } from './background';
+import { withRunNotes } from './runNotes';
 import { cliHelperBuild, ownHelperImage, refreshHelperImage, type HelperBuild, type HelperRefreshDeps } from './helperRefresh';
 
 const BASE = 'ghcr.io/acme/base:1';
@@ -110,7 +112,9 @@ describe('the part "the workspace helper image" of the background run', () => {
 
   it('builds the tag again when the base image changed, and records the check at the end of the build', async () => {
     const s = setup({ label: DIGEST_A, registry: DIGEST_B, stored: { tag: TAG, baseImage: BASE, baseDigest: DIGEST_A, checkedAt: iso(-1440), attemptedAt: iso(-2880) } });
-    expect(await refreshHelperImage(s.deps)).toBe('reached');
+    const notes = new RunReportBuilder(0);
+    expect(await withRunNotes(notes, () => refreshHelperImage(s.deps))).toBe('reached');
+    expect(notes.finish(0, true).events).toEqual({ helperImageBuilt: { count: 1, items: [TAG] } });
     expect(s.builds).toEqual([{ tag: TAG, dockerfile: s.deps.dockerfile, baseDigest: DIGEST_B }]);
     // The previous attempt stays in the record.
     expect(s.written()).toEqual({ tag: TAG, baseImage: BASE, baseDigest: DIGEST_B, checkedAt: iso(2), builtAt: iso(2), attemptedAt: iso(-2880) });
@@ -131,14 +135,18 @@ describe('the part "the workspace helper image" of the background run', () => {
   it('keeps the existing image and records only the attempt when the build fails, so the windows check it', async () => {
     const stored: EngineHelperRecord = { tag: TAG, baseImage: BASE, baseDigest: DIGEST_A, checkedAt: iso(-1440) };
     const s = setup({ label: DIGEST_A, registry: DIGEST_B, stored, build: async () => Promise.reject(new Error('E: Unable to fetch some archives')) });
-    expect(await refreshHelperImage(s.deps)).toBe('reached');
+    const notes = new RunReportBuilder(0);
+    expect(await withRunNotes(notes, () => refreshHelperImage(s.deps))).toBe('reached');
+    expect(notes.finish(0, true).events).toEqual({ helperImageFailed: { count: 1, items: [`${TAG}: the build failed: E: Unable to fetch some archives`] } });
     expect(s.written()).toEqual({ ...stored, attemptedAt: iso(0) });
     expect(s.log[1]).toBe(`The workspace helper image ${TAG} could not be built again, so the existing image stays and the windows check it: E: Unable to fetch some archives`);
   });
 
   it('records only the attempt when the registry does not answer, and tells the run that it found no network', async () => {
     const s = setup({ label: DIGEST_A, registry: 'unreachable', stored: { tag: TAG, baseImage: BASE, baseDigest: DIGEST_A, checkedAt: iso(-1440) } });
-    expect(await refreshHelperImage(s.deps)).toBe('offline');
+    const notes = new RunReportBuilder(0);
+    expect(await withRunNotes(notes, () => refreshHelperImage(s.deps))).toBe('offline');
+    expect(notes.finish(0, true).events).toEqual({ helperImageFailed: { count: 1, items: [`${TAG}: the registry of ${BASE} did not answer (connect ECONNREFUSED)`] } });
     expect(s.builds).toEqual([]);
     expect(s.written()).toEqual({ tag: TAG, baseImage: BASE, baseDigest: DIGEST_A, checkedAt: iso(-1440), attemptedAt: iso(0) });
     expect(s.log.at(-1)).toMatch(new RegExp(`^The base image ${BASE} of the workspace helper could not be checked: its registry did not answer`));
@@ -164,8 +172,11 @@ describe('the part "the workspace helper image" of the background run', () => {
 
     const failing = setup({});
     failing.deps.engine = { inspect: async () => Promise.reject(new Error('Cannot connect to the Docker daemon')) };
-    expect(await refreshHelperImage(failing.deps)).toBe('none');
+    const notes = new RunReportBuilder(0);
+    expect(await withRunNotes(notes, () => refreshHelperImage(failing.deps))).toBe('none');
     expect(failing.log).toEqual([`The workspace helper image ${TAG} could not be read: Cannot connect to the Docker daemon`]);
+    // A missing image is no failure of the run; an inspect that fails is.
+    expect(notes.finish(0, true).events).toEqual({ helperImageFailed: { count: 1, items: [`${TAG}: it could not be read: Cannot connect to the Docker daemon`] } });
     expect(failing.written()).toBeUndefined();
   });
 
