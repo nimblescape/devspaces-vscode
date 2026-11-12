@@ -817,7 +817,9 @@ async function activateExtension(
       if (await engineRemoved(target)) throw new Error(removedEngineNote(describeDockerHost(target.host)));
       await runWithDockerTarget(target, () => helper.checkImagePresent({ signal }));
     },
-    open: (target) =>
+    // With ChannelOpenOptions: a worker from the current build in the place of one from an earlier build (renew) never
+    // starts on the open connection of the relay.
+    open: (target, options) =>
       openHelperChannel(
         {
           start: (args) => docker.start(args),
@@ -857,6 +859,7 @@ async function activateExtension(
           devspaceName: () => windowDevspaceName(connection.currentContainerName(), target.host, registry),
         },
         target,
+        options,
       ),
   });
   helperChannels = channels;
@@ -887,6 +890,10 @@ async function activateExtension(
     // The processes that the kernel of the engine ended because the memory ran out: in the log on every engine, and on
     // the Lima VM a warning at the first one of each start of the VM, with the setting of its memory (R-VM-006).
     onOomKills: (target, kills) => oomWatch.seen(target.host, kills),
+    // The worker of the engine runs from an earlier build of the helper image (a rebuild by the Monitor or a window): a
+    // worker from the current build takes its place in the background, and the earlier one is closed once no operation
+    // runs on it (docs/requirements.md R-DS-008).
+    onEarlierBuild: (target) => void channels.renew(target),
   });
   // The source of the heartbeats and the owner of a permanent Monitor (computer.id); created by the first reader, and
   // read once (each open and each repair of the heartbeats asks for it; a failed read is tried again at the next call).

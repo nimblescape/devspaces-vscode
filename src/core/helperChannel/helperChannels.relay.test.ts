@@ -150,6 +150,24 @@ describe('openHelperChannel with the connection of the relay', () => {
     channel.close();
   });
 
+  // R-DS-008: the container of the open connection runs the helper image of the time of its open.
+  it('with newConnection, starts the worker on a new connection, never on the open one, which keeps its streams', async () => {
+    const shared = fakeConnection(fakeWorker());
+    const next = fakeConnection(fakeWorker());
+    const relayAccess = access(async () => next as unknown as RelayConnection, shared);
+    const runDirect = vi.fn<ChannelOpenDeps['runDirect']>(async () => ({ exitCode: 0, stdout: `${ENGINE}\n`, stderr: '', timedOut: false }));
+    const channel = await openHelperChannel(deps({ relay: () => relayAccess, runDirect }), REMOTE, { newConnection: true });
+    expect(channel.isOpen).toBe(true);
+    expect(shared.openWorker).not.toHaveBeenCalled();
+    // The open connection is neither retired nor closed; the new one becomes the current one after the checks.
+    expect(relayAccess.retire).not.toHaveBeenCalled();
+    expect(shared.closes).toEqual([]);
+    expect(relayAccess.use).toHaveBeenCalledWith(next);
+    // The identity of the engine is read with a login of its own, not through the Docker pipe of the open connection.
+    expect(runDirect.mock.calls.map(([args, , withContext]) => [args[0], withContext])).toEqual([['info', true]]);
+    channel.close();
+  });
+
   it('closes a new connection when the worker on it reaches another engine, and only retires the open connection of the engine', async () => {
     const otherEngine = async () => ({ exitCode: 0, stdout: '"another-engine" "/var/lib/docker"\n', stderr: '', timedOut: false });
     const fresh = fakeConnection(fakeWorker());

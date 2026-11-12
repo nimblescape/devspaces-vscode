@@ -4,13 +4,15 @@
 
 // The helper channels of a window: at most one per Docker engine, opened at its first use, closed after
 // CHANNEL_IDLE_CLOSE_MS without an operation, and opened again after it was lost. When it cannot be opened, it is not
-// tried again for CHANNEL_RETRY_AFTER_FAILURE_MS (clearFailures ends that wait). For the local Docker too, never for an
+// tried again for CHANNEL_RETRY_AFTER_FAILURE_MS (clearFailures ends that wait). A worker that runs from an earlier
+// build of its helper tag is renewed: a worker from the current build takes its place, and it is closed once no
+// operation runs on it (renew, docs/requirements.md R-DS-008). For the local Docker too, never for an
 // unsupported endpoint. A call that needs the worker (a flow, the refresh) first makes it ready (the helper image, then
 // the open in full, also within that wait); when it cannot, the call is refused, never taken a way without it. The
 // worker runs the whole pipeline itself; the extension relays no Docker calls, pulls, starts or locks through it. No
 // `vscode`.
 import { dockerApiErrorText, dockerApiMismatch, dockerApiMismatchText, type DockerCliApi, type EngineApiVersions } from '../docker/dockerApiVersion';
-import { runWithDockerTarget } from '../docker/dockerTargets';
+import { outsideOperation, runWithDockerTarget } from '../docker/dockerTargets';
 import { isNoDockerHostTarget, isPodmanDockerTarget, isUnreadableDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import type { HelperMaintenance } from '../helper/helperImages';
 import { bundleHash, loaderCommand } from '../loader/pipeLoader';
@@ -19,6 +21,7 @@ import type { RelayAccess } from '../relay/connections';
 import { RELAY_ENTRY } from '../relay/frames';
 import { HELPER_DOCKER_SOCKET, LABEL_HELPER_CHANNEL, LABEL_HELPER_RUN, VSCODE_STORE_DIR, freeWorkerNumber, workerName, workerNameStart } from '../names';
 import { errorMessage, isUserFacingError } from '../errors';
+import { outsideSshPrompts } from '../sshAskpass';
 import { VERSION_ENV, isDevspacesVersion, userAgentVersion } from '../http';
 import { abortError, isAbortError, type Logger, type RunOptions, type RunResult, type StartedProcess } from '../ports';
 import { CHANNEL_OPEN_TIMEOUT_MS, HelperChannel, HelperChannelError } from './helperChannel';
@@ -53,6 +56,12 @@ export const CHANNEL_RETRY_AFTER_FAILURE_MS = 5 * 60_000;
 export const CHANNEL_PROBE_TIMEOUT_MS = 30_000;
 /** How often the idle channels are looked for. */
 export const CHANNEL_SWEEP_INTERVAL_MS = 60_000;
+/**
+ * After a worker from the current build of the helper image could not be opened in the place of a worker from an
+ * earlier build (renew), the next renew of that engine waits this long (as RELAY_WORKER_MAX_AGE_MS): each heartbeat
+ * asks for it, and a host whose login asks for a password refuses each login of the background.
+ */
+export const CHANNEL_RENEW_RETRY_MS = 60 * 60_000;
 
 /**
  * The refresh of the sidebar, which no user starts, waits at most this long for a worker that is being opened (longer
@@ -126,6 +135,15 @@ export function channelRunArgs(p: {
     p.tag,
     ...loaderCommand({ path: CHANNEL_SCRIPT_PATH, hash: p.scriptHash, entry: p.entry ?? CHANNEL_ENTRY }),
   ];
+}
+
+/** How a worker is opened (openHelperChannel, HelperChannelsOptions.open). */
+export interface ChannelOpenOptions {
+  /**
+   * Never on the open connection of the relay of the engine, whose container runs the helper image from the time of
+   * its open: on a new connection (HelperChannels.renew, for a worker from the current build).
+   */
+  newConnection?: boolean;
 }
 
 export interface ChannelOpenDeps {
@@ -295,14 +313,16 @@ async function openBehindRelay(
  * the Engine API (`GET /info`), so both are compared as their values (sameEngine; the Docker CLI prints them as JSON in
  * Go's form, which escapes `<`, `>` and `&`), and the value of the worker is checked (parseProbeValue) as everything
  * that it answers. On a remote engine, the API versions of the probe must fit the Docker CLI of Devspaces
- * (ChannelOpenDeps.dockerCliApi, dockerApiMismatch). Throws HelperChannelError('open').
+ * (ChannelOpenDeps.dockerCliApi, dockerApiMismatch). With `options.newConnection`, the worker never starts on the open
+ * connection of the engine: on a new one, which becomes the current one after the checks (the open connection keeps its
+ * streams until they end). Throws HelperChannelError('open').
  */
-export async function openHelperChannel(deps: ChannelOpenDeps, target: DockerTarget): Promise<HelperChannel> {
+export async function openHelperChannel(deps: ChannelOpenDeps, target: DockerTarget, options: ChannelOpenOptions = {}): Promise<HelperChannel> {
   const name = engineName(target);
   const relay = target.kind === 'remote' ? deps.relay?.(target) : undefined;
   // The open connection of the engine (an earlier worker opened it, and the Docker pipe of the window keeps it): the
   // worker starts in its container, without a new login, and keeps the name of that container.
-  const shared = relay?.current();
+  const shared = options.newConnection === true ? undefined : relay?.current();
   if (relay !== undefined && shared !== undefined) {
     try {
       const channel = await openWorkerOn(shared, deps.logger, name, WORKER_HELLO_BEHIND_RELAY_MS);
@@ -506,10 +526,15 @@ interface Entry {
   failure?: string;
   /** Closed by `close` while it was being opened: the channel of that open is closed at once. */
   closed?: boolean;
+  /** The open of a worker from the current build in the place of `channel` (renew), while it runs. */
+  renewing?: Promise<void>;
+  /** When the last renew failed (the next one waits CHANNEL_RENEW_RETRY_MS). */
+  renewFailedAt?: number;
 }
 
 export interface HelperChannelsOptions {
-  open(target: DockerTarget): Promise<HelperChannel>;
+  /** openHelperChannel of the engine of `target`, with `options`. */
+  open(target: DockerTarget, options?: ChannelOpenOptions): Promise<HelperChannel>;
   /**
    * Makes the state that a worker of `target` needs consistent before it is opened for a call (a flow, the refresh):
    * the helper image, built when its tag is missing (HelperImages.ensureImagePresent). `maintenance` when the call is
@@ -541,6 +566,7 @@ export interface HelperChannelsOptions {
   idleCloseMs?: number;
   retryAfterFailureMs?: number;
   sweepIntervalMs?: number;
+  renewRetryMs?: number;
 }
 
 /**
@@ -558,6 +584,11 @@ function keyOf(target: DockerTarget): string {
 /** The channels of this window, one per Docker engine (local and remote). */
 export class HelperChannels {
   private readonly entries = new Map<string, Entry>();
+  /**
+   * The channels of workers from an earlier build whose place a worker from the current build took (renew), with the
+   * key of their engine: each is closed once no operation runs on it (the sweep), or by `close` of its engine.
+   */
+  private readonly retiring = new Map<HelperChannel, string>();
   private readonly sweepTimer: ReturnType<typeof setInterval>;
   private disposed = false;
 
@@ -813,7 +844,78 @@ export class HelperChannels {
     }
   }
 
-  /** Closes the channels without an operation for CHANNEL_IDLE_CLOSE_MS. */
+  /**
+   * The worker of `target` runs from an earlier build of its helper tag (HeartbeatValue.earlierBuild,
+   * docs/requirements.md R-DS-008): a worker from the current build takes its place. It is opened beside the earlier
+   * one as work in the background: outside of any operation and any flow of the user (a login asks nothing), the helper
+   * image only checked (`checkPresent`, never built), and on a remote engine always on a new connection of the relay,
+   * whose container starts from the tag as it is now (ChannelOpenOptions.newConnection). The calls from then on go to
+   * the new worker, and the earlier one is closed once no operation runs on it (at once, else by the sweep). When the
+   * new worker cannot be opened, the earlier one stays, and the next renew of the engine waits CHANNEL_RENEW_RETRY_MS.
+   * Nothing when the engine has no open worker, while one is opened, and while a renew runs. Resolves when the renew
+   * ended; never rejects.
+   */
+  renew(target: DockerTarget): Promise<void> {
+    const key = keyOf(target);
+    const entry = this.entries.get(key);
+    const earlier = entry?.channel;
+    if (this.disposed || entry === undefined || earlier === undefined || !earlier.isOpen || entry.opening !== undefined) return Promise.resolve();
+    if (entry.renewing !== undefined) return entry.renewing;
+    const retryMs = this.options.renewRetryMs ?? CHANNEL_RENEW_RETRY_MS;
+    if (entry.renewFailedAt !== undefined && Math.abs(Date.now() - entry.renewFailedAt) < retryMs) return Promise.resolve();
+    const name = engineName(target);
+    const opened = outsideOperation(() =>
+      outsideSshPrompts(async () => {
+        await this.options.checkPresent?.(target, undefined);
+        return this.options.open(target, { newConnection: true });
+      }),
+    );
+    const renewing = opened.then(
+      (channel) => {
+        entry.renewing = undefined;
+        // Closed by `close` or dispose meanwhile, or another worker took the place: the earlier one was lost, and a call
+        // opened a new one (or opens it now).
+        const taken = (entry.channel !== earlier && entry.channel !== undefined) || entry.opening !== undefined;
+        if (this.disposed || entry.closed === true || this.entries.get(key) !== entry || taken) {
+          channel.close();
+          return;
+        }
+        entry.renewFailedAt = undefined;
+        entry.channel = channel;
+        channel.onClose(() => {
+          if (entry.channel === channel) entry.channel = undefined;
+        });
+        this.options.logger.info(`The worker on ${name} runs from the current build of the helper image now; the worker from the earlier build is closed once no operation runs on it.`);
+        if (earlier.isOpen) {
+          this.retiring.set(earlier, key);
+          this.closeRetired();
+        }
+      },
+      (error: unknown) => {
+        entry.renewing = undefined;
+        entry.renewFailedAt = Date.now();
+        this.options.logger.info(
+          `The worker on ${name} stays on the earlier build of the helper image, because a worker from the current build could not be opened (tried again in ${Math.round(retryMs / 60_000)} minutes): ${errorMessage(error)}`,
+        );
+      },
+    );
+    entry.renewing = renewing;
+    return renewing;
+  }
+
+  /** Closes the retired channels (renew) on which no operation runs, and forgets the ones that closed. */
+  private closeRetired(): void {
+    for (const channel of [...this.retiring.keys()]) {
+      if (channel.isOpen && channel.busy > 0) continue;
+      this.retiring.delete(channel);
+      channel.close();
+    }
+  }
+
+  /**
+   * Closes the channels without an operation for CHANNEL_IDLE_CLOSE_MS, and the retired ones on which no operation runs
+   * (renew).
+   */
   sweep(): void {
     const idleMs = this.options.idleCloseMs ?? CHANNEL_IDLE_CLOSE_MS;
     for (const entry of this.entries.values()) {
@@ -824,15 +926,23 @@ export class HelperChannels {
         channel.close();
       }
     }
+    this.closeRetired();
   }
 
   /**
    * Closes the channel to the engine of `target` ("Remove Devspaces from This Docker Engine…" removes the containers of
    * the workers next): its input ends, so the worker ends what still runs and exits (HelperChannel.close). A channel that
-   * is being opened is closed once it is open. The next call that needs the worker opens a new one.
+   * is being opened is closed once it is open, and so is the worker of a renew that runs; a retired worker of the engine
+   * (renew) is closed at once. The next call that needs the worker opens a new one.
    */
   close(target: DockerTarget): void {
     const key = keyOf(target);
+    // The retired workers of the engine too (renew), also while operations run on them.
+    for (const [channel, of] of [...this.retiring]) {
+      if (of !== key) continue;
+      this.retiring.delete(channel);
+      channel.close();
+    }
     const entry = this.entries.get(key);
     if (entry === undefined) return;
     this.entries.delete(key);
@@ -852,6 +962,8 @@ export class HelperChannels {
     this.disposed = true;
     clearInterval(this.sweepTimer);
     for (const entry of this.entries.values()) entry.channel?.closeNow();
+    for (const channel of this.retiring.keys()) channel.closeNow();
     this.entries.clear();
+    this.retiring.clear();
   }
 }

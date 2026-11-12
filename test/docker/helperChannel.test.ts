@@ -24,6 +24,8 @@ import { testRemoteDockerHost } from '../../src/core/docker/remoteDocker';
 import { outsideOperation, runWithDockerTarget } from '../../src/core/docker/dockerTargets';
 import { HelperChannel } from '../../src/core/helperChannel/helperChannel';
 import { channelRunArgs, openHelperChannel } from '../../src/core/helperChannel/helperChannels';
+import { ownHelperOf } from '../../src/core/worker/ownHelper';
+import { runsFromEarlierBuild } from '../../src/helperChannel/flowOperations';
 import { parseOomKills, vmstatOomKills } from '../../src/core/vm/oomKills';
 import {
   CHANNEL_PROTOCOL_VERSION,
@@ -51,7 +53,7 @@ import { dockerPipeAddress } from '../../src/core/relay/pipeAddress';
 import { RemoteShells } from '../../src/core/relay/remoteShells';
 import { openRelayConnection, wslHostTransport, type RelayTransport } from '../../src/core/relay/transport';
 import { TEST_RUN_LABEL, removeRunObjects } from './dockerRun';
-import { Timings, dockerTestContext, testHelperImage, testStateVolume, testVscodeVolume } from './harness';
+import { Timings, dockerTestContext, testEngine, testHelperImage, testStateVolume, testVscodeVolume } from './harness';
 
 async function bundleScript(): Promise<string> {
   const result = await esbuild.build({
@@ -135,11 +137,12 @@ describe('the helper channel with the real Docker engine', () => {
    * Opens a channel as the extension does; `extraArgs` go before the image (for example `-e`), `process` is kept.
    * `relay`: the worker behind the relay, on the connection of `relay` when it has one, else on a new connection whose
    * transport is a local `sh -s` (in place of `ssh … sh -s`), or `relayTransport`; `transport` is that process, and
-   * `name` the name of its container. `host`: the host of the relay (default `runner-engine`).
+   * `name` the name of its container. `host`: the host of the relay (default `runner-engine`). `newConnection`: never on
+   * the open connection (ChannelOpenOptions).
    */
   async function open(
     extraArgs: string[] = [],
-    options: { relay?: RelayConnections; relayTransport?: RelayTransport; host?: string } = {},
+    options: { relay?: RelayConnections; relayTransport?: RelayTransport; host?: string; newConnection?: boolean } = {},
   ): Promise<{ channel: HelperChannel; process: StartedProcess; name: string; transport?: StartedByteProcess }> {
     let started: StartedProcess | undefined;
     let transport: StartedByteProcess | undefined;
@@ -181,6 +184,7 @@ describe('the helper channel with the real Docker engine', () => {
         windowName: () => 'Docker Test of the Worker Channel',
       },
       target,
+      { newConnection: options.newConnection },
     );
     return { channel, process: started!, name, transport };
   }
@@ -319,6 +323,61 @@ describe('the helper channel with the real Docker engine', () => {
       );
     } finally {
       killed.dispose();
+    }
+  });
+
+  // R-DS-008: after a rebuild of the helper tag, the look of the heartbeat finds that the worker runs from the earlier
+  // build (the inspects of the production client of the Engine API), and a worker with `newConnection` starts in a new
+  // container of the relay from the current build, while the open connection keeps its container and its streams. A tag
+  // of its own (built on the helper image of the run), so that the other tests keep theirs.
+  it('moves a worker to the current build: the look sees the earlier build, and a new connection runs the current one', async () => {
+    const shared = helperTag;
+    const ownTag = `devspaces-worker:rebuilt-${run.runId}`;
+    const buildOwn = (text: string): string => {
+      cli.ok(['build', '-q', ...runLabelArgs, '-t', ownTag, '-'], `FROM ${shared}\nRUN echo ${text} > /devspaces-test-build\n`);
+      return cli.ok(['image', 'inspect', '-f', '{{.Id}}', ownTag]);
+    };
+    const engine = testEngine(env);
+    const look = (name: string) => {
+      const own = ownHelperOf(JSON.parse(cli.ok(['container', 'inspect', name]))[0]);
+      if (own === undefined) throw new Error(`The own helper image of ${name} cannot be read.`);
+      return runsFromEarlierBuild(engine, async () => own, AbortSignal.timeout(30_000));
+    };
+    const connections = new RelayConnections({ logger: log });
+    const firstBuild = buildOwn(`first-${run.runId}`);
+    helperTag = ownTag;
+    try {
+      const earlier = await open([], { relay: connections });
+      expect(cli.ok(['container', 'inspect', '-f', '{{.Image}}', earlier.name])).toBe(firstBuild);
+      expect(await look(earlier.name)).toBe(false);
+      const earlierConnection = connections.get('runner-engine')!;
+      // The rebuild of the tag (by the Monitor or another window): the worker runs from the earlier build now.
+      const currentBuild = buildOwn(`current-${run.runId}`);
+      expect(currentBuild).not.toBe(firstBuild);
+      expect(await look(earlier.name)).toBe(true);
+      // The worker from the current build, on a new connection, beside the earlier one.
+      const current = await timings.measure('open a worker from the current build on a new connection', () => open([], { relay: connections, newConnection: true }));
+      expect(current.transport).toBeDefined();
+      expect(current.name).not.toBe(earlier.name);
+      expect(cli.ok(['container', 'inspect', '-f', '{{.Image}}', current.name])).toBe(currentBuild);
+      expect(await look(current.name)).toBe(false);
+      expect(parseProbeValue(await current.channel.operation(OP_PROBE, parseProbeParams({}), { timeoutMs: 30_000 }))?.serverVersion).toBeDefined();
+      // The new connection is the one for the Docker streams now; the earlier one still runs with its worker.
+      expect(connections.get('runner-engine')).not.toBe(earlierConnection);
+      expect(earlierConnection.isOpen).toBe(true);
+      expect(cli.container(earlier.name)?.State.Running).toBe(true);
+      expect(parseProbeValue(await earlier.channel.operation(OP_PROBE, parseProbeParams({}), { timeoutMs: 30_000 }))?.serverVersion).toBeDefined();
+      // The earlier worker closed: its stream ends, and its connection stays until it was idle (here: closed below).
+      earlier.channel.close();
+      await waitUntil(() => earlierConnection.streamCount === 0, 'the end of the earlier worker');
+      current.channel.close();
+      connections.close('runner-engine', 'the test closed it');
+      await Promise.all([earlier.transport?.exited, current.transport?.exited]);
+      await waitUntil(() => cli.container(earlier.name) === undefined && cli.container(current.name) === undefined, 'the removal of the containers');
+    } finally {
+      helperTag = shared;
+      connections.dispose();
+      cli.run(['image', 'rm', '-f', ownTag]);
     }
   });
 

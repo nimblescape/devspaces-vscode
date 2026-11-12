@@ -220,6 +220,14 @@ export async function withSshPrompts<T>(fn: () => Promise<T>, signal?: AbortSign
   }
 }
 
+/**
+ * Runs `fn` outside of any flow of the user: an SSH login that it starts asks nothing, as the logins of the background,
+ * also when a flow of the user caused it (HelperChannels.renew).
+ */
+export function outsideSshPrompts<T>(fn: () => Promise<T>): Promise<T> {
+  return promptScopes.exit(fn);
+}
+
 /** True within withSshPrompts: an SSH login that starts now may ask. */
 export function sshPromptsAllowed(): boolean {
   return activeScope() !== undefined;

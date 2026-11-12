@@ -113,6 +113,44 @@ describe('the operations of the Monitor in the worker', () => {
     expect(await heartbeatOperation(() => missing.engine, undefined, () => oomKills)({ heartbeat: HEARTBEAT }, contextOf().context)).toEqual({ ok: false, missing: true, detail: expect.any(String) });
   });
 
+  // R-DS-008: the helper tag that the worker started from is on another image now (a rebuild).
+  it('heartbeat: answers that the worker runs from an earlier build of its helper tag; never fails for that look', async () => {
+    const { engine } = engineOf(ok);
+    const inspects: { kind: string; reference: string }[] = [];
+    let current: unknown = { Id: OWN.image.id };
+    const withImage: DockerEngine = {
+      ...engine,
+      inspect: async (kind, reference) => {
+        inspects.push({ kind, reference });
+        if (current instanceof Error) throw current;
+        return current;
+      },
+    };
+    const heartbeat = (ownHelperOf: () => Promise<OwnHelper> = async () => OWN) =>
+      heartbeatOperation(() => withImage, undefined, () => undefined, ownHelperOf)({ heartbeat: HEARTBEAT }, contextOf().context);
+    // The tag is on the image of the worker.
+    expect(await heartbeat()).toEqual({ ok: true });
+    expect(inspects).toEqual([{ kind: 'image', reference: OWN.image.tag }]);
+    // The tag is on another image.
+    current = { Id: `sha256:${'b'.repeat(64)}` };
+    expect(await heartbeat()).toEqual({ ok: true, earlierBuild: true });
+    // The tag is on no image, the inspect fails, or the worker cannot read its own image: no answer, the heartbeat is ok.
+    for (const value of [undefined, { Id: 7 }, new EngineError('boom', 500)]) {
+      current = value;
+      expect(await heartbeat(), String(value)).toEqual({ ok: true });
+    }
+    current = { Id: `sha256:${'b'.repeat(64)}` };
+    expect(await heartbeat(() => Promise.reject(new Error('no inspect')))).toEqual({ ok: true });
+    // Without the reader of its own image (the tests of other parts), no look.
+    inspects.length = 0;
+    expect(await heartbeatOperation(() => withImage, undefined, () => undefined)({ heartbeat: HEARTBEAT }, contextOf().context)).toEqual({ ok: true });
+    expect(inspects).toEqual([]);
+    // A heartbeat that the monitor did not take: no look.
+    const missing = engineOf(() => Promise.reject(new EngineError('No such container', 404)));
+    expect(await heartbeatOperation(() => ({ ...missing.engine, inspect: withImage.inspect }), undefined, () => undefined, async () => OWN)({ heartbeat: HEARTBEAT }, contextOf().context)).toMatchObject({ ok: false });
+    expect(inspects).toEqual([]);
+  });
+
   it('heartbeat: refuses parameters that do not fit and a secret before anything runs; a cancel is cancelled', async () => {
     const { engine, execs } = engineOf(ok);
     await expect(heartbeatOperation(() => engine)({ heartbeat: { ...HEARTBEAT, source: 'x' } }, contextOf().context)).rejects.toMatchObject({ code: 'invalid' });

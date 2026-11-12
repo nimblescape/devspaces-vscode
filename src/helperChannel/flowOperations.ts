@@ -440,22 +440,57 @@ export function reconcileOperation(engineOf: EngineOfOperation, ownHelperOf: Own
  * `heartbeat`, one heartbeat of a window to the Monitor container of the worker's engine
  * (monitorFlow.sendHeartbeat). `missing` tells the window to start the monitor again. A heartbeat that the monitor
  * took also answers the last check of the helper image by the Monitor (helperCheck.ts), read from its volume at
- * `stateDir` (LOCK_STATE_DIR), and the processes that the kernel of the engine ended because the memory ran out
- * (`oomKillsOf`, by default readOomKills of the kernel that the worker runs on).
+ * `stateDir` (LOCK_STATE_DIR), the processes that the kernel of the engine ended because the memory ran out
+ * (`oomKillsOf`, by default readOomKills of the kernel that the worker runs on), and whether the worker runs from an
+ * earlier build of its helper tag (runsFromEarlierBuild with `ownHelperOf`; not looked at without it).
  */
-export function heartbeatOperation(engineOf: EngineOfOperation, stateDir: string = LOCK_STATE_DIR, oomKillsOf: () => OomKills | undefined = readOomKills): OperationHandler {
+export function heartbeatOperation(
+  engineOf: EngineOfOperation,
+  stateDir: string = LOCK_STATE_DIR,
+  oomKillsOf: () => OomKills | undefined = readOomKills,
+  ownHelperOf?: OwnHelperOf,
+): OperationHandler {
   return checkedOperation('heartbeat', parseHeartbeatParams, async (checked, context) => {
-    const value = await sendHeartbeat(engineOf(context), checked.heartbeat, context.signal).catch((error: unknown) => {
+    const engine = engineOf(context);
+    const value = await sendHeartbeat(engine, checked.heartbeat, context.signal).catch((error: unknown) => {
       cancelledIfAborted('heartbeat', context);
       throw error;
     });
     if (!value.ok) return value satisfies HeartbeatValue;
-    // With the last check of the helper image by the Monitor, from its volume, when it has one (helperCheck.ts), and
-    // the processes that the kernel of the engine ended because the memory ran out (oomKills.ts).
+    // With the last check of the helper image by the Monitor, from its volume, when it has one (helperCheck.ts), the
+    // processes that the kernel of the engine ended because the memory ran out (oomKills.ts), and the earlier build
+    // that the worker runs from (docs/requirements.md R-DS-008).
     const helperCheck = helperCheckOf(readEngineHelperRecord(stateDir));
     const oomKills = oomKillsOf();
-    return { ...value, ...(helperCheck === undefined ? {} : { helperCheck }), ...(oomKills === undefined ? {} : { oomKills }) } satisfies HeartbeatValue;
+    const earlierBuild = ownHelperOf !== undefined && (await runsFromEarlierBuild(engine, () => ownHelperOf(context), context.signal));
+    return {
+      ...value,
+      ...(helperCheck === undefined ? {} : { helperCheck }),
+      ...(oomKills === undefined ? {} : { oomKills }),
+      ...(earlierBuild ? { earlierBuild: true as const } : {}),
+    } satisfies HeartbeatValue;
   });
+}
+
+/** The time limit of the look of a heartbeat whether the worker runs from an earlier build (runsFromEarlierBuild). */
+export const EARLIER_BUILD_LOOK_TIMEOUT_MS = 5_000;
+
+/**
+ * Whether the worker runs from an earlier build of its helper tag: the tag that its container was started from
+ * (OwnHelper.image.tag of `ownHelper`; on a remote engine, the container of the connection of the relay) is on another
+ * image now, because the Monitor or a window built it again (docs/requirements.md R-DS-008). False when the tag is on
+ * no image (the next worker builds it), and when either cannot be read (the inspect within
+ * EARLIER_BUILD_LOOK_TIMEOUT_MS, or until `signal` aborts): the heartbeat never fails for this look.
+ */
+export async function runsFromEarlierBuild(engine: Pick<DockerEngine, 'inspect'>, ownHelper: () => Promise<OwnHelper>, signal: AbortSignal): Promise<boolean> {
+  try {
+    const own = await ownHelper();
+    const image = await engine.inspect('image', own.image.tag, AbortSignal.any([signal, AbortSignal.timeout(EARLIER_BUILD_LOOK_TIMEOUT_MS)]));
+    const id = typeof image === 'object' && image !== null ? (image as { Id?: unknown }).Id : undefined;
+    return typeof id === 'string' && id !== own.image.id;
+  } catch {
+    return false;
+  }
 }
 
 /**

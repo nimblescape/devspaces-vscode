@@ -4,7 +4,8 @@
 
 // The calls of this window to the Monitor of an engine, as operations of the worker of that engine (every
 // remote action is a worker operation): the heartbeats (`heartbeat`, whose answer also carries the last check of the
-// helper image by the Monitor and the processes that the kernel of the engine ended because the memory ran out), the
+// helper image by the Monitor, the processes that the kernel of the engine ended because the memory ran out, and whether
+// the worker runs from an earlier build of its helper tag), the
 // check that the container of a devspace exists there (`windowState`), the Git state of a release (`recordGitState`),
 // the ensure of the monitor (`monitorEnsure`), and "Update All Images Now" (`monitorRunNow`). The image settings and
 // list come with the operation `open`. No `vscode` here; never throws, except the Git state (its caller bounds and logs
@@ -53,6 +54,12 @@ export interface WorkerMonitorDeps {
    * there (HeartbeatValue.oomKills). Called without a wait; it must not throw.
    */
   onOomKills?: (target: DockerTarget, kills: OomKills) => void;
+  /**
+   * The worker of `target` runs from an earlier build of its helper tag, from the answer of a heartbeat there
+   * (HeartbeatValue.earlierBuild): the window opens a worker from the current build in its place (HelperChannels.renew,
+   * docs/requirements.md R-DS-008). Called without a wait; it must not throw.
+   */
+  onEarlierBuild?: (target: DockerTarget) => void;
 }
 
 export function workerMonitor(deps: WorkerMonitorDeps) {
@@ -66,6 +73,7 @@ export function workerMonitor(deps: WorkerMonitorDeps) {
         if (!value.ok) return value;
         if (value.helperCheck !== undefined) deps.onHelperCheck?.(target, value.helperCheck);
         if (value.oomKills !== undefined) deps.onOomKills?.(target, value.oomKills);
+        if (value.earlierBuild === true) deps.onEarlierBuild?.(target);
         return { ok: true };
       } catch (error) {
         return { ok: false, missing: false, detail: errorMessage(error) };

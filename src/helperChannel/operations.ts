@@ -163,8 +163,9 @@ export const OPERATIONS: Readonly<Record<string, OperationHandler>> = {
   [OP_WINDOW_STATE]: windowStateOperation(ENGINE_OF),
   // The registry rebuilt from the volumes, by the worker's own pipeline.
   [OP_RECONCILE]: reconcileOperation(ENGINE_OF, OWN_HELPER_OF, (context, p) => workerBatchSession(BATCH, context, p)),
-  // The heartbeats of the Monitor, and the Git state of a release (the image settings come with the open).
-  [OP_HEARTBEAT]: heartbeatOperation(ENGINE_OF),
+  // The heartbeats of the Monitor (with the look whether this worker runs from an earlier build of its helper tag), and
+  // the Git state of a release (the image settings come with the open).
+  [OP_HEARTBEAT]: heartbeatOperation(ENGINE_OF, undefined, undefined, OWN_HELPER_OF),
   [OP_RECORD_GIT_STATE]: recordGitStateOperation(ENGINE_OF, OWN_HELPER_OF, (context, p) => workerBatchSession(BATCH, context, p)),
   // The ensure of the Monitor container, with this worker's own script as the script of the Monitor.
   [OP_MONITOR_ENSURE]: monitorEnsureOperation(ENGINE_OF, OWN_HELPER_OF, MONITOR_SCRIPT, WORKER_SCRIPT),
