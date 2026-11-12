@@ -9,6 +9,7 @@
 // for the local Docker, the calls go as before.
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
+import { volumeReaderArgs } from '../hosts/volumeReader';
 import { BootstrapDocker, isSharedShellCall, isShellCall } from './bootstrapDocker';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from './dockerHost';
 import { operationOnShell, operationOpenLoginOnly, runWithDockerTarget } from './dockerTargets';
@@ -497,6 +498,15 @@ describe('isSharedShellCall', () => {
     // The removal of the build cache only on the VM: elsewhere the Docker CLI of the host could prune a builder of its user.
     expect(isSharedShellCall(['builder', 'prune', '--all', '--force'], true)).toBe(true);
     expect(isSharedShellCall(['builder', 'prune', '--all', '--force'], false)).toBe(false);
+  });
+
+  it('takes the reader of the shared volumes exactly as volumeReaderArgs makes it, no other docker run', () => {
+    const reader = volumeReaderArgs('devspaces-worker:0123456789ab', { vscode: 'devspaces-vscode', monitor: 'devspaces-monitor' }, 'devspaces-reader-0a1b2c3d');
+    for (const vm of [false, true]) {
+      expect(isSharedShellCall(reader, vm)).toBe(true);
+      expect(isSharedShellCall([...reader.slice(0, -1), 'sh'], vm)).toBe(false);
+      expect(isSharedShellCall(['run', '--rm', '-v', '/:/host', 'devspaces-worker:0123456789ab', 'sh'], vm)).toBe(false);
+    }
   });
 });
 

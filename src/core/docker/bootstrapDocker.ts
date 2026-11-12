@@ -38,6 +38,7 @@ import { hostEndpoint, isVmHost, isSshClosedBeforeLogin, type DockerTarget } fro
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 import { extractBaseImages } from '../imageCheck/dockerfile';
+import { isVolumeReaderCall } from '../hosts/volumeReader';
 import { operationDockerTarget, operationOnShell, operationOpenLoginOnly, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
 
@@ -285,14 +286,15 @@ const SHARED_SHELL_CHANGES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
- * A call that may run on the shared shell of a host (runWithDockerTarget with `onShell`): one of isShellCall, or one of
- * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES). On the VM of Devspaces (`vm`) also `docker builder
- * prune` (Remove Unused Build Cache…): on another host, the Docker CLI there could send it to a buildx builder that its
- * user chose (`docker buildx use --global`) instead of the engine, so it keeps the way of BootstrapDocker with
- * BUILDX_BUILDER=default (REMOTE_BUILDX_BUILDER); the VM has no builder of a user.
+ * A call that may run on the shared shell of a host (runWithDockerTarget with `onShell`): one of isShellCall, one of
+ * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES), or the reader of the shared volumes of its reports
+ * (isVolumeReaderCall: a container without network that only reads the volumes, with its script as an argument). On the
+ * VM of Devspaces (`vm`) also `docker builder prune` (Remove Unused Build Cache…): on another host, the Docker CLI there
+ * could send it to a buildx builder that its user chose (`docker buildx use --global`) instead of the engine, so it
+ * keeps the way of BootstrapDocker with BUILDX_BUILDER=default (REMOTE_BUILDX_BUILDER); the VM has no builder of a user.
  */
 export function isSharedShellCall(args: readonly string[], vm: boolean): boolean {
-  if (isShellCall(args)) return true;
+  if (isShellCall(args) || isVolumeReaderCall(args)) return true;
   const [command, subcommand] = dockerCommandWords(args);
   if (!shellCarries(args) || command === undefined) return false;
   if (vm && command === 'builder' && subcommand === 'prune') return true;
