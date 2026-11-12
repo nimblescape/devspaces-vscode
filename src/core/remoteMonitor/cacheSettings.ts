@@ -6,7 +6,7 @@
 // devspaces.cacheUpdateSchedule (a cron schedule of five fields or an interval in minutes), when a run is due, and
 // whether the monitor of an engine runs permanently (its restart policy). The default is daily at 06:07 in the
 // computer's time zone. Pure functions; no I/O, no `vscode`.
-import { nextCronTime, parseCronSchedule, shortestCronGapMinutes, type CronSchedule } from './cron';
+import { DEFAULT_IMAGE_TIME_ZONE, isTimeZone, nextCronTime, parseCronSchedule, shortestCronGapMinutes, type CronSchedule } from './cron';
 
 /**
  * The default of devspaces.cacheUpdateSchedule: daily at 06:07 in the time zone of the computer (DEVSPACE_IMAGE_TZ of
@@ -65,6 +65,25 @@ export function normalizeCacheSchedule(value: unknown): string {
   return parseCacheSchedule(value)?.text ?? DEFAULT_CACHE_UPDATE_SCHEDULE;
 }
 
+/** The environment variables of the container of the Monitor with the schedule of its background run and its time zone. */
+export const MONITOR_SCHEDULE_ENV = 'DEVSPACE_IMAGE_SCHEDULE';
+export const MONITOR_TIME_ZONE_ENV = 'DEVSPACE_IMAGE_TZ';
+
+/**
+ * The schedule of the whole background run that the Monitor takes from its container, until a window stores newer
+ * settings in its volume: DEVSPACE_IMAGE_SCHEDULE (the setting cacheUpdateSchedule, parseCacheSchedule: a cron
+ * expression of five fields or an interval in minutes) in DEVSPACE_IMAGE_TZ (the time zone of the computer that created
+ * the monitor). Invalid or missing: DEFAULT_CACHE_UPDATE_SCHEDULE (daily at 06:07) and DEFAULT_IMAGE_TIME_ZONE
+ * (Europe/Vienna).
+ */
+export function cacheScheduleFromEnv(env: Readonly<Record<string, string | undefined>>): { schedule: CacheSchedule; timeZone: string } {
+  const timeZone = env[MONITOR_TIME_ZONE_ENV];
+  return {
+    schedule: parseCacheSchedule(env[MONITOR_SCHEDULE_ENV]) ?? parseCacheSchedule(DEFAULT_CACHE_UPDATE_SCHEDULE)!,
+    timeZone: isTimeZone(timeZone) ? timeZone : DEFAULT_IMAGE_TIME_ZONE,
+  };
+}
+
 /**
  * Whether the Monitor of an engine runs permanently (R-DS-003): on a remote host (`remote`), unless the setting
  * devspaces.stopMonitorWhenIdle is true (remote hosts only; its default is false). On the WSL distribution or VM of
@@ -102,7 +121,14 @@ export function monitorRestartPolicy(permanent: boolean): typeof IDLE_MONITOR_RE
  */
 export function cacheRunDue(schedule: CacheSchedule, lastEndAt: number | undefined, now: number, timeZone: string): boolean {
   if (lastEndAt === undefined) return true;
-  if (schedule.kind === 'interval') return now - lastEndAt >= schedule.minutes * 60_000;
-  const next = nextCronTime(lastEndAt, schedule.cron, timeZone);
+  const next = scheduleTimeAfter(schedule, lastEndAt, timeZone);
   return next !== undefined && next <= now;
+}
+
+/**
+ * The first time of the schedule after `from`: with an interval, the interval after it; with a cron schedule, its next
+ * time after it in `timeZone` (undefined: the schedule has no next time, e.g. 30 February).
+ */
+export function scheduleTimeAfter(schedule: CacheSchedule, from: number, timeZone: string): number | undefined {
+  return schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone);
 }

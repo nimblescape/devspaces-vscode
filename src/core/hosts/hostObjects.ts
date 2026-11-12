@@ -254,7 +254,8 @@ function hasDevspacesLabel(labels: ReadonlyMap<string, string>): boolean {
   return false;
 }
 
-function text(value: unknown): string | undefined {
+/** A string field that is not empty; undefined for anything else. */
+export function nonEmptyText(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
@@ -289,46 +290,46 @@ const SHARED_VOLUME_ROLES: Readonly<Record<string, string>> = {
 };
 
 function classifyContainer(item: Record<string, unknown>, known: readonly KnownDevspace[]): HostObject | undefined {
-  const id = text(item.ID);
+  const id = nonEmptyText(item.ID);
   // `Names` lists the names of a container with links, separated by commas.
-  const name = text(item.Names)?.split(',')[0];
+  const name = nonEmptyText(item.Names)?.split(',')[0];
   if (id === undefined || name === undefined) return undefined;
   const labels = parseLabels(item.Labels);
-  const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
+  const devspaceId = nonEmptyText(labels.get(LABEL_DEVSPACE_ID));
   const ofDevspaces = devspaceId !== undefined || hasDevspacesLabel(labels) || name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX);
   const base: HostObject = {
     kind: 'container',
     id,
     name,
     purpose: 'other',
-    ...(text(item.State) !== undefined ? { state: text(item.State) } : {}),
-    ...(text(item.Status) !== undefined ? { status: text(item.Status) } : {}),
+    ...(nonEmptyText(item.State) !== undefined ? { state: nonEmptyText(item.State) } : {}),
+    ...(nonEmptyText(item.Status) !== undefined ? { status: nonEmptyText(item.Status) } : {}),
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),
-    ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
-    ...(text(item.Image) !== undefined ? { image: text(item.Image) } : {}),
+    ...(nonEmptyText(item.CreatedAt) !== undefined ? { createdAt: nonEmptyText(item.CreatedAt) } : {}),
+    ...(nonEmptyText(item.Image) !== undefined ? { image: nonEmptyText(item.Image) } : {}),
     ...networksOf(item),
   };
   if (!ofDevspaces) {
     // A service of Docker Compose names its project and its service.
-    const project = text(labels.get(COMPOSE_PROJECT_LABEL));
-    const service = text(labels.get(COMPOSE_SERVICE_LABEL));
+    const project = nonEmptyText(labels.get(COMPOSE_PROJECT_LABEL));
+    const service = nonEmptyText(labels.get(COMPOSE_SERVICE_LABEL));
     return { ...base, purpose: 'notDevspaces', ...(project !== undefined && service !== undefined ? { role: `service ${service} of ${project}` } : {}) };
   }
   // The helpers first: a worker of a devspace window has a name that starts with the name of that devspace.
   if (labels.has(LABEL_MONITOR)) return { ...base, purpose: 'monitor' };
   if (labels.has(LABEL_BUILD_RUN)) return { ...base, purpose: 'buildContainer' };
   if (labels.has(LABEL_HELPER_RUN)) return { ...base, purpose: labels.has(LABEL_CHANNEL_STEP) ? 'batchHelper' : 'worker' };
-  const byName = devspaceByName(text(labels.get(COMPOSE_PROJECT_LABEL)) ?? name, known);
+  const byName = devspaceByName(nonEmptyText(labels.get(COMPOSE_PROJECT_LABEL)) ?? name, known);
   if (devspaceId === undefined && byName === undefined) return base;
-  const service = text(labels.get(LABEL_COMPOSE_SERVICE));
-  return { ...base, ...devspaceFields(devspaceId, byName, known, text(labels.get(LABEL_REPOSITORY))), role: service !== undefined ? `service ${service}` : 'dev container' };
+  const service = nonEmptyText(labels.get(LABEL_COMPOSE_SERVICE));
+  return { ...base, ...devspaceFields(devspaceId, byName, known, nonEmptyText(labels.get(LABEL_REPOSITORY))), role: service !== undefined ? `service ${service}` : 'dev container' };
 }
 
 function classifyVolume(item: Record<string, unknown>, known: readonly KnownDevspace[]): HostObject | undefined {
-  const name = text(item.Name);
+  const name = nonEmptyText(item.Name);
   if (name === undefined) return undefined;
   const labels = parseLabels(item.Labels);
-  const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
+  const devspaceId = nonEmptyText(labels.get(LABEL_DEVSPACE_ID));
   // A named volume of the configuration of a devspace of this computer, also one without the labels of Devspaces.
   const additionalOf = known.find((devspace) => devspace.additionalVolumes.includes(name));
   const ofDevspaces = devspaceId !== undefined || additionalOf !== undefined || hasDevspacesLabel(labels) || name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX);
@@ -353,12 +354,12 @@ function classifyVolume(item: Record<string, unknown>, known: readonly KnownDevs
       : volumeKind === VOLUME_KIND_COMPOSE
         ? 'volume of Docker Compose'
         : 'workspace';
-  return { ...base, ...devspaceFields(devspaceId, byName, known, text(labels.get(LABEL_REPOSITORY))), role };
+  return { ...base, ...devspaceFields(devspaceId, byName, known, nonEmptyText(labels.get(LABEL_REPOSITORY))), role };
 }
 
 /** The networks of a container of `docker system df -v` (its field `Networks`: names joined with commas). */
 function networksOf(item: Record<string, unknown>): Pick<HostObject, 'networks'> {
-  const networks = (text(item.Networks) ?? '')
+  const networks = (nonEmptyText(item.Networks) ?? '')
     .split(',')
     .map((name) => name.trim())
     .filter((name) => name !== '');
@@ -390,13 +391,13 @@ function holdsNetwork(joined: string, name: string): boolean {
 
 /** The number of the containers of `docker system df -v` on the network `name` (holdsNetwork). */
 function networkUsers(containers: readonly unknown[], name: string): number {
-  return containers.filter((item) => isRecord(item) && holdsNetwork(text(item.Networks) ?? '', name)).length;
+  return containers.filter((item) => isRecord(item) && holdsNetwork(nonEmptyText(item.Networks) ?? '', name)).length;
 }
 
 /** A network of `docker network ls --format '{{json .}}'`. */
 function classifyNetwork(item: Record<string, unknown>, known: readonly KnownDevspace[], containers: readonly unknown[]): HostObject | undefined {
-  const id = text(item.ID);
-  const name = text(item.Name);
+  const id = nonEmptyText(item.ID);
+  const name = nonEmptyText(item.Name);
   if (id === undefined || name === undefined) return undefined;
   const labels = parseLabels(item.Labels);
   const base: HostObject = {
@@ -405,14 +406,14 @@ function classifyNetwork(item: Record<string, unknown>, known: readonly KnownDev
     name,
     purpose: 'notDevspaces',
     usedBy: networkUsers(containers, name),
-    ...(text(item.Driver) !== undefined ? { driver: text(item.Driver) } : {}),
-    ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
+    ...(nonEmptyText(item.Driver) !== undefined ? { driver: nonEmptyText(item.Driver) } : {}),
+    ...(nonEmptyText(item.CreatedAt) !== undefined ? { createdAt: nonEmptyText(item.CreatedAt) } : {}),
   };
-  if (BUILT_IN_NETWORKS.has(name) || isSwarmNetwork(name, text(item.Driver))) return { ...base, builtIn: true, role: 'network of Docker' };
-  const devspaceId = text(labels.get(LABEL_DEVSPACE_ID));
-  const project = text(labels.get(COMPOSE_PROJECT_LABEL));
+  if (BUILT_IN_NETWORKS.has(name) || isSwarmNetwork(name, nonEmptyText(item.Driver))) return { ...base, builtIn: true, role: 'network of Docker' };
+  const devspaceId = nonEmptyText(labels.get(LABEL_DEVSPACE_ID));
+  const project = nonEmptyText(labels.get(COMPOSE_PROJECT_LABEL));
   const byName = devspaceByName(project ?? name, known);
-  if (devspaceId !== undefined || byName !== undefined) return { ...base, ...devspaceFields(devspaceId, byName, known, text(labels.get(LABEL_REPOSITORY))), role: 'network' };
+  if (devspaceId !== undefined || byName !== undefined) return { ...base, ...devspaceFields(devspaceId, byName, known, nonEmptyText(labels.get(LABEL_REPOSITORY))), role: 'network' };
   if (hasDevspacesLabel(labels) || name.toLowerCase().startsWith(RESOURCE_NAME_PREFIX)) return { ...base, purpose: 'other' };
   return project !== undefined ? { ...base, role: `network of ${project}` } : base;
 }
@@ -440,8 +441,8 @@ function buildCacheOf(items: readonly unknown[]): BuildCacheSummary {
 
 /** `repository:tag` of an entry of `docker system df -v` or `docker image ls`; undefined for `<none>`. */
 function referenceOf(item: Record<string, unknown>): string | undefined {
-  const repository = text(item.Repository);
-  const tag = text(item.Tag);
+  const repository = nonEmptyText(item.Repository);
+  const tag = nonEmptyText(item.Tag);
   return repository !== undefined && tag !== undefined && repository !== '<none>' && tag !== '<none>' ? `${repository}:${tag}` : undefined;
 }
 
@@ -454,7 +455,7 @@ function mergedImages(items: readonly unknown[], tagRows: readonly unknown[] = [
   const images = new Map<string, { id: string; tags: string[]; item: Record<string, unknown> }>();
   for (const item of items) {
     if (!isRecord(item)) continue;
-    const id = text(item.ID);
+    const id = nonEmptyText(item.ID);
     if (id === undefined) continue;
     let image = images.get(id);
     if (image === undefined) {
@@ -466,15 +467,15 @@ function mergedImages(items: readonly unknown[], tagRows: readonly unknown[] = [
   }
   for (const row of tagRows) {
     if (!isRecord(row)) continue;
-    const image = images.get(text(row.ID) ?? '');
+    const image = images.get(nonEmptyText(row.ID) ?? '');
     const reference = referenceOf(row);
     if (image !== undefined && reference !== undefined && !image.tags.includes(reference)) image.tags.push(reference);
   }
   return [...images.values()];
 }
 
-/** The short form of an image ID: its first 12 hex digits, as `docker image ls` shows it. */
-function shortImageId(id: string): string {
+/** The short form of an image ID or digest: its first 12 hex digits (`sha256:` left out), as `docker image ls` shows it. */
+export function shortImageId(id: string): string {
   return id.replace(/^sha256:/, '').slice(0, 12);
 }
 
@@ -537,7 +538,7 @@ function classifyImage(
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),
     ...(parseDockerSize(item.UniqueSize) !== undefined ? { uniqueBytes: parseDockerSize(item.UniqueSize) } : {}),
     ...(count(item.Containers) !== undefined ? { usedBy: count(item.Containers) } : {}),
-    ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
+    ...(nonEmptyText(item.CreatedAt) !== undefined ? { createdAt: nonEmptyText(item.CreatedAt) } : {}),
   };
   if (helper) return { ...base, purpose: 'helperImage' };
   if (ordered.some((tag) => tag.startsWith(`${BUILDX_REPOSITORY}:`))) return { ...base, purpose: 'buildImage' };
@@ -615,7 +616,7 @@ const ACTIVE_CONTAINER_STATES = new Set(['running', 'paused', 'restarting']);
 
 /** The containers of `docker system df -v` that run (ACTIVE_CONTAINER_STATES). */
 function runningContainers(containers: readonly unknown[]): Array<Record<string, unknown>> {
-  return containers.filter((item): item is Record<string, unknown> => isRecord(item) && ACTIVE_CONTAINER_STATES.has(text(item.State) ?? ''));
+  return containers.filter((item): item is Record<string, unknown> => isRecord(item) && ACTIVE_CONTAINER_STATES.has(nonEmptyText(item.State) ?? ''));
 }
 
 /** What the running containers use, from runningUsesArgs: the IDs of their images, the names of their volumes and networks. */
@@ -629,7 +630,7 @@ function runningUsesOf(entries: readonly unknown[]): RunningUses {
   const uses: RunningUses = { imageIds: [], volumes: new Set(), networks: new Set() };
   for (const entry of entries) {
     if (!isRecord(entry)) continue;
-    const image = text(entry.image);
+    const image = nonEmptyText(entry.image);
     if (image !== undefined) uses.imageIds.push(image);
     for (const mount of Array.isArray(entry.mounts) ? entry.mounts : []) {
       if (isRecord(mount) && mount.Type === 'volume' && typeof mount.Name === 'string') uses.volumes.add(mount.Name);
@@ -673,8 +674,8 @@ function activeOf(containers: readonly unknown[], running: readonly unknown[] | 
       }
     };
   }
-  const images = active.flatMap((item) => text(item.Image) ?? []);
-  const mounts = new Set(active.flatMap((item) => (text(item.Mounts) ?? '').split(',').map((mount) => mount.trim())));
+  const images = active.flatMap((item) => nonEmptyText(item.Image) ?? []);
+  const mounts = new Set(active.flatMap((item) => (nonEmptyText(item.Mounts) ?? '').split(',').map((mount) => mount.trim())));
   return (object) => {
     switch (object.kind) {
       case 'container':
@@ -703,8 +704,20 @@ export function runningUsesArgs(ids: readonly string[]): string[] {
   return ['container', 'inspect', '--format', RUNNING_USES_FORMAT, ...ids];
 }
 
-/** Each line of the standard error of a failed `docker container inspect` says that a container is gone. */
+/** A line of the standard error of `docker container inspect` that says that a container is gone. */
 const MISSING_CONTAINER_LINE = /^Error(?: response from daemon)?: No such container/i;
+
+/**
+ * Each line of the standard error of a failed `docker container inspect` of several containers says that a container is
+ * gone (and there is at least one): its output still holds the containers that are there.
+ */
+export function onlyMissingContainers(stderr: string): boolean {
+  const errors = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return errors.length > 0 && errors.every((line) => MISSING_CONTAINER_LINE.test(line));
+}
 
 /**
  * Reads what the running containers `ids` use (runningUsesArgs), in batches of RUNNING_USES_BATCH. A container that is
@@ -716,11 +729,7 @@ async function readRunningUses(docker: Pick<BootstrapDocker, 'run'>, ids: readon
   for (let start = 0; start < ids.length; start += RUNNING_USES_BATCH) {
     const result = await docker.run(runningUsesArgs(ids.slice(start, start + RUNNING_USES_BATCH)), { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
     if (result.timedOut) return undefined;
-    const errors = result.stderr
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    if (result.exitCode !== 0 && !(errors.length > 0 && errors.every((line) => MISSING_CONTAINER_LINE.test(line)))) return undefined;
+    if (result.exitCode !== 0 && !onlyMissingContainers(result.stderr)) return undefined;
     uses.push(...parseJsonLines(result.stdout));
   }
   return uses;
@@ -773,7 +782,7 @@ export async function readHostInventory(
   if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr, networkList.timedOut);
   const tagList = await docker.run(IMAGE_TAGS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (tagList.exitCode !== 0 || tagList.timedOut) throw new CommandError(commandText(IMAGE_TAGS_ARGS), tagList.exitCode, tagList.stdout, tagList.stderr, tagList.timedOut);
-  const runningIds = runningContainers(Array.isArray(df.Containers) ? df.Containers : []).flatMap((item) => text(item.ID) ?? []);
+  const runningIds = runningContainers(Array.isArray(df.Containers) ? df.Containers : []).flatMap((item) => nonEmptyText(item.ID) ?? []);
   const running = runningIds.length > 0 ? await readRunningUses(docker, runningIds, signal) : [];
   return buildInventory({
     df,

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CACHE_RUN_FILE } from '../core/remoteMonitor/protocol';
 import type { EngineContainerSummary } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
-import { IDLE_RETRY_MAX_WAIT_MS } from './backgroundRules';
+import { IDLE_RETRY_MAX_WAIT_MS } from '../core/remoteMonitor/backgroundRules';
 import { CacheSchedule, CurrentCacheSettings, cacheRunStore, main } from './main';
 
 const MINUTE = 60_000;

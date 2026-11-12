@@ -16,7 +16,7 @@ import { VERSION_ENV, compareDevspacesVersions, isDevspacesVersion, userAgentVer
 import { LOADER_EXIT_CODE, bundleHash, bundleLine, loaderCommand } from '../loader/pipeLoader';
 import { abortError, isAbortError, sleep, type Logger } from '../ports';
 import { VSCODE_STORE_DIR } from '../names';
-import { monitorRestartPolicy } from './cacheSettings';
+import { MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV, monitorRestartPolicy } from './cacheSettings';
 import type { MonitorRunSpec } from '../worker/dockerEngine';
 import type { MonitorEngine, MonitorInspected } from './monitorEngine';
 import {
@@ -116,8 +116,8 @@ export const MONITOR_SUCCESSOR_ENV = 'DEVSPACE_MONITOR_SUCCESSOR';
 /** The variables that runSpec sets itself (the successor of a monitor takes the others of its predecessor). */
 export const MONITOR_SPEC_ENV: readonly string[] = [
   MONITOR_CREATE_ID_ENV,
-  'DEVSPACE_IMAGE_SCHEDULE',
-  'DEVSPACE_IMAGE_TZ',
+  MONITOR_SCHEDULE_ENV,
+  MONITOR_TIME_ZONE_ENV,
   MONITOR_PERMANENT_ENV,
   MONITOR_VM_ENV,
   MONITOR_VSCODE_STORE_ENV,
@@ -726,8 +726,8 @@ export class RemoteSessionMonitor {
     if (createId !== undefined) env[MONITOR_CREATE_ID_ENV] = createId;
     if (images) {
       // The schedule of the whole background run, under the names DEVSPACE_IMAGE_SCHEDULE and DEVSPACE_IMAGE_TZ.
-      env.DEVSPACE_IMAGE_SCHEDULE = images.schedule;
-      env.DEVSPACE_IMAGE_TZ = images.timeZone;
+      env[MONITOR_SCHEDULE_ENV] = images.schedule;
+      env[MONITOR_TIME_ZONE_ENV] = images.timeZone;
     }
     // The mode, fixed for the life of the container (it is part of its label).
     if (permanent) env[MONITOR_PERMANENT_ENV] = '1';

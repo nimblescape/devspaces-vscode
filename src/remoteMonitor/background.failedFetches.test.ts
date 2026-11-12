@@ -19,7 +19,7 @@ import { silentLogger } from '../core/ports';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import { markServerOpened, serverCommitsUrl, serverFolder, serverScriptName, type StoreLockAttempt, type VscodeStoreDeps } from '../core/worker/vscodeServerStore';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type VscodeBackgroundDeps } from './background';
-import { MAX_FAILED_FETCHES, SERVER_UNUSED_MS, type CacheRunState, type NetworkContact } from './backgroundRules';
+import { MAX_FAILED_FETCHES, SERVER_UNUSED_MS, type CacheRunState, type NetworkContact } from '../core/remoteMonitor/backgroundRules';
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const DAY = 24 * 60 * 60_000;

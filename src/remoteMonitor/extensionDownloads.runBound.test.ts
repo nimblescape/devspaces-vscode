@@ -18,7 +18,7 @@ import { MARKETPLACE_ALL_VERSIONS_CHUNK, MAX_MARKETPLACE_SINGLE_QUERIES, RECORDE
 import { readExtensionRecordFiles } from '../core/worker/vscodeExtensionStore';
 import type { StoreLockAttempt } from '../core/worker/vscodeServerStore';
 import { isNetworkError } from '../core/networkFailure';
-import type { RunNetwork } from './backgroundRules';
+import type { RunNetwork } from '../core/remoteMonitor/backgroundRules';
 import { cleanupExtensions, downloadExtensions, type ExtensionRunDeps } from './extensionDownloads';
 
 const DAY = 24 * 60 * 60_000;

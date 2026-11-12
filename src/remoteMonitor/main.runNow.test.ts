@@ -12,7 +12,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RUN_NOW_FILE } from '../core/remoteMonitor/protocol';
-import type { CacheRunState } from './backgroundRules';
+import type { CacheRunState } from '../core/remoteMonitor/backgroundRules';
 import { CacheSchedule, CurrentCacheSettings, main, runRequestStore } from './main';
 
 const MINUTE = 60_000;

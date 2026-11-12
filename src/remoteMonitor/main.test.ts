@@ -21,7 +21,6 @@ import {
   idleExitFromEnv,
   RemoteMonitorLoop,
   heartbeatDir,
-  cacheScheduleFromEnv,
   imageTimesFromEnv,
   CurrentCacheSettings,
   CacheSchedule,
@@ -37,6 +36,7 @@ import {
   type ExecFile,
   timingFromEnv,
 } from './main';
+import { cacheScheduleFromEnv } from '../core/remoteMonitor/cacheSettings';
 import type { EngineAnswer, EngineApi, EngineRequest } from '../helperChannel/engineApi';
 import { dockerEngine } from '../helperChannel/engineClient';
 import type { LoopEngine } from './engine';
@@ -44,7 +44,7 @@ import { lockFilePath, lockFolder } from '../core/helperChannel/protocol';
 import { REMOTE_GAP_MS, REMOTE_GRACE_MS, REMOTE_TICK_MS, decide, type RemoteRecord } from './rules';
 import type { StopLockAttempt } from './stopLock';
 import type { CacheRunStore } from './background';
-import type { CacheRunState } from './backgroundRules';
+import type { CacheRunState } from '../core/remoteMonitor/backgroundRules';
 
 const A = '3f2a9c1e-5b7d-4e8a-9c0f-2d1e6a7b8c9d';
 const B = '7c1d2e3f-0000-4000-8000-000000000002';

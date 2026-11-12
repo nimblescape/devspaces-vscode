@@ -19,7 +19,7 @@ import type { EngineContainer, EngineContainerSummary, EngineExecOptions, Engine
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import { markServerOpened, serverCommitsUrl, serverFolder, serverScriptName, type StoreLockAttempt, type VscodeStoreDeps } from '../core/worker/vscodeServerStore';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BACKGROUND_LINK_TIMEOUT_MS, BackgroundRun, UPDATE_SERVICE_TIMEOUT_MS, type VscodeBackgroundDeps } from './background';
-import { SERVER_UNUSED_MS, type CacheRunState } from './backgroundRules';
+import { SERVER_UNUSED_MS, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const DAY = 24 * 60 * 60_000;

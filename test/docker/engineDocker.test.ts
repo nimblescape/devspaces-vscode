@@ -19,7 +19,7 @@ import { NodeProcessRunner } from '../../src/core/process';
 import { EngineDocker } from '../../src/core/worker/engineDocker';
 import { engineApi, engineHijack } from '../../src/helperChannel/engineApi';
 import { dockerEngine } from '../../src/helperChannel/engineClient';
-import { commitsInProcesses } from '../../src/remoteMonitor/backgroundRules';
+import { commitsInProcesses } from '../../src/core/remoteMonitor/backgroundRules';
 import { TEST_BASE_IMAGE, TEST_RUN_LABEL, removeRunObjects } from './dockerRun';
 import { dockerTestContext } from './harness';
 

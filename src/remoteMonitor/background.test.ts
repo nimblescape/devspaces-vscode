@@ -21,7 +21,7 @@ import { formatExtensionRecord } from '../core/vscodeExtensions';
 import { markServerOpened, serverCommitsUrl, serverFolder, serverLockFile, serverScriptName, type StoreLockAttempt, type VscodeStoreDeps } from '../core/worker/vscodeServerStore';
 import type { RunReport } from '../core/remoteMonitor/runReport';
 import { BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
-import { SERVER_UNUSED_MS, type CacheRunState } from './backgroundRules';
+import { SERVER_UNUSED_MS, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
 
 const NOW = Date.parse('2026-10-09T12:00:00Z');
 const DAY = 24 * 60 * 60_000;

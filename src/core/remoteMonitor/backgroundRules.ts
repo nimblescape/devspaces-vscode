@@ -2,10 +2,13 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The pure rules of the Monitor's background run (background.ts does the I/O): its stored state in the volume
-// (the end of the last run, the last cleanup, the retry of a run that did not reach the network), when the cleanup of the shared VS Code server store is due (at most once
-// a day), which qualities of the server it keeps new, and which server versions the cleanup removes. Pure; no I/O.
-import type { VscodeQuality } from '../core/helperChannel/protocol';
+// The pure rules of the Monitor's background run (src/remoteMonitor/background.ts does the I/O): its stored state in
+// the volume (the end of the last run, the last cleanup, the retry of a run that did not reach the network), when the
+// cleanup of the shared VS Code server store is due (at most once a day), which qualities of the server it keeps new,
+// and which server versions the cleanup removes. Pure; no I/O. Here in core, as the reports of the view Docker Hosts
+// read the same state and give the same rules (src/core/hosts/resourceReport.ts).
+import type { VscodeQuality } from '../helperChannel/protocol';
+import { scheduleTimeAfter, type CacheSchedule } from './cacheSettings';
 
 /** The cleanup of the store runs at most once a day. */
 export const STORE_CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
@@ -84,12 +87,51 @@ export function runRetryDue(retryAt: number, now: number): boolean {
   return now >= retryAt || retryAt - now > RUN_RETRY_DELAYS_MS[RUN_RETRY_DELAYS_MS.length - 1] + CLOCK_RESET_MS;
 }
 
+/** The times of the state that decide when the background run is due (backgroundRunDue). */
+export interface RunTimes {
+  lastEndAt: number | undefined;
+  retryAt: number | undefined;
+  lastAttemptAt: number | undefined;
+}
+
+/**
+ * Whether the clock of the host went back by more than CLOCK_RESET_MS behind the end of the last run (a clock that was
+ * far ahead, then corrected): the Monitor then starts the schedule again from now, as otherwise no run would come until
+ * the clock caught up.
+ */
+export function clockWentBack(lastEndAt: number | undefined, now: number): boolean {
+  return lastEndAt !== undefined && now < lastEndAt - CLOCK_RESET_MS;
+}
+
+/**
+ * The time of the next background run (`now` or earlier: it is due; undefined: the schedule has no next time): while a
+ * retry waits (`retryAt`), its time (`now` when runRetryDue takes a time far ahead as due) or the time of the schedule
+ * after the last attempt (when it is known), whichever comes first; else the time of the schedule after the end of the
+ * last run (scheduleTimeAfter; none: now). An end after which the clock went back (clockWentBack) counts as now, as the
+ * Monitor starts the schedule again from now.
+ */
+export function nextBackgroundRunAt(times: RunTimes, schedule: CacheSchedule, timeZone: string, now: number): number | undefined {
+  if (times.retryAt !== undefined) {
+    const retry = runRetryDue(times.retryAt, now) ? Math.min(times.retryAt, now) : times.retryAt;
+    const scheduled = times.lastAttemptAt !== undefined ? scheduleTimeAfter(schedule, times.lastAttemptAt, timeZone) : undefined;
+    return scheduled !== undefined && scheduled < retry ? scheduled : retry;
+  }
+  if (times.lastEndAt === undefined) return now;
+  return scheduleTimeAfter(schedule, clockWentBack(times.lastEndAt, now) ? now : times.lastEndAt, timeZone);
+}
+
+/** Whether the background run is due at `now` (nextBackgroundRunAt). */
+export function backgroundRunDue(times: RunTimes, schedule: CacheSchedule, timeZone: string, now: number): boolean {
+  const next = nextBackgroundRunAt(times, schedule, timeZone, now);
+  return next !== undefined && next <= now;
+}
+
 /** A version whose fetch by the run failed is tried again after this long (a day). */
 export const FETCH_RETRY_MS = 24 * 60 * 60_000;
 /** The most failed fetches that the state keeps (the newest of each quality and platform). */
 export const MAX_FAILED_FETCHES = 16;
-/** A server version as serverVersionName writes it. */
-const SERVER_VERSION = /^(stable|insider)-(linux-x64|linux-arm64)-[0-9a-f]{40}$/;
+/** A server version as serverVersionName writes it (also the name of its marker of use): its quality, platform and commit. */
+export const SERVER_VERSION_NAME = /^(stable|insider)-(linux-x64|linux-arm64)-([0-9a-f]{40})$/;
 
 /** The stored state; an empty one for anything invalid (a field that is no time is left out). */
 export function parseCacheRunState(text: string): CacheRunState {
@@ -121,7 +163,7 @@ export function parseCacheRunState(text: string): CacheRunState {
   // Only names of server versions with a time, at most MAX_FAILED_FETCHES; else none.
   if (typeof failedFetches === 'object' && failedFetches !== null && !Array.isArray(failedFetches)) {
     const entries = Object.entries(failedFetches as Record<string, unknown>);
-    if (entries.length <= MAX_FAILED_FETCHES && entries.every(([version, at]) => SERVER_VERSION.test(version) && time(at) !== undefined)) {
+    if (entries.length <= MAX_FAILED_FETCHES && entries.every(([version, at]) => SERVER_VERSION_NAME.test(version) && time(at) !== undefined)) {
       state.failedFetches = Object.fromEntries(entries) as Record<string, number>;
     }
   }

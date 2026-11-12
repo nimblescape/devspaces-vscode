@@ -30,7 +30,7 @@
 // morning needs.
 // At the end of each run, its short report goes into the volume of the Monitor (runReport.ts; the parts note their
 // events with noteRun of runNotes.ts).
-// The pure rules are in backgroundRules.ts. No `vscode`.
+// The pure rules are in src/core/remoteMonitor/backgroundRules.ts. No `vscode`.
 import { randomBytes } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -57,6 +57,7 @@ import {
 import {
   FETCH_RETRY_MS,
   MAX_FAILED_FETCHES,
+  SERVER_VERSION_NAME,
   cleanupDue,
   commitsInProcesses,
   fetchRetryDue,
@@ -67,7 +68,7 @@ import {
   type NetworkContact,
   type RunNetwork,
   type StoredServer,
-} from './backgroundRules';
+} from '../core/remoteMonitor/backgroundRules';
 import { isNetworkError, isServerAnswer } from '../core/networkFailure';
 import { errorMessage } from '../core/errors';
 import { engineFailure, type VscodeEngine } from './engine';
@@ -372,7 +373,7 @@ export class BackgroundRun {
   private async openedVersions(root: string, platform: VscodePlatform): Promise<Array<{ quality: VscodeQuality; at: number }>> {
     const opened: Array<{ quality: VscodeQuality; at: number }> = [];
     for (const entry of await fs.promises.readdir(path.posix.join(root, STORE_USED_FOLDER)).catch(() => [] as string[])) {
-      const match = /^(stable|insider)-(linux-x64|linux-arm64)-[0-9a-f]{40}$/.exec(entry);
+      const match = SERVER_VERSION_NAME.exec(entry);
       if (match === null || match[2] !== platform) continue;
       const at = await serverOpenedAt(root, entry);
       if (at !== undefined) opened.push({ quality: match[1] as VscodeQuality, at });

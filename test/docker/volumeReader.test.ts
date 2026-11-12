@@ -6,10 +6,12 @@
 // with the helper image of the tests and the Docker CLI of Devspaces (BootstrapDocker), as the reports of the view
 // Docker Hosts read: it reads the records of the Monitor, also a file and a folder that only their owner may read (the
 // capability DAC_READ_SEARCH), the servers and extensions of the store of VS Code and the top level of the cache of the
-// workers; it changes nothing in the volumes and leaves no container; a missing image is never pulled.
+// workers; it changes nothing in the volumes and leaves no container; a missing image is never pulled. The facts of
+// Docker of a volume (readObjectDetails) name the containers that use it with the place and the mode of their mount.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BootstrapDocker } from '../../src/core/docker/bootstrapDocker';
 import type { HelperImageUse } from '../../src/core/helper/helperImage';
+import { readObjectDetails } from '../../src/core/hosts/objectDetails';
 import { readSharedVolumes } from '../../src/core/hosts/volumeReader';
 import { NodeProcessRunner } from '../../src/core/process';
 import { TEST_RUN_LABEL, removeRunObjects } from './dockerRun';
@@ -95,6 +97,14 @@ describe('the reader of the shared volumes on a real engine', () => {
     // Nothing changed in the volumes, and no container of the reader is left.
     expect(await Promise.all([listing(monitor), listing(vscode), listing(cache)])).toEqual(before);
     expect(cli.lines(['ps', '-a', '-q', '--filter', 'name=^devspaces-reader-'])).toEqual([]);
+  }, 5 * 60_000);
+
+  it('names the containers that use a volume, with the place and the mode of their mount', async () => {
+    const name = `devspaces-test-reader-user-${run.runId}`;
+    cli.ok(['container', 'create', '--label', `${TEST_RUN_LABEL}=${run.runId}`, '--name', name, '--mount', `type=volume,source=${vscode},target=/vscode,readonly`, image.tag, 'true']);
+    const details = await readObjectDetails(docker, { kind: 'volume', id: vscode });
+    expect(details).toMatchObject({ kind: 'volume', driver: 'local', moreUsers: false, users: [{ name, state: 'created', destination: '/vscode', readOnly: true }] });
+    expect(details.createdAt).toEqual(expect.any(String));
   }, 5 * 60_000);
 
   it('never pulls: an image that the engine does not have gives the next one, or none', async () => {

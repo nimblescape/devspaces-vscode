@@ -14,8 +14,9 @@ import { describe, expect, it } from 'vitest';
 import type { HttpResponse, HttpTransport } from '../core/http';
 import { EngineError, type EngineImage } from '../core/worker/dockerEngine';
 import type { ImageEngine } from './engine';
-import { ImageMaintenance, referenceText, type ReferencesInUse, type ReplacedImages } from './images';
-import type { NetworkContact } from './backgroundRules';
+import { ImageMaintenance, referenceText, type ReferencesInUse } from './images';
+import type { ReplacedImages } from '../core/remoteMonitor/replacedImages';
+import type { NetworkContact } from '../core/remoteMonitor/backgroundRules';
 
 const DIGEST = `sha256:${'a'.repeat(64)}`;
 const OLD_DIGEST = `sha256:${'b'.repeat(64)}`;
