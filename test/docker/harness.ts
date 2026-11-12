@@ -20,7 +20,7 @@ import { DockerCredentialStore } from '../../src/core/imageCheck/credentials';
 import type { ImageChecker } from '../../src/core/imageCheck/imageCheck';
 import { RegistryClient } from '../../src/core/imageCheck/registryClient';
 import type { ProgressStep } from '../../src/core/messages';
-import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_HELPER_RUN, LABEL_OWNER_ID, LABEL_REPOSITORY, WORKSPACES_ROOT } from '../../src/core/names';
+import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_HELPER_RUN, LABEL_IMAGE_KEY, LABEL_OWNER_ID, LABEL_REPOSITORY, WORKSPACES_ROOT, isImageKey } from '../../src/core/names';
 import { errorDetail } from '../../src/core/pipeline/pipelineRules';
 import {
   sleep,
@@ -100,6 +100,28 @@ export function expectLabelledDevspaceImage(cli: DockerCli, entry: Devspace | un
   expect(JSON.parse(labels[LABEL_BUILD_RECORD] ?? '{}')).toMatchObject({ devspaceImage: image, buildNumber: record!.buildNumber, configPath: record!.configPath });
   expect(record!.imageId).toBe(cli.ok(['image', 'inspect', '-f', '{{.Id}}', image]));
   return labels;
+}
+
+/**
+ * The devspace image of `entry` (its build record) is a shared image (R-DS-010): of the labels of Devspaces it carries
+ * only its key (no devspace ID, repository, owner, or build record), the record pins the ID of that image and names the
+ * key, and the dev container `containerName` carries the record with the key (it vouches for the image). Returns the
+ * build record in the labels of the dev container.
+ */
+export function expectSharedDevspaceImage(cli: DockerCli, entry: Devspace | undefined, containerName: string): Record<string, unknown> {
+  const record = entry?.buildRecord;
+  expect(record).toBeDefined();
+  const image = record!.devspaceImage;
+  const labels = cli.image(image)?.Config.Labels ?? {};
+  expect(isImageKey(labels[LABEL_IMAGE_KEY])).toBe(true);
+  for (const label of [LABEL_DEVSPACE_ID, LABEL_REPOSITORY, LABEL_OWNER_ID, LABEL_BUILD_RECORD]) expect(labels).not.toHaveProperty(label);
+  expect(record!.imageKey).toBe(labels[LABEL_IMAGE_KEY]);
+  expect(record!.imageId).toBe(cli.ok(['image', 'inspect', '-f', '{{.Id}}', image]));
+  const containerLabels = cli.container(containerName)?.Config.Labels ?? {};
+  expect(containerLabels).toMatchObject({ [LABEL_DEVSPACE_ID]: entry!.id, [LABEL_REPOSITORY]: entry!.repository, [LABEL_OWNER_ID]: entry!.owner.id });
+  const containerRecord = JSON.parse(containerLabels[LABEL_BUILD_RECORD] ?? '{}') as Record<string, unknown>;
+  expect(containerRecord).toMatchObject({ devspaceImage: image, buildNumber: record!.buildNumber, configPath: record!.configPath, imageKey: labels[LABEL_IMAGE_KEY] });
+  return containerRecord;
 }
 
 /** Token for the helper runs. The tests clone only public repositories, so Git never sends it. */

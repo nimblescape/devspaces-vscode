@@ -36,7 +36,6 @@ import {
   GITHUB_TOKEN_FILE,
   TOKEN_FOLDER,
   TOKEN_TMPFS,
-  LABEL_BUILD_RECORD,
   LABEL_CONFIG_PATH,
   LABEL_DEFAULT_IMAGE,
   LABEL_DEVSPACE_ID,
@@ -64,6 +63,7 @@ import {
   createVolume,
   dockerTestContext,
   expectLabelledDevspaceImage,
+  expectSharedDevspaceImage,
   fakeAuth,
   inConceptOrder,
   registryClient,
@@ -1173,9 +1173,9 @@ describe.skipIf(engineHadMonitor)('open pipeline on a seeded devspace', () => {
       let entry = await registry.get(defaultImage.id);
       expect(entry?.defaultImage).toBe(TEST_BASE_IMAGE);
       expect(entry?.buildRecord).toMatchObject({ buildNumber: 1, configPath: CONFIG_PATH, defaultImage: TEST_BASE_IMAGE, features: {} });
-      // The record in the labels of the image names the default image too (adoptImageRecord restores it).
-      const labels = expectLabelledDevspaceImage(cli, entry);
-      expect(JSON.parse(labels[LABEL_BUILD_RECORD] ?? '{}')).toMatchObject({ defaultImage: TEST_BASE_IMAGE });
+      // The default image gives a shared image (R-DS-010): the record is in the labels of the dev container, and it
+      // names the default image too (the open of another computer takes it from there).
+      expect(expectSharedDevspaceImage(cli, entry, defaultImage.name)).toMatchObject({ defaultImage: TEST_BASE_IMAGE });
       expect(ui.since(events)).toEqual([]);
 
       // The open of the configuration devspace, while the default-image devspace runs: built from the Dockerfile, with
