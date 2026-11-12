@@ -140,6 +140,9 @@ export const DockerHostsTexts = {
     }
   },
   purposeTooltip: (purpose: HostObjectPurpose): string => PURPOSE_TOOLTIPS[purpose],
+  /** The tooltip line of a helper image without a tag (earlierHelperBuildName). */
+  earlierHelperBuild:
+    'An earlier build of the helper image: a newer build took its tag devspaces-worker:<hash>, and Docker keeps no record of the tag that an image had. Docker keeps the image while a container that was created from it exists, also a stopped one.',
   /** Why the row has its color: the view shows an inactive object dimmed. */
   activeTooltip: (object: HostObject): string =>
     object.kind === 'container'
@@ -160,6 +163,7 @@ const PURPOSE_WORDS: Readonly<Record<Exclude<HostObjectPurpose, 'devspace' | 'ot
   buildContainer: 'build of the helper image',
   helperImage: 'helper image',
   buildImage: 'build image',
+  helperBaseImage: 'base image of the helper image',
   baseImage: 'base image of a devspace',
   other: 'of Devspaces',
   notDevspaces: 'not of Devspaces',
@@ -175,6 +179,7 @@ const PURPOSE_TOOLTIPS: Readonly<Record<HostObjectPurpose, string>> = {
   buildContainer: 'A build of the helper image in a container of the build image.',
   helperImage: 'The image of the workers and of the Monitor. Devspaces builds it again when it needs it.',
   buildImage: 'The image that builds the helper image (docker/buildx-bin, pinned by Devspaces). Devspaces pulls it again when it needs it.',
+  helperBaseImage: 'The image that the Dockerfile of the helper image starts from. Devspaces pulls it again before the next build of the helper image.',
   baseImage: 'An image that the configuration of a devspace of this computer names. The next build of the devspace pulls it again.',
   sharedVolume: 'A volume that the devspaces of the engine share. Devspaces creates it again when it needs it.',
   other: 'An object with a label or a name of Devspaces.',
@@ -311,6 +316,7 @@ export function objectRowLook(row: ObjectRow): RowLook {
     if (object.usedBy !== undefined && object.usedBy > 0) parts.push(`${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
   }
   const tooltip = [`${capitalized(object.kind)} ${object.name}`, object.builtIn === true ? 'A network that Docker creates itself (bridge, host and none on every engine; ingress and docker_gwbridge on a node of Docker Swarm). Devspaces does not remove it.' : DockerHostsTexts.purposeTooltip(object.purpose)];
+  if (object.kind === 'image' && object.purpose === 'helperImage' && (object.tags?.length ?? 0) === 0) tooltip.push(DockerHostsTexts.earlierHelperBuild);
   if (object.status !== undefined) tooltip.push(`Status: ${object.status}`);
   if (object.kind === 'image' && (object.tags?.length ?? 0) > 1) tooltip.push(`Tags: ${(object.tags ?? []).join(', ')}`);
   if (object.sizeBytes !== undefined) tooltip.push(`Size: ${formatSize(object.sizeBytes)}${object.uniqueBytes !== undefined ? ` (${formatSize(object.uniqueBytes)} only for this image)` : ''}`);

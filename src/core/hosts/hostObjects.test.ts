@@ -13,7 +13,9 @@ import {
   baseImageReferences,
   BUILD_CACHE_PRUNE_ARGS,
   buildInventory,
+  earlierHelperBuildName,
   formatSize,
+  helperBaseImageReferences,
   IMAGE_TAGS_ARGS,
   imageTagsNowArgs,
   imageUsersNowArgs,
@@ -114,6 +116,13 @@ describe('references of base images', () => {
       devspace({ defaultImage: 'ghcr.io/majikmate/web:latest' }),
     ]);
     expect([...references].sort()).toEqual(['ghcr.io/majikmate/web:latest', 'mcr.microsoft.com/devcontainers/base:bookworm']);
+  });
+
+  it('takes the first FROM of the Dockerfile of the helper image, with the default of its ARG', () => {
+    expect([...helperBaseImageReferences('# syntax=docker/dockerfile:1\nARG BASE_IMAGE=node:24-trixie-slim\nFROM ${BASE_IMAGE}\nRUN true\n')]).toEqual(['node:24-trixie-slim']);
+    expect([...helperBaseImageReferences('FROM docker.io/library/debian:13 AS base\nFROM base\n')]).toEqual(['debian:13']);
+    expect(helperBaseImageReferences('RUN true\n').size).toBe(0);
+    expect(helperBaseImageReferences('FROM scratch\n').size).toBe(0);
   });
 });
 
@@ -457,8 +466,32 @@ describe('buildInventory', () => {
   });
 
   it('names an image without a tag by its short ID', () => {
-    const result = buildInventory(input({ Images: [{ ID: 'sha256:0123456789abcdef', Repository: '<none>', Tag: '<none>' }] }, { helperImageIds: new Set(['sha256:0123456789abcdef']) }));
-    expect(result.images[0]).toMatchObject({ name: '<none> (0123456789ab)', tags: [], purpose: 'helperImage' });
+    const result = buildInventory(input({ Images: [{ ID: 'sha256:0123456789abcdef', Repository: '<none>', Tag: '<none>' }] }));
+    expect(result.images[0]).toMatchObject({ name: '<none> (0123456789ab)', tags: [], purpose: 'notDevspaces' });
+  });
+
+  it('names a helper image without a tag as an earlier build of the helper image', () => {
+    const result = buildInventory(input({ Images: [{ ID: 'sha256:547784e940da0123', Repository: '<none>', Tag: '<none>' }] }, { helperImageIds: new Set(['sha256:547784e940da0123']) }));
+    expect(result.images[0]).toMatchObject({ name: 'devspaces-worker (earlier build, 547784e940da)', tags: [], purpose: 'helperImage' });
+    expect(earlierHelperBuildName('547784e940da0123')).toBe('devspaces-worker (earlier build, 547784e940da)');
+  });
+
+  it('names a helper image by its helper tag, also when docker system df -v lists its monitor tag first', () => {
+    const result = buildInventory(
+      input(
+        { Images: [{ ID: 'sha256:w', Repository: 'devspaces-monitor', Tag: '6ba87151934c', Size: '721MB' }] },
+        { helperImageIds: new Set(['sha256:w']), imageTags: [{ ID: 'sha256:w', Repository: 'devspaces-monitor', Tag: '6ba87151934c' }, { ID: 'sha256:w', Repository: 'devspaces-worker', Tag: '6ba87151934c' }] },
+      ),
+    );
+    expect(result.images[0]).toMatchObject({ name: 'devspaces-worker:6ba87151934c', tags: ['devspaces-worker:6ba87151934c', 'devspaces-monitor:6ba87151934c'], purpose: 'helperImage' });
+  });
+
+  it('marks the base image of the helper image, unless a devspace names it as its base image too', () => {
+    const images = { Images: [{ ID: 'sha256:n', Repository: 'node', Tag: '24-trixie-slim' }] };
+    const helperBaseImages = new Set(['node:24-trixie-slim']);
+    expect(buildInventory(input(images, { helperBaseImages })).images[0]).toMatchObject({ name: 'node:24-trixie-slim', purpose: 'helperBaseImage' });
+    expect(buildInventory(input(images, { helperBaseImages, baseImages: new Set(['node:24-trixie-slim']) })).images[0]).toMatchObject({ purpose: 'baseImage' });
+    expect(buildInventory(input(images)).images[0]).toMatchObject({ purpose: 'notDevspaces' });
   });
 
   it('gives an empty inventory for output without the lists', () => {

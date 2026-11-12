@@ -7,7 +7,8 @@
 // operation on that host: through the Docker pipe of the extension, as "Remove Devspaces from This Docker Engine…"
 // reads), their Start and Stop, and their removal. The objects of Devspaces get their purpose: those with a label
 // nimblescape.devspaces.*, the containers, images and volumes whose name starts with `devspaces-` (also the tags of the
-// build image devspaces-buildx), and the base images that the build record of a devspace of the host names. Every other
+// build image devspaces-buildx), the base images that the build record of a devspace of the host names, and the base
+// image of the helper image (the first FROM of its Dockerfile). Every other
 // object of the engine is listed too, as `notDevspaces` (for example the services of the host, which the user stops to
 // free CPU and memory). The removal never uses force: Docker refuses a running container, and an image or a volume that
 // a container uses, and the result says so. No `vscode`.
@@ -39,6 +40,8 @@ import type { Devspace } from '../types';
 import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, parseJsonOutput, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { BUILDX_REPOSITORY } from '../docker/buildxImage';
+import { isHelperImageTag } from '../helper/helperState';
+import { extractBaseImages } from '../imageCheck/dockerfile';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { VOLUME_REMOVE_TIMEOUT_MS } from '../docker/engineRemoval';
 
@@ -60,6 +63,7 @@ export type HostObjectPurpose =
   | 'buildContainer'
   | 'helperImage'
   | 'buildImage'
+  | 'helperBaseImage'
   | 'baseImage'
   | 'sharedVolume'
   | 'other'
@@ -467,22 +471,57 @@ function mergedImages(items: readonly unknown[], tagRows: readonly unknown[] = [
   return [...images.values()];
 }
 
-/** The short form of an image ID for its name when it has no tag: `<none> (1a2b3c4d5e6f)`. */
+/** The short form of an image ID: its first 12 hex digits, as `docker image ls` shows it. */
+function shortImageId(id: string): string {
+  return id.replace(/^sha256:/, '').slice(0, 12);
+}
+
+/** The name of an image without a tag: `<none> (1a2b3c4d5e6f)`. */
 function untaggedName(id: string): string {
-  return `<none> (${id.replace(/^sha256:/, '').slice(0, 12)})`;
+  return `<none> (${shortImageId(id)})`;
+}
+
+/**
+ * The name of a helper image without a tag: an earlier build, whose tag `devspaces-worker:<hash>` a newer build took
+ * (Docker keeps no record of the tag that an image had).
+ */
+export function earlierHelperBuildName(id: string): string {
+  return `devspaces-worker (earlier build, ${shortImageId(id)})`;
+}
+
+/**
+ * The base image of the helper image: the first FROM of its Dockerfile `dockerfileText` (with the defaults of its ARGs),
+ * as a normalized reference (normalizedReference) in a set; an empty set when the Dockerfile names none.
+ */
+export function helperBaseImageReferences(dockerfileText: string): Set<string> {
+  let first: string | undefined;
+  try {
+    first = extractBaseImages(dockerfileText)[0];
+  } catch {
+    first = undefined;
+  }
+  const reference = first === undefined ? '' : normalizedReference(first);
+  return new Set(reference === '' ? [] : [reference]);
 }
 
 function classifyImage(
   image: { id: string; tags: string[]; item: Record<string, unknown> },
-  input: { devspaceImageIds: ReadonlySet<string>; helperImageIds: ReadonlySet<string>; baseImages: ReadonlySet<string>; known: readonly KnownDevspace[] },
+  input: Pick<InventoryInput, 'devspaceImageIds' | 'helperImageIds' | 'baseImages' | 'helperBaseImages' | 'known'>,
 ): HostObject {
   const { id, tags, item } = image;
-  // The tags of Devspaces first, so that the name of the row is one of them.
-  const ordered = [...tags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX)), ...tags.filter((tag) => !tag.startsWith(RESOURCE_NAME_PREFIX))];
+  // The tags of Devspaces first, so that the name of the row is one of them, and of those the helper tag
+  // devspaces-worker:<hash> first: a helper image that the Monitor runs from has its monitor tag
+  // devspaces-monitor:<hash> too, which only names the image of the Monitor.
+  const ordered = [
+    ...tags.filter(isHelperImageTag),
+    ...tags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX) && !isHelperImageTag(tag)),
+    ...tags.filter((tag) => !tag.startsWith(RESOURCE_NAME_PREFIX)),
+  ];
+  const helper = input.helperImageIds.has(id);
   const base: HostObject = {
     kind: 'image',
     id,
-    name: ordered[0] ?? untaggedName(id),
+    name: ordered[0] ?? (helper ? earlierHelperBuildName(id) : untaggedName(id)),
     tags: ordered,
     purpose: 'other',
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),
@@ -490,7 +529,7 @@ function classifyImage(
     ...(count(item.Containers) !== undefined ? { usedBy: count(item.Containers) } : {}),
     ...(text(item.CreatedAt) !== undefined ? { createdAt: text(item.CreatedAt) } : {}),
   };
-  if (input.helperImageIds.has(id)) return { ...base, purpose: 'helperImage' };
+  if (helper) return { ...base, purpose: 'helperImage' };
   if (ordered.some((tag) => tag.startsWith(`${BUILDX_REPOSITORY}:`))) return { ...base, purpose: 'buildImage' };
   const byName = ordered.map((tag) => devspaceByName(tag, input.known)).find((devspace) => devspace !== undefined);
   if (input.devspaceImageIds.has(id) || byName !== undefined) {
@@ -498,6 +537,7 @@ function classifyImage(
     return { ...base, ...devspaceFields(undefined, byName, input.known, undefined), role: prepared ? 'prepared image' : 'image' };
   }
   if (ordered.some((tag) => input.baseImages.has(normalizedReference(tag)))) return { ...base, purpose: 'baseImage' };
+  if (ordered.some((tag) => input.helperBaseImages?.has(normalizedReference(tag)) === true)) return { ...base, purpose: 'helperBaseImage' };
   if (ordered.some((tag) => tag.toLowerCase().startsWith(RESOURCE_NAME_PREFIX))) return base;
   return { ...base, purpose: 'notDevspaces' };
 }
@@ -513,6 +553,8 @@ export interface InventoryInput {
   known: readonly KnownDevspace[];
   /** baseImageReferences of the devspaces of the host. */
   baseImages: ReadonlySet<string>;
+  /** helperBaseImageReferences: the base image of the helper image (a base image of a devspace too counts as that). */
+  helperBaseImages?: ReadonlySet<string>;
   /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
   networks?: readonly unknown[];
   /** The output of IMAGE_TAGS_ARGS, parsed: one entry per tag of an image, so that each image has all its tags. */
@@ -681,7 +723,7 @@ export const IMAGE_TAGS_ARGS: readonly string[] = ['image', 'ls', '--no-trunc', 
  */
 export async function readHostInventory(
   docker: Pick<BootstrapDocker, 'run' | 'listImagesByLabel'>,
-  options: { known: readonly KnownDevspace[]; baseImages: ReadonlySet<string>; signal?: AbortSignal },
+  options: { known: readonly KnownDevspace[]; baseImages: ReadonlySet<string>; helperBaseImages?: ReadonlySet<string>; signal?: AbortSignal },
 ): Promise<HostInventory> {
   const { signal } = options;
   const result = await docker.run(SYSTEM_DF_ARGS, { timeoutMs: SYSTEM_DF_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
@@ -704,6 +746,7 @@ export async function readHostInventory(
     helperImageIds,
     known: options.known,
     baseImages: options.baseImages,
+    ...(options.helperBaseImages !== undefined ? { helperBaseImages: options.helperBaseImages } : {}),
     networks: parseJsonLines(networkList.stdout),
     imageTags: parseJsonLines(tagList.stdout),
     ...(running !== undefined ? { running } : {}),
