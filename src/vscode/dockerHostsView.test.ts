@@ -425,6 +425,29 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     for (const group of groups) expect((provider.getTreeItem(group) as unknown as TreeItem).resourceUri).toBeUndefined();
   });
 
+  it('opens the report of an object row with vscode.open and only its address, so that VS Code opens a preview tab (R-ENG-010)', async () => {
+    read.mockImplementation(async () => ({ ...fullInventory(), containers: [shopWeb] }));
+    const provider = view();
+    const [row] = (await objectRowsOf(provider, 'lab')).filter((entry) => entry.object.id === shopWeb.id);
+    const item = provider.getTreeItem(row) as unknown as TreeItem;
+    const command = item.command as { command: string; title: string; arguments: Array<{ toString(): string }> };
+    // Only the address: VS Code adds the kind of the click (a double click keeps the tab).
+    expect(command).toMatchObject({ command: 'vscode.open', title: 'Show Report' });
+    expect(command.arguments.map(String)).toEqual([`devspaces-report:/lab/container/${shopWeb.name}?id=${shopWeb.id}`]);
+    const hostItem = provider.getTreeItem(await hostRow(provider, 'lab')) as unknown as TreeItem;
+    expect((hostItem.command as { command?: string } | undefined)?.command).not.toBe('vscode.open');
+  });
+
+  it('gives the report page the object of the last read of its host, and nothing for another host, kind or ID', async () => {
+    read.mockImplementation(async () => ({ ...fullInventory(), containers: [shopWeb] }));
+    const provider = view();
+    await objectRowsOf(provider, 'lab');
+    expect(provider.objectOf('lab', 'container', shopWeb.id)).toEqual(shopWeb);
+    expect(provider.objectOf('lab', 'volume', shopWeb.id)).toBeUndefined();
+    expect(provider.objectOf('lab', 'container', 'other')).toBeUndefined();
+    expect(provider.objectOf('box', 'container', shopWeb.id)).toBeUndefined();
+  });
+
   it('says why the build cache could not be removed', async () => {
     window.showWarningMessage.mockResolvedValueOnce(DockerHostsCommandTexts.prune);
     pruneBuildCache.mockRejectedValueOnce(new Error('a prune operation is already running'));

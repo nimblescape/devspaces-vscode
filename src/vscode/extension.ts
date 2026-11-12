@@ -1497,6 +1497,7 @@ async function activateExtension(
       const computer = { id: computerId(), repositories, devspaces, version: userAgentVersion() ?? '0.0.0' };
       return onHostShell(target.host, () => readResourceReport(docker, { object: target.object, ...(helperTag !== undefined ? { currentHelperTag: helperTag } : {}), computer, clock }));
     },
+    objectOf: (host, kind, id) => hostsView?.objectOf(host, kind, id),
     readMonitorLog: (host, timeZone) => onHostShell(host, () => readMonitorLog(docker, timeZone)),
     clock: () => ({ now: Date.now(), timeZone: usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) }),
   });

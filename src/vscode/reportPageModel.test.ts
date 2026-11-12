@@ -3,13 +3,13 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // What the report page of a resource of the view Docker Hosts shows (docs/requirements.md R-ENG-010): the resource of a
-// click on a row, the header with its buttons and the state of the read, the notes of a failed read and of a VM that
-// does not run (Start the VM only for a stopped VM), the HTML of the webview, and the check of its messages.
+// click on a row, the address of its report (one address per resource, read back exactly), the header with its buttons and the state of the read, the notes of a failed read and of a VM that
+// does not run (Start the VM only for a stopped VM) and of a resource that the view does not show, the HTML of the webview, and the check of its messages.
 import { describe, expect, it } from 'vitest';
 import { LIMA_HOST } from '../core/docker/dockerHost';
 import type { HostObject } from '../core/hosts/hostObjects';
 import type { ReportClock, ReportContent } from '../core/hosts/reportModel';
-import { ReportPageTexts, parseReportRequest, reportPageHtml, reportPageView, reportTargetOfArgument, sameTarget, type ReportTarget } from './reportPageModel';
+import { ReportPageTexts, parseReportRequest, reportAddress, reportKeyOf, reportPageHtml, reportPageView, reportTargetOfArgument, type ReportTarget } from './reportPageModel';
 
 const CLOCK: ReportClock = { now: Date.UTC(2026, 10, 12, 6, 52), timeZone: 'Europe/Vienna' };
 const monitor: HostObject = { kind: 'container', id: 'm1', name: 'devspaces-monitor', purpose: 'monitor', state: 'running', active: true };
@@ -38,53 +38,95 @@ describe('reportTargetOfArgument', () => {
   });
 });
 
-describe('sameTarget', () => {
-  it('compares the host, the kind and the ID; a new name of the same object is the same resource', () => {
-    expect(sameTarget(target, { host: LIMA_HOST, object: { ...monitor, name: 'renamed' } })).toBe(true);
-    expect(sameTarget(target, { host: 'lab', object: monitor })).toBe(false);
-    expect(sameTarget(target, { host: LIMA_HOST, object: { ...monitor, id: 'm2' } })).toBe(false);
-    expect(sameTarget(target, { host: LIMA_HOST, object: { ...monitor, kind: 'volume' } })).toBe(false);
+describe('reportAddress and reportKeyOf', () => {
+  const image: HostObject = { kind: 'image', id: 'sha256:abc', name: 'ghcr.io/majikmate/devcontainer-base:2.0.35', purpose: 'baseImage' };
+
+  it('gives the path /<host>/<kind>/<name> and the ID in the query, and reads them back', () => {
+    const address = reportAddress({ host: LIMA_HOST, object: image });
+    expect(address).toEqual({ path: `/${LIMA_HOST}/image/ghcr.io/majikmate/devcontainer-base:2.0.35`, query: 'id=sha256%3Aabc' });
+    expect(reportKeyOf(address)).toEqual({ host: LIMA_HOST, kind: 'image', id: 'sha256:abc', name: 'ghcr.io/majikmate/devcontainer-base:2.0.35' });
+    expect(reportKeyOf(reportAddress(target))).toEqual({ host: LIMA_HOST, kind: 'container', id: 'm1', name: 'devspaces-monitor' });
+  });
+
+  it('writes a / and a % in the host so that the host stays one part of the path', () => {
+    const address = reportAddress({ host: 'me@box/a%b', object: monitor });
+    expect(address.path).toBe('/me@box%2Fa%25b/container/devspaces-monitor');
+    expect(reportKeyOf(address)?.host).toBe('me@box/a%b');
+  });
+
+  it('gives the same address for the same resource; another ID, host or kind is another address', () => {
+    const key = (object: HostObject, host = LIMA_HOST) => JSON.stringify(reportAddress({ host, object }));
+    expect(key({ ...monitor, state: 'exited', active: false })).toBe(key(monitor));
+    expect(key({ ...monitor, id: 'm2' })).not.toBe(key(monitor));
+    expect(key(monitor, 'lab')).not.toBe(key(monitor));
+    expect(key({ ...monitor, kind: 'volume' })).not.toBe(key(monitor));
+  });
+
+  it('takes no other address: another kind, no ID, an empty host, another spelling, or a query with more', () => {
+    const { path, query } = reportAddress(target);
+    for (const address of [
+      { path: `/${LIMA_HOST}/plugin/devspaces-monitor`, query },
+      { path: `/${LIMA_HOST}/container`, query },
+      { path: `/${LIMA_HOST}/container/`, query },
+      { path: '//container/devspaces-monitor', query },
+      { path, query: '' },
+      { path, query: 'id=' },
+      { path, query: 'id=m1&id=m2' },
+      { path, query: 'id=m1&x=1' },
+      { path: '/lima%3Adevspaces/container/devspaces-monitor', query },
+      { path: '/me@box%2fa/container/devspaces-monitor', query },
+      { path: '/me@box%41/container/devspaces-monitor', query },
+      { path: 'container/devspaces-monitor', query },
+    ]) {
+      expect(reportKeyOf(address)).toBeUndefined();
+    }
   });
 });
 
 describe('reportPageView', () => {
   it('shows the name, the kind line with the VM of Devspaces, the time of the read, and the buttons', () => {
-    const view = reportPageView({ target, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, kept: false, clock: CLOCK });
+    const view = reportPageView({ target, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK });
     expect(view).toMatchObject({ title: 'devspaces-monitor', kind: 'container', kindLine: `Container · Monitor · Running · Local VM of Devspaces (${LIMA_HOST})`, tone: 'normal', status: 'Read today 07:52', busy: false, content });
     expect(view.buttons).toEqual([
       { action: 'showLog', label: 'Show Log of the Monitor' },
-      { action: 'keepOpen', label: 'Keep Open' },
       { action: 'refresh', label: 'Refresh', primary: true },
     ]);
     expect(view.banner).toBeUndefined();
   });
 
-  it('keeps the content while a Refresh reads, with Refresh disabled; a kept page has no Keep Open; Show Log only for the Monitor', () => {
-    const view = reportPageView({ target, vm: false, phase: { kind: 'reading' }, content: { ...content, monitorLog: false }, kept: true, clock: CLOCK });
+  it('keeps the content while a Refresh reads, with Refresh disabled; Show Log only for the Monitor', () => {
+    const view = reportPageView({ target, vm: false, phase: { kind: 'reading' }, content: { ...content, monitorLog: false }, clock: CLOCK });
     expect(view).toMatchObject({ status: 'Reading…', busy: true, kindLine: `Container · Monitor · Running · ${LIMA_HOST}` });
     expect(view.content).toBeDefined();
     expect(view.buttons).toEqual([{ action: 'refresh', label: 'Refresh', primary: true, disabled: true }]);
-    expect(reportPageView({ target, vm: false, phase: { kind: 'reading' }, kept: false, clock: CLOCK }).content).toBeUndefined();
+    expect(reportPageView({ target, vm: false, phase: { kind: 'reading' }, clock: CLOCK }).content).toBeUndefined();
   });
 
   it('colors the name as the view Docker Hosts does', () => {
     const image: HostObject = { kind: 'image', id: 'sha256:n', name: 'nginx:1.27', purpose: 'notDevspaces' };
-    expect(reportPageView({ target: { host: 'lab', object: image }, vm: false, phase: { kind: 'reading' }, kept: false, clock: CLOCK }).tone).toBe('notDevspacesInactive');
-    expect(reportPageView({ target: { host: 'lab', object: { ...monitor, active: false, state: 'exited' } }, vm: false, phase: { kind: 'reading' }, kept: false, clock: CLOCK })).toMatchObject({
+    expect(reportPageView({ target: { host: 'lab', object: image }, vm: false, phase: { kind: 'reading' }, clock: CLOCK }).tone).toBe('notDevspacesInactive');
+    expect(reportPageView({ target: { host: 'lab', object: { ...monitor, active: false, state: 'exited' } }, vm: false, phase: { kind: 'reading' }, clock: CLOCK })).toMatchObject({
       tone: 'inactive',
       kindLine: 'Container · Monitor · Stopped · lab',
     });
   });
 
   it('says why a read failed, and keeps the content of the read before', () => {
-    const view = reportPageView({ target, vm: false, phase: { kind: 'failed', message: 'ssh: connect to host lab port 22: Connection refused' }, content, kept: false, clock: CLOCK });
+    const view = reportPageView({ target, vm: false, phase: { kind: 'failed', message: 'ssh: connect to host lab port 22: Connection refused' }, content, clock: CLOCK });
     expect(view.banner).toEqual({ message: ReportPageTexts.failed, detail: 'ssh: connect to host lab port 22: Connection refused', buttons: [] });
     expect(view.status).toBe('');
     expect(view.content).toBe(content);
   });
 
+  it('shows a resource that the view does not show by its address: its name, its kind and its host, and why it reads nothing', () => {
+    const view = reportPageView({ target: { host: LIMA_HOST, kind: 'image', id: 'sha256:abc', name: 'nginx:1.27' }, vm: true, phase: { kind: 'missing' }, clock: CLOCK });
+    expect(view).toMatchObject({ title: 'nginx:1.27', kind: 'image', kindLine: `Image · Local VM of Devspaces (${LIMA_HOST})`, tone: 'normal', status: '', busy: false });
+    expect(view.banner).toEqual({ message: ReportPageTexts.missing, detail: ReportPageTexts.missingDetail, buttons: [] });
+    expect(view.buttons).toEqual([{ action: 'refresh', label: 'Refresh', primary: true }]);
+  });
+
   it('reads nothing on a VM that does not run: Start the VM only for a stopped VM', () => {
-    const banner = (state: Parameters<typeof reportPageView>[0]['phase'] & { kind: 'vm' }) => reportPageView({ target, vm: true, phase: state, kept: false, clock: CLOCK }).banner;
+    const banner = (state: Parameters<typeof reportPageView>[0]['phase'] & { kind: 'vm' }) => reportPageView({ target, vm: true, phase: state, clock: CLOCK }).banner;
     expect(banner({ kind: 'vm', state: { kind: 'stopped' } })).toEqual({
       message: ReportPageTexts.vmNotRunning,
       detail: ReportPageTexts.vmNotRunningDetail,
@@ -97,8 +139,8 @@ describe('reportPageView', () => {
 
 describe('parseReportRequest', () => {
   it('takes only the messages of the page', () => {
-    for (const type of ['ready', 'refresh', 'keepOpen', 'showLog', 'startVm']) expect(parseReportRequest({ type, extra: 1 })).toEqual({ type });
-    for (const raw of [undefined, null, 'refresh', { type: 'run' }, { type: 3 }, {}]) expect(parseReportRequest(raw)).toBeUndefined();
+    for (const type of ['ready', 'refresh', 'showLog', 'startVm']) expect(parseReportRequest({ type, extra: 1 })).toEqual({ type });
+    for (const raw of [undefined, null, 'refresh', { type: 'run' }, { type: 'keepOpen' }, { type: 3 }, {}]) expect(parseReportRequest(raw)).toBeUndefined();
   });
 });
 
