@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
 import { BootstrapDocker, isSharedShellCall, isShellCall } from './bootstrapDocker';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from './dockerHost';
-import { operationOnShell, runWithDockerTarget } from './dockerTargets';
+import { operationOnShell, operationOpenLoginOnly, runWithDockerTarget } from './dockerTargets';
 
 const OK: RunResult = { exitCode: 0, stdout: '', stderr: '', timedOut: false };
 const PIPE = 'unix:///run/user/1000/devspaces-0123456789abcdef/docker.sock';
@@ -386,6 +386,70 @@ describe('BootstrapDocker: the shared shell of a host (the view Docker Hosts)', 
     await runWithDockerTarget(WSL, () => docker.run(['image', 'ls']));
     expect(envs).toHaveLength(4);
     expect(remoteShell).toHaveBeenCalledTimes(4);
+  });
+
+  it('runs a read with `openLoginOnly` only on the open shell, and refuses each call that would log in', async () => {
+    const { runner, envs } = recorder();
+    const lines: string[] = [];
+    const logger: Logger = { ...silentLogger, info: (message) => lines.push(message) };
+    const remoteShell = vi.fn(async (_target: DockerTarget, _args: readonly string[], _options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { login?: boolean }): Promise<RunResult | undefined> => SHELL);
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', { dockerPipe: () => undefined, remoteShell });
+    const refused = new AbortController();
+    await runWithDockerTarget(
+      REMOTE,
+      async () => {
+        await expect(docker.run(['image', 'ls', '--format', '{{json .}}'])).resolves.toEqual(SHELL);
+        // No open shell: no new shell, and no `ssh://<host>` either.
+        remoteShell.mockResolvedValueOnce(undefined);
+        await expect(docker.run(['volume', 'ls', '--format', '{{json .}}'])).rejects.toMatchObject({ name: 'AbortError' });
+      },
+      { onShell: true, openLoginOnly: refused },
+    );
+    expect(remoteShell.mock.calls.map(([, args, options]) => [args[0], options.login])).toEqual([
+      ['image', false],
+      ['volume', false],
+    ]);
+    expect(refused.signal.aborted).toBe(true);
+    expect(envs).toEqual([]);
+    expect(lines).toContain('docker volume ls --format {{json .}} does not run: it may use only a login to build-box that is open, and none is.');
+  });
+
+  it('runs a read with `openLoginOnly` through the pipe of an SSH host (the login of the relay), never through the pipe of the VM', async () => {
+    const { runner, envs } = recorder();
+    const remoteShell = vi.fn(async (): Promise<RunResult | undefined> => undefined);
+    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, silentLogger, 'win32', { dockerPipe: () => PIPE, servePipe: async () => undefined, remoteShell });
+    await runWithDockerTarget(REMOTE, () => docker.run(['image', 'ls', '--format', '{{json .}}']), { onShell: true, openLoginOnly: new AbortController() });
+    expect(envs.map((env) => env.DOCKER_HOST)).toEqual([PIPE]);
+    // The pipe of the VM makes a connection of its own (wsl.exe), which would start the WSL distribution.
+    const refused = new AbortController();
+    await expect(runWithDockerTarget(WSL, () => docker.run(['image', 'ls', '--format', '{{json .}}']), { onShell: true, openLoginOnly: refused })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(refused.signal.aborted).toBe(true);
+    // Also without `onShell`, where a call of the VM goes to its pipe at once.
+    await expect(runWithDockerTarget(WSL, () => docker.run(['image', 'ls', '--format', '{{json .}}']), { openLoginOnly: new AbortController() })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(envs).toHaveLength(1);
+    expect(remoteShell).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps `openLoginOnly` in an operation on the same host within it, not on another host', async () => {
+    const refused = new AbortController();
+    const seen: Array<[string, boolean]> = [];
+    const note = (name: string) => seen.push([name, operationOpenLoginOnly() === refused]);
+    await runWithDockerTarget(
+      REMOTE,
+      async () => {
+        note('outer');
+        await runWithDockerTarget(REMOTE, async () => note('same host'));
+        await runWithDockerTarget(WSL, async () => note('other host'));
+      },
+      { openLoginOnly: refused },
+    );
+    note('outside');
+    expect(seen).toEqual([
+      ['outer', true],
+      ['same host', true],
+      ['other host', false],
+      ['outside', false],
+    ]);
   });
 
   it('keeps `onShell` in an operation on the same host within it, not on another host', async () => {

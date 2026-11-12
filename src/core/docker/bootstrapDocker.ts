@@ -38,7 +38,7 @@ import { hostEndpoint, isVmHost, isSshClosedBeforeLogin, type DockerTarget } fro
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 import { extractBaseImages } from '../imageCheck/dockerfile';
-import { operationDockerTarget, operationOnShell, operationWithoutLogin, outsideOperation } from './dockerTargets';
+import { operationDockerTarget, operationOnShell, operationOpenLoginOnly, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
 
 /** Result of `docker info`. */
@@ -195,9 +195,10 @@ export interface BootstrapDockerOptions {
    * (RemoteShells.docker): for a call of an operation there that only reads (isShellCall) while the host has no Docker
    * pipe of the extension, so that the checks before a connection of the relay need no SSH login of their own; and for
    * each call of the work of the view Docker Hosts (isSharedShellCall, runWithDockerTarget with `onShell`), also on the
-   * VM of Devspaces. Undefined when the host has no shell (the call logs in with `ssh://<host>`).
+   * VM of Devspaces. Undefined when the host has no shell (the call logs in with `ssh://<host>`). With `login: false`
+   * (runWithDockerTarget with `openLoginOnly`), only on a shell that is open or logging in, never with a new login.
    */
-  remoteShell?: (target: DockerTarget, args: readonly string[], options: Pick<RunOptions, 'timeoutMs' | 'signal'>) => Promise<RunResult | undefined>;
+  remoteShell?: (target: DockerTarget, args: readonly string[], options: Pick<RunOptions, 'timeoutMs' | 'signal'> & { login?: boolean }) => Promise<RunResult | undefined>;
   /**
    * The Docker CLI of Devspaces when it is installed (presentOwnDockerCli), else undefined: the CLI of the calls of an
    * operation on a remote engine, in place of the Docker CLI of this computer, which such calls take only without it.
@@ -505,8 +506,17 @@ export class BootstrapDocker {
         withoutLogin.abort(abortError());
         throw abortError();
       }
-      const onShell = call.shellTarget === undefined ? undefined : await this.runOnShell(call.shellTarget, args, options, call.shared === true);
+      // The read of the sizes of the utilization page in the background (runWithDockerTarget, `openLoginOnly`): only on
+      // the shell that is open, or through the pipe of an SSH host (the login of the relay); never a new login.
+      const openLoginOnly = options.env === undefined ? operationOpenLoginOnly() : undefined;
+      const onShell = call.shellTarget === undefined ? undefined : await this.runOnShell(call.shellTarget, args, options, call.shared === true, openLoginOnly === undefined);
       if (onShell !== undefined) return onShell;
+      const target = operationDockerTarget();
+      if (openLoginOnly !== undefined && target?.kind === 'remote' && reachesEngine(args) && (call.shellTarget !== undefined || call.login !== undefined || isVmHost(target.host))) {
+        this.logger.info(`${commandText(args)} does not run: it may use only a login to ${target.host} that is open, and none is.`);
+        openLoginOnly.abort(abortError());
+        throw abortError();
+      }
       if (call.noEndpoint !== undefined) {
         throw new UserFacingError(
           'dockerHostUnreachable',
@@ -603,14 +613,14 @@ export class BootstrapDocker {
    * undefined too. A shell that ends during the command gives its result (exit code 255), so a call that changes
    * something never runs twice.
    */
-  private async runOnShell(target: DockerTarget, args: readonly string[], options: RunOptions, shared: boolean): Promise<RunResult | undefined> {
+  private async runOnShell(target: DockerTarget, args: readonly string[], options: RunOptions, shared: boolean, login: boolean): Promise<RunResult | undefined> {
     if (this.remoteShell === undefined || !(shared ? isSharedShellCall(args, isVmHost(target.host)) : isShellCall(args))) return undefined;
     if (options.input !== undefined || options.cwd !== undefined || options.onStdout !== undefined || options.onStderr !== undefined) return undefined;
     try {
-      return await this.remoteShell(target, args, { timeoutMs: options.timeoutMs, signal: options.signal });
+      return await this.remoteShell(target, args, { timeoutMs: options.timeoutMs, signal: options.signal, ...(login ? {} : { login: false }) });
     } catch (error) {
       if (isAbortError(error)) throw error;
-      const next = isVmHost(target.host) ? 'so it needs the Docker pipe of the extension' : 'so it logs in over SSH itself';
+      const next = !login ? 'and it may not log in' : isVmHost(target.host) ? 'so it needs the Docker pipe of the extension' : 'so it logs in over SSH itself';
       this.logger.warn(`docker ${dockerCommandWords(args).join(' ')} could not run on the shell before the relay on ${target.host}, ${next}: ${errorMessage(error)}`);
       return undefined;
     }

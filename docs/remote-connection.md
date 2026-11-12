@@ -561,7 +561,7 @@ For an SSH host. Each VS Code window has its own extension host, so each window 
 | An engine with the removal mark | 1 for each Docker connection of the window (`docker system dial-stdio`). |
 | The test of a host in **Use a Remote Docker Host…** | 1: always a new login. |
 | The check of the key of Devspaces after **Use a Key** | 1: a login that may use only that key. |
-| The utilization page of the host ([`R-ENG-009`](requirements.md#r-eng-009)) | 0 while the shell before the relay of the host is open (it closes 2 minutes after its last command); else 1 for a shell, also while a connection of the relay of the window is open, because the page reads files of the host, which the relay does not reach. While the page samples, the next connection of the relay in a flow of the user logs in itself: 1 more. |
+| The utilization page of the host ([`R-ENG-009`](requirements.md#r-eng-009)) | 0 while the shell before the relay of the host is open (it closes 2 minutes after its last command); else 1 for a shell, also while a connection of the relay of the window is open, because the page reads files of the host, which the relay does not reach. While the page samples, the next connection of the relay in a flow of the user logs in itself: 1 more. Its read of the sizes by itself never logs in: only on the open shell, or through the connection of the relay. |
 
 The CI job "vscode attach remote" counts the logins of the open of a restored window on another computer and allows one ([`test/vscode/attach/remote.test.ts`](https://github.com/nimblescape/devspaces-vscode/blob/main/test/vscode/attach/remote.test.ts)). The Docker tools in your terminals use your own Docker context and are not part of this count.
 

@@ -18,7 +18,7 @@ import type { RunResult } from '../core/ports';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { fakeVscode, resetFakeVscode, type FakeWebviewPanel } from './testing/fakeVscode';
-import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
+import { FOCUS_PAUSE_MS, HIDDEN_STOP_MS, IDLE_PAUSE_MS, SIZES_EVERY_MS, UsagePages, VM_CHECK_MS, type UsagePagesDeps } from './usagePage';
 import { UsagePageTexts, type UsagePageView } from './usagePageModel';
 
 const BOOT = 'c979624d-e703-46d3-ae35-c4cb34a59e91';
@@ -379,61 +379,57 @@ describe('UsagePages', () => {
     expect(shells.logins).toEqual([{ host: 'build-box', flow: true }]);
   });
 
-  it('forgets the sizes of before a new start of the host', async () => {
+  it('forgets the sizes of before a new start of the host, and reads them again after the next sample', async () => {
     shells.open.add(LIMA_HOST);
-    readSizes.mockResolvedValue(emptyInventory());
     const panel = await open(pages(), LIMA_HOST);
-    panel.receive({ type: 'readSizes' });
-    await flush();
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    readSizes.mockImplementationOnce(() => new Promise<HostInventory>(() => {}));
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
-    expect(lastView(panel).sizes.label).toBe('Read Sizes');
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    // The sizes of before are gone while the new read runs.
+    expect(lastView(panel).docker.value).toBe('…');
   });
 
   it('sees a new start of the host also after a sample without a boot ID', async () => {
     shells.open.add(LIMA_HOST);
-    readSizes.mockResolvedValue(emptyInventory());
-    const panel = await open(pages(), LIMA_HOST);
-    panel.receive({ type: 'readSizes' });
-    await flush();
+    await open(pages(), LIMA_HOST);
     shells.boot = 'unreadable';
     await timers.advance(VM_USAGE_INTERVAL_MS);
-    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    expect(readSizes).toHaveBeenCalledTimes(1);
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
-    expect(lastView(panel).sizes.label).toBe('Read Sizes');
+    expect(readSizes).toHaveBeenCalledTimes(2);
   });
 
   it('sees a new start of the host after a first sample of a resume without a boot ID', async () => {
     shells.open.add(LIMA_HOST);
-    readSizes.mockResolvedValue(emptyInventory());
     const panel = await open(pages(), LIMA_HOST);
-    panel.receive({ type: 'readSizes' });
-    await flush();
     panel.receive({ type: 'pause' });
     shells.boot = 'unreadable';
     panel.receive({ type: 'resume' });
     await flush();
-    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    // Each start reads the sizes after its first sample.
+    expect(readSizes).toHaveBeenCalledTimes(2);
     // The sampler of the resume saw no boot ID before: the page compares with the boot ID of before the pause.
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
-    expect(lastView(panel).sizes.label).toBe('Read Sizes');
+    expect(readSizes).toHaveBeenCalledTimes(3);
   });
 
-  it('keeps nothing of a Read Sizes that ran across a new start of the host', async () => {
+  it('keeps nothing of a read of the sizes that ran across a new start of the host, and reads again', async () => {
     shells.open.add(LIMA_HOST);
     let release: (inventory: HostInventory) => void = () => {};
-    readSizes.mockImplementation(() => new Promise<HostInventory>((resolve) => (release = resolve)));
+    readSizes.mockImplementationOnce(() => new Promise<HostInventory>((resolve) => (release = resolve)));
     const panel = await open(pages(), LIMA_HOST);
-    panel.receive({ type: 'readSizes' });
-    await flush();
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
     release(emptyInventory());
     await flush();
     expect(lastView(panel).sizes).toEqual({ label: 'Read Sizes', disabled: false });
+    await timers.advance(VM_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
   });
 
   it('counts the time of the sample on the host for the age of the VM', async () => {
@@ -744,7 +740,8 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.vm);
     panel.receive({ type: 'readSizes' });
     await flush();
-    expect(readSizes).not.toHaveBeenCalled();
+    // Only the read in the background after the first sample.
+    expect(readSizes).toHaveBeenCalledTimes(1);
   });
 
   it('starts no Read Sizes when the VM stops while it reads the state of the VM', async () => {
@@ -809,6 +806,81 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
   });
 
+  it('reads the sizes in the background after the first sample, without a question and on an open login only, then every 10 minutes', async () => {
+    const flows: boolean[] = [];
+    readSizes.mockImplementation(async () => {
+      flows.push(sshPromptsAllowed());
+      return emptyInventory();
+    });
+    const panel = await open(pages(), 'build-box');
+    expect(readSizes).toHaveBeenCalledWith('build-box', expect.any(AbortSignal), { openLoginOnly: true });
+    expect(flows).toEqual([false]);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    await timers.advance(SIZES_EVERY_MS - SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    await timers.advance(SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    expect(flows).toEqual([false, false]);
+    // Refresh Sizes reads at once, in a flow, and the next read in the background comes 10 minutes after it.
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(flows).toEqual([false, false, true]);
+    await timers.advance(SIZES_EVERY_MS - SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads no sizes in the background while paused or hidden, and again after Resume and after a show that follows the end of the samples', async () => {
+    const panel = await open(pages(), 'build-box');
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    panel.receive({ type: 'pause' });
+    await timers.advance(SIZES_EVERY_MS * 2);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    panel.receive({ type: 'resume' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    // A show within the 15 seconds goes on with the same samples: no new read.
+    panel.setVisible(false);
+    await timers.advance(HIDDEN_STOP_MS / 3);
+    panel.setVisible(true);
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    panel.setVisible(false);
+    await timers.advance(SIZES_EVERY_MS * 2);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    panel.setVisible(true);
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(3);
+  });
+
+  it('shows the error of a read in the background, and nothing when it found no open login', async () => {
+    readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
+    const first = await open(pages(), 'build-box');
+    expect(lastView(first).docker.note).toBe(UsagePageTexts.sizesNotRead);
+    readSizes.mockRejectedValueOnce(new Error('docker system df failed\nmore'));
+    const second = await open(pages(), 'other-box');
+    expect(lastView(second).docker.note).toBe(UsagePageTexts.sizesFailed('docker system df failed'));
+  });
+
+  it('reads no sizes in the background on a VM that does not run, and says nothing', async () => {
+    shells.open.add(LIMA_HOST);
+    vmState = { kind: 'stopped' };
+    const panel = await open(pages(), LIMA_HOST);
+    expect(readSizes).not.toHaveBeenCalled();
+    expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
+  });
+
+  it('says in the header that it reads the sizes, and does not end a read in the background at a close', async () => {
+    let signal: AbortSignal | undefined;
+    readSizes.mockImplementation((_host, readSignal) => {
+      signal = readSignal;
+      return new Promise<HostInventory>(() => {});
+    });
+    const panel = await open(pages(), 'build-box');
+    expect(lastView(panel).status.text).toMatch(/^Live · every 5 s · updated .* · reading the sizes, the values wait$/);
+    panel.dispose();
+    expect(signal?.aborted).toBe(false);
+  });
+
   it('reads the sizes on click in a flow, never on a stopped VM', async () => {
     shells.open.add(LIMA_HOST);
     const panel = await open(pages(), LIMA_HOST);
@@ -820,13 +892,13 @@ describe('UsagePages', () => {
     panel.receive({ type: 'readSizes' });
     expect(lastView(panel).sizes).toEqual({ label: 'Reading Sizes…', disabled: true });
     await flush();
-    expect(readSizes).toHaveBeenCalledWith(LIMA_HOST, expect.any(AbortSignal));
+    expect(readSizes).toHaveBeenLastCalledWith(LIMA_HOST, expect.any(AbortSignal));
     expect(flow).toBe(true);
     expect(lastView(panel).sizes).toEqual({ label: 'Refresh Sizes', disabled: false });
     vmState = { kind: 'stopped' };
     panel.receive({ type: 'readSizes' });
     await flush();
-    expect(readSizes).toHaveBeenCalledTimes(1);
+    expect(readSizes).toHaveBeenCalledTimes(2);
     expect(lastView(panel).docker.note).toContain(UsagePageTexts.sizesVmStopped);
     vmState = { kind: 'unknown', detail: 'limactl failed' };
     panel.receive({ type: 'readSizes' });

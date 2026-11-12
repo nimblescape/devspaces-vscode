@@ -179,6 +179,7 @@ export const UsagePageTexts = {
       ? 'The page uses the shell of Devspaces to the VM. It does not start the VM.'
       : 'The page uses the shell of Devspaces to the host. When none is open, it logs in once over SSH; a host that needs a password asks for it in VS Code.',
   live: (seconds: number, at: string | undefined) => `Live · every ${seconds} s${at !== undefined ? ` · updated ${at}` : ''}`,
+  liveReadingSizes: ' · reading the sizes, the values wait',
   secondReading: (seconds: number) => `Reading the CPU use: it needs two readings, ${seconds} seconds apart.`,
   secondReadingDetail: 'Memory and disk show at once. The sizes of Docker show after Read Sizes.',
   paused: (at: string | undefined) => (at !== undefined ? `Paused · values of ${at}` : 'Paused'),
@@ -331,7 +332,7 @@ function statusAndBanner(input: UsagePageInput): Pick<UsagePageView, 'status' | 
       const seconds = intervalSeconds(input);
       const waiting = input.usage !== undefined && input.usage.cpu === undefined;
       return {
-        status: { text: T.live(seconds, at), tone: 'live' },
+        status: { text: `${T.live(seconds, at)}${input.sizesReading ? T.liveReadingSizes : ''}`, tone: 'live' },
         ...(waiting ? { banner: { tone: 'info' as const, message: T.secondReading(seconds), detail: T.secondReadingDetail, buttons: [] } } : {}),
         pause: { action: 'pause', label: T.pause },
         stale: false,
