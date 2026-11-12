@@ -358,6 +358,31 @@ describe('EngineCleanup', () => {
     await expect(t.cleanup.observe()).resolves.toBeUndefined();
   });
 
+  // The cleanup catches a failure of its own (not of the engine) itself; the report of the run still names it.
+  it('a failure of the cleanup itself is one line, and a failure in the report of the run', async () => {
+    const engine = new FakeEngine();
+    typicalEngine(engine);
+    const log: string[] = [];
+    const cleanup = new EngineCleanup({
+      engine: engine.port(),
+      log: (message) => log.push(message),
+      now: () => {
+        throw new Error('the clock broke');
+      },
+      record: { read: async () => undefined, write: async () => {} },
+      ownHelper: async () => ({ tag: OWN, baseImage: BASE }),
+      referencesInUse: async () => ({ references: [], complete: true }),
+      vm: false,
+      buildx: PIN,
+    });
+    const notes = new RunReportBuilder(0);
+    await expect(withRunNotes(notes, () => cleanup.pass())).resolves.toBeUndefined();
+    expect(log).toContain('The cleanup of the engine failed: the clock broke');
+    expect(notes.finish(0, true).events.partFailed).toEqual({ count: 1, items: ['the cleanup of the engine: the clock broke'] });
+    // Outside a run (the look every 5 minutes) nothing is noted, and nothing throws.
+    await expect(cleanup.observe()).resolves.toBeUndefined();
+  });
+
   it('a failed removal is logged, and the tag stays in the record', async () => {
     const t = setup();
     typicalEngine(t.engine);

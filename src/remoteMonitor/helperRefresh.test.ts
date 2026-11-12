@@ -146,7 +146,7 @@ describe('the part "the workspace helper image" of the background run', () => {
     const s = setup({ label: DIGEST_A, registry: 'unreachable', stored: { tag: TAG, baseImage: BASE, baseDigest: DIGEST_A, checkedAt: iso(-1440) } });
     const notes = new RunReportBuilder(0);
     expect(await withRunNotes(notes, () => refreshHelperImage(s.deps))).toBe('offline');
-    expect(notes.finish(0, true).events).toEqual({ helperImageFailed: { count: 1, items: [`${TAG}: the registry of ${BASE} did not answer`] } });
+    expect(notes.finish(0, true).events).toEqual({ helperImageFailed: { count: 1, items: [`${TAG}: the registry of ${BASE} did not answer (connect ECONNREFUSED)`] } });
     expect(s.builds).toEqual([]);
     expect(s.written()).toEqual({ tag: TAG, baseImage: BASE, baseDigest: DIGEST_A, checkedAt: iso(-1440), attemptedAt: iso(0) });
     expect(s.log.at(-1)).toMatch(new RegExp(`^The base image ${BASE} of the workspace helper could not be checked: its registry did not answer`));

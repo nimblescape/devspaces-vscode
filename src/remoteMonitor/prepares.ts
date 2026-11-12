@@ -166,11 +166,13 @@ export function prepareLine(env: PrepareDevspace, value: PrepareValue): string {
 /** The event of the report of the run (noteRun) for the outcome of one prepare. */
 function notePrepare(env: PrepareDevspace, value: PrepareValue): void {
   const detail = oneLine(value.detail);
+  const named = (why: string) => (why !== '' ? `${env.repository}: ${why}` : env.repository);
   if (value.outcome === 'prepared') noteRun('devspacePrepared', env.repository);
+  else if (value.outcome === 'skipped') noteRun('devspacePrepareSkipped', named(detail));
   // A cancel is a Delete of the devspace, no failure.
-  else if (value.outcome === 'skipped' || value.outcome === 'cancelled') noteRun('devspacePrepareSkipped', `${env.repository}: ${detail}`);
-  else if (value.outcome === 'stopped') noteRun('devspacePrepareFailed', `${env.repository}: stopped by its time limit`);
-  else noteRun('devspacePrepareFailed', `${env.repository}: ${detail}`);
+  else if (value.outcome === 'cancelled') noteRun('devspacePrepareSkipped', named(detail !== '' ? `stopped by a Delete (${detail})` : 'stopped by a Delete'));
+  else if (value.outcome === 'stopped') noteRun('devspacePrepareFailed', named('stopped by its time limit'));
+  else noteRun('devspacePrepareFailed', named(detail));
 }
 
 /**

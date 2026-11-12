@@ -98,6 +98,9 @@ export class EngineCleanup {
 
   private serial(work: () => Promise<void>): Promise<void> {
     const next = this.queue.then(work, work).catch((error: unknown) => {
+      // The cleanup catches its own failure, so the run does not see it (BackgroundRun.part); outside a run (observe)
+      // noteRun notes nothing.
+      noteRun('partFailed', `the cleanup of the engine: ${errorMessage(error)}`);
       this.deps.log(`The cleanup of the engine failed: ${errorMessage(error)}`);
     });
     this.queue = next;

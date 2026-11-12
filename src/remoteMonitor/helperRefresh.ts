@@ -130,7 +130,7 @@ export async function refreshHelperImage(deps: HelperRefreshDeps): Promise<Netwo
   const answer = await registry.getDigest(reference);
   const now = new Date(deps.now()).toISOString();
   if (answer.kind !== 'digest') {
-    noteRun('helperImageFailed', answer.kind === 'unreachable' ? `${tag}: the registry of ${baseImage} did not answer` : `${tag}: the registry gave no digest for ${baseImage} (${answer.kind})`);
+    noteRun('helperImageFailed', answer.kind === 'unreachable' ? `${tag}: the registry of ${baseImage} did not answer (${answer.error})` : `${tag}: the registry gave no digest for ${baseImage} (${answer.kind})`);
     log(
       answer.kind === 'unreachable'
         ? `The base image ${baseImage} of the workspace helper could not be checked: its registry did not answer (${answer.error}).`

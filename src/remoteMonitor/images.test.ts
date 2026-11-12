@@ -584,9 +584,12 @@ describe('the images of the remote Monitor', () => {
     await new ImageMaintenance({ engine, registryTransport, log: () => {}, ...inUse() }).pass();
     expect(calls).toEqual([]);
     const log: string[] = [];
-    await new ImageMaintenance({ engine, registryTransport, log: (message) => log.push(message), ...inUse(`${DEV}:2`) }).pass();
-    // The failure of the list of the engine.
+    const notes = new RunReportBuilder(0);
+    const maintenance = new ImageMaintenance({ engine, registryTransport, log: (message) => log.push(message), ...inUse(`${DEV}:2`) });
+    await withRunNotes(notes, () => maintenance.pass());
+    // The failure of the list of the engine, also in the report of the run (the pass catches it itself).
     expect(log).toEqual(['The images could not be maintained: the list of the images failed: connect ECONNREFUSED /var/run/docker.sock']);
+    expect(notes.finish(0, true).events).toEqual({ partFailed: { count: 1, items: ['the images: the list of the images failed: connect ECONNREFUSED /var/run/docker.sock'] } });
     expect(calls).toEqual(['images']);
   });
 });

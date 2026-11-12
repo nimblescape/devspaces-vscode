@@ -6,8 +6,8 @@
 // Monitor writes what it did into its volume (RUN_REPORTS_FILE, the last MAX_RUN_REPORTS runs, the newest first):
 // the times of the run, whether it reached the network, and for each kind of event (RUN_EVENTS) how often it happened
 // and the names of the first ones (an image reference, a server commit, an extension file, a repository). The details
-// of each step stay in the log of the Monitor. The report of the Monitor container in the view Docker Hosts shows it
-// (R-ENG-010).
+// of each step stay in the log of the Monitor. The file is meant for the report of the Monitor in the view Docker
+// Hosts.
 // The file is written by the Monitor of the newest version of Devspaces that started it (R-DS-011) and read by windows
 // of other versions, so its check leaves out what this version does not know (a key, an event, a run that is not
 // valid) and keeps the rest; the keys that it knows keep their strict checks. It is information for the user, not an
@@ -20,12 +20,22 @@ export const RUN_REPORTS_FILE = 'runs.json';
 export const MAX_RUN_REPORTS = 7;
 /** The names that a report keeps of one kind of event (its count goes on counting). */
 export const MAX_RUN_ITEMS_PER_EVENT = 10;
-/** The names that a report keeps of all its events together. */
+/** The names that a report keeps of all its events that are no failure together. */
 export const MAX_RUN_ITEMS = 60;
+/**
+ * The names that a report keeps of all its failures together (RUN_FAILURE_EVENTS), apart from MAX_RUN_ITEMS, so that the
+ * events of a large run never leave the failures without the names that explain them.
+ */
+export const MAX_RUN_FAILURE_ITEMS = 20;
 /** The longest name of an event, in characters (a longer one is cut, with "…"). */
 export const MAX_RUN_ITEM_LENGTH = 200;
 /** The largest file of the reports, in bytes (a larger file holds no report). */
-export const MAX_RUN_REPORTS_FILE_BYTES = 256 * 1024;
+export const MAX_RUN_REPORTS_FILE_BYTES = 512 * 1024;
+/**
+ * The longest time that one report of runs in a row that did not reach the network spans (mergeRunReports): a longer
+ * outage gets one report per such time.
+ */
+export const MAX_MERGED_RUN_MS = 24 * 60 * 60_000;
 
 /**
  * The kinds of events of a run, in the order of its parts. The names of an event:
@@ -110,10 +120,21 @@ export function runItemText(text: string): string {
   return `${/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut}…`;
 }
 
+/** The names that a report may still keep of `event`, after `used` names of other failures or other events. */
+function roomFor(event: RunEvent, used: { items: number; failures: number }): number {
+  return RUN_FAILURE_EVENTS.has(event) ? MAX_RUN_FAILURE_ITEMS - used.failures : MAX_RUN_ITEMS - used.items;
+}
+
+/** Counts `names` names of `event` into `used`. */
+function useRoom(event: RunEvent, names: number, used: { items: number; failures: number }): void {
+  if (RUN_FAILURE_EVENTS.has(event)) used.failures += names;
+  else used.items += names;
+}
+
 /** Collects the events of one run (noteRun of the Monitor) and makes its report. */
 export class RunReportBuilder {
   private readonly events: Partial<Record<RunEvent, RunEventNote>> = {};
-  private items = 0;
+  private readonly used = { items: 0, failures: 0 };
 
   constructor(private readonly startedAt: number) {}
 
@@ -122,11 +143,11 @@ export class RunReportBuilder {
     if (!Number.isSafeInteger(count) || count < 1) return;
     const note = (this.events[event] ??= { count: 0, items: [] });
     note.count += count;
-    if (item === undefined || note.items.length >= MAX_RUN_ITEMS_PER_EVENT || this.items >= MAX_RUN_ITEMS) return;
+    if (item === undefined || note.items.length >= MAX_RUN_ITEMS_PER_EVENT || roomFor(event, this.used) <= 0) return;
     const text = runItemText(item);
     if (text === '') return;
     note.items.push(text);
-    this.items++;
+    useRoom(event, 1, this.used);
   }
 
   /** The report of the run that ended at `endedAt`. */
@@ -171,13 +192,13 @@ export function parseRunReport(value: unknown): RunReport | undefined {
   if (!isTime(startedAt) || !isTime(endedAt) || typeof reachedNetwork !== 'boolean' || !isRecord(events)) return undefined;
   if (attempts !== undefined && (typeof attempts !== 'number' || !Number.isSafeInteger(attempts) || attempts < 2)) return undefined;
   const notes: Partial<Record<RunEvent, RunEventNote>> = {};
-  let items = 0;
+  const used = { items: 0, failures: 0 };
   // Only the events that this version knows (RUN_EVENTS); those of a newer version are left out.
   for (const event of RUN_EVENTS) {
     if (!Object.prototype.hasOwnProperty.call(events, event)) continue;
-    const note = parseNote(events[event], MAX_RUN_ITEMS - items);
+    const note = parseNote(events[event], roomFor(event, used));
     if (note === undefined) return undefined;
-    items += note.items.length;
+    useRoom(event, note.items.length, used);
     notes[event] = note;
   }
   return { startedAt, endedAt, reachedNetwork, ...(attempts !== undefined ? { attempts: attempts as number } : {}), events: notes };
@@ -212,25 +233,35 @@ export function parseRunReports(text: string): RunReport[] {
  */
 export function mergeRunReports(earlier: RunReport, later: RunReport): RunReport {
   const events: Partial<Record<RunEvent, RunEventNote>> = {};
-  let items = 0;
+  const used = { items: 0, failures: 0 };
   for (const event of RUN_EVENTS) {
     const first = earlier.events[event];
     const second = later.events[event];
     if (first === undefined && second === undefined) continue;
-    const names = [...new Set([...(first?.items ?? []), ...(second?.items ?? [])])].slice(0, Math.max(0, Math.min(MAX_RUN_ITEMS_PER_EVENT, MAX_RUN_ITEMS - items)));
-    items += names.length;
+    const names = [...new Set([...(first?.items ?? []), ...(second?.items ?? [])])].slice(0, Math.max(0, Math.min(MAX_RUN_ITEMS_PER_EVENT, roomFor(event, used))));
+    useRoom(event, names.length, used);
     events[event] = { count: (first?.count ?? 0) + (second?.count ?? 0), items: names };
   }
   return { startedAt: earlier.startedAt, endedAt: later.endedAt, reachedNetwork: false, attempts: (earlier.attempts ?? 1) + (later.attempts ?? 1), events };
 }
 
 /**
+ * Whether `report` joins the report `newest` (mergeRunReports): both did not reach the network, and together they span
+ * at most MAX_MERGED_RUN_MS.
+ */
+function joins(newest: RunReport | undefined, report: RunReport): newest is RunReport {
+  if (newest === undefined || newest.reachedNetwork || report.reachedNetwork) return false;
+  const span = Date.parse(report.endedAt) - Date.parse(newest.startedAt);
+  return span >= 0 && span <= MAX_MERGED_RUN_MS;
+}
+
+/**
  * The text of the file with `report` first, then the newest of `earlier`, MAX_RUN_REPORTS in all. A run that did not
- * reach the network right after another such run joins its report (mergeRunReports), so that the retries of a night
- * without a network take one place.
+ * reach the network right after another such run joins its report (mergeRunReports) within MAX_MERGED_RUN_MS, so that
+ * the retries of a night without a network take one place.
  */
 export function runReportsText(report: RunReport, earlier: readonly RunReport[]): string {
   const [newest, ...rest] = earlier;
-  const runs = !report.reachedNetwork && newest !== undefined && !newest.reachedNetwork ? [mergeRunReports(newest, report), ...rest] : [report, ...earlier];
+  const runs = joins(newest, report) ? [mergeRunReports(newest, report), ...rest] : [report, ...earlier];
   return JSON.stringify({ runs: runs.slice(0, MAX_RUN_REPORTS) });
 }

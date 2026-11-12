@@ -214,6 +214,18 @@ describe('the part "prepares" of the background run', () => {
     expect(lines).toEqual(['The worker of the prepares could not be started, so 2 devspace(s) are prepared at the next run: no answer within 120 seconds.']);
   });
 
+  it('the report names a cancel as a Delete, and a repository alone when the worker gives no detail', async () => {
+    const { engine } = fakeEngine({ ...volume(REPO_A, A), ...volume(REPO_B, B) });
+    const answers: Record<string, PrepareValue> = {
+      [A]: { outcome: 'cancelled', detail: '', seconds: 3 },
+      [B]: { outcome: 'skipped', detail: '', seconds: 0 },
+    };
+    const { worker } = fakeWorker(async (id) => answers[id]);
+    const notes = new RunReportBuilder(0);
+    await withRunNotes(notes, () => prepareDevspaces({ engine, log: () => {}, monotonic: () => 0, lastUsed: async () => new Map(), worker: () => worker }));
+    expect(notes.finish(0, true).events).toEqual({ devspacePrepareSkipped: { count: 2, items: [`${REPO_A}: stopped by a Delete`, REPO_B] } });
+  });
+
   it('the line of each outcome', () => {
     const env = { id: A, repository: REPO_A };
     expect(prepareLine(env, { outcome: 'cancelled', detail: 'it was asked to stop', seconds: 3 })).toBe(`${REPO_A}: the prepare was stopped after 3 s: it was asked to stop.`);

@@ -7,6 +7,8 @@
 // does not know.
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_MERGED_RUN_MS,
+  MAX_RUN_FAILURE_ITEMS,
   MAX_RUN_ITEMS,
   MAX_RUN_ITEMS_PER_EVENT,
   MAX_RUN_ITEM_LENGTH,
@@ -53,15 +55,26 @@ describe('the report of a run', () => {
     expect(Object.keys(made.events)).toEqual(['imagePulled', 'engineObjectRemoved', 'extensionDownloaded', 'partFailed']);
   });
 
-  it('keeps at most MAX_RUN_ITEMS_PER_EVENT names of a kind and MAX_RUN_ITEMS in all; the counts go on', () => {
+  it('keeps at most MAX_RUN_ITEMS_PER_EVENT names of a kind, MAX_RUN_ITEMS of the other events and MAX_RUN_FAILURE_ITEMS of the failures; the counts go on', () => {
     const notes = new RunReportBuilder(START);
     for (let i = 0; i < 25; i++) notes.note('extensionDownloaded', `ext.e${i}-1.0.0`);
-    for (const event of RUN_EVENTS) for (let i = 0; i < 5; i++) notes.note(event, `${event} ${i}`);
+    for (const event of RUN_EVENTS) for (let i = 0; i < 8; i++) notes.note(event, `${event} ${i}`);
     const { events } = notes.finish(END, true);
-    expect(events.extensionDownloaded).toEqual({ count: 30, items: Array.from({ length: MAX_RUN_ITEMS_PER_EVENT }, (_, i) => `ext.e${i}-1.0.0`) });
-    const names = Object.values(events).reduce((sum, note) => sum + note.items.length, 0);
-    expect(names).toBe(MAX_RUN_ITEMS);
-    for (const event of RUN_EVENTS) expect(events[event]!.count).toBe(event === 'extensionDownloaded' ? 30 : 5);
+    expect(events.extensionDownloaded).toEqual({ count: 33, items: Array.from({ length: MAX_RUN_ITEMS_PER_EVENT }, (_, i) => `ext.e${i}-1.0.0`) });
+    const names = (failures: boolean) => RUN_EVENTS.filter((event) => RUN_FAILURE_EVENTS.has(event) === failures).reduce((sum, event) => sum + events[event]!.items.length, 0);
+    expect(names(false)).toBe(MAX_RUN_ITEMS);
+    expect(names(true)).toBe(MAX_RUN_FAILURE_ITEMS);
+    for (const event of RUN_EVENTS) expect(events[event]!.count).toBe(event === 'extensionDownloaded' ? 33 : 8);
+  });
+
+  it('a large run never leaves its failures without names', () => {
+    const notes = new RunReportBuilder(START);
+    for (const event of RUN_EVENTS.filter((kind) => !RUN_FAILURE_EVENTS.has(kind))) for (let i = 0; i < MAX_RUN_ITEMS_PER_EVENT; i++) notes.note(event, `${event} ${i}`);
+    notes.note('partFailed', 'the prepares of the devspace images: the engine broke');
+    const report = notes.finish(END, true);
+    expect(report.events.partFailed).toEqual({ count: 1, items: ['the prepares of the devspace images: the engine broke'] });
+    // The check of the file keeps them too.
+    expect(parseRunReport(JSON.parse(JSON.stringify(report)))).toEqual(report);
   });
 
   it('a name is one line of at most MAX_RUN_ITEM_LENGTH characters; an empty name and a count below 1 are left out', () => {
@@ -98,7 +111,8 @@ describe('the file of the last runs', () => {
 
   it('a full file of runs with all their names stays below MAX_RUN_REPORTS_FILE_BYTES', () => {
     const notes = new RunReportBuilder(START);
-    for (const event of RUN_EVENTS) for (let i = 0; i < MAX_RUN_ITEMS_PER_EVENT; i++) notes.note(event, `${i} ${'é'.repeat(MAX_RUN_ITEM_LENGTH)}`);
+    // Each name of 3 bytes per character in UTF-8, the most that a character of the Basic Multilingual Plane takes.
+    for (const event of RUN_EVENTS) for (let i = 0; i < MAX_RUN_ITEMS_PER_EVENT; i++) notes.note(event, `${i} ${'€'.repeat(MAX_RUN_ITEM_LENGTH)}`);
     const full = notes.finish(END, true);
     const text = runReportsText(full, Array.from({ length: MAX_RUN_REPORTS }, () => full));
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThan(MAX_RUN_REPORTS_FILE_BYTES);
@@ -126,6 +140,21 @@ describe('the file of the last runs', () => {
     expect(reports[1]).toEqual(report(0, { imagePulled: { count: 1, items: ['node:24'] } }));
     // The next run that reaches the network gets its own report.
     expect(parseRunReports(runReportsText(report(13), reports)).map((entry) => entry.attempts)).toEqual([undefined, 12, undefined]);
+  });
+
+  it('a report of runs that did not reach the network spans at most MAX_MERGED_RUN_MS', () => {
+    const at = (ms: number) => new Date(START + ms).toISOString();
+    const offline = (from: number, to: number): RunReport => ({ startedAt: at(from), endedAt: at(to), reachedNetwork: false, events: {} });
+    const hour = 60 * 60_000;
+    let reports: RunReport[] = [];
+    // An outage of 3 days, with a retry every hour.
+    for (let n = 0; n < 72; n++) reports = parseRunReports(runReportsText(offline(n * hour, n * hour + 60_000), reports));
+    expect(reports.map((entry) => [entry.startedAt, entry.attempts])).toEqual([
+      [at(48 * hour), 24],
+      [at(24 * hour), 24],
+      [at(0), 24],
+    ]);
+    expect(MAX_MERGED_RUN_MS).toBe(24 * hour);
   });
 
   it('a merge keeps the names within the limits', () => {

@@ -443,7 +443,10 @@ export class ImageMaintenance {
       // The untagged images of this pass are the ones that the next pass may remove.
       this.seenUntagged = this.untaggedNow;
     } catch (error) {
-      this.deps.log(`The images could not be maintained: ${error instanceof Error ? error.message : String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      // The pass catches its own failure, so the run does not see it (BackgroundRun.part).
+      noteRun('partFailed', `the images: ${message}`);
+      this.deps.log(`The images could not be maintained: ${message}`);
     } finally {
       // No empty lists (the other repositories stay: pruneReplacedImages).
       this.replaced = pruneReplacedImages(this.replaced);
