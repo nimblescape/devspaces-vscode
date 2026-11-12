@@ -41,7 +41,7 @@ import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, parseJsonOutput, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { BUILDX_REPOSITORY } from '../docker/buildxImage';
 import { isHelperImageTag } from '../helper/helperState';
-import { extractBaseImages } from '../imageCheck/dockerfile';
+import { baseImageOf } from '../helper/helperImage';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { VOLUME_REMOVE_TIMEOUT_MS } from '../docker/engineRemoval';
 
@@ -482,8 +482,8 @@ function untaggedName(id: string): string {
 }
 
 /**
- * The name of a helper image without a tag: an earlier build, whose tag `devspaces-worker:<hash>` a newer build took
- * (Docker keeps no record of the tag that an image had).
+ * The name of a helper image without a tag: usually an earlier build, whose tag `devspaces-worker:<hash>` a newer build
+ * took (Docker keeps no record of the tag that an image had).
  */
 export function earlierHelperBuildName(id: string): string {
   return `devspaces-worker (earlier build, ${shortImageId(id)})`;
@@ -494,12 +494,7 @@ export function earlierHelperBuildName(id: string): string {
  * as a normalized reference (normalizedReference) in a set; an empty set when the Dockerfile names none.
  */
 export function helperBaseImageReferences(dockerfileText: string): Set<string> {
-  let first: string | undefined;
-  try {
-    first = extractBaseImages(dockerfileText)[0];
-  } catch {
-    first = undefined;
-  }
+  const first = baseImageOf(dockerfileText);
   const reference = first === undefined ? '' : normalizedReference(first);
   return new Set(reference === '' ? [] : [reference]);
 }
@@ -537,7 +532,7 @@ function classifyImage(
     return { ...base, ...devspaceFields(undefined, byName, input.known, undefined), role: prepared ? 'prepared image' : 'image' };
   }
   if (ordered.some((tag) => input.baseImages.has(normalizedReference(tag)))) return { ...base, purpose: 'baseImage' };
-  if (ordered.some((tag) => input.helperBaseImages?.has(normalizedReference(tag)) === true)) return { ...base, purpose: 'helperBaseImage' };
+  if (ordered.some((tag) => input.helperBaseImages.has(normalizedReference(tag)))) return { ...base, purpose: 'helperBaseImage' };
   if (ordered.some((tag) => tag.toLowerCase().startsWith(RESOURCE_NAME_PREFIX))) return base;
   return { ...base, purpose: 'notDevspaces' };
 }
@@ -554,7 +549,7 @@ export interface InventoryInput {
   /** baseImageReferences of the devspaces of the host. */
   baseImages: ReadonlySet<string>;
   /** helperBaseImageReferences: the base image of the helper image (a base image of a devspace too counts as that). */
-  helperBaseImages?: ReadonlySet<string>;
+  helperBaseImages: ReadonlySet<string>;
   /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
   networks?: readonly unknown[];
   /** The output of IMAGE_TAGS_ARGS, parsed: one entry per tag of an image, so that each image has all its tags. */
@@ -723,7 +718,7 @@ export const IMAGE_TAGS_ARGS: readonly string[] = ['image', 'ls', '--no-trunc', 
  */
 export async function readHostInventory(
   docker: Pick<BootstrapDocker, 'run' | 'listImagesByLabel'>,
-  options: { known: readonly KnownDevspace[]; baseImages: ReadonlySet<string>; helperBaseImages?: ReadonlySet<string>; signal?: AbortSignal },
+  options: { known: readonly KnownDevspace[]; baseImages: ReadonlySet<string>; helperBaseImages: ReadonlySet<string>; signal?: AbortSignal },
 ): Promise<HostInventory> {
   const { signal } = options;
   const result = await docker.run(SYSTEM_DF_ARGS, { timeoutMs: SYSTEM_DF_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
@@ -746,7 +741,7 @@ export async function readHostInventory(
     helperImageIds,
     known: options.known,
     baseImages: options.baseImages,
-    ...(options.helperBaseImages !== undefined ? { helperBaseImages: options.helperBaseImages } : {}),
+    helperBaseImages: options.helperBaseImages,
     networks: parseJsonLines(networkList.stdout),
     imageTags: parseJsonLines(tagList.stdout),
     ...(running !== undefined ? { running } : {}),

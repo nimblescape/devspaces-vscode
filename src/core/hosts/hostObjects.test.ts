@@ -60,7 +60,7 @@ function devspace(overrides: Partial<Devspace> = {}): Devspace {
 }
 
 function input(df: unknown, overrides: Partial<InventoryInput> = {}): InventoryInput {
-  return { df, devspaceImageIds: new Set(), helperImageIds: new Set(), known: [knownDevspace(devspace())], baseImages: new Set(), ...overrides };
+  return { df, devspaceImageIds: new Set(), helperImageIds: new Set(), known: [knownDevspace(devspace())], baseImages: new Set(), helperBaseImages: new Set(), ...overrides };
 }
 
 describe('sizes', () => {
@@ -525,7 +525,7 @@ describe('readHostInventory', () => {
       },
       { 'nimblescape.devspaces.worker=true': ['sha256:w'] },
     );
-    const inventory = await readHostInventory(docker, { known: [], baseImages: new Set() });
+    const inventory = await readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     expect(docker.calls).toEqual([[...SYSTEM_DF_ARGS], [...NETWORK_LS_ARGS], [...IMAGE_TAGS_ARGS], runningUsesArgs(['c1'])]);
     expect(SYSTEM_DF_ARGS).toEqual(['system', 'df', '--verbose', '--format', '{{json .}}']);
     expect(IMAGE_TAGS_ARGS).toEqual(['image', 'ls', '--no-trunc', '--format', '{{json .}}']);
@@ -547,14 +547,14 @@ describe('readHostInventory', () => {
     ]);
     const containers = Array.from({ length: RUNNING_USES_BATCH + 1 }, (_, index) => ({ ID: `c${index}`, Names: `n${index}`, State: index === 0 ? 'exited' : 'running', Image: 'node' }));
     const many = fakeDocker({ 'system df': ok(JSON.stringify({ Containers: [...containers, { ID: 'p', Names: 'p', State: 'paused' }] })) });
-    await readHostInventory(many, { known: [], baseImages: new Set() });
+    await readHostInventory(many, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     const inspects = many.calls.filter((call) => call[0] === 'container');
     expect(inspects.map((call) => call.length - 4)).toEqual([RUNNING_USES_BATCH, 1]);
     expect(inspects.flatMap((call) => call.slice(4))).not.toContain('c0');
     expect(inspects[1].slice(4)).toEqual(['p']);
 
     const none = fakeDocker({ 'system df': ok(JSON.stringify({ Containers: [{ ID: 'c1', Names: 'web', State: 'exited' }] })) });
-    await readHostInventory(none, { known: [], baseImages: new Set() });
+    await readHostInventory(none, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     expect(none.calls.map((call) => call[0])).toEqual(['system', 'network', 'image']);
   });
 
@@ -585,20 +585,20 @@ describe('readHostInventory', () => {
       listImagesByLabel: async () => [],
     });
     const active = (objects: readonly HostObject[]): string[] => objects.filter((object) => object.active === true).map((object) => object.name);
-    const merged = await readHostInventory(batches(ok(line(id('b'), 'second'))), { known: [], baseImages: new Set() });
+    const merged = await readHostInventory(batches(ok(line(id('b'), 'second'))), { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     expect(active(merged.images)).toEqual(['nginx:1', 'redis:8']);
     expect(active(merged.volumes)).toEqual(['first', 'second']);
     // A later batch that fails or does not end in time: not the uses of the first batch alone, but the fields of
     // docker system df -v (the containers name busybox and no volume).
     for (const second of [fail('permission denied\n'), { exitCode: 0, stdout: '', stderr: '', timedOut: true }]) {
-      const fallback = await readHostInventory(batches(second), { known: [], baseImages: new Set() });
+      const fallback = await readHostInventory(batches(second), { known: [], baseImages: new Set(), helperBaseImages: new Set() });
       expect(active(fallback.images)).toEqual(['busybox:latest']);
       expect(active(fallback.volumes)).toEqual([]);
     }
     // The signal reaches each inspect, and a cancel during the inspect ends the read.
     const abort = new AbortController();
     const signals: Array<AbortSignal | undefined> = [];
-    await readHostInventory(batches(ok(), signals), { known: [], baseImages: new Set(), signal: abort.signal });
+    await readHostInventory(batches(ok(), signals), { known: [], baseImages: new Set(), helperBaseImages: new Set(), signal: abort.signal });
     expect(signals).toEqual([abort.signal, abort.signal]);
     const cancelled = {
       ...batches(ok()),
@@ -614,7 +614,7 @@ describe('readHostInventory', () => {
         return ok();
       },
     };
-    await expect(readHostInventory(cancelled, { known: [], baseImages: new Set(), signal: abort.signal })).rejects.toThrow(/aborted/);
+    await expect(readHostInventory(cancelled, { known: [], baseImages: new Set(), helperBaseImages: new Set(), signal: abort.signal })).rejects.toThrow(/aborted/);
   });
 
   it('leaves out a container that is gone, and takes the fields of docker system df -v when docker container inspect fails', async () => {
@@ -632,28 +632,28 @@ describe('readHostInventory', () => {
     const line = JSON.stringify({ image: `sha256:${'a'.repeat(64)}`, mounts: [], networks: { bridge: {} } });
     const gone = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error response from daemon: No such container: c2\n', timedOut: false } });
     // Exact: `web` was created from nginx:2, which now names another image; its image is nginx:1.
-    expect(activeImages(await readHostInventory(gone, { known: [], baseImages: new Set() }))).toEqual(['nginx:1']);
+    expect(activeImages(await readHostInventory(gone, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:1']);
     const failed = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'permission denied\n', timedOut: false } });
-    expect(activeImages(await readHostInventory(failed, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(failed, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
     const slow = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 0, stdout: line, stderr: '', timedOut: true } });
-    expect(activeImages(await readHostInventory(slow, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(slow, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
     // The short form of the Docker CLI says that a container is gone too.
     const short = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error: No such container: c2\n', timedOut: false } });
-    expect(activeImages(await readHostInventory(short, { known: [], baseImages: new Set() }))).toEqual(['nginx:1']);
+    expect(activeImages(await readHostInventory(short, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:1']);
     // A failure without a reason, and a gone container next to another error: the fields of docker system df -v.
     const silentFailure = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: '', timedOut: false } });
-    expect(activeImages(await readHostInventory(silentFailure, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(silentFailure, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
     const mixed = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error response from daemon: No such container: c2\npermission denied\n', timedOut: false } });
-    expect(activeImages(await readHostInventory(mixed, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(mixed, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
   });
 
   it('throws when docker system df, docker network ls or docker image ls fails', async () => {
-    await expect(readHostInventory(fakeDocker({ 'system df': fail('Cannot connect to the Docker daemon') }), { known: [], baseImages: new Set() })).rejects.toThrow(/Cannot connect/);
+    await expect(readHostInventory(fakeDocker({ 'system df': fail('Cannot connect to the Docker daemon') }), { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/Cannot connect/);
     const docker = fakeDocker({ 'system df': ok('{}'), 'network ls': fail('permission denied') });
-    await expect(readHostInventory(docker, { known: [], baseImages: new Set() })).rejects.toThrow(/permission denied/);
+    await expect(readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/permission denied/);
     // Without every tag, a removal would only untag an image.
     const tags = fakeDocker({ 'system df': ok('{}'), 'image ls': fail('Error response from daemon: denied') });
-    await expect(readHostInventory(tags, { known: [], baseImages: new Set() })).rejects.toThrow(/denied/);
+    await expect(readHostInventory(tags, { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/denied/);
   });
 });
 

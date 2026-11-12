@@ -148,9 +148,9 @@ describe('objectRowLook', () => {
   it('says why a helper image has no tag, and names the base image of the helper image', () => {
     const earlier = objectRowLook(objectRow({ kind: 'image', id: 'sha256:547784e940da', name: 'devspaces-worker (earlier build, 547784e940da)', tags: [], purpose: 'helperImage', sizeBytes: 721_000_000, active: true }));
     expect(earlier).toMatchObject({ label: 'devspaces-worker (earlier build, 547784e940da)', description: 'helper image · 721 MB' });
-    expect(earlier.tooltip).toContain('An earlier build of the helper image: a newer build took its tag devspaces-worker:<hash>');
+    expect(earlier.tooltip).toContain('A helper image without a tag: usually an earlier build, whose tag devspaces-worker:<hash> a newer build took.');
     const current = objectRowLook(objectRow({ kind: 'image', id: 'sha256:w', name: 'devspaces-worker:6ba87151934c', tags: ['devspaces-worker:6ba87151934c', 'devspaces-monitor:6ba87151934c'], purpose: 'helperImage' }));
-    expect(current.tooltip).not.toContain('An earlier build');
+    expect(current.tooltip).not.toContain('without a tag');
     expect(current.tooltip).toContain('Tags: devspaces-worker:6ba87151934c, devspaces-monitor:6ba87151934c');
     const base = objectRowLook(objectRow({ kind: 'image', id: 'sha256:n', name: 'node:24-trixie-slim', tags: ['node:24-trixie-slim'], purpose: 'helperBaseImage', sizeBytes: 356_000_000 }));
     expect(base).toMatchObject({ description: 'base image of the helper image · 356 MB', color: 'inactive' });

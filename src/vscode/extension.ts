@@ -1424,19 +1424,17 @@ async function activateExtension(
   // of one connection each; on an SSH host with an open connection of the relay, they go through its pipe, which shares
   // the login of the relay.
   const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
-  // The objects of a host with their sizes: for the view Docker Hosts and for Read Sizes of the utilization page.
-  // The base image of the helper image, from its Dockerfile in this extension (none when it cannot be read).
-  const helperBaseImages = async (): Promise<Set<string>> => {
-    try {
-      return helperBaseImageReferences(await fs.promises.readFile(helperDockerfile, 'utf8'));
-    } catch (error) {
+  // The base image of the helper image, from its Dockerfile in this extension, read once (none when it cannot be read).
+  let helperBaseImages: Promise<Set<string>> | undefined;
+  const readHelperBaseImages = (): Promise<Set<string>> =>
+    (helperBaseImages ??= fs.promises.readFile(helperDockerfile, 'utf8').then(helperBaseImageReferences, (error: unknown) => {
       logger.warn(`The Dockerfile of the helper image could not be read for the view Docker Hosts: ${errorMessage(error)}`);
-      return new Set();
-    }
-  };
+      return new Set<string>();
+    }));
+  // The objects of a host with their sizes: for the view Docker Hosts and for Read Sizes of the utilization page.
   const readInventory = async (host: string, signal: AbortSignal) => {
     const here = devspacesOfHost(await registry.list(), host);
-    const helperBases = await helperBaseImages();
+    const helperBases = await readHelperBaseImages();
     return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), helperBaseImages: helperBases, signal }));
   };
   // The utilization pages of the hosts (R-ENG-009): each sample is one command on the shared shell of the host, and the

@@ -360,7 +360,8 @@ function engineCheckChange(record: HelperImageRecord | undefined, check: HelperC
   };
 }
 
-function baseImageOf(dockerfileContent: string): string | undefined {
+/** The base image of the helper image: the first FROM of its Dockerfile, with the defaults of its ARGs; undefined for none. */
+export function baseImageOf(dockerfileContent: string): string | undefined {
   try {
     return extractBaseImages(dockerfileContent)[0];
   } catch {
