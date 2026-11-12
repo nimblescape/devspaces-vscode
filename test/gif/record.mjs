@@ -306,6 +306,22 @@ async function paletteCommand(title) {
   await wait(600);
 }
 
+/**
+ * Waits until the window of the devspace shows the files of the repository in the Explorer. A question of VS Code
+ * whether the extension may sign in (only when the window of the devspace has no session) gets "Allow".
+ */
+async function openedDevspace(ui) {
+  const deadline = Date.now() + OPEN_TIMEOUT_MS;
+  while (!(await ui.find({ explorer: 'index.html' }, 2_000).catch(() => undefined))) {
+    if (Date.now() > deadline) throw new Error(`The window of the devspace did not open within ${OPEN_TIMEOUT_MS / 60_000} minutes.`);
+    const allow = await ui.find({ button: 'Allow' }, 1_000).catch(() => undefined);
+    if (allow) {
+      log('The window of the devspace asked for the sign-in: Allow.');
+      await click(allow, { ms: 200 });
+    }
+  }
+}
+
 /** The take: returns the marks of its scenes and of its cut, in ms since the start of the recording. */
 async function take(ui, video) {
   const recording = record(video);
@@ -343,7 +359,7 @@ async function take(ui, video) {
     await wait(3500);
     const cut = { from: Date.now() - recording.started };
     await shot('2-opening');
-    await ui.find({ explorer: 'index.html' }, OPEN_TIMEOUT_MS);
+    await openedDevspace(ui);
     await wait(4000);
     await paletteCommand('Notifications: Clear All Notifications');
     await wait(1000);
