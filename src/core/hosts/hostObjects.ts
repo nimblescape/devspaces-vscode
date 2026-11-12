@@ -482,8 +482,9 @@ function untaggedName(id: string): string {
 }
 
 /**
- * The name of a helper image without a tag: usually an earlier build, whose tag `devspaces-worker:<hash>` a newer build
- * took (Docker keeps no record of the tag that an image had).
+ * The name of a helper image without its helper tag `devspaces-worker:<hash>` (hasHelperTag): usually an earlier build,
+ * whose helper tag a newer build took (Docker keeps no record of the tag that an image had). It can still have its
+ * monitor tag `devspaces-monitor:<hash>` while the Monitor runs from it, until the next open tags the new build.
  */
 export function earlierHelperBuildName(id: string): string {
   return `devspaces-worker (earlier build, ${shortImageId(id)})`;
@@ -493,6 +494,11 @@ export function earlierHelperBuildName(id: string): string {
  * The base image of the helper image: the first FROM of its Dockerfile `dockerfileText` (with the defaults of its ARGs),
  * as a normalized reference (normalizedReference) in a set; an empty set when the Dockerfile names none.
  */
+/** True if the helper image has its helper tag `devspaces-worker:<hash>`; without it, it is named earlierHelperBuildName. */
+export function hasHelperTag(object: Pick<HostObject, 'tags'>): boolean {
+  return (object.tags ?? []).some(isHelperImageTag);
+}
+
 export function helperBaseImageReferences(dockerfileText: string): Set<string> {
   const first = baseImageOf(dockerfileText);
   const reference = first === undefined ? '' : normalizedReference(first);
@@ -506,7 +512,8 @@ function classifyImage(
   const { id, tags, item } = image;
   // The tags of Devspaces first, so that the name of the row is one of them, and of those the helper tag
   // devspaces-worker:<hash> first: a helper image that the Monitor runs from has its monitor tag
-  // devspaces-monitor:<hash> too, which only names the image of the Monitor.
+  // devspaces-monitor:<hash> too, which only names the image of the Monitor. A helper image without its helper tag is
+  // an earlier build, also while it still has its monitor tag.
   const ordered = [
     ...tags.filter(isHelperImageTag),
     ...tags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX) && !isHelperImageTag(tag)),
@@ -516,7 +523,7 @@ function classifyImage(
   const base: HostObject = {
     kind: 'image',
     id,
-    name: ordered[0] ?? (helper ? earlierHelperBuildName(id) : untaggedName(id)),
+    name: helper && !ordered.some(isHelperImageTag) ? earlierHelperBuildName(id) : (ordered[0] ?? untaggedName(id)),
     tags: ordered,
     purpose: 'other',
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),

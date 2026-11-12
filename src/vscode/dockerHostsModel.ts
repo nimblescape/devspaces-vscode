@@ -8,7 +8,7 @@
 // build cache. The texts, icons, context values and
 // commands of each row, without `vscode` (dockerHostsView.ts renders them).
 import { describeDockerHost, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
-import { formatSize, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
+import { formatSize, hasHelperTag, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
 import type { VmState } from '../core/vm/vmState';
 import { Commands } from './commands';
 import type { RowColor } from './rowColors';
@@ -140,9 +140,9 @@ export const DockerHostsTexts = {
     }
   },
   purposeTooltip: (purpose: HostObjectPurpose): string => PURPOSE_TOOLTIPS[purpose],
-  /** The tooltip line of a helper image without a tag (earlierHelperBuildName). */
+  /** The tooltip line of a helper image without its helper tag (earlierHelperBuildName). */
   earlierHelperBuild:
-    'A helper image without a tag: usually an earlier build, whose tag devspaces-worker:<hash> a newer build took. Docker keeps no record of the tag that an image had. Docker does not remove an image while a container that was created from it exists, also a stopped one.',
+    'A helper image without its tag devspaces-worker:<hash>: usually an earlier build, whose tag a newer build took. Docker keeps no record of the tag that an image had. Docker does not remove an image while a container that was created from it exists, also a stopped one.',
   /** Why the row has its color: the view shows an inactive object dimmed. */
   activeTooltip: (object: HostObject): string =>
     object.kind === 'container'
@@ -316,9 +316,11 @@ export function objectRowLook(row: ObjectRow): RowLook {
     if (object.usedBy !== undefined && object.usedBy > 0) parts.push(`${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
   }
   const tooltip = [`${capitalized(object.kind)} ${object.name}`, object.builtIn === true ? 'A network that Docker creates itself (bridge, host and none on every engine; ingress and docker_gwbridge on a node of Docker Swarm). Devspaces does not remove it.' : DockerHostsTexts.purposeTooltip(object.purpose)];
-  if (object.kind === 'image' && object.purpose === 'helperImage' && (object.tags?.length ?? 0) === 0) tooltip.push(DockerHostsTexts.earlierHelperBuild);
+  if (object.kind === 'image' && object.purpose === 'helperImage' && !hasHelperTag(object)) tooltip.push(DockerHostsTexts.earlierHelperBuild);
   if (object.status !== undefined) tooltip.push(`Status: ${object.status}`);
-  if (object.kind === 'image' && (object.tags?.length ?? 0) > 1) tooltip.push(`Tags: ${(object.tags ?? []).join(', ')}`);
+  // Every tag when the name is not the only one: several tags, or a name that is not a tag (an earlier build).
+  const tags = object.tags ?? [];
+  if (object.kind === 'image' && (tags.length > 1 || (tags.length === 1 && tags[0] !== object.name))) tooltip.push(`Tags: ${tags.join(', ')}`);
   if (object.sizeBytes !== undefined) tooltip.push(`Size: ${formatSize(object.sizeBytes)}${object.uniqueBytes !== undefined ? ` (${formatSize(object.uniqueBytes)} only for this image)` : ''}`);
   if (object.usedBy !== undefined && object.kind !== 'container') tooltip.push(`Used by ${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
   if (object.kind !== 'volume') tooltip.push(`ID: ${object.id}`);

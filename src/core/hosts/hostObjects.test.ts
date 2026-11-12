@@ -140,7 +140,7 @@ describe('buildInventory', () => {
       { ID: 'c9', Names: 'shop-web-1', State: 'exited', Image: 'node:22', Networks: 'shop_default, bridge', Labels: 'com.docker.compose.project=shop,com.docker.compose.service=web' },
     ],
     Images: [
-      { ID: 'sha256:w', Repository: 'devspaces-worker', Tag: '6ba87151', Size: '412MB', UniqueSize: '12MB', Containers: '2' },
+      { ID: 'sha256:w', Repository: 'devspaces-worker', Tag: '6ba87151934c', Size: '412MB', UniqueSize: '12MB', Containers: '2' },
       { ID: 'sha256:w', Repository: 'devspaces-monitor', Tag: 'abc', Size: '412MB', UniqueSize: '12MB', Containers: '2' },
       { ID: 'sha256:b', Repository: 'devspaces-buildx', Tag: '0.30.1', Size: '80MB' },
       { ID: 'sha256:d', Repository: IMAGE, Tag: '3', Size: '2GB', UniqueSize: '200MB' },
@@ -219,13 +219,13 @@ describe('buildInventory', () => {
         `${IMAGE}:3`,
         `${IMAGE}:prepared`,
         'devspaces-other-repo-brave-curie:1',
-        'devspaces-worker:6ba87151',
+        'devspaces-worker:6ba87151934c',
         'mcr.microsoft.com/devcontainers/base:bookworm',
         'node:22',
         '<none> (x)',
       ].sort(),
     );
-    expect(images['devspaces-worker:6ba87151']).toMatchObject({ purpose: 'helperImage', tags: ['devspaces-worker:6ba87151', 'devspaces-monitor:abc'], sizeBytes: 412_000_000, uniqueBytes: 12_000_000, usedBy: 2 });
+    expect(images['devspaces-worker:6ba87151934c']).toMatchObject({ purpose: 'helperImage', tags: ['devspaces-worker:6ba87151934c', 'devspaces-monitor:abc'], sizeBytes: 412_000_000, uniqueBytes: 12_000_000, usedBy: 2 });
     expect(images['devspaces-buildx:0.30.1'].purpose).toBe('buildImage');
     expect(images[`${IMAGE}:3`]).toMatchObject({ purpose: 'devspace', devspaceId: DEVSPACE_ID, role: 'image' });
     expect(images[`${IMAGE}:prepared`]).toMatchObject({ purpose: 'devspace', role: 'prepared image' });
@@ -474,6 +474,24 @@ describe('buildInventory', () => {
     const result = buildInventory(input({ Images: [{ ID: 'sha256:547784e940da0123', Repository: '<none>', Tag: '<none>' }] }, { helperImageIds: new Set(['sha256:547784e940da0123']) }));
     expect(result.images[0]).toMatchObject({ name: 'devspaces-worker (earlier build, 547784e940da)', tags: [], purpose: 'helperImage' });
     expect(earlierHelperBuildName('547784e940da0123')).toBe('devspaces-worker (earlier build, 547784e940da)');
+  });
+
+  it('names a helper image that kept only its monitor tag as an earlier build: a rebuild took its helper tag', () => {
+    const result = buildInventory(
+      input(
+        {
+          Images: [
+            { ID: 'sha256:old', Repository: 'devspaces-monitor', Tag: '6ba87151934c' },
+            { ID: 'sha256:new', Repository: 'devspaces-worker', Tag: '6ba87151934c' },
+          ],
+        },
+        { helperImageIds: new Set(['sha256:old', 'sha256:new']) },
+      ),
+    );
+    expect(result.images.map((image) => [image.name, image.tags])).toEqual([
+      ['devspaces-worker (earlier build, old)', ['devspaces-monitor:6ba87151934c']],
+      ['devspaces-worker:6ba87151934c', ['devspaces-worker:6ba87151934c']],
+    ]);
   });
 
   it('names a helper image by its helper tag, also when docker system df -v lists its monitor tag first', () => {

@@ -1424,10 +1424,12 @@ async function activateExtension(
   // of one connection each; on an SSH host with an open connection of the relay, they go through its pipe, which shares
   // the login of the relay.
   const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
-  // The base image of the helper image, from its Dockerfile in this extension, read once (none when it cannot be read).
+  // The base image of the helper image, from its Dockerfile in this extension: read once, and again at the next read of
+  // a host after a failed read (then none).
   let helperBaseImages: Promise<Set<string>> | undefined;
   const readHelperBaseImages = (): Promise<Set<string>> =>
     (helperBaseImages ??= fs.promises.readFile(helperDockerfile, 'utf8').then(helperBaseImageReferences, (error: unknown) => {
+      helperBaseImages = undefined;
       logger.warn(`The Dockerfile of the helper image could not be read for the view Docker Hosts: ${errorMessage(error)}`);
       return new Set<string>();
     }));
