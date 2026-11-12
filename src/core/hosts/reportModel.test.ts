@@ -19,6 +19,13 @@ describe('the texts of a report', () => {
     expect(timeText(9_000_000_000_000_000, CLOCK)).toBe('an invalid time');
   });
 
+  it('finds today, yesterday and tomorrow by the calendar on the days of a change of the summer time', () => {
+    // Vienna, 2026-10-25 00:30 (a day of 25 hours): tomorrow is 26 October.
+    expect(timeText(Date.UTC(2026, 9, 26, 5, 7), { now: Date.UTC(2026, 9, 24, 22, 30), timeZone: 'Europe/Vienna' })).toBe('tomorrow 06:07');
+    // Vienna, 2026-03-30 00:30, after a day of 23 hours: yesterday is 29 March.
+    expect(timeText(Date.UTC(2026, 2, 29, 10, 0), { now: Date.UTC(2026, 2, 29, 22, 30), timeZone: 'Europe/Vienna' })).toBe('yesterday 12:00');
+  });
+
   it('reads the times of Docker, and takes year 1 as never', () => {
     expect(dockerTime('2026-11-12T08:00:00.123456789Z')).toBe(NOW + 123);
     expect(dockerTime('0001-01-01T00:00:00Z')).toBeUndefined();

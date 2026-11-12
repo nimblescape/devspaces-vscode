@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { monitorRecords } from './monitorRecords';
 import { CLOCK, DAY, DEVSPACE, HOUR, NOW, OTHER_DEVSPACE, monitorFile } from './reportFixtures.testkit';
 import type { ReportBody, ReportCell, ReportSection } from './reportModel';
-import { MAX_EXTENSION_ROWS, vscodeStoreReport, workerCacheReport } from './storeReport';
+import { MAX_CACHE_ROWS, MAX_EXTENSION_ROWS, vscodeStoreReport, workerCacheReport } from './storeReport';
 import type { StoredServer, VscodeStoreReading } from './volumeReader';
 
 const [A, B, C, D, E, F] = ['a', 'b', 'c', 'd', 'e', 'f'].map((digit) => digit.repeat(40));
@@ -119,6 +119,44 @@ describe('the report of the store of VS Code', () => {
     expect(rule(vscodeStoreReport({ ...other, cut: true }, records, CLOCK, 'linux-x64'), '1.139.1')).toEqual({ text: 'not known: the list of the store is incomplete', tone: 'warn' });
   });
 
+  it('orders the builds of one version by their download, as the releases come', () => {
+    const insiders = (commit: string, daysAgo: number) => server(commit, '1.142.0-insider', { quality: 'insider', modifiedAt: NOW - daysAgo * DAY });
+    const report = vscodeStoreReport(store({ servers: [insiders(A, 40), insiders(B, 20), insiders(C, 30), insiders(D, 50)], used: [] }), records, CLOCK, 'linux-x64');
+    expect(rows(section(report.sections, 'VS Code Server')).map((row) => [row[3].text, row[6].chip?.tone])).toEqual([
+      ['bbbbbbb', 'keep'],
+      ['ccccccc', 'keep'],
+      ['aaaaaaa', 'remove'],
+      ['ddddddd', 'remove'],
+    ]);
+  });
+
+  it('takes a time ahead of the clock as due, as the Monitor does (a clock that was corrected)', () => {
+    const ahead = monitorRecords({
+      cut: false,
+      textsDropped: false,
+      files: [monitorFile('cache-run.json', { lastCleanupAt: NOW + 3 * DAY, failedFetches: { [`stable-linux-x64-${E}`]: NOW + 3 * DAY } }), monitorFile('extensions/failures.json', { 'ms-python.python': NOW + 3 * DAY })],
+    });
+    const report = vscodeStoreReport(store(), ahead, CLOCK, 'linux-x64');
+    expect(rows(section(report.sections, 'Downloads that failed')).map((row) => row[2].text)).toEqual(['with the next run', 'with the next run']);
+    expect(facts(section(report.sections, 'Cleanup and downloads'))['Next cleanup']).toBe('with the next run');
+  });
+
+  it('counts a list that cannot be read only while the cleanup keeps it, and ignores a name that is no devspace ID', () => {
+    const lists = monitorRecords({
+      cut: false,
+      textsDropped: false,
+      files: [
+        monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['dbaeumer.vscode-eslint'], defaults: [] }),
+        // The cleanup of the Monitor removes this list first: its file is older than 14 days.
+        monitorFile(`extensions/wanted/${OTHER_DEVSPACE}.json`, 'no json', NOW - 20 * DAY),
+        monitorFile('extensions/wanted/notes.v1.json', 'no json'),
+      ],
+    });
+    expect(lists.others.map((file) => file.path)).toEqual(['extensions/wanted/notes.v1.json']);
+    const extensions = rows(section(vscodeStoreReport(store(), lists, CLOCK, 'linux-x64').sections, 'Extensions'));
+    expect(extensions.find((row) => row[0].text === 'some.unlisted')?.[5].chip?.tone).toBe('remove');
+  });
+
   it('gives no rule of an extension file while a record that the rules need is not read whole', () => {
     const textless = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['golang.go'], defaults: [] }), { path: 'extensions/chosen.json', bytes: 2_000_000, omitted: 'size' }] });
     const cut = monitorRecords({ cut: true, textsDropped: false, files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['golang.go'], defaults: [] })] });
@@ -188,5 +226,8 @@ describe('the report of the cache of the workers', () => {
       ['small', 'file', '10 B', '1', 'today 08:00'],
     ]);
     expect(body.kind === 'table' ? body.more : undefined).toBe('It holds more entries than the reader lists.');
+    const many = Array.from({ length: MAX_CACHE_ROWS + 3 }, (_, index) => ({ name: `e${index}`, kind: 'file' as const, usage: { bytes: 1, files: 1, cut: false } }));
+    const more = section(workerCacheReport({ entries: many, more: true }, CLOCK).sections, 'Top level');
+    expect(more.kind === 'table' ? more.more : undefined).toBe('3 more entries. It holds more entries than the reader lists.');
   });
 });

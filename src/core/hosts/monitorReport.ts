@@ -7,11 +7,12 @@
 // the check of the helper image, the extension lists, the older image versions, the other records) and of its container
 // devspaces-monitor (its mode and version, and what its last runs did). From the records of the Monitor
 // (monitorRecords.ts) and the facts of Docker of its container (objectDetails.ts). Pure; no I/O.
-import { CACHE_RUN_FILE, IMAGES_IN_USE_MAX_AGE_MS, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, UNUSED_END_MS } from '../remoteMonitor/protocol';
+import { CACHE_RUN_FILE, IMAGES_IN_USE_MAX_AGE_MS, IMAGE_SETTINGS_FILE, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, UNUSED_END_MS } from '../remoteMonitor/protocol';
 import { IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
 import { nextCronTime } from '../remoteMonitor/cron';
 import { registryReferenceKey } from '../remoteMonitor/registryAnswers';
 import { RUN_FAILURE_EVENTS, type RunEvent, type RunReport } from '../remoteMonitor/runReport';
+import { compareDevspacesVersions } from '../http';
 import { RECORDED_LIST_MS } from '../vscodeExtensions';
 import type { MonitorRecords } from './monitorRecords';
 import type { ContainerDetails } from './objectDetails';
@@ -43,6 +44,8 @@ export function scheduleText(schedule: string | undefined, timeZone: string | un
  * the defaults). Undefined without the settings and without the variables of its container (the report of its volume).
  */
 function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<string, string> | undefined): { schedule: CacheSchedule; timeZone: string; from: string } | undefined {
+  // Settings whose text the reader left out are there, but not known.
+  if (records.textless.includes(IMAGE_SETTINGS_FILE)) return undefined;
   const settings = records.settings;
   const stored = settings !== undefined ? parseCacheSchedule(settings.schedule) : undefined;
   if (settings !== undefined && stored !== undefined) return { schedule: stored, timeZone: settings.timeZone, from: 'sent by the last start of a window' };
@@ -57,7 +60,14 @@ function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<strin
 function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerEnv?: ReadonlyMap<string, string>): ReportFact[] {
   const facts: ReportFact[] = [];
   const active = activeSchedule(records, containerEnv);
-  facts.push(fact('Schedule', active !== undefined ? `${scheduleText(active.schedule.text, active.timeZone)} · ${active.from}` : 'the one of the container of the Monitor: no window has sent one since its start'));
+  const settingsTextless = records.textless.includes(IMAGE_SETTINGS_FILE);
+  facts.push(
+    active !== undefined
+      ? fact('Schedule', `${scheduleText(active.schedule.text, active.timeZone)} · ${active.from}`)
+      : settingsTextless
+        ? fact('Schedule', 'not known: the reader left out the text of image-settings.json', chip('too large for one read', 'warn'))
+        : fact('Schedule', 'the one of the container of the Monitor: no window has sent one since its start'),
+  );
   if (records.textless.includes(CACHE_RUN_FILE)) {
     facts.push(fact('Last run ended', 'not known: the reader left out the text of cache-run.json', chip('too large for one read', 'warn')));
     return facts;
@@ -69,7 +79,7 @@ function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerE
   } else if (state.lastEndAt === undefined) {
     facts.push(fact('Next run', 'at the next check of the Monitor: no run is known'));
   } else if (active === undefined) {
-    facts.push(fact('Next run', 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
+    facts.push(fact('Next run', settingsTextless ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
   } else {
     const { schedule, timeZone } = active;
     const next = schedule.kind === 'interval' ? state.lastEndAt + schedule.minutes * 60_000 : nextCronTime(state.lastEndAt, schedule.cron, timeZone);
@@ -158,7 +168,7 @@ function imagesInUseSection(records: MonitorRecords, computer: ReportComputer, c
       const answer = key !== undefined ? records.registry?.digests[key] : undefined;
       const registry = answer !== undefined ? `sha256:${shortDigest(answer.digest)}… · asked ${timeText(answer.at, clock)}` : '';
       const rule: ReportChip =
-        clock.now - at >= IMAGES_IN_USE_MAX_AGE_MS
+        clock.now - at > IMAGES_IN_USE_MAX_AGE_MS
           ? chip(`sent more than ${spanText(IMAGES_IN_USE_MAX_AGE_MS)} ago: no longer kept up to date`, 'remove')
           : key === undefined
             ? chip('pinned by a digest: never pulled', 'info')
@@ -285,6 +295,18 @@ function runRow(run: RunReport, clock: ReportClock): ReportCell[] {
   ];
 }
 
+/**
+ * The rule of the version of a Monitor (R-DS-011): the newest version runs it, so one of an earlier version moves to the
+ * script of a newer one that a window stored, and a window of this version keeps one of a newer version.
+ */
+function versionChip(version: string, own: string): ReportChip {
+  const order = compareDevspacesVersions(version, own);
+  if (order === 0) return chip('this version', 'keep');
+  if (order < 0) return chip('an earlier version: it moves to the script of a newer one that a window stored', 'info');
+  if (order > 0) return chip('newer than this extension: the windows of this version keep it', 'info');
+  return chip('another version', 'info');
+}
+
 /** The report of the container of the Monitor (devspaces-monitor). `records`: those of its volume, when it could be read. */
 export function monitorContainerReport(details: ContainerDetails | undefined, records: MonitorRecords | undefined, computer: ReportComputer, clock: ReportClock): ReportContent {
   const facts: ReportFact[] = [];
@@ -300,9 +322,7 @@ export function monitorContainerReport(details: ContainerDetails | undefined, re
     facts.push(
       version === undefined
         ? fact('Version of Devspaces', 'unknown: an earlier extension created it', chip('the next start of a window replaces it', 'remove'))
-        : version === computer.version
-          ? fact('Version of Devspaces', version, chip('this version', 'keep'))
-          : fact('Version of Devspaces', version, chip('another version: it moves to the script of a newer one that a window stored', 'info')),
+        : fact('Version of Devspaces', version, versionChip(version, computer.version)),
     );
   }
   if (records !== undefined) facts.push(...backgroundFacts(records, clock, details?.env));

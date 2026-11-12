@@ -8,11 +8,12 @@
 // what the reader of the shared volumes read (volumeReader.ts) and the records of the Monitor (monitorRecords.ts); the
 // rules are those of the Monitor (backgroundRules.ts, vscodeExtensions.ts). Pure; no I/O.
 import type { VscodePlatform } from '../helperChannel/protocol';
-import { FETCH_RETRY_MS, KEPT_SERVER_VERSIONS, SERVER_UNUSED_MS, SERVER_VERSION_NAME, STORE_CLEANUP_INTERVAL_MS, serversToRemove } from '../remoteMonitor/backgroundRules';
+import { FETCH_RETRY_MS, KEPT_SERVER_VERSIONS, SERVER_UNUSED_MS, SERVER_VERSION_NAME, STORE_CLEANUP_INTERVAL_MS, cleanupDue, fetchRetryDue, serversToRemove } from '../remoteMonitor/backgroundRules';
 import {
   EXTENSION_FOLDERS,
   EXTENSION_RETRY_MS,
   RECORDED_LIST_MS,
+  extensionRetryWaits,
   compareVersions,
   dependencyIds,
   extensionEntryText,
@@ -36,10 +37,15 @@ function markerName(server: Pick<StoredServer, 'quality' | 'platform' | 'commit'
   return `${server.quality}-${server.platform}-${server.commit}`;
 }
 
-/** Versions of VS Code (`1.141.0`, also `1.142.0-insider`) by their numbers, the newest first; one without a version last. */
+/**
+ * Versions of VS Code (`1.141.0`, also `1.142.0-insider`) by their numbers, the newest first; one without a version
+ * last. The builds of one version (Insiders builds share the version of their iteration) by the time of their download,
+ * the newest first.
+ */
 function newerFirst(a: StoredServer, b: StoredServer): number {
-  if (a.version === undefined || b.version === undefined) return a.version === undefined ? (b.version === undefined ? 0 : 1) : -1;
-  return compareVersions(b.version.replace(/-.*$/, ''), a.version.replace(/-.*$/, ''));
+  const byDownload = (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0) || a.commit.localeCompare(b.commit);
+  if (a.version === undefined || b.version === undefined) return a.version === undefined ? (b.version === undefined ? byDownload : 1) : -1;
+  return compareVersions(b.version.replace(/-.*$/, ''), a.version.replace(/-.*$/, '')) || byDownload;
 }
 
 /**
@@ -47,7 +53,7 @@ function newerFirst(a: StoredServer, b: StoredServer): number {
  * (`platform`; the Monitor leaves the versions of other platforms alone), the KEPT_SERVER_VERSIONS newest of its quality
  * stay, and every version that an open used within SERVER_UNUSED_MS (without a marker: the time of its folder, as the
  * Monitor counts it); the others go at its next cleanup, unless a running container runs them. The Monitor orders the
- * versions by the releases of the update service; this report by their version numbers. `complete`: the reader listed
+ * versions by the releases of the update service; this report by their version numbers (newerFirst). `complete`: the reader listed
  * the whole store (else a marker that it did not list can keep a version, so a removal is not certain).
  */
 function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string, number>, platform: VscodePlatform | undefined, complete: boolean, clock: ReportClock): Map<StoredServer, ReportChip> {
@@ -76,10 +82,12 @@ function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string,
   return rules;
 }
 
-/** The time of the next try of a failed download, in words. */
-function nextTry(failedAt: number, waitMs: number, clock: ReportClock): ReportCell {
-  const due = failedAt + waitMs;
-  return due <= clock.now ? cell('with the next run') : cell(`with the first run after ${timeText(due, clock)}`);
+/**
+ * The time of the next try of a failed download, in words: with the next run when the rule of the Monitor (`due`) says
+ * so (also for a time far ahead of the clock, a clock that was corrected), else after `waitMs`.
+ */
+function nextTry(failedAt: number, waitMs: number, due: boolean, clock: ReportClock): ReportCell {
+  return due ? cell('with the next run') : cell(`with the first run after ${timeText(failedAt + waitMs, clock)}`);
 }
 
 /**
@@ -112,16 +120,16 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
       }),
       empty: 'No server version is stored.',
     },
-    from: `From the folders server/QUALITY/PLATFORM/COMMIT and their product.json, and the markers used/QUALITY-PLATFORM-COMMIT that a window writes when it starts a version. Rule of the cleanup of the Monitor, for the platform of the engine only: a version goes when no window started it for ${spanText(SERVER_UNUSED_MS)} (a version without a marker counts from its download), it is not one of the ${KEPT_SERVER_VERSIONS} newest of its quality, and no running container runs it. The Monitor orders the versions by the releases of VS Code; this report orders them by their version numbers.`,
+    from: `From the folders server/QUALITY/PLATFORM/COMMIT and their product.json, and the markers used/QUALITY-PLATFORM-COMMIT that a window writes when it starts a version. Rule of the cleanup of the Monitor, for the platform of the engine only: a version goes when no window started it for ${spanText(SERVER_UNUSED_MS)} (a version without a marker counts from its download), it is not one of the ${KEPT_SERVER_VERSIONS} newest of its quality, and no running container runs it. The Monitor orders the versions by the releases of VS Code; this report orders them by their version numbers, and the builds of one version by the time of their download.`,
   });
   // The failed downloads: of server versions (cache-run.json) and of extensions (extensions/failures.json).
   const failures: ReportCell[][] = [];
   for (const [version, at] of Object.entries(records?.cacheRun?.failedFetches ?? {}).sort(([, a], [, b]) => b - a)) {
     const match = SERVER_VERSION_NAME.exec(version);
-    failures.push([cell(match !== null ? `VS Code Server ${match[3].slice(0, 7)} (${match[1]}, ${match[2]})` : version), cell(timeText(at, clock)), nextTry(at, FETCH_RETRY_MS, clock)]);
+    failures.push([cell(match !== null ? `VS Code Server ${match[3].slice(0, 7)} (${match[1]}, ${match[2]})` : version), cell(timeText(at, clock)), nextTry(at, FETCH_RETRY_MS, fetchRetryDue(at, clock.now), clock)]);
   }
   for (const [entry, at] of [...(records?.extensionFailures ?? new Map<string, number>())].sort(([, a], [, b]) => b - a)) {
-    failures.push([cell(`Extension ${entry}`), cell(timeText(at, clock)), nextTry(at, EXTENSION_RETRY_MS, clock)]);
+    failures.push([cell(`Extension ${entry}`), cell(timeText(at, clock)), nextTry(at, EXTENSION_RETRY_MS, !extensionRetryWaits(at, clock.now), clock)]);
   }
   if (records !== undefined) {
     sections.push({
@@ -136,7 +144,7 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   const cleanupFacts = [];
   const lastCleanup = records?.cacheRun?.lastCleanupAt;
   if (records !== undefined) cleanupFacts.push(fact('Last cleanup', lastCleanup !== undefined ? `${timeText(lastCleanup, clock)} · at most once a day` : 'none yet'));
-  if (lastCleanup !== undefined) cleanupFacts.push(fact('Next cleanup', lastCleanup + STORE_CLEANUP_INTERVAL_MS <= clock.now ? 'with the next run' : `with the first run after ${timeText(lastCleanup + STORE_CLEANUP_INTERVAL_MS, clock)}`));
+  if (lastCleanup !== undefined) cleanupFacts.push(fact('Next cleanup', cleanupDue(lastCleanup, clock.now) ? 'with the next run' : `with the first run after ${timeText(lastCleanup + STORE_CLEANUP_INTERVAL_MS, clock)}`));
   const downloads = store.temporary.files + store.extensionTemporary.files;
   cleanupFacts.push(fact('Downloads now', downloads === 0 ? 'none' : `${countText(downloads, 'temporary file')} (${sizeText(store.temporary.bytes + store.extensionTemporary.bytes, !store.temporary.cut && !store.extensionTemporary.cut)}): a download runs, or the cleanup removes what an ended one left`));
   cleanupFacts.push(fact('Lock files', `${store.locks}: one for each server version and extension file that a download or a cleanup used; they stay`));
@@ -168,21 +176,16 @@ function extensionRows(store: VscodeStoreReading, records: MonitorRecords | unde
   const lists = (records?.extensionLists ?? []).flatMap((list) => (list.record !== undefined ? [list.record] : []));
   const wanted = wantedExtensions(lists, clock.now);
   const pinned = new Set(wanted.filter((ref) => ref.version !== undefined).map(extensionEntryText));
-  // As the Monitor: a list that is there but cannot be read keeps the files of the IDs that no list names.
-  const unreadable = (records?.extensionLists ?? []).some((list) => list.record === undefined);
+  // As the Monitor: a list that is there but cannot be read keeps the files of the IDs that no list names, unless its
+  // file is older than RECORDED_LIST_MS: the cleanup removes such a list first (removeStaleExtensionStateFiles).
+  const unreadable = (records?.extensionLists ?? []).some((list) => list.record === undefined && !(list.modifiedAt !== undefined && clock.now - list.modifiedAt >= RECORDED_LIST_MS));
   const named = !unreadable ? new Set([...wanted.map((ref) => ref.id), ...dependencyIds(wanted, records?.extensionDependencies ?? new Map())]) : undefined;
   const chosen = new Set((records?.extensionChoices ?? new Map<string, string>()).values());
   const removedNames = new Set<string>();
-  const newest = new Map<string, string>();
-  for (const folder of EXTENSION_FOLDERS) {
-    const names = store.extensions.filter((file) => file.folder === folder).map((file) => file.name);
-    if (known) for (const name of extensionFilesToRemove(folder, names, pinned, { ...(named !== undefined ? { named } : {}), chosen })) removedNames.add(`${folder}/${name}`);
-    for (const name of names) {
-      const parsed = parseCachedExtension(name, folder);
-      if (parsed === undefined) continue;
-      const key = `${folder}/${parsed.id}`;
-      const known = newest.get(key);
-      if (known === undefined || compareVersions(parsed.version, known) > 0) newest.set(key, parsed.version);
+  if (known) {
+    for (const folder of EXTENSION_FOLDERS) {
+      const names = store.extensions.filter((file) => file.folder === folder).map((file) => file.name);
+      for (const name of extensionFilesToRemove(folder, names, pinned, { ...(named !== undefined ? { named } : {}), chosen })) removedNames.add(`${folder}/${name}`);
     }
   }
   const rows = store.extensions
@@ -192,11 +195,11 @@ function extensionRows(store: VscodeStoreReading, records: MonitorRecords | unde
     const key = `${file.file.folder}/${file.file.name}`;
     if (file.parsed === undefined) return chip('no file of the Monitor: left alone', 'info');
     if (!known) return undefined;
-    if (removedNames.has(key)) return chip(named !== undefined && !named.has(file.parsed.id) ? 'removed at the next cleanup: no list of the last 14 days names it' : 'removed at the next cleanup: an older version', 'remove');
+    if (removedNames.has(key)) return chip(named !== undefined && !named.has(file.parsed.id) ? `removed at the next cleanup: no list of the last ${spanText(RECORDED_LIST_MS)} names it` : 'removed at the next cleanup: an older version', 'remove');
     if (chosen.has(key)) return chip('kept: the version that the runs chose', 'keep');
     if (pinned.has(`${file.parsed.id}@${file.parsed.version}`)) return chip(`kept: a list pins @${file.parsed.version}`, 'info');
-    if (newest.get(`${file.file.folder}/${file.parsed.id}`) === file.parsed.version) return chip('kept: newest', 'keep');
-    return chip('kept', 'keep');
+    // extensionFilesToRemove keeps a file that is not chosen and not pinned only when it is the newest of its extension.
+    return chip('kept: newest', 'keep');
   };
   return {
     removed: removedNames.size,
@@ -240,7 +243,7 @@ export function workerCacheReport(cache: WorkerCacheReading, clock: ReportClock)
           columns: ['Name', 'Kind', 'Size', 'Files', 'Last change'],
           rows: entries.slice(0, MAX_CACHE_ROWS).map((entry) => [cell(entry.name), cell(entry.kind), cell(sizeText(entry.usage.bytes, !entry.usage.cut)), cell(String(entry.usage.files)), cell(entry.modifiedAt !== undefined ? timeText(entry.modifiedAt, clock) : '')]),
           empty: 'The volume is empty.',
-          ...(entries.length > MAX_CACHE_ROWS || cache.more ? { more: cache.more ? 'It holds more entries than the reader lists.' : `${entries.length - MAX_CACHE_ROWS} more entries` } : {}),
+          ...(entries.length > MAX_CACHE_ROWS || cache.more ? { more: [entries.length > MAX_CACHE_ROWS ? `${entries.length - MAX_CACHE_ROWS} more entries.` : '', cache.more ? 'It holds more entries than the reader lists.' : ''].filter((part) => part !== '').join(' ') } : {}),
         },
         from: 'From the top level of the volume, the largest first.',
       },

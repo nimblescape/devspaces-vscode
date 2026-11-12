@@ -72,11 +72,25 @@ export interface ReportClock {
 
 const DAY_MS = 24 * 60 * 60_000;
 
+/** One formatter per time zone: a report gives hundreds of times. */
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
 /** The date of `at` in `timeZone` as YYYY-MM-DD, and its time as HH:MM. */
 function dateAndTime(at: number, timeZone: string): { date: string; time: string } {
-  const parts = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone }).formatToParts(new Date(at));
+  let format = FORMATTERS.get(timeZone);
+  if (format === undefined) {
+    format = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone });
+    FORMATTERS.set(timeZone, format);
+  }
+  const parts = format.formatToParts(new Date(at));
   const part = (type: Intl.DateTimeFormatPartTypes): string => parts.find((entry) => entry.type === type)?.value ?? '';
   return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
+}
+
+/** The calendar date `days` after the date `date` (YYYY-MM-DD), by the calendar, so a day of 23 or 25 hours counts as one. */
+function dateAfter(date: string, days: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
 }
 
 /**
@@ -86,10 +100,10 @@ function dateAndTime(at: number, timeZone: string): { date: string; time: string
 export function timeText(at: number, clock: ReportClock): string {
   if (Number.isNaN(new Date(at).getTime())) return 'an invalid time';
   const { date, time } = dateAndTime(at, clock.timeZone);
-  const day = (offset: number): string => dateAndTime(clock.now + offset * DAY_MS, clock.timeZone).date;
-  if (date === day(0)) return `today ${time}`;
-  if (date === day(-1)) return `yesterday ${time}`;
-  if (date === day(1)) return `tomorrow ${time}`;
+  const today = dateAndTime(clock.now, clock.timeZone).date;
+  if (date === today) return `today ${time}`;
+  if (date === dateAfter(today, -1)) return `yesterday ${time}`;
+  if (date === dateAfter(today, 1)) return `tomorrow ${time}`;
   return `${date} ${time}`;
 }
 

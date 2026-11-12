@@ -76,6 +76,8 @@ function facts(value: ReportBody): Record<string, ReportCell> {
   return Object.fromEntries(value.facts.map((entry) => [entry.label, entry.value]));
 }
 
+const details: ContainerDetails = { kind: 'container', labels: new Map([[LABEL_MONITOR_VERSION, '0.4.1']]), restartPolicy: 'on-failure', env: new Map(), mounts: [], ports: [], networks: [] };
+
 describe('the schedule in words', () => {
   it('names a daily time, an interval, another cron schedule and the default', () => {
     expect(scheduleText('7 6 * * *', 'Europe/Vienna')).toBe('daily at 06:07 · Europe/Vienna');
@@ -112,6 +114,9 @@ describe('the report of the volume of the Monitor', () => {
     const textless = monitorRecords({ cut: false, textsDropped: true, files: [{ path: 'cache-run.json', bytes: 10, omitted: 'output' }] });
     const unknown = facts(body(monitorVolumeReport(textless, COMPUTER, CLOCK).sections, 'Background run'));
     expect([unknown['Last run ended']?.text, unknown['Next run']]).toEqual(['not known: the reader left out the text of cache-run.json', undefined]);
+    const settingsTextless = monitorRecords({ cut: false, textsDropped: false, files: [{ path: 'image-settings.json', bytes: 10, omitted: 'budget' }, monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
+    const settings = facts(body(monitorContainerReport(details, settingsTextless, COMPUTER, CLOCK).sections, 'The Monitor'));
+    expect([settings.Schedule?.text, settings['Next run']?.text]).toEqual(['not known: the reader left out the text of image-settings.json', 'not known: the schedule is not known']);
     const none = monitorRecords({ cut: false, textsDropped: false, files: [] });
     expect(facts(body(monitorVolumeReport(none, COMPUTER, CLOCK).sections, 'Background run'))['Next run']?.text).toBe('at the next check of the Monitor: no run is known');
   });
@@ -130,6 +135,12 @@ describe('the report of the volume of the Monitor', () => {
       ['old/image:1', 'another computer', '', 'remove'],
       [`postgres:16@${DIGEST}`, 'this computer', '', 'info'],
     ]);
+  });
+
+  it('keeps a list of image references for exactly 30 days, as the Monitor does', () => {
+    const at = (age: number) => monitorRecords({ cut: false, textsDropped: false, files: [monitorFile(`images-in-use.${SOURCE}.json`, { at: NOW - age, references: [`postgres:16@${DIGEST}`] })] });
+    const tone = (age: number) => rows(body(monitorVolumeReport(at(age), COMPUTER, CLOCK).sections, 'Image references in use'))[0][4].chip?.tone;
+    expect([tone(30 * DAY), tone(30 * DAY + 1)]).toEqual(['info', 'remove']);
   });
 
   it('gives the check of the helper image, the extension lists, the older images and the other records', () => {
@@ -151,7 +162,6 @@ describe('the report of the volume of the Monitor', () => {
 });
 
 describe('the report of the container of the Monitor', () => {
-  const details: ContainerDetails = { kind: 'container', labels: new Map([[LABEL_MONITOR_VERSION, '0.4.1']]), restartPolicy: 'on-failure', env: new Map(), mounts: [], ports: [], networks: [] };
 
   it('gives its mode and version, and what its last runs did', () => {
     const report = monitorContainerReport(details, records, COMPUTER, CLOCK);
@@ -190,7 +200,9 @@ describe('the report of the container of the Monitor', () => {
     const permanent = monitorContainerReport({ ...details, restartPolicy: 'unless-stopped', labels: new Map([[LABEL_MONITOR_VERSION, '0.5.0'], [LABEL_MONITOR_OWNER, OTHER_SOURCE]]) }, undefined, COMPUTER, CLOCK);
     const monitor = facts(body(permanent.sections, 'The Monitor'));
     expect(monitor.Mode?.text).toBe('keeps running, created by another computer');
-    expect(monitor['Version of Devspaces']?.chip?.tone).toBe('info');
+    expect(monitor['Version of Devspaces']?.chip?.text).toBe('newer than this extension: the windows of this version keep it');
+    const earlierVersion = monitorContainerReport({ ...details, labels: new Map([[LABEL_MONITOR_VERSION, '0.3.9']]) }, undefined, COMPUTER, CLOCK);
+    expect(facts(body(earlierVersion.sections, 'The Monitor'))['Version of Devspaces']?.chip?.text).toBe('an earlier version: it moves to the script of a newer one that a window stored');
     expect(permanent.sections.map((section) => section.title)).toEqual(['The Monitor']);
     expect(permanent.notices).toEqual([expect.stringContaining('devspaces-monitor could not be read')]);
     const earlier = monitorContainerReport({ ...details, labels: new Map() }, records, COMPUTER, CLOCK);

@@ -7,7 +7,7 @@
 // unreadable, and a file that is no record is named as another file.
 import { describe, expect, it } from 'vitest';
 import { monitorRecords } from './monitorRecords';
-import { DEVSPACE, HASH, SOURCE, monitorFile } from './reportFixtures.testkit';
+import { DEVSPACE, HASH, HOUR, NOW, SOURCE, monitorFile } from './reportFixtures.testkit';
 
 describe('the records of the Monitor', () => {
   it('parses each record of the volume with the parser of the Monitor', () => {
@@ -46,7 +46,7 @@ describe('the records of the Monitor', () => {
     expect(records.extensionFailures).toEqual(new Map([['ms-python.python', 1_700_000_000_000]]));
     expect(records.extensionChoices).toEqual(new Map([['dbaeumer.vscode-eslint', 'universal/dbaeumer.vscode-eslint-3.0.16']]));
     expect(records.extensionDependencies).toEqual(new Map([['ms-python.python', ['ms-python.debugpy']]]));
-    expect(records.extensionLists).toEqual([{ devspaceId: DEVSPACE, record: { at: 1_700_000_000_000, configuration: [{ id: 'dbaeumer.vscode-eslint' }], defaults: [] } }]);
+    expect(records.extensionLists).toEqual([{ devspaceId: DEVSPACE, modifiedAt: NOW - HOUR, record: { at: 1_700_000_000_000, configuration: [{ id: 'dbaeumer.vscode-eslint' }], defaults: [] } }]);
     expect(records.workerScripts).toEqual([{ hash: HASH, scriptBytes: 123_456, modifiedAt: 1_700_000_400_000, record: { version: '0.4.1', helperTag: 'devspaces-worker:0123456789ab' } }]);
     expect(records.unreadable).toEqual([]);
     expect(records.textless).toEqual([]);
@@ -74,7 +74,7 @@ describe('the records of the Monitor', () => {
     expect(records.cacheRun).toBeUndefined();
     expect(records.runs).toEqual([]);
     expect(records.heartbeats).toEqual([{ source: SOURCE, devspaceId: DEVSPACE }]);
-    expect(records.extensionLists).toEqual([{ devspaceId: DEVSPACE }]);
+    expect(records.extensionLists).toEqual([{ devspaceId: DEVSPACE, modifiedAt: NOW - HOUR }]);
     expect(records.unreadable).toEqual(['runs.json', 'cache-run.json', 'helper-image.json', `heartbeats/${SOURCE}.${DEVSPACE}.json`, `extensions/wanted/${DEVSPACE}.json`]);
     expect(records.textless).toEqual(['runs.json', 'cache-run.json']);
     expect(records.others.map((file) => file.path)).toEqual(['cleanup.json', 'runs.json.12.3.tmp', 'heartbeats/stray.json', `worker-scripts/${HASH}.js.0123456789ab.tmp`]);

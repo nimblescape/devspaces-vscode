@@ -35,6 +35,7 @@ import { RUN_REPORTS_FILE, parseRunReports, type RunReport } from '../remoteMoni
 import { WORKER_SCRIPT_FOLDER, isWorkerScriptHash, parseWorkerScriptRecord, type WorkerScriptRecord } from '../remoteMonitor/workerScript';
 import { parseExtensionChoices, parseExtensionDependencies, parseExtensionFailures, parseExtensionRecord, type ExtensionRecord } from '../vscodeExtensions';
 import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
+import { isStorageId } from '../storage/paths';
 import { isRecord } from '../valueChecks';
 import { optional } from './reportModel';
 import type { MonitorFile, MonitorStateReading } from './volumeReader';
@@ -55,6 +56,8 @@ export interface ImagesInUseFile {
 /** The extension list of the last open of a devspace (`extensions/wanted/DEVSPACE-ID.json`). */
 export interface ExtensionListFile {
   devspaceId: string;
+  /** The time of its file (the cleanup of the Monitor removes a list whose file is older than RECORDED_LIST_MS). */
+  modifiedAt?: number;
   record?: ExtensionRecord;
 }
 
@@ -151,9 +154,10 @@ export function monitorRecords(reading: MonitorStateReading): MonitorRecords {
       if (name === undefined) records.others.push(file);
       else records.heartbeats.push({ ...name, ...optional('record', parsed(file, parseHeartbeatRecord)) });
     } else if (path.startsWith(WANTED)) {
+      // As the Monitor reads the lists (readExtensionRecordFiles): only the names of a devspace ID.
       const devspaceId = WANTED_NAME.exec(path.slice(WANTED.length))?.[1];
-      if (devspaceId === undefined) records.others.push(file);
-      else records.extensionLists.push({ devspaceId, ...optional('record', parsed(file, parseExtensionRecord)) });
+      if (devspaceId === undefined || !isStorageId(devspaceId)) records.others.push(file);
+      else records.extensionLists.push({ devspaceId, ...optional('modifiedAt', file.modifiedAt), ...optional('record', parsed(file, parseExtensionRecord)) });
     } else if (path.startsWith(WORKER_SCRIPTS)) {
       const match = WORKER_SCRIPT_NAME.exec(path.slice(WORKER_SCRIPTS.length));
       if (match === null || !isWorkerScriptHash(match[1])) {
