@@ -1,0 +1,43 @@
+{
+ "scenes": [
+  {
+   "n": 1,
+   "at": 501
+  },
+  {
+   "n": 2,
+   "at": 10163
+  },
+  {
+   "n": 3,
+   "at": 40419
+  },
+  {
+   "n": 4,
+   "at": 51623
+  },
+  {
+   "n": 5,
+   "at": 64636
+  },
+  {
+   "n": 6,
+   "at": 74726
+  }
+ ],
+ "cuts": [
+  {
+   "from": 15614,
+   "to": 37785
+  }
+ ],
+ "shots": [
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-1.png",
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-2-opening.png",
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-2.png",
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-3.png",
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-4.png",
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-5.png",
+  "/home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/scene-6.png"
+ ]
+}
