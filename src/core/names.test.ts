@@ -18,7 +18,9 @@ import {
   devspaceImageName,
   devspaceImageRepository,
   freeWorkerNumber,
+  isDevspaceImageName,
   isDevspaceResourceName,
+  isImageKey,
   isOwnDevspaceLabel,
   resourceName,
   workerNameStart,
@@ -205,6 +207,8 @@ describe('EXTENSION_LABEL_KEYS', () => {
       'host-access',
       // The ID label of a devspace.
       'id',
+      // The key of a shared devspace image (R-DS-010).
+      'image-key',
       // The label of the Monitor container: the hash of its script, image, and mode.
       'monitor',
       // The nonce label of each create of the remote Monitor, by which a failed create removes only its own
@@ -303,6 +307,40 @@ describe('resourceName', () => {
   it('refuses a repository without owner or name', () => {
     expect(() => resourceName('api', ID)).toThrow();
     expect(() => resourceName('acme/', ID)).toThrow();
+  });
+});
+
+describe('isDevspaceImageName', () => {
+  const ID = '11111111-2222-4333-8444-555555555555';
+
+  it('is the name of a devspace and a build number', () => {
+    expect(isDevspaceImageName(devspaceImageName('acme/api', ID, 1))).toBe(true);
+    expect(isDevspaceImageName(`${resourceName('acme/api', ID, 'config')}:12`)).toBe(true);
+  });
+
+  it('is no other tag, no other repository, and no name of a registry', () => {
+    for (const reference of [
+      `${resourceName('acme/api', ID)}:prepared`,
+      `${resourceName('acme/api', ID)}:0`,
+      `${resourceName('acme/api', ID)}:01`,
+      `${resourceName('acme/api', ID)}:latest`,
+      resourceName('acme/api', ID),
+      'devspaces-tools:3',
+      `ghcr.io/acme/${resourceName('acme/api', ID)}:3`,
+      `localhost:5000/${resourceName('acme/api', ID)}:3`,
+    ]) {
+      expect(isDevspaceImageName(reference)).toBe(false);
+    }
+  });
+});
+
+describe('isImageKey', () => {
+  it('is sha256: and 64 hexadecimal digits in lower case', () => {
+    expect(isImageKey(`sha256:${'a1'.repeat(32)}`)).toBe(true);
+    expect(isImageKey(`sha256:${'A1'.repeat(32)}`)).toBe(false);
+    expect(isImageKey(`sha256:${'a'.repeat(63)}`)).toBe(false);
+    expect(isImageKey(`sha512:${'a'.repeat(64)}`)).toBe(false);
+    expect(isImageKey(undefined)).toBe(false);
   });
 });
 

@@ -2142,6 +2142,33 @@ describe('READ_FILES_SCRIPT', () => {
     expect(readBig().configText).toHaveLength(MAX_CONFIG_TEXT_LENGTH + 1);
   });
 
+  it('reads the lockfile next to the configuration, by the rule of WRITE_AND_RUN_SCRIPT', () => {
+    const repo = tempDir();
+    write(path.join(repo, '.devcontainer', 'devcontainer.json'), '{ "image": "alpine" }');
+    write(path.join(repo, '.devcontainer', 'devcontainer-lock.json'), '{ "features": {} }');
+    expect(read(repo, '.devcontainer/devcontainer.json')).toEqual({ configText: '{ "image": "alpine" }', lockfileText: '{ "features": {} }' });
+    // `.devcontainer.json` has `.devcontainer-lock.json`.
+    write(path.join(repo, '.devcontainer.json'), '{ "image": "alpine" }');
+    write(path.join(repo, '.devcontainer-lock.json'), '{ "features": { "a": {} } }');
+    expect(read(repo, '.devcontainer.json')).toEqual({ configText: '{ "image": "alpine" }', lockfileText: '{ "features": { "a": {} } }' });
+  });
+
+  it('says that the lockfile is unreadable when it is a link out of the repository or longer than MAX_LOCKFILE_LENGTH, and none for a folder', () => {
+    const repo = tempDir();
+    const outside = tempDir();
+    write(path.join(repo, '.devcontainer', 'devcontainer.json'), '{ "image": "alpine" }');
+    write(path.join(outside, 'secret'), 'token');
+    fs.symlinkSync(path.join(outside, 'secret'), path.join(repo, '.devcontainer', 'devcontainer-lock.json'));
+    expect(read(repo, '.devcontainer/devcontainer.json')).toEqual({ configText: '{ "image": "alpine" }', lockfileUnreadable: true });
+    fs.unlinkSync(path.join(repo, '.devcontainer', 'devcontainer-lock.json'));
+    write(path.join(repo, '.devcontainer', 'devcontainer-lock.json'), 'x'.repeat(MAX_LOCKFILE_LENGTH + 1));
+    expect(read(repo, '.devcontainer/devcontainer.json')).toEqual({ configText: '{ "image": "alpine" }', lockfileUnreadable: true });
+    // A folder of the name is no lockfile, as for the build (--no-lockfile).
+    fs.unlinkSync(path.join(repo, '.devcontainer', 'devcontainer-lock.json'));
+    fs.mkdirSync(path.join(repo, '.devcontainer', 'devcontainer-lock.json'));
+    expect(read(repo, '.devcontainer/devcontainer.json')).toEqual({ configText: '{ "image": "alpine" }' });
+  });
+
   it('reads a configuration in a folder whose name has a backslash', () => {
     const repo = tempDir();
     write(path.join(repo, '.devcontainer', 'a\\b', 'devcontainer.json'), '{ "image": "alpine" }');

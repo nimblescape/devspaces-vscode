@@ -774,11 +774,23 @@ const MISSING_IN_REPOSITORY = String.raw`const missingInRepository = (file) => {
 `;
 
 /**
+ * Script fragment: `lockfileOf(config)`, the lockfile next to the configuration file `config` as the Dev Container CLI
+ * reads it (`.devcontainer-lock.json` next to `.devcontainer.json`, else `devcontainer-lock.json`). The build gives it
+ * to the CLI (WRITE_AND_RUN_SCRIPT); the read of the configuration reads it for the image key of a shared image
+ * (READ_FILES_SCRIPT, R-DS-010).
+ */
+const LOCKFILE_OF = String.raw`const lockfileOf = (config) =>
+  path.posix.join(path.posix.dirname(config), path.posix.basename(config).startsWith('.') ? '.devcontainer-lock.json' : 'devcontainer-lock.json');
+`;
+
+/**
  * `node -e` script. `argv[1]` = repository folder (absolute), `argv[2]` = configuration path relative to it, `argv[3]`
  * (optional) = the Dockerfile as the configuration names it after the Dev Container CLI resolved its variables, in
  * place of `build.dockerfile` of the text.
  * Prints one JSON line: `null` if the configuration file does not exist, otherwise
- * `{ configText, dockerfilePath?, dockerfileText?, dockerfileMissing? }`. `build.dockerfile` (or the old `dockerFile`) is
+ * `{ configText, lockfileText?, lockfileUnreadable?, dockerfilePath?, dockerfileText?, dockerfileMissing? }`: the lockfile
+ * next to the configuration (lockfileOf) as its text, or `lockfileUnreadable: true` when it is no plain file of the
+ * repository or longer than MAX_LOCKFILE_LENGTH. `build.dockerfile` (or the old `dockerFile`) is
  * resolved relative to the folder of the configuration; `dockerfilePath` is relative to the repository folder.
  * Paths outside of the repository folder are not read, nor a path with a variable that is not resolved, nor a file whose
  * link leads out of the repository. `dockerfileMissing: true`: the Dockerfile does not exist in the repository, and no
@@ -791,7 +803,7 @@ const fs = require('fs');
 const path = require('path');
 const root = path.posix.resolve(process.argv[1]);
 const inside = (file) => file === root || file.startsWith(root + '/');
-${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${MISSING_IN_REPOSITORY}const stripJsonc = (text) => {
+${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${MISSING_IN_REPOSITORY}${LOCKFILE_OF}const stripJsonc = (text) => {
   let result = '';
   let i = 0;
   const skipComment = (j) => {
@@ -847,6 +859,17 @@ const main = () => {
   if (configText === null) throw new Error('The configuration file is not a file of the repository.');
   if (configText === undefined) return null;
   const result = { configText };
+  // The lockfile next to the configuration, the one that WRITE_AND_RUN_SCRIPT gives every build, for the image key of a
+  // shared image: its text, or lockfileUnreadable when it is no plain file of the repository, is longer than the limit,
+  // or its read fails (then no image is shared; the read of the configuration does not fail for it).
+  let lockfileText;
+  try {
+    lockfileText = readInRepository(lockfileOf(configFile), ${MAX_LOCKFILE_LENGTH});
+  } catch {
+    lockfileText = null;
+  }
+  if (typeof lockfileText === 'string' && lockfileText.length <= ${MAX_LOCKFILE_LENGTH}) result.lockfileText = lockfileText;
+  else if (lockfileText !== undefined) result.lockfileUnreadable = true;
   let config;
   try {
     config = JSON.parse(stripJsonc(configText.replace(/^\uFEFF/, '')));
@@ -911,9 +934,7 @@ const args = process.argv.slice(4);
 // The repository folder: the workspace folder of the run (buildArgs).
 const workspaceIndex = args.indexOf('--workspace-folder');
 const root = workspaceIndex >= 0 ? args[workspaceIndex + 1] : undefined;
-${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}const lockfileOf = (config) =>
-  path.posix.join(path.posix.dirname(config), path.posix.basename(config).startsWith('.') ? '.devcontainer-lock.json' : 'devcontainer-lock.json');
-const prepare = () => {
+${READ_LIMITED}${REAL_PATH}${READ_IN_REPOSITORY}${LOCKFILE_OF}const prepare = () => {
   if (!folder || path.posix.resolve(folder) !== folder || folder === '/') throw new Error('Invalid folder: ' + folder);
   const input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
   const files = input && typeof input.files === 'object' && input.files !== null ? input.files : {};

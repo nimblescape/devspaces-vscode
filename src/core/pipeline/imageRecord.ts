@@ -78,6 +78,16 @@ function recordLabelValue(labels: Readonly<Record<string, string>>): unknown {
 }
 
 /**
+ * The image key (BuildRecord.imageKey, R-DS-010) of the build record in the labels `labels` of a dev container, or
+ * `undefined` when the record is missing, too long, no valid build record, or has no key. For isSharedImage, which
+ * reads it from the dev containers of every devspace.
+ */
+export function recordedImageKey(labels: Readonly<Record<string, string>>): string | undefined {
+  const value = recordLabelValue(labels);
+  return isBuildRecord(value) ? value.imageKey : undefined;
+}
+
+/**
  * The build record in the labels `labels` of the dev container of `env` (its own labels and those that it inherits
  * from its image), or `undefined` when they do not fit: as imageBuildRecord, for the devspace image of `env` that the
  * record names by its build number (devspaceImageName). The pinned image ID is never taken from the labels; the caller

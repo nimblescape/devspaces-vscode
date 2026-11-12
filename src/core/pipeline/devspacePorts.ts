@@ -7,7 +7,7 @@
 import type { RegistryAnswers } from '../remoteMonitor/registryAnswers';
 import type { ConfigCheckEntry } from '../storage/configCheckEntry';
 import type { DevspaceBusyMarks } from './busyMarks';
-import type { ContainerInfo, ImageInfo, ImageInspection, ListedContainer, NetworkInfo, VolumeInfo } from '../docker/dockerObjects';
+import type { ContainerInfo, ImageInfo, ImageInspection, LabelledImage, ListedContainer, NetworkInfo, VolumeInfo } from '../docker/dockerObjects';
 import type { HeldDevspaceLock } from '../docker/devspaceLock';
 import type { UserIds } from '../docker/passwdUsers';
 import type { SECRET_TOKEN, VscodePlatform, VscodeServerRef } from '../helperChannel/protocol';
@@ -52,7 +52,7 @@ export interface DevspaceDocker {
    * All containers with the label nimblescape.devspaces.id, running or not (the refresh reads all
    * devspaces at once). Each with the time of its create, for the rule of the dev container.
    */
-  listDevspaceContainers(): Promise<ListedContainer[]>;
+  listDevspaceContainers(signal?: AbortSignal): Promise<ListedContainer[]>;
   /**
    * The containers with the label nimblescape.devspaces.id of `devspaceId`, running or not: its dev
    * container and the other services; each with the time of its create.
@@ -130,6 +130,11 @@ export interface DevspaceDocker {
   listImageTags(repository: string): Promise<string[]>;
   /** The named images `devspaces-*`, each once with its references. */
   listDevspaceImages(signal?: AbortSignal): Promise<ImageInfo[]>;
+  /**
+   * The images whose label `key` has the value `value` (the label filter of the image list), each once with its
+   * references `repository:tag` and its labels; dangling images are left out (none has a tag that a build could take).
+   */
+  imagesByLabel(key: string, value: string, signal?: AbortSignal): Promise<LabelledImage[]>;
   /**
    * `docker pull`. EngineDocker.pullImage pulls without a login first; it asks for the login of the registry of the
    * reference itself only when the registry refuses that pull (or Docker Hub limits it), and holds it only for this

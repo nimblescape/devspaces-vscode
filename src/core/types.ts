@@ -43,6 +43,13 @@ export interface BuildRecord {
   /** Feature reference as written in the configuration → digest read right before the build. */
   features: Record<string, string>;
   /**
+   * The image key (imageKey.ts, R-DS-010) of devspaceImage: the image is a shared image, which carries only this key,
+   * built or tagged by the extension. The dev container carries the record with the key, so that a build of another
+   * devspace takes the image only when a dev container of the extension was created from it with this key
+   * (isSharedImage). Missing: the image was built for this devspace only.
+   */
+  imageKey?: string;
+  /**
    * A Docker Compose configuration: the dev service, and the images that Compose and the Dev Container CLI built for
    * the project (builtServiceImages), which Delete removes. The devspace image is the image of the dev service.
    */

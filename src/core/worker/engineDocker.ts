@@ -6,7 +6,7 @@
 // It answers as the Docker CLI answers and is the one implementation of DevspaceDocker, so that DevspaceService
 // runs in the worker; the inspect JSON is read by the same functions as `docker inspect` (dockerObjects.ts). Pure over
 // the port; no I/O, no `vscode`.
-import { mapContainerState, publicInfo, toLabels, toNetworkInfo, toVolumeInfo, type ContainerInfo, type ImageInfo, type ImageInspection, type ImageNames, type InspectedContainer, type ListedContainer, type NetworkInfo, type VolumeInfo } from '../docker/dockerObjects';
+import { mapContainerState, publicInfo, toLabels, toNetworkInfo, toVolumeInfo, type ContainerInfo, type ImageInfo, type ImageInspection, type ImageNames, type LabelledImage, type InspectedContainer, type ListedContainer, type NetworkInfo, type VolumeInfo } from '../docker/dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { passwdUserIds, type UserIds } from '../docker/passwdUsers';
 import { errorMessage } from '../errors';
@@ -162,8 +162,10 @@ export class EngineDocker implements DevspaceDocker {
   }
 
   /** DevspaceDocker.listDevspaceContainers: each with the time of its create (ListedContainer). */
-  async listDevspaceContainers(): Promise<ListedContainer[]> {
-    return (await this.containersWithLabel(LABEL_DEVSPACE_ID)).map(listed);
+  async listDevspaceContainers(signal?: AbortSignal): Promise<ListedContainer[]> {
+    const containers = await this.containersWithLabel(LABEL_DEVSPACE_ID, signal);
+    if (signal?.aborted) throw abortError();
+    return containers.map(listed);
   }
 
   /**
@@ -410,6 +412,15 @@ export class EngineDocker implements DevspaceDocker {
     if (signal?.aborted) throw abortError();
     return images
       .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX) && !tag.endsWith(':<none>')), createdAt: image.created }))
+      .filter((image) => image.tags.length > 0);
+  }
+
+  /** DevspaceDocker.imagesByLabel: the label filter of the list of the images. */
+  async imagesByLabel(key: string, value: string, signal?: AbortSignal): Promise<LabelledImage[]> {
+    const images = await this.call('the list of the images', signal, (limited) => this.engine.images({ label: [`${key}=${value}`] }, limited));
+    if (signal?.aborted) throw abortError();
+    return images
+      .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => !tag.endsWith(':<none>')), labels: { ...image.labels }, createdAt: image.created }))
       .filter((image) => image.tags.length > 0);
   }
 

@@ -90,6 +90,11 @@ export interface ImageInfo {
   createdAt: string;
 }
 
+/** A local image with its labels (DevspaceDocker.imagesByLabel). */
+export interface LabelledImage extends ImageInfo {
+  labels: Record<string, string>;
+}
+
 /**
  * An image as `docker image inspect` describes it: its ID, tags, and digests.
  */

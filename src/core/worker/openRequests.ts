@@ -13,7 +13,7 @@ import { EXEC_USER, MAX_DELETE_VOLUMES } from '../helperChannel/protocol';
 import { boundServiceFolders, isGitSummary, MAX_SERVICE_FOLDERS, MAX_SERVICE_PATH_LENGTH } from '../git/gitSummary';
 import { HelperOperationError } from '../helperChannel/helperChannel';
 import { dockerHostField, isOnDockerHost } from '../docker/dockerHost';
-import { devspaceImageName, isConfigPathLabelValue, repositoryFolder, resourceName } from '../names';
+import { devspaceImageName, isConfigPathLabelValue, isImageKey, repositoryFolder, resourceName } from '../names';
 import { ownerOf } from '../ownership';
 import { sameSource, sourceSegment } from '../devspaceSource';
 import { parseImageReference } from '../remoteMonitor/protocol';
@@ -67,7 +67,7 @@ const CREATE_FIELDS = new Set(['id', 'repository', 'configPath', 'defaultImage']
 /** The fields of a change of the configuration (ConfigurationChange). */
 const CONFIGURATION_FIELDS = new Set(['select', 'defaultImage', 'shutdownActionNone', 'addVolumes', 'addServiceVolumes', 'keepRefusedFor', 'serviceFolders', 'cloned']);
 /** The fields of a build record (BuildRecord) and of its Docker Compose part (ComposeBuildRecord). */
-const BUILD_RECORD_FIELDS = new Set(['builtAt', 'devspaceImage', 'imageId', 'buildNumber', 'configPath', 'configHash', 'defaultImage', 'images', 'features', 'compose']);
+const BUILD_RECORD_FIELDS = new Set(['builtAt', 'devspaceImage', 'imageId', 'buildNumber', 'configPath', 'configHash', 'defaultImage', 'images', 'features', 'imageKey', 'compose']);
 const COMPOSE_RECORD_FIELDS = new Set(['service', 'images', 'serviceImages', 'version', 'inputsHash']);
 /** The fields of a refused update (RefusedUpdate). */
 const REFUSED_FIELDS = new Set(['configPath', 'configHash', 'images', 'features', 'items', 'hostAccessChecks', 'reason']);
@@ -289,9 +289,10 @@ function imageList(value: unknown, what: string): string[] {
  */
 export function checkedBuildRecord(value: unknown): BuildRecord {
   if (!isRecord(value) || !hasOnlyFields(value, BUILD_RECORD_FIELDS)) throw invalid('build record');
-  const { builtAt, devspaceImage, imageId, buildNumber, configPath, configHash, defaultImage, images, features, compose } = value;
+  const { builtAt, devspaceImage, imageId, buildNumber, configPath, configHash, defaultImage, images, features, imageKey, compose } = value;
   if (!isTime(builtAt) || !plainText(devspaceImage, MAX_REFERENCE_LENGTH) || devspaceImage === '') throw invalid('build record');
   if (imageId !== undefined && (typeof imageId !== 'string' || !SHA256.test(imageId))) throw invalid('image ID of the build record');
+  if (imageKey !== undefined && !isImageKey(imageKey)) throw invalid('image key of the build record');
   if (!isConfigPath(configPath) || !plainText(configHash, MAX_HASH_LENGTH)) throw invalid('configuration of the build record');
   if (defaultImage !== undefined && !isDefaultImage(defaultImage)) throw invalid('default image of the build record');
   let composeRecord: ComposeBuildRecord | undefined;
@@ -313,6 +314,7 @@ export function checkedBuildRecord(value: unknown): BuildRecord {
     ...(defaultImage !== undefined ? { defaultImage: defaultImage as string } : {}),
     images: digests(images, 'images of the build record'),
     features: digests(features, 'features of the build record'),
+    ...(imageKey !== undefined ? { imageKey: imageKey as string } : {}),
     ...(composeRecord !== undefined ? { compose: composeRecord } : {}),
   };
   if (!isBuildRecord(record)) throw invalid('build record');

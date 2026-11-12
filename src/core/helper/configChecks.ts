@@ -13,6 +13,11 @@ export interface ConfigurationProblems {
   compose: boolean;
   /** Short human-readable items: `${localWorkspaceFolder}`. */
   computerDependent: string[];
+  /**
+   * devcontainer.json as written (the text parsed as JSON with comments); `undefined` when it is no JSON object. For the
+   * image key of a shared image (R-DS-010).
+   */
+  written?: Record<string, unknown>;
 }
 
 const LOCAL_WORKSPACE_FOLDER = /\$\{localWorkspaceFolder\}/;
@@ -54,5 +59,5 @@ export function checkConfiguration(configText: string): ConfigurationProblems {
   const items: string[] = [];
   const relevant = Object.fromEntries(Object.entries(config).filter(([key]) => !HARMLESS_PROPERTIES.includes(key)));
   if (LOCAL_WORKSPACE_FOLDER.test(JSON.stringify(relevant))) items.push('${localWorkspaceFolder}');
-  return { compose, computerDependent: items };
+  return { compose, computerDependent: items, written: config };
 }

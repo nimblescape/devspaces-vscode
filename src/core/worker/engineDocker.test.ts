@@ -211,6 +211,24 @@ describe('the Docker of the pipeline over the port', () => {
     expect(filters).toContainEqual({ reference: ['devspaces-a'] });
   });
 
+  it('imagesByLabel: the label filter, with the tags and the labels of each image, not a dangling one (R-DS-010)', async () => {
+    const filters: unknown[] = [];
+    const engine: DockerEngine = {
+      ...unusedEngine(),
+      images: async (given) => {
+        filters.push(given);
+        return [
+          { id: 'sha256:1', repoTags: ['devspaces-a:1', 'x:<none>'], repoDigests: [], labels: { k: 'v' }, created: '2026-10-03T10:00:00.000Z' },
+          { id: 'sha256:2', repoTags: ['<none>:<none>'], repoDigests: [], labels: { k: 'v' }, created: '2026-10-03T10:00:00.000Z' },
+          { id: 'sha256:3', repoTags: [], repoDigests: [], labels: { k: 'v' }, created: '2026-10-03T10:00:00.000Z' },
+        ];
+      },
+    };
+    const docker = new EngineDocker(engine);
+    expect(await docker.imagesByLabel('k', 'v')).toEqual([{ id: 'sha256:1', tags: ['devspaces-a:1'], labels: { k: 'v' }, createdAt: '2026-10-03T10:00:00.000Z' }]);
+    expect(filters).toEqual([{ label: ['k=v'] }]);
+  });
+
   it('exec: the input or the secret input as standard input, never both', async () => {
     const seen: unknown[] = [];
     const engine: DockerEngine = { ...unusedEngine(), exec: async (c, command, options) => (seen.push([c, command, options]), { exitCode: 0, stdout: 'x', stderr: '', timedOut: false }) };

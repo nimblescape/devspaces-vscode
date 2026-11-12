@@ -233,6 +233,19 @@ export function isOwnDevspaceLabel(value: string): boolean {
  */
 export const LABEL_PREPARED = 'nimblescape.devspaces.prepared';
 /**
+ * A label of a shared devspace image: the image key (`sha256:<64 hex>`, imageKey in ./pipeline/imageKey.ts), the hash of
+ * every input of its build (the configuration, the images and Features, the lockfile, the version of the Dev Container
+ * CLI). Such an image carries no label of a devspace (no nimblescape.devspaces.id, repository, owner, or build record):
+ * each devspace that uses it has its own tag `<resource>:<build number>` on it, and its own data on its dev container
+ * (devspaceContainerLabels). An open whose inputs give the same key tags that image instead of a build
+ * ([`R-DS-010`](../../docs/requirements.md#r-ds-010)).
+ */
+export const LABEL_IMAGE_KEY = 'nimblescape.devspaces.image-key';
+/** Whether `value` is an image key (LABEL_IMAGE_KEY): `sha256:` and 64 hexadecimal digits in lower case. */
+export function isImageKey(value: unknown): value is string {
+  return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+/**
  * Every label key that the extension reads or writes (on containers, images, and volumes), each with LABEL_PREFIX, in
  * lower case. The host access policy refuses every key with LABEL_PREFIX in a configuration and on images
  * (isReservedLabel in ./policy/rules.ts), these and any later one: such a label would hide a container or volume from
@@ -259,6 +272,7 @@ export const EXTENSION_LABEL_KEYS: ReadonlySet<string> = new Set([
   LABEL_BUILD_ID,
   LABEL_BUILD_RECORD,
   LABEL_PREPARED,
+  LABEL_IMAGE_KEY,
   LABEL_MONITOR,
   LABEL_MONITOR_CREATE,
   LABEL_MONITOR_OWNER,
@@ -495,6 +509,15 @@ export function composeProjectName(repository: string, devspaceId: string): stri
 /** Devspace image: `<resourceName>:<build number>`. */
 export function devspaceImageName(repository: string, devspaceId: string, buildNumber: number): string {
   return `${devspaceImageRepository(repository, devspaceId)}:${buildNumber}`;
+}
+
+/**
+ * Whether `reference` has the shape of a devspace image (devspaceImageName): the name of a devspace
+ * (isDevspaceResourceName) and a build number as its tag.
+ */
+export function isDevspaceImageName(reference: string): boolean {
+  const colon = reference.lastIndexOf(':');
+  return colon > 0 && /^[1-9][0-9]*$/.test(reference.slice(colon + 1)) && isDevspaceResourceName(reference.slice(0, colon));
 }
 
 /** The tag of the prepared devspace image (LABEL_PREPARED); never a build number. */

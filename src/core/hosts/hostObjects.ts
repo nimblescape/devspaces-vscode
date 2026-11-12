@@ -22,6 +22,7 @@ import {
   LABEL_DEVSPACE_ID,
   LABEL_HELPER,
   LABEL_HELPER_RUN,
+  LABEL_IMAGE_KEY,
   LABEL_PREFIX,
   LABEL_REPOSITORY,
   LABEL_SERVICE_DATA,
@@ -32,6 +33,7 @@ import {
   VOLUME_KIND_COMPOSE,
   HELPER_CACHE_VOLUME,
   VSCODE_STORE_VOLUME,
+  isDevspaceImageName,
   resourceName,
 } from '../names';
 import { isAbortError, type Logger, type RunResult } from '../ports';
@@ -553,7 +555,10 @@ function classifyImage(
 export interface InventoryInput {
   /** The output of `docker system df -v --format '{{json .}}'`, parsed. */
   df: unknown;
-  /** The IDs of the images with the label nimblescape.devspaces.id (the images of the devspaces). */
+  /**
+   * The IDs of the images of the devspaces: those with the label nimblescape.devspaces.id, and the shared images (the
+   * label nimblescape.devspaces.image-key and the tag of a devspace image, R-DS-010).
+   */
   devspaceImageIds: ReadonlySet<string>;
   /** The IDs of the images with the label nimblescape.devspaces.worker=true (the helper images). */
   helperImageIds: ReadonlySet<string>;
@@ -743,8 +748,16 @@ export async function readHostInventory(
   }
   const df = parseJsonOutput(result.stdout);
   if (!isRecord(df)) throw new CommandError(commandText(SYSTEM_DF_ARGS), result.exitCode, result.stdout, 'Unexpected output of docker system df.');
-  const devspaceImageIds = new Set((await docker.listImagesByLabel(LABEL_DEVSPACE_ID)).map((image) => image.id));
-  const helperImageIds = new Set((await docker.listImagesByLabel(`${LABEL_HELPER}=true`)).map((image) => image.id));
+  const [devspaceImages, keyImages, helperImages] = await Promise.all([
+    docker.listImagesByLabel(LABEL_DEVSPACE_ID),
+    docker.listImagesByLabel(LABEL_IMAGE_KEY),
+    docker.listImagesByLabel(`${LABEL_HELPER}=true`),
+  ]);
+  // The images built for one devspace (its ID), and the shared images (their key, R-DS-010) with the tag of a devspace
+  // image, not another image with a key label (which a Dockerfile can write).
+  const sharedImages = keyImages.filter((image) => image.tags.some(isDevspaceImageName));
+  const devspaceImageIds = new Set([...devspaceImages, ...sharedImages].map((image) => image.id));
+  const helperImageIds = new Set(helperImages.map((image) => image.id));
   const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
   if (networkList.exitCode !== 0 || networkList.timedOut) throw new CommandError(commandText(NETWORK_LS_ARGS), networkList.exitCode, networkList.stdout, networkList.stderr, networkList.timedOut);
   const tagList = await docker.run(IMAGE_TAGS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
