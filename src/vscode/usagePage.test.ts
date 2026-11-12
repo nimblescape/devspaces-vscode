@@ -872,6 +872,31 @@ describe('UsagePages', () => {
     expect(lastView(second).docker.note).toBe(UsagePageTexts.sizesFailed('docker system df failed'));
   });
 
+  it('reads the sizes by itself no more after a failed read until the next start or a Refresh Sizes that worked', async () => {
+    readSizes.mockRejectedValueOnce(new Error('permission denied'));
+    const panel = await open(pages(), 'build-box');
+    expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesFailed('permission denied'));
+    await timers.advance(SIZES_EVERY_MS * 2);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    // The next start reads again.
+    panel.receive({ type: 'pause' });
+    panel.receive({ type: 'resume' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    readSizes.mockRejectedValueOnce(new Error('permission denied'));
+    await timers.advance(SIZES_EVERY_MS);
+    expect(readSizes).toHaveBeenCalledTimes(3);
+    // (Less than 30 minutes without a click since the Resume, so the page does not pause.)
+    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(3);
+    // Refresh Sizes that works turns the reads by itself on again.
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(4);
+    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(5);
+  });
+
   it('reads no sizes in the background on a VM that does not run, and says nothing', async () => {
     shells.open.add(LIMA_HOST);
     vmState = { kind: 'stopped' };
