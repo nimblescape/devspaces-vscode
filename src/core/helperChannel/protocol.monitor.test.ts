@@ -53,6 +53,12 @@ describe('the operations of the Monitor in the worker', () => {
     for (const odd of [{ ok: true, oomKills: { ...oomKills, count: -1 } }, { ok: true, oomKills: { ...oomKills, boot: 'x' } }, { ok: true, oomKills: null }, { ok: true, helperCheck: null, oomKills }, { ok: false, missing: false, detail: 'x', oomKills }]) {
       expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
     }
+    // The worker runs from an earlier build of its helper tag (R-DS-008): only `true`.
+    expect(parseHeartbeatValue({ ok: true, earlierBuild: true })).toEqual({ ok: true, earlierBuild: true });
+    expect(parseHeartbeatValue({ ok: true, helperCheck, oomKills, earlierBuild: true })).toEqual({ ok: true, helperCheck, oomKills, earlierBuild: true });
+    for (const odd of [{ ok: true, earlierBuild: false }, { ok: true, earlierBuild: 'yes' }, { ok: true, earlierBuild: null }, { ok: false, missing: false, detail: 'x', earlierBuild: true }]) {
+      expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
+    }
     for (const odd of [null, { ok: true, missing: false }, { ok: false, detail: 'x' }, { ok: false, missing: 'no', detail: 'x' }, { ok: false, missing: false, detail: 'x'.repeat(MAX_MONITOR_DETAIL_LENGTH + 1) }, { ok: 'yes' }]) {
       expect(parseHeartbeatValue(odd), JSON.stringify(odd)).toBeUndefined();
     }

@@ -1395,8 +1395,13 @@ export interface HeartbeatParams {
  * check of the Monitor that found its helper image current (helperCheck.ts), from the volume of the Monitor, when it
  * has one; the window takes it into its state of the helper image (recordEngineHelperCheck). `oomKills`: the processes
  * that the kernel of the engine ended because the memory ran out (oomKills.ts), when the worker can read them.
+ * `earlierBuild`: the worker runs from an earlier build of its helper tag (the tag is on another image now, after a
+ * rebuild); the window then opens a worker from the current build in its place (HelperChannels.renew,
+ * docs/requirements.md R-DS-008).
  */
-export type HeartbeatValue = { ok: true; helperCheck?: HelperCheck; oomKills?: OomKills } | { ok: false; missing: boolean; detail: string };
+export type HeartbeatValue =
+  | { ok: true; helperCheck?: HelperCheck; oomKills?: OomKills; earlierBuild?: true }
+  | { ok: false; missing: boolean; detail: string };
 
 /** The longest detail of a failed heartbeat or monitor command. */
 export const MAX_MONITOR_DETAIL_LENGTH = 2000;
@@ -1411,12 +1416,18 @@ export function parseHeartbeatParams(value: unknown): HeartbeatParams | undefine
 /** The check of HeartbeatValue (the extension). */
 export function parseHeartbeatValue(value: unknown): HeartbeatValue | undefined {
   if (!isRecord(value)) return undefined;
-  if (value.ok === true && hasOnlyKeys(value, ['ok'], ['helperCheck', 'oomKills'])) {
-    // Strictly (parseHelperCheck, parseOomKills); a value with an invalid part is invalid.
+  if (value.ok === true && hasOnlyKeys(value, ['ok'], ['helperCheck', 'oomKills', 'earlierBuild'])) {
+    // Strictly (parseHelperCheck, parseOomKills, `earlierBuild` only `true`); a value with an invalid part is invalid.
     const helperCheck = value.helperCheck === undefined ? undefined : parseHelperCheck(value.helperCheck);
     const oomKills = value.oomKills === undefined ? undefined : parseOomKills(value.oomKills);
     if ((value.helperCheck !== undefined && helperCheck === undefined) || (value.oomKills !== undefined && oomKills === undefined)) return undefined;
-    return { ok: true, ...(helperCheck === undefined ? {} : { helperCheck }), ...(oomKills === undefined ? {} : { oomKills }) };
+    if (value.earlierBuild !== undefined && value.earlierBuild !== true) return undefined;
+    return {
+      ok: true,
+      ...(helperCheck === undefined ? {} : { helperCheck }),
+      ...(oomKills === undefined ? {} : { oomKills }),
+      ...(value.earlierBuild === true ? { earlierBuild: true as const } : {}),
+    };
   }
   if (!hasOnlyKeys(value, ['ok', 'missing', 'detail']) || value.ok !== false || typeof value.missing !== 'boolean') return undefined;
   if (typeof value.detail !== 'string' || value.detail.length > MAX_MONITOR_DETAIL_LENGTH) return undefined;

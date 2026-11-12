@@ -64,6 +64,17 @@ describe('the calls of a window to the Monitor, as operations of the worker', ()
     expect(kills).toEqual([[TARGET, oomKills]]);
   });
 
+  it('a heartbeat that says the worker runs from an earlier build hands its engine on, and answers ok', async () => {
+    const earlier: unknown[][] = [];
+    const monitor = workerMonitor({ flow: async () => ({ ok: true, earlierBuild: true }), owner: () => ({ windowId: 'w', pid: 7 }), logger: silentLogger, onEarlierBuild: (...args) => earlier.push(args) });
+    expect(await monitor.heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: true });
+    expect(earlier).toEqual([[TARGET]]);
+    // Without it: no hand-on.
+    const current = workerMonitor({ flow: async () => ({ ok: true }), owner: () => ({ windowId: 'w', pid: 7 }), logger: silentLogger, onEarlierBuild: (...args) => earlier.push(args) });
+    expect(await current.heartbeat(TARGET, HEARTBEAT)).toEqual({ ok: true });
+    expect(earlier).toHaveLength(1);
+  });
+
   it('the container of a devspace exists unless the worker reads it as missing; a failure counts as not there', async () => {
     for (const [state, exists] of [['running', true], ['stopped', true], ['missing', false]] as const) {
       const { monitor, calls } = monitorWith(() => ({ state }));
