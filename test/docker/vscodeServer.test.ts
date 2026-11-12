@@ -27,7 +27,7 @@ const FOLDER = '/workspaces/vscode-server';
 const CONFIG_PATH = '.devcontainer/devcontainer.json';
 const REMOTE_USER = 'dev';
 /** A glibc image that the engine has: the base of the helper image (resources/helper/Dockerfile). */
-const GLIBC_BASE_IMAGE = process.env.DEVSPACE_TEST_GLIBC_IMAGE ?? 'node:24-trixie-slim';
+const GLIBC_BASE_IMAGE = process.env.DEVSPACE_TEST_GLIBC_IMAGE ?? 'node:26-trixie-slim';
 /** A commit of no VS Code: the update service is never asked for it (the store has it). */
 const COMMIT = crypto.randomBytes(20).toString('hex');
 

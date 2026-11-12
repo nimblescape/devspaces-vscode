@@ -13,7 +13,10 @@ import {
   baseImageReferences,
   BUILD_CACHE_PRUNE_ARGS,
   buildInventory,
+  earlierHelperBuildName,
+  isEarlierHelperBuild,
   formatSize,
+  helperBaseImageReferences,
   IMAGE_TAGS_ARGS,
   imageTagsNowArgs,
   imageUsersNowArgs,
@@ -58,7 +61,7 @@ function devspace(overrides: Partial<Devspace> = {}): Devspace {
 }
 
 function input(df: unknown, overrides: Partial<InventoryInput> = {}): InventoryInput {
-  return { df, devspaceImageIds: new Set(), helperImageIds: new Set(), known: [knownDevspace(devspace())], baseImages: new Set(), ...overrides };
+  return { df, devspaceImageIds: new Set(), helperImageIds: new Set(), known: [knownDevspace(devspace())], baseImages: new Set(), helperBaseImages: new Set(), ...overrides };
 }
 
 describe('sizes', () => {
@@ -115,6 +118,13 @@ describe('references of base images', () => {
     ]);
     expect([...references].sort()).toEqual(['ghcr.io/majikmate/web:latest', 'mcr.microsoft.com/devcontainers/base:bookworm']);
   });
+
+  it('takes the first FROM of the Dockerfile of the helper image, with the default of its ARG', () => {
+    expect([...helperBaseImageReferences('# syntax=docker/dockerfile:1\nARG BASE_IMAGE=node:24-trixie-slim\nFROM ${BASE_IMAGE}\nRUN true\n')]).toEqual(['node:24-trixie-slim']);
+    expect([...helperBaseImageReferences('FROM docker.io/library/debian:13 AS base\nFROM base\n')]).toEqual(['debian:13']);
+    expect(helperBaseImageReferences('RUN true\n').size).toBe(0);
+    expect(helperBaseImageReferences('FROM scratch\n').size).toBe(0);
+  });
 });
 
 describe('buildInventory', () => {
@@ -131,7 +141,7 @@ describe('buildInventory', () => {
       { ID: 'c9', Names: 'shop-web-1', State: 'exited', Image: 'node:22', Networks: 'shop_default, bridge', Labels: 'com.docker.compose.project=shop,com.docker.compose.service=web' },
     ],
     Images: [
-      { ID: 'sha256:w', Repository: 'devspaces-worker', Tag: '6ba87151', Size: '412MB', UniqueSize: '12MB', Containers: '2' },
+      { ID: 'sha256:w', Repository: 'devspaces-worker', Tag: '6ba87151934c', Size: '412MB', UniqueSize: '12MB', Containers: '2' },
       { ID: 'sha256:w', Repository: 'devspaces-monitor', Tag: 'abc', Size: '412MB', UniqueSize: '12MB', Containers: '2' },
       { ID: 'sha256:b', Repository: 'devspaces-buildx', Tag: '0.30.1', Size: '80MB' },
       { ID: 'sha256:d', Repository: IMAGE, Tag: '3', Size: '2GB', UniqueSize: '200MB' },
@@ -210,13 +220,13 @@ describe('buildInventory', () => {
         `${IMAGE}:3`,
         `${IMAGE}:prepared`,
         'devspaces-other-repo-brave-curie:1',
-        'devspaces-worker:6ba87151',
+        'devspaces-worker:6ba87151934c',
         'mcr.microsoft.com/devcontainers/base:bookworm',
         'node:22',
         '<none> (x)',
       ].sort(),
     );
-    expect(images['devspaces-worker:6ba87151']).toMatchObject({ purpose: 'helperImage', tags: ['devspaces-worker:6ba87151', 'devspaces-monitor:abc'], sizeBytes: 412_000_000, uniqueBytes: 12_000_000, usedBy: 2 });
+    expect(images['devspaces-worker:6ba87151934c']).toMatchObject({ purpose: 'helperImage', tags: ['devspaces-worker:6ba87151934c', 'devspaces-monitor:abc'], sizeBytes: 412_000_000, uniqueBytes: 12_000_000, usedBy: 2 });
     expect(images['devspaces-buildx:0.30.1'].purpose).toBe('buildImage');
     expect(images[`${IMAGE}:3`]).toMatchObject({ purpose: 'devspace', devspaceId: DEVSPACE_ID, role: 'image' });
     expect(images[`${IMAGE}:prepared`]).toMatchObject({ purpose: 'devspace', role: 'prepared image' });
@@ -457,8 +467,56 @@ describe('buildInventory', () => {
   });
 
   it('names an image without a tag by its short ID', () => {
-    const result = buildInventory(input({ Images: [{ ID: 'sha256:0123456789abcdef', Repository: '<none>', Tag: '<none>' }] }, { helperImageIds: new Set(['sha256:0123456789abcdef']) }));
-    expect(result.images[0]).toMatchObject({ name: '<none> (0123456789ab)', tags: [], purpose: 'helperImage' });
+    const result = buildInventory(input({ Images: [{ ID: 'sha256:0123456789abcdef', Repository: '<none>', Tag: '<none>' }] }));
+    expect(result.images[0]).toMatchObject({ name: '<none> (0123456789ab)', tags: [], purpose: 'notDevspaces' });
+  });
+
+  it('names a helper image without a tag as an earlier build of the helper image', () => {
+    const result = buildInventory(input({ Images: [{ ID: 'sha256:547784e940da0123', Repository: '<none>', Tag: '<none>' }] }, { helperImageIds: new Set(['sha256:547784e940da0123']) }));
+    expect(result.images[0]).toMatchObject({ name: 'devspaces-worker (earlier build, 547784e940da)', tags: [], purpose: 'helperImage' });
+    expect(earlierHelperBuildName('547784e940da0123')).toBe('devspaces-worker (earlier build, 547784e940da)');
+  });
+
+  it('keeps the tag as the name of an image that the user built from the helper image (it has the label of the helper image)', () => {
+    const result = buildInventory(input({ Images: [{ ID: 'sha256:mine', Repository: 'myapp', Tag: '1' }] }, { helperImageIds: new Set(['sha256:mine']) }));
+    expect(result.images[0]).toMatchObject({ name: 'myapp:1', purpose: 'helperImage' });
+    expect(isEarlierHelperBuild(result.images[0])).toBe(false);
+  });
+
+  it('names a helper image that kept only its monitor tag as an earlier build: a rebuild took its helper tag', () => {
+    const result = buildInventory(
+      input(
+        {
+          Images: [
+            { ID: 'sha256:old', Repository: 'devspaces-monitor', Tag: '6ba87151934c' },
+            { ID: 'sha256:new', Repository: 'devspaces-worker', Tag: '6ba87151934c' },
+          ],
+        },
+        { helperImageIds: new Set(['sha256:old', 'sha256:new']) },
+      ),
+    );
+    expect(result.images.map((image) => [image.name, image.tags])).toEqual([
+      ['devspaces-worker (earlier build, old)', ['devspaces-monitor:6ba87151934c']],
+      ['devspaces-worker:6ba87151934c', ['devspaces-worker:6ba87151934c']],
+    ]);
+  });
+
+  it('names a helper image by its helper tag, also when docker system df -v lists its monitor tag first', () => {
+    const result = buildInventory(
+      input(
+        { Images: [{ ID: 'sha256:w', Repository: 'devspaces-monitor', Tag: '6ba87151934c', Size: '721MB' }] },
+        { helperImageIds: new Set(['sha256:w']), imageTags: [{ ID: 'sha256:w', Repository: 'devspaces-monitor', Tag: '6ba87151934c' }, { ID: 'sha256:w', Repository: 'devspaces-worker', Tag: '6ba87151934c' }] },
+      ),
+    );
+    expect(result.images[0]).toMatchObject({ name: 'devspaces-worker:6ba87151934c', tags: ['devspaces-worker:6ba87151934c', 'devspaces-monitor:6ba87151934c'], purpose: 'helperImage' });
+  });
+
+  it('marks the base image of the helper image, unless a devspace names it as its base image too', () => {
+    const images = { Images: [{ ID: 'sha256:n', Repository: 'node', Tag: '24-trixie-slim' }] };
+    const helperBaseImages = new Set(['node:24-trixie-slim']);
+    expect(buildInventory(input(images, { helperBaseImages })).images[0]).toMatchObject({ name: 'node:24-trixie-slim', purpose: 'helperBaseImage' });
+    expect(buildInventory(input(images, { helperBaseImages, baseImages: new Set(['node:24-trixie-slim']) })).images[0]).toMatchObject({ purpose: 'baseImage' });
+    expect(buildInventory(input(images)).images[0]).toMatchObject({ purpose: 'notDevspaces' });
   });
 
   it('gives an empty inventory for output without the lists', () => {
@@ -492,7 +550,7 @@ describe('readHostInventory', () => {
       },
       { 'nimblescape.devspaces.worker=true': ['sha256:w'] },
     );
-    const inventory = await readHostInventory(docker, { known: [], baseImages: new Set() });
+    const inventory = await readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     expect(docker.calls).toEqual([[...SYSTEM_DF_ARGS], [...NETWORK_LS_ARGS], [...IMAGE_TAGS_ARGS], runningUsesArgs(['c1'])]);
     expect(SYSTEM_DF_ARGS).toEqual(['system', 'df', '--verbose', '--format', '{{json .}}']);
     expect(IMAGE_TAGS_ARGS).toEqual(['image', 'ls', '--no-trunc', '--format', '{{json .}}']);
@@ -514,14 +572,14 @@ describe('readHostInventory', () => {
     ]);
     const containers = Array.from({ length: RUNNING_USES_BATCH + 1 }, (_, index) => ({ ID: `c${index}`, Names: `n${index}`, State: index === 0 ? 'exited' : 'running', Image: 'node' }));
     const many = fakeDocker({ 'system df': ok(JSON.stringify({ Containers: [...containers, { ID: 'p', Names: 'p', State: 'paused' }] })) });
-    await readHostInventory(many, { known: [], baseImages: new Set() });
+    await readHostInventory(many, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     const inspects = many.calls.filter((call) => call[0] === 'container');
     expect(inspects.map((call) => call.length - 4)).toEqual([RUNNING_USES_BATCH, 1]);
     expect(inspects.flatMap((call) => call.slice(4))).not.toContain('c0');
     expect(inspects[1].slice(4)).toEqual(['p']);
 
     const none = fakeDocker({ 'system df': ok(JSON.stringify({ Containers: [{ ID: 'c1', Names: 'web', State: 'exited' }] })) });
-    await readHostInventory(none, { known: [], baseImages: new Set() });
+    await readHostInventory(none, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     expect(none.calls.map((call) => call[0])).toEqual(['system', 'network', 'image']);
   });
 
@@ -552,20 +610,20 @@ describe('readHostInventory', () => {
       listImagesByLabel: async () => [],
     });
     const active = (objects: readonly HostObject[]): string[] => objects.filter((object) => object.active === true).map((object) => object.name);
-    const merged = await readHostInventory(batches(ok(line(id('b'), 'second'))), { known: [], baseImages: new Set() });
+    const merged = await readHostInventory(batches(ok(line(id('b'), 'second'))), { known: [], baseImages: new Set(), helperBaseImages: new Set() });
     expect(active(merged.images)).toEqual(['nginx:1', 'redis:8']);
     expect(active(merged.volumes)).toEqual(['first', 'second']);
     // A later batch that fails or does not end in time: not the uses of the first batch alone, but the fields of
     // docker system df -v (the containers name busybox and no volume).
     for (const second of [fail('permission denied\n'), { exitCode: 0, stdout: '', stderr: '', timedOut: true }]) {
-      const fallback = await readHostInventory(batches(second), { known: [], baseImages: new Set() });
+      const fallback = await readHostInventory(batches(second), { known: [], baseImages: new Set(), helperBaseImages: new Set() });
       expect(active(fallback.images)).toEqual(['busybox:latest']);
       expect(active(fallback.volumes)).toEqual([]);
     }
     // The signal reaches each inspect, and a cancel during the inspect ends the read.
     const abort = new AbortController();
     const signals: Array<AbortSignal | undefined> = [];
-    await readHostInventory(batches(ok(), signals), { known: [], baseImages: new Set(), signal: abort.signal });
+    await readHostInventory(batches(ok(), signals), { known: [], baseImages: new Set(), helperBaseImages: new Set(), signal: abort.signal });
     expect(signals).toEqual([abort.signal, abort.signal]);
     const cancelled = {
       ...batches(ok()),
@@ -581,7 +639,7 @@ describe('readHostInventory', () => {
         return ok();
       },
     };
-    await expect(readHostInventory(cancelled, { known: [], baseImages: new Set(), signal: abort.signal })).rejects.toThrow(/aborted/);
+    await expect(readHostInventory(cancelled, { known: [], baseImages: new Set(), helperBaseImages: new Set(), signal: abort.signal })).rejects.toThrow(/aborted/);
   });
 
   it('leaves out a container that is gone, and takes the fields of docker system df -v when docker container inspect fails', async () => {
@@ -599,28 +657,28 @@ describe('readHostInventory', () => {
     const line = JSON.stringify({ image: `sha256:${'a'.repeat(64)}`, mounts: [], networks: { bridge: {} } });
     const gone = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error response from daemon: No such container: c2\n', timedOut: false } });
     // Exact: `web` was created from nginx:2, which now names another image; its image is nginx:1.
-    expect(activeImages(await readHostInventory(gone, { known: [], baseImages: new Set() }))).toEqual(['nginx:1']);
+    expect(activeImages(await readHostInventory(gone, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:1']);
     const failed = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'permission denied\n', timedOut: false } });
-    expect(activeImages(await readHostInventory(failed, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(failed, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
     const slow = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 0, stdout: line, stderr: '', timedOut: true } });
-    expect(activeImages(await readHostInventory(slow, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(slow, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
     // The short form of the Docker CLI says that a container is gone too.
     const short = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error: No such container: c2\n', timedOut: false } });
-    expect(activeImages(await readHostInventory(short, { known: [], baseImages: new Set() }))).toEqual(['nginx:1']);
+    expect(activeImages(await readHostInventory(short, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:1']);
     // A failure without a reason, and a gone container next to another error: the fields of docker system df -v.
     const silentFailure = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: '', timedOut: false } });
-    expect(activeImages(await readHostInventory(silentFailure, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(silentFailure, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
     const mixed = fakeDocker({ 'system df': ok(df), 'container inspect': { exitCode: 1, stdout: line, stderr: 'Error response from daemon: No such container: c2\npermission denied\n', timedOut: false } });
-    expect(activeImages(await readHostInventory(mixed, { known: [], baseImages: new Set() }))).toEqual(['nginx:2']);
+    expect(activeImages(await readHostInventory(mixed, { known: [], baseImages: new Set(), helperBaseImages: new Set() }))).toEqual(['nginx:2']);
   });
 
   it('throws when docker system df, docker network ls or docker image ls fails', async () => {
-    await expect(readHostInventory(fakeDocker({ 'system df': fail('Cannot connect to the Docker daemon') }), { known: [], baseImages: new Set() })).rejects.toThrow(/Cannot connect/);
+    await expect(readHostInventory(fakeDocker({ 'system df': fail('Cannot connect to the Docker daemon') }), { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/Cannot connect/);
     const docker = fakeDocker({ 'system df': ok('{}'), 'network ls': fail('permission denied') });
-    await expect(readHostInventory(docker, { known: [], baseImages: new Set() })).rejects.toThrow(/permission denied/);
+    await expect(readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/permission denied/);
     // Without every tag, a removal would only untag an image.
     const tags = fakeDocker({ 'system df': ok('{}'), 'image ls': fail('Error response from daemon: denied') });
-    await expect(readHostInventory(tags, { known: [], baseImages: new Set() })).rejects.toThrow(/denied/);
+    await expect(readHostInventory(tags, { known: [], baseImages: new Set(), helperBaseImages: new Set() })).rejects.toThrow(/denied/);
   });
 });
 

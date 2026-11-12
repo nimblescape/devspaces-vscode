@@ -5,7 +5,7 @@
 # Workspace helper of the Devspaces extension (implementation notes 7).
 # The extension builds this image locally and tags it devspaces-worker:<hash of this file and the CLI version>.
 # It must build with BuildKit and with the classic builder: no syntax directive, no heredocs, no RUN --mount.
-ARG BASE_IMAGE=node:24-trixie-slim
+ARG BASE_IMAGE=node:26-trixie-slim
 FROM ${BASE_IMAGE}
 
 # Passed by the extension (DEVCONTAINER_CLI_VERSION in src/core/helper/helperImage.ts).

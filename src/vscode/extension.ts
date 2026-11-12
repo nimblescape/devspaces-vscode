@@ -49,7 +49,7 @@ import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
-import { baseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
+import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
@@ -1424,10 +1424,22 @@ async function activateExtension(
   // of one connection each; on an SSH host with an open connection of the relay, they go through its pipe, which shares
   // the login of the relay.
   const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
+  // The base image of the helper image, from its Dockerfile in this extension: read once, and again at the next read of
+  // a host after a failed read (then none; the first failure is logged).
+  let helperBaseImages: Promise<Set<string>> | undefined;
+  let helperBaseImagesWarned = false;
+  const readHelperBaseImages = (): Promise<Set<string>> =>
+    (helperBaseImages ??= fs.promises.readFile(helperDockerfile, 'utf8').then(helperBaseImageReferences, (error: unknown) => {
+      helperBaseImages = undefined;
+      if (!helperBaseImagesWarned) logger.warn(`The Dockerfile of the helper image could not be read for the view Docker Hosts: ${errorMessage(error)}`);
+      helperBaseImagesWarned = true;
+      return new Set<string>();
+    }));
   // The objects of a host with their sizes: for the view Docker Hosts and for Read Sizes of the utilization page.
   const readInventory = async (host: string, signal: AbortSignal) => {
     const here = devspacesOfHost(await registry.list(), host);
-    return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), signal }));
+    const helperBases = await readHelperBaseImages();
+    return onHostShell(host, () => readHostInventory(docker, { known: here.map(knownDevspace), baseImages: baseImageReferences(here), helperBaseImages: helperBases, signal }));
   };
   // The utilization pages of the hosts (R-ENG-009): each sample is one command on the shared shell of the host, and the
   // page never starts the VM of Devspaces (R-VM-004). The free space of this computer for the disk of the VM is that of

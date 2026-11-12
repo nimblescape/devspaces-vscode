@@ -33,7 +33,7 @@ describe('the objects of the view "Docker Hosts" on a real engine', () => {
   const web = `${project}-web-1`;
   const runLabel = `${TEST_RUN_LABEL}=${run.runId}`;
 
-  const read = (): Promise<HostInventory> => readHostInventory(docker, { known: [], baseImages: new Set() });
+  const read = (): Promise<HostInventory> => readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
   const find = (objects: readonly HostObject[], name: string): HostObject => {
     const object = objects.find((candidate) => candidate.name === name);
     if (object === undefined) throw new Error(`The read found no ${name}.`);

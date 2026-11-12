@@ -144,6 +144,23 @@ describe('objectRowLook', () => {
     expect(ingress.contextValue).toBe('hostsObject;network;notDevspaces');
     expect(bridge.contextValue).toBe('hostsObject;network;notDevspaces');
   });
+
+  it('says why a helper image has no tag, and names the base image of the helper image', () => {
+    const earlier = objectRowLook(objectRow({ kind: 'image', id: 'sha256:547784e940da', name: 'devspaces-worker (earlier build, 547784e940da)', tags: [], purpose: 'helperImage', sizeBytes: 721_000_000, active: true }));
+    expect(earlier).toMatchObject({ label: 'devspaces-worker (earlier build, 547784e940da)', description: 'helper image · 721 MB' });
+    expect(earlier.tooltip).toContain('A helper image without its tag devspaces-worker:<hash>: usually an earlier build, whose tag a newer build took.');
+    expect(earlier.tooltip).not.toContain('Tags:');
+    // It can still have the tag of the Monitor, which the tooltip names.
+    const monitorOnly = objectRowLook(objectRow({ kind: 'image', id: 'sha256:old', name: 'devspaces-worker (earlier build, old)', tags: ['devspaces-monitor:6ba87151934c'], purpose: 'helperImage' }));
+    expect(monitorOnly.tooltip).toContain('A helper image without its tag devspaces-worker:<hash>');
+    expect(monitorOnly.tooltip).toContain('Tags: devspaces-monitor:6ba87151934c');
+    const current = objectRowLook(objectRow({ kind: 'image', id: 'sha256:w', name: 'devspaces-worker:6ba87151934c', tags: ['devspaces-worker:6ba87151934c', 'devspaces-monitor:6ba87151934c'], purpose: 'helperImage' }));
+    expect(current.tooltip).not.toContain('without its tag');
+    expect(current.tooltip).toContain('Tags: devspaces-worker:6ba87151934c, devspaces-monitor:6ba87151934c');
+    const base = objectRowLook(objectRow({ kind: 'image', id: 'sha256:n', name: 'node:24-trixie-slim', tags: ['node:24-trixie-slim'], purpose: 'helperBaseImage', sizeBytes: 356_000_000 }));
+    expect(base).toMatchObject({ description: 'base image of the helper image · 356 MB', color: 'inactive' });
+    expect(base.tooltip).toContain('The image that the Dockerfile of the helper image starts from.');
+  });
 });
 
 describe('the colors of the object rows', () => {

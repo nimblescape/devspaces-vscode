@@ -76,8 +76,8 @@ const MONITOR_TAG = /^devspaces-monitor:[0-9a-f]{12}$/;
 
 /**
  * The second tag of a helper image that the Monitor container runs
- * from, so that it shows as `devspaces-monitor:<hash>` (the hash of its helper tag) instead of an image ID. Undefined for
- * a tag that is not a helper tag.
+ * from, so that the image of the container shows as `devspaces-monitor:<hash>` (the hash of its helper tag) instead of an
+ * image ID. The view Docker Hosts names the image by its helper tag. Undefined for a tag that is not a helper tag.
  */
 export function monitorImageTag(helperTag: string): string | undefined {
   return isHelperImageTag(helperTag) ? `devspaces-monitor:${helperTag.slice('devspaces-worker:'.length)}` : undefined;

@@ -242,7 +242,7 @@ describe('ensureHelperImageUse', () => {
   it('builds the real Dockerfile of the extension with a stable tag', async () => {
     const file = path.resolve(__dirname, '../../../resources/helper/Dockerfile');
     const content = fs.readFileSync(file, 'utf8');
-    expect(content).toMatch(/^ARG BASE_IMAGE=node:24-trixie-slim$/m);
+    expect(content).toMatch(/^ARG BASE_IMAGE=node:26-trixie-slim$/m);
     expect(content).toMatch(/^FROM \$\{BASE_IMAGE\}$/m);
     expect(content).toMatch(/^ARG DEVCONTAINER_CLI_VERSION$/m);
     expect(content).toMatch(/^LABEL nimblescape\.devspaces\.worker=true$/m);
@@ -602,7 +602,7 @@ describe('ensureHelperImageUse with a state file: new helper image', () => {
     const file = path.resolve(__dirname, '../../../resources/helper/Dockerfile');
     const docker = new FakeDocker();
     await ensureHelperImageUse(docker, file, { statePath: h.statePath, baseDigest: h.baseDigest, clock: h.clock });
-    expect(h.lookups.map((lookup) => lookup.reference)).toEqual(['node:24-trixie-slim']);
+    expect(h.lookups.map((lookup) => lookup.reference)).toEqual(['node:26-trixie-slim']);
   });
 });
 
