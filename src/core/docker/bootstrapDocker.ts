@@ -1132,6 +1132,6 @@ export class BootstrapDocker {
   private commandError(args: readonly string[], result: RunResult, note?: string): CommandError {
     const notes = [result.timedOut ? 'The command did not end within the time limit.' : undefined, note].filter(Boolean);
     const stderr = notes.length > 0 ? `${result.stderr.trimEnd()}\n${notes.join('\n')}`.trim() : result.stderr;
-    return new CommandError(commandText(args), result.exitCode, result.stdout, stderr);
+    return new CommandError(commandText(args), result.exitCode, result.stdout, stderr, result.timedOut);
   }
 }

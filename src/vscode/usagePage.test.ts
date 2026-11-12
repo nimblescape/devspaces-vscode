@@ -954,6 +954,17 @@ describe('UsagePages', () => {
   });
 
 
+  it('reads by itself again after a new start of the host that follows a read at its time limit', async () => {
+    shells.open.add(LIMA_HOST);
+    readSizes.mockRejectedValueOnce(new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.', true));
+    await openRead(pages(), LIMA_HOST);
+    await timers.advance(SIZES_EVERY_MS + VM_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
+    await timers.advance(VM_USAGE_INTERVAL_MS * 2);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+  });
+
   it('reads by itself again after a Refresh Sizes that worked across a new start of the host', async () => {
     shells.open.add(LIMA_HOST);
     readSizes.mockRejectedValueOnce(new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.', true));
@@ -971,6 +982,17 @@ describe('UsagePages', () => {
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(3);
   });
+
+  it('keeps the reads by itself after a Refresh Sizes that ended at its time limit (for example the time limit of its login)', async () => {
+    const panel = await openRead(pages(), 'build-box');
+    readSizes.mockRejectedValueOnce(new CommandError('ssh build-box', null, '', 'The login did not end within the time limit.', true));
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(3);
+  });
+
 
   it('shows no error of a failed read in the background when the VM stops while the page reads its state', async () => {
     shells.open.add(LIMA_HOST);

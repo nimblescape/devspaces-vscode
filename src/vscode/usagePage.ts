@@ -178,9 +178,9 @@ class UsagePage {
   /** When the last read of the sizes of this boot of the host ended (also a failed one). */
   private sizesReadAt: number | undefined;
   /**
-   * Whether the page reads the sizes by itself: off after a read longer than its time limit (it stops the shared shell,
-   * and with it the samples) until a Refresh Sizes that worked. After another failed read, the next read in the
-   * background comes 10 minutes later, as after one that worked.
+   * Whether the page reads the sizes by itself: off after a read in the background longer than its time limit (it stops
+   * the shared shell, and with it the samples) until a Refresh Sizes that worked or a new start of the host. After another
+   * failed read, the next read in the background comes 10 minutes later, as after one that worked.
    */
   private sizesAuto = true;
   /** Ends the Read Sizes that runs (vmClosing). */
@@ -390,6 +390,7 @@ class UsagePage {
       this.sizesError = undefined;
       this.sizesDueAt = undefined;
       this.sizesReadAt = undefined;
+      this.sizesAuto = true;
     }
     this.header = header.bootId === undefined && known !== undefined ? { ...header, bootId: known } : header;
   }
@@ -665,10 +666,10 @@ class UsagePage {
       if (background && this.vm && ((await this.vmStateNow()).kind !== 'running' || controller.signal.aborted || this.disposed)) return;
       ran = true;
       const detail = errorMessage(error);
-      // A read longer than its time limit stopped the shared shell: only a Refresh Sizes tries it again.
-      const tooLong = error instanceof CommandError && error.timedOut;
-      if (tooLong) this.sizesAuto = false;
-      const next = !this.sizesAuto ? ' (the page reads them by itself again after a Refresh Sizes that works)' : background ? ' (the page tries again in 10 minutes)' : '';
+      // A read in the background longer than its time limit stopped the shared shell: only a Refresh Sizes that works or
+      // a new start of the host reads by itself again. (A Refresh Sizes may also fail at the time limit of its login.)
+      if (background && error instanceof CommandError && error.timedOut) this.sizesAuto = false;
+      const next = !this.sizesAuto ? ' (the page reads them by itself again after a Refresh Sizes that works or a new start of the host)' : background ? ' (the page tries again in 10 minutes)' : '';
       this.deps.logger.warn(`The sizes of ${this.host} could not be read${next}: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
     } finally {
