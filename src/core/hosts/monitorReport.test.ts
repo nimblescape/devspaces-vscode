@@ -235,6 +235,10 @@ describe('the report of the container of the Monitor', () => {
     expect(schedule(new Map([['DEVSPACE_IMAGE_SCHEDULE', '360'], ['DEVSPACE_IMAGE_TZ', 'UTC']]))).toEqual(['every 360 minutes after the end of the last run · of its container: no window has sent one since its start', 'today 12:19']);
     // Without its variables (or with invalid ones): daily at 06:07 in Europe/Vienna.
     expect(schedule(new Map([['DEVSPACE_IMAGE_TZ', 'Not/AZone']]))).toEqual(['daily at 06:07 · Europe/Vienna · of its container: no window has sent one since its start', 'tomorrow 06:07']);
+    // A list of the volume that stopped early can miss image-settings.json: the schedule is not known.
+    const cut = monitorRecords({ cut: true, textsDropped: false, files: [monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
+    const monitor = facts(body(monitorContainerReport({ ...details, env: new Map([['DEVSPACE_IMAGE_SCHEDULE', '360']]) }, cut, COMPUTER, CLOCK).sections, 'The Monitor'));
+    expect([monitor.Schedule?.text, monitor['Next run']?.text]).toEqual(['not known: the reader did not list all the files of the volume', 'not known: the schedule is not known']);
   });
 
   it('names a Monitor that keeps running, one of another version, and one of an earlier extension', () => {

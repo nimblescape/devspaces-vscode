@@ -44,13 +44,20 @@ function markerName(server: Pick<StoredServer, 'quality' | 'platform' | 'commit'
 
 /**
  * Versions of VS Code (`1.141.0`, also `1.142.0-insider`) by their numbers, the newest first; one without a version
- * last. The builds of one version (Insiders builds share the version of their iteration) by the time of their download,
- * the newest first.
+ * last, as one with another text. The builds of one version (Insiders builds share the version of their iteration) by
+ * the time of their download, the newest first.
  */
 function newerFirst(a: StoredServer, b: StoredServer): number {
   const byDownload = (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0) || a.commit.localeCompare(b.commit);
-  if (a.version === undefined || b.version === undefined) return a.version === undefined ? (b.version === undefined ? byDownload : 1) : -1;
-  return compareVersions(b.version.replace(/-.*$/, ''), a.version.replace(/-.*$/, '')) || byDownload;
+  const left = releaseVersion(a.version);
+  const right = releaseVersion(b.version);
+  if (left === undefined || right === undefined) return left === undefined ? (right === undefined ? byDownload : 1) : -1;
+  return compareVersions(right, left) || byDownload;
+}
+
+/** The numbers x.y.z of the version of a product.json (1.141.0, or 1.142.0-insider), or undefined for any other text. */
+function releaseVersion(version: string | undefined): string | undefined {
+  return version !== undefined ? /^(\d{1,9}\.\d{1,9}\.\d{1,9})(?:-.*)?$/.exec(version)?.[1] : undefined;
 }
 
 /**

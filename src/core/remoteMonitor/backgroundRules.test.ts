@@ -12,6 +12,7 @@ import {
   STORE_CLEANUP_INTERVAL_MS,
   backgroundRunDue,
   cleanupDue,
+  clockWentBack,
   nextBackgroundRunAt,
   parseCacheRunState,
   qualitiesToFetch,
@@ -19,7 +20,7 @@ import {
   runRetryDue,
   serversToRemove,
 } from './backgroundRules';
-import { parseCacheSchedule } from './cacheSettings';
+import { parseCacheSchedule, scheduleTimeAfter } from './cacheSettings';
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse('2026-10-09T12:00:00Z');
@@ -92,6 +93,14 @@ describe('the retry of a run that did not reach the network', () => {
     expect(next(NOW - 20 * MINUTE, NOW + 30 * MINUTE, NOW - 20 * MINUTE)).toBe(NOW + 30 * MINUTE);
     // A retry far ahead of the clock is due now.
     expect(next(NOW - 20 * MINUTE, NOW + 3 * DAY)).toBe(NOW);
+  });
+
+  it('names a clock that went back far behind the last end, and the time of the schedule after a time', () => {
+    expect(clockWentBack(undefined, NOW)).toBe(false);
+    expect(clockWentBack(NOW + CLOCK_RESET_MS, NOW)).toBe(false);
+    expect(clockWentBack(NOW + CLOCK_RESET_MS + 1, NOW)).toBe(true);
+    expect(scheduleTimeAfter(parseCacheSchedule('90')!, NOW, 'UTC')).toBe(NOW + 90 * MINUTE);
+    expect(scheduleTimeAfter(parseCacheSchedule('7 6 * * *')!, NOW, 'UTC')).toBe(Date.parse('2026-10-10T06:07:00Z'));
   });
 });
 

@@ -74,6 +74,7 @@ describe('the facts of Docker about an object', () => {
       createdAt: '2026-11-09T08:00:00Z',
       image: 'nginx:1.27',
       imageId: 'sha256:abc',
+      state: 'running',
       startedAt: '2026-11-12T07:00:00Z',
       finishedAt: '0001-01-01T00:00:00Z',
       exitCode: 0,
@@ -197,6 +198,16 @@ describe('the sections of the facts of Docker', () => {
       ['shop_static', '/usr/share/nginx/html', 'read-only'],
       ['/srv/conf (bind)', '/etc/nginx/conf.d', 'read-write'],
     ]);
+  });
+
+  it('gives the end of the last run only for a container that ended, by the state of its inspect', () => {
+    const inspect = (status: string) => parseObjectDetails('container', { ...CONTAINER_INSPECT, State: { Status: status, StartedAt: '2026-11-12T07:00:00Z', FinishedAt: '2026-11-12T07:30:00Z', ExitCode: 137 } });
+    const lastEnd = (status: string, listed = 'running') => facts(dockerFactsSections(object({ state: listed }), inspect(status), CLOCK))['Last end'];
+    expect(lastEnd('exited')).toBe('today 08:30 · exit code 137');
+    expect(lastEnd('dead')).toBe('today 08:30 · exit code 137');
+    // A paused container runs, and its end of an earlier run is no end.
+    expect(lastEnd('paused', 'paused')).toBeUndefined();
+    expect(lastEnd('running', 'exited')).toBeUndefined();
   });
 
   it('gives an image with its version labels, digests and use', () => {

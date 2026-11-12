@@ -8,8 +8,7 @@
 // and which server versions the cleanup removes. Pure; no I/O. Here in core, as the reports of the view Docker Hosts
 // read the same state and give the same rules (src/core/hosts/resourceReport.ts).
 import type { VscodeQuality } from '../helperChannel/protocol';
-import type { CacheSchedule } from './cacheSettings';
-import { nextCronTime } from './cron';
+import { scheduleTimeAfter, type CacheSchedule } from './cacheSettings';
 
 /** The cleanup of the store runs at most once a day. */
 export const STORE_CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
@@ -96,21 +95,29 @@ export interface RunTimes {
 }
 
 /**
+ * Whether the clock of the host went back by more than CLOCK_RESET_MS behind the end of the last run (a clock that was
+ * far ahead, then corrected): the Monitor then starts the schedule again from now, as otherwise no run would come until
+ * the clock caught up.
+ */
+export function clockWentBack(lastEndAt: number | undefined, now: number): boolean {
+  return lastEndAt !== undefined && now < lastEndAt - CLOCK_RESET_MS;
+}
+
+/**
  * The time of the next background run (`now` or earlier: it is due; undefined: the schedule has no next time): while a
  * retry waits (`retryAt`), its time (`now` when runRetryDue takes a time far ahead as due) or the time of the schedule
  * after the last attempt (when it is known), whichever comes first; else the time of the schedule after the end of the
- * last run (cacheRunDue; none: now). An end more than CLOCK_RESET_MS ahead of `now` counts as now, as the Monitor
- * starts the schedule again from now after a clock that was far ahead and then corrected.
+ * last run (scheduleTimeAfter; none: now). An end after which the clock went back (clockWentBack) counts as now, as the
+ * Monitor starts the schedule again from now.
  */
 export function nextBackgroundRunAt(times: RunTimes, schedule: CacheSchedule, timeZone: string, now: number): number | undefined {
-  const after = (from: number): number | undefined => (schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone));
   if (times.retryAt !== undefined) {
     const retry = runRetryDue(times.retryAt, now) ? Math.min(times.retryAt, now) : times.retryAt;
-    const scheduled = times.lastAttemptAt !== undefined ? after(times.lastAttemptAt) : undefined;
+    const scheduled = times.lastAttemptAt !== undefined ? scheduleTimeAfter(schedule, times.lastAttemptAt, timeZone) : undefined;
     return scheduled !== undefined && scheduled < retry ? scheduled : retry;
   }
   if (times.lastEndAt === undefined) return now;
-  return after(times.lastEndAt - CLOCK_RESET_MS > now ? now : times.lastEndAt);
+  return scheduleTimeAfter(schedule, clockWentBack(times.lastEndAt, now) ? now : times.lastEndAt, timeZone);
 }
 
 /** Whether the background run is due at `now` (nextBackgroundRunAt). */

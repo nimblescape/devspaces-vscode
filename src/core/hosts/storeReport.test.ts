@@ -155,6 +155,9 @@ describe('the report of the store of VS Code', () => {
       ['aaaaaaa', 'remove'],
       ['ddddddd', 'remove'],
     ]);
+    // A version text that is no x.y.z counts as no version: it goes last, and the order stays the same each time.
+    const odd = vscodeStoreReport(store({ servers: [server(A, 'abc', { modifiedAt: NOW - DAY }), server(B, '1.141.0'), server(C, '1.142.0')], used: [] }), records, CLOCK, 'linux-x64');
+    expect(rows(section(odd.sections, 'VS Code Server')).map((row) => row[3].text)).toEqual(['ccccccc', 'bbbbbbb', 'aaaaaaa']);
   });
 
   it('takes a time ahead of the clock as due, as the Monitor does (a clock that was corrected)', () => {

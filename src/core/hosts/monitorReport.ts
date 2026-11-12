@@ -42,15 +42,15 @@ export function scheduleText(schedule: string | undefined, timeZone: string | un
  * The schedule that the Monitor runs with, as it takes it (CurrentCacheSettings of the Monitor): the settings that the
  * last start of a window stored in its volume, else those of its container (cacheScheduleFromEnv: its variables, else
  * the defaults). Undefined when it is not known: the settings are there but cannot be read (the Monitor then keeps the
- * schedule that it had), or there are none and the report does not know the variables of its container (the report of
- * its volume).
+ * schedule that it had), the reader did not list all the files of the volume (it can have left them out), or there are
+ * none and the report does not know the variables of its container (the report of its volume).
  */
 function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<string, string> | undefined): { schedule: CacheSchedule; timeZone: string; from: string } | undefined {
   if (records.unreadable.includes(IMAGE_SETTINGS_FILE)) return undefined;
   const settings = records.settings;
   // The parse of the settings takes only a schedule that parseCacheSchedule takes.
   if (settings !== undefined) return { schedule: parseCacheSchedule(settings.schedule)!, timeZone: settings.timeZone, from: 'sent by the last start of a window' };
-  if (containerEnv === undefined) return undefined;
+  if (records.cut || containerEnv === undefined) return undefined;
   return { ...cacheScheduleFromEnv(Object.fromEntries(containerEnv)), from: 'of its container: no window has sent one since its start' };
 }
 
@@ -58,6 +58,7 @@ function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<strin
 function unknownScheduleFact(records: MonitorRecords): ReportFact {
   if (records.textless.includes(IMAGE_SETTINGS_FILE)) return fact('Schedule', 'not known: the reader left out the text of image-settings.json', chip('too large for one read', 'warn'));
   if (records.unreadable.includes(IMAGE_SETTINGS_FILE)) return fact('Schedule', 'not known: image-settings.json cannot be read, and the Monitor keeps the schedule that it had', chip('the record cannot be read', 'warn'));
+  if (records.cut) return fact('Schedule', 'not known: the reader did not list all the files of the volume', chip('the record cannot be read', 'warn'));
   return fact('Schedule', 'the one of the container of the Monitor: no window has sent one since its start');
 }
 
@@ -86,7 +87,7 @@ function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerE
   const unused = records.lastUse !== undefined && clock.now - records.lastUse.at >= UNUSED_END_MS;
   if (!known) {
     if (state.retryAt !== undefined) facts.push(nextFact(`a retry ${timeText(state.retryAt, clock)}, or before it by the schedule`));
-    else facts.push(nextFact(records.unreadable.includes(IMAGE_SETTINGS_FILE) ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
+    else facts.push(nextFact(records.unreadable.includes(IMAGE_SETTINGS_FILE) || records.cut ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
   } else if (next === undefined) {
     facts.push(nextFact('none: the schedule has no time'));
   } else if (next <= clock.now) {
@@ -174,14 +175,14 @@ function imagesInUseSection(records: MonitorRecords, computer: ReportComputer, c
       byReference.set(reference, known);
     }
   }
+  // An answer counts only while it is fresh, as the opens take it.
+  const fresh = freshRegistryDigests(records.registry, [...byReference.keys()], clock.now).digests;
   const rows = [...byReference.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([reference, { sources, at }]): ReportCell[] => {
       const sentBy = sources.size === 1 ? computerText([...sources][0], computer) : `${sources.size} computers`;
       const key = registryReferenceKey(reference);
       const answer = key !== undefined && records.registry !== undefined && Object.hasOwn(records.registry.digests, key) ? records.registry.digests[key] : undefined;
-      // An answer counts only while it is fresh, as the opens take it (freshRegistryDigests).
-      const fresh = answer !== undefined && freshRegistryDigests(records.registry, [reference], clock.now).digests[reference] !== undefined;
       const registry = answer !== undefined ? `sha256:${shortDigest(answer.digest)}… · asked ${timeText(answer.at, clock)}` : '';
       const rule: ReportChip =
         clock.now - at > IMAGES_IN_USE_MAX_AGE_MS
@@ -189,7 +190,7 @@ function imagesInUseSection(records: MonitorRecords, computer: ReportComputer, c
           : key === undefined
             ? // The record holds only references that the grammar takes (parseImagesInUseRecord): no key means a digest.
               chip('pinned by a digest: never pulled', 'info')
-            : fresh
+            : answer !== undefined && Object.hasOwn(fresh, reference)
               ? chip('kept up to date by the Monitor', 'keep')
               : answer !== undefined
                 ? chip('the last answer of the registry is old: the opens check it themselves', 'warn')

@@ -87,7 +87,8 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
   if (object.kind === 'container' && object.purpose === 'monitor') {
     own = monitorContainerReport(details?.kind === 'container' ? details : undefined, records, computer, clock);
     // A read without the volume of the Monitor: the volume is not there (the reader mounts only the volumes that are).
-    if (reading !== undefined && records === undefined) own.notices.push('The volume devspaces-monitor is not there: the background run and the last runs are missing.');
+    // A read that was too long has no parts at all, which its own notice says.
+    if (reading !== undefined && !reading.tooLong && records === undefined) own.notices.push('The volume devspaces-monitor is not there: the background run and the last runs are missing.');
   } else if (volumes.vscode !== undefined) {
     if (reading?.vscode !== undefined) own = vscodeStoreReport(reading.vscode, records, clock, input.platform);
   } else if (volumes.monitor !== undefined) {

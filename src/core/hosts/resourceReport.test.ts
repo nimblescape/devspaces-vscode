@@ -69,5 +69,7 @@ describe('the report of a resource', () => {
     const monitor = (volumes: Parameters<typeof resourceReport>[0]['volumes']): string[] => resourceReport({ object: { kind: 'container', id: 'm', name: 'devspaces-monitor', purpose: 'monitor' }, volumes, computer: COMPUTER, clock: CLOCK }).notices;
     expect(monitor({ kind: 'noImage' })).toEqual([expect.stringContaining('no helper image of Devspaces')]);
     expect(monitor({ kind: 'read', reading: { ...reading, monitor: undefined }, image: 'x' })).toEqual(['The volume devspaces-monitor is not there: the background run and the last runs are missing.']);
+    // A read that was too long has no parts: it does not say that the volume is missing.
+    expect(monitor({ kind: 'read', reading: { ...reading, tooLong: true, monitor: undefined }, image: 'x' })).toEqual(['The volumes hold too much for one read: their content is left out.']);
   });
 });

@@ -95,7 +95,7 @@ import {
 } from '../core/remoteMonitor/protocol';
 import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, type SelfEngine, type VscodeEngine } from './engine';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
-import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, backgroundRunDue, parseCacheRunState, runRetryDelay, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
+import { IDLE_RETRY_MAX_WAIT_MS, backgroundRunDue, clockWentBack, parseCacheRunState, runRetryDelay, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
 import { cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_SUCCESSOR_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
@@ -1204,7 +1204,7 @@ export async function writeRunRequest(stateDir: string, now: number): Promise<vo
  * The one schedule of the whole background run, checked every IMAGE_CHECK_MS. At most one run at a time: a time that
  * comes during a run is left out. By the setting cacheUpdateSchedule: with an interval, a run when the end of the last
  * run is at least the interval ago; with a cron schedule, a run when a time of it came after the end of the last run
- * (cacheRunDue). The end of the last run is kept in the volume (CacheRunStore), so a restart of the monitor does not
+ * (backgroundRunDue). The end of the last run is kept in the volume (CacheRunStore), so a restart of the monitor does not
  * run again at once: at its start it runs only when the run is due by that time (never ran: due). So a time of the
  * schedule that the monitor missed (it was down, the engine off, the computer asleep) runs once at its next check, and
  * a clock that jumps ahead runs once too. And a request of "Update All Images Now" (`runRequest`, RUN_NOW_FILE) runs
@@ -1286,10 +1286,10 @@ export class CacheSchedule {
       await this.observing;
     }
     const time = this.deps.now();
-    // A clock that steps back by more than CLOCK_RESET_MS behind the end of the last run (a clock that was far ahead,
-    // then corrected) starts the schedule again from now; otherwise no run would come until the clock caught up. A
-    // smaller step back runs no time that was handled already again.
-    if (this.lastEndAt !== undefined && time < this.lastEndAt - CLOCK_RESET_MS) {
+    // A clock that steps back by more than CLOCK_RESET_MS behind the end of the last run (clockWentBack: a clock that
+    // was far ahead, then corrected) starts the schedule again from now; otherwise no run would come until the clock
+    // caught up. A smaller step back runs no time that was handled already again.
+    if (this.lastEndAt !== undefined && clockWentBack(this.lastEndAt, time)) {
       this.deps.log(`The clock of the host went back by ${Math.round((this.lastEndAt - time) / 60_000)} minutes; the schedule of the background run goes on from now.`);
       this.lastEndAt = time;
       await this.deps.state.update({ lastEndAt: time }).catch(() => undefined);

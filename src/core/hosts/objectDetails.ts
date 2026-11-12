@@ -32,6 +32,8 @@ const MAX_LIST = 50;
  * The others can hold secrets, and no report needs them.
  */
 const KEPT_ENV: readonly string[] = [MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV];
+/** The states of Docker of a container whose last run ended: its report gives the end and the exit code. */
+const ENDED_STATES: readonly string[] = ['exited', 'dead', 'restarting'];
 
 /** A mount of a container. */
 export interface MountDetail {
@@ -49,6 +51,8 @@ export interface ContainerDetails {
   createdAt?: string;
   image?: string;
   imageId?: string;
+  /** Its state of Docker: `created`, `running`, `paused`, `restarting`, `exited`, `removing` or `dead`. */
+  state?: string;
   startedAt?: string;
   finishedAt?: string;
   exitCode?: number;
@@ -179,6 +183,7 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
         ...optional('createdAt', nonEmptyText(value.Created)),
         ...optional('image', nonEmptyText(config.Image)),
         ...optional('imageId', nonEmptyText(value.Image)),
+        ...optional('state', nonEmptyText(state.Status)),
         ...optional('startedAt', nonEmptyText(state.StartedAt)),
         ...optional('finishedAt', nonEmptyText(state.FinishedAt)),
         ...optional('exitCode', exitCode),
@@ -326,7 +331,10 @@ export function dockerFactsSections(object: HostObject, details: ObjectDetails |
       push(created !== undefined ? fact('Created', created) : undefined);
       const started = dockerTimeText(container?.startedAt, clock);
       push(started !== undefined ? fact('Last start', started) : undefined);
-      const finished = object.state !== 'running' ? dockerTimeText(container?.finishedAt, clock) : undefined;
+      // The end of the last run and its exit code only for a container that ended (a paused one runs, and a new one never
+      // ran); its state of the inspect is newer than the one of the list.
+      const state = container?.state ?? object.state;
+      const finished = state !== undefined && ENDED_STATES.includes(state) ? dockerTimeText(container?.finishedAt, clock) : undefined;
       push(finished !== undefined ? fact('Last end', `${finished}${container?.exitCode !== undefined ? ` · exit code ${container.exitCode}` : ''}`) : undefined);
       push(restartFact(container?.restartPolicy));
       push(composeFact(container?.labels ?? new Map(), 'service'));

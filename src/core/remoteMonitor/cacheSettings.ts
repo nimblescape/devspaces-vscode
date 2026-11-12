@@ -121,7 +121,14 @@ export function monitorRestartPolicy(permanent: boolean): typeof IDLE_MONITOR_RE
  */
 export function cacheRunDue(schedule: CacheSchedule, lastEndAt: number | undefined, now: number, timeZone: string): boolean {
   if (lastEndAt === undefined) return true;
-  if (schedule.kind === 'interval') return now - lastEndAt >= schedule.minutes * 60_000;
-  const next = nextCronTime(lastEndAt, schedule.cron, timeZone);
+  const next = scheduleTimeAfter(schedule, lastEndAt, timeZone);
   return next !== undefined && next <= now;
+}
+
+/**
+ * The first time of the schedule after `from`: with an interval, the interval after it; with a cron schedule, its next
+ * time after it in `timeZone` (undefined: the schedule has no next time, e.g. 30 February).
+ */
+export function scheduleTimeAfter(schedule: CacheSchedule, from: number, timeZone: string): number | undefined {
+  return schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone);
 }
