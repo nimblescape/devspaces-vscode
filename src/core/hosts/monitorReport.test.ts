@@ -11,6 +11,7 @@ import { monitorRecords } from './monitorRecords';
 import { monitorContainerReport, monitorVolumeReport, scheduleText, type ReportComputer } from './monitorReport';
 import type { ContainerDetails } from './objectDetails';
 import { CLOCK, DAY, DEVSPACE, HASH, HELPER, HOUR, NOW, OTHER_DEVSPACE, OTHER_SOURCE, SOURCE, monitorFile } from './reportFixtures.testkit';
+import type { MonitorFile } from './volumeReader';
 import type { ReportBody, ReportCell, ReportSection } from './reportModel';
 
 const DIGEST = `sha256:${'d'.repeat(64)}`;
@@ -133,6 +134,16 @@ describe('the report of the volume of the Monitor', () => {
     const invalid = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('image-settings.json', 'no json'), monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
     const kept = facts(body(monitorContainerReport(details, invalid, COMPUTER, CLOCK).sections, 'The Monitor'));
     expect([kept.Schedule?.text, kept['Next run']?.text]).toEqual(['not known: image-settings.json cannot be read, and the Monitor keeps the schedule that it had', 'not known: the schedule is not known']);
+    const backgroundOf = (files: MonitorFile[], cut = false) => facts(body(monitorVolumeReport(monitorRecords({ cut, textsDropped: false, files }), COMPUTER, CLOCK).sections, 'Background run'));
+    const settingsFile = monitorFile('image-settings.json', { schedule: '7 6 * * *', timeZone: 'Europe/Vienna' });
+    // A clock that was 3 days ahead and then corrected: the Monitor starts the schedule again from now.
+    expect(backgroundOf([settingsFile, monitorFile('cache-run.json', { lastEndAt: NOW + 3 * DAY })])['Next run']?.text).toBe('tomorrow 06:07');
+    // A Monitor that no window used for 30 days ends, and starts no run that is only due.
+    expect(backgroundOf([settingsFile, monitorFile('cache-run.json', { lastEndAt: NOW - 2 * DAY }), monitorFile('last-use.json', { at: NOW - 31 * DAY })])['Next run']?.text).toBe(
+      'not now: no window used this engine for 30 days, so the Monitor ends; the next start of a window starts it again',
+    );
+    // A list of the volume that stopped early can miss cache-run.json.
+    expect(backgroundOf([settingsFile], true)['Last run ended']?.text).toBe('not known: the reader did not list all the files of the volume');
     const none = monitorRecords({ cut: false, textsDropped: false, files: [] });
     expect(facts(body(monitorVolumeReport(none, COMPUTER, CLOCK).sections, 'Background run'))['Next run']?.text).toBe('at the next check of the Monitor: no run is known');
   });
@@ -160,6 +171,11 @@ describe('the report of the volume of the Monitor', () => {
       files: [monitorFile(`images-in-use.${SOURCE}.json`, { at: NOW - HOUR, references: ['ghcr.io/a/b:1'] }), monitorFile('registry-digests.json', { digests: { 'ghcr.io/a/b:1': { digest: DIGEST, at: NOW - 3 * DAY } }, schedule: '7 6 * * *', timeZone: 'Europe/Vienna' })],
     });
     expect(rows(body(monitorVolumeReport(old, COMPUTER, CLOCK).sections, 'Image references in use'))[0][4].chip).toEqual({ text: 'the last answer of the registry is old: the opens check it themselves', tone: 'warn' });
+  });
+
+  it('names an extension list whose time lies ahead of the clock as one that does not count, as the Monitor reads it', () => {
+    const ahead = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW + 3 * DAY, configuration: ['golang.go'], defaults: [] })] });
+    expect(rows(body(monitorVolumeReport(ahead, COMPUTER, CLOCK).sections, 'Extension lists of the starts'))[0][4].chip).toEqual({ text: 'does not count: its time lies ahead of the clock of the host', tone: 'warn' });
   });
 
   it('keeps a list of image references for exactly 30 days, as the Monitor does', () => {
@@ -231,7 +247,8 @@ describe('the report of the container of the Monitor', () => {
     const otherText = monitorContainerReport({ ...details, labels: new Map([[LABEL_MONITOR_VERSION, '0.4.1-dev']]) }, undefined, COMPUTER, CLOCK);
     expect(facts(body(otherText.sections, 'The Monitor'))['Version of Devspaces']?.chip?.text).toBe('another version');
     expect(permanent.sections.map((section) => section.title)).toEqual(['The Monitor']);
-    expect(permanent.notices).toEqual([expect.stringContaining('devspaces-monitor could not be read')]);
+    // Why the records are missing is a notice of the read (resourceReport).
+    expect(permanent.notices).toEqual([]);
     const earlier = monitorContainerReport({ ...details, labels: new Map() }, records, COMPUTER, CLOCK);
     expect(facts(body(earlier.sections, 'The Monitor'))['Version of Devspaces']?.chip?.tone).toBe('remove');
   });

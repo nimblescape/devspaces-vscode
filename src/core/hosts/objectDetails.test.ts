@@ -150,6 +150,8 @@ describe('the facts of Docker about an object', () => {
     expect(details).toMatchObject({ kind: 'volume', driver: 'local', users: [], usersProblem: expect.stringContaining('Cannot connect to the Docker daemon') });
     const usedBy = dockerFactsSections({ kind: 'volume', id: 'v', name: 'v', purpose: 'notDevspaces' }, details, CLOCK).find((entry) => entry.title === 'Used by')?.body;
     expect(usedBy?.kind === 'table' ? usedBy.empty : undefined).toMatch(/^Not known: Docker could not list them/);
+    const slow = fakeDocker({ 'volume inspect': result({ stdout: JSON.stringify({ Name: 'v' }) }), 'container ls': result({ exitCode: null, timedOut: true }) });
+    expect(await readObjectDetails(slow, { kind: 'volume', id: 'v' })).toMatchObject({ usersProblem: expect.stringContaining('The command did not end within the time limit.') });
   });
 
   it('throws an abort during the inspect of the containers that use a volume', async () => {

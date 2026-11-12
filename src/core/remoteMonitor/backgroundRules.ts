@@ -8,7 +8,8 @@
 // and which server versions the cleanup removes. Pure; no I/O. Here in core, as the reports of the view Docker Hosts
 // read the same state and give the same rules (src/core/hosts/resourceReport.ts).
 import type { VscodeQuality } from '../helperChannel/protocol';
-import { cacheRunDue, type CacheSchedule } from './cacheSettings';
+import type { CacheSchedule } from './cacheSettings';
+import { nextCronTime } from './cron';
 
 /** The cleanup of the store runs at most once a day. */
 export const STORE_CLEANUP_INTERVAL_MS = 24 * 60 * 60_000;
@@ -95,13 +96,27 @@ export interface RunTimes {
 }
 
 /**
- * Whether the background run is due at `now`: while a retry waits (`retryAt`), its time (runRetryDue) or the schedule
- * counted from the last attempt (when it is known), whichever comes first; else the schedule counted from the end of
- * the last run (cacheRunDue).
+ * The time of the next background run (`now` or earlier: it is due; undefined: the schedule has no next time): while a
+ * retry waits (`retryAt`), its time (`now` when runRetryDue takes a time far ahead as due) or the time of the schedule
+ * after the last attempt (when it is known), whichever comes first; else the time of the schedule after the end of the
+ * last run (cacheRunDue; none: now). An end more than CLOCK_RESET_MS ahead of `now` counts as now, as the Monitor
+ * starts the schedule again from now after a clock that was far ahead and then corrected.
  */
+export function nextBackgroundRunAt(times: RunTimes, schedule: CacheSchedule, timeZone: string, now: number): number | undefined {
+  const after = (from: number): number | undefined => (schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone));
+  if (times.retryAt !== undefined) {
+    const retry = runRetryDue(times.retryAt, now) ? Math.min(times.retryAt, now) : times.retryAt;
+    const scheduled = times.lastAttemptAt !== undefined ? after(times.lastAttemptAt) : undefined;
+    return scheduled !== undefined && scheduled < retry ? scheduled : retry;
+  }
+  if (times.lastEndAt === undefined) return now;
+  return after(times.lastEndAt - CLOCK_RESET_MS > now ? now : times.lastEndAt);
+}
+
+/** Whether the background run is due at `now` (nextBackgroundRunAt). */
 export function backgroundRunDue(times: RunTimes, schedule: CacheSchedule, timeZone: string, now: number): boolean {
-  if (times.retryAt === undefined) return cacheRunDue(schedule, times.lastEndAt, now, timeZone);
-  return runRetryDue(times.retryAt, now) || (times.lastAttemptAt !== undefined && cacheRunDue(schedule, times.lastAttemptAt, now, timeZone));
+  const next = nextBackgroundRunAt(times, schedule, timeZone, now);
+  return next !== undefined && next <= now;
 }
 
 /** A version whose fetch by the run failed is tried again after this long (a day). */

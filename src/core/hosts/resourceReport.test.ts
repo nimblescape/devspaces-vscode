@@ -65,5 +65,9 @@ describe('the report of a resource', () => {
       'Docker could not give the facts of this object: No such volume',
     ]);
     expect(notices({ kind: 'read', reading: { ...reading, monitor: { cut: true, textsDropped: false, files: [] } }, image: 'x' })).toEqual(['The volume devspaces-monitor holds more files than the reader lists: some records are missing.']);
+    // The report of the container of the Monitor: one notice for one cause.
+    const monitor = (volumes: Parameters<typeof resourceReport>[0]['volumes']): string[] => resourceReport({ object: { kind: 'container', id: 'm', name: 'devspaces-monitor', purpose: 'monitor' }, volumes, computer: COMPUTER, clock: CLOCK }).notices;
+    expect(monitor({ kind: 'noImage' })).toEqual([expect.stringContaining('no helper image of Devspaces')]);
+    expect(monitor({ kind: 'read', reading: { ...reading, monitor: undefined }, image: 'x' })).toEqual(['The volume devspaces-monitor is not there: the background run and the last runs are missing.']);
   });
 });

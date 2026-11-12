@@ -13,7 +13,7 @@ import { CommandError } from '../errors';
 import { isRecord } from '../valueChecks';
 import { commandText, parseJsonLines, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
-import { nonEmptyText as text, onlyMissingContainers, type HostObject, type HostObjectKind } from './hostObjects';
+import { nonEmptyText, onlyMissingContainers, type HostObject, type HostObjectKind } from './hostObjects';
 import { cell, chip, countText, dockerTimeText, fact, itemsText, optional, shortDigest, sizeText, type ReportClock, type ReportFact, type ReportSection } from './reportModel';
 
 /** The label of Docker Compose on a volume: its name in the Compose file. */
@@ -143,10 +143,10 @@ function parseMounts(value: unknown): MountDetail[] {
   const mounts: MountDetail[] = [];
   for (const entry of value) {
     if (!isRecord(entry)) continue;
-    const destination = text(entry.Destination);
+    const destination = nonEmptyText(entry.Destination);
     if (destination === undefined) continue;
-    const type = text(entry.Type) ?? 'unknown';
-    mounts.push({ type, source: (type === 'volume' ? text(entry.Name) : text(entry.Source)) ?? '', destination, readOnly: entry.RW === false });
+    const type = nonEmptyText(entry.Type) ?? 'unknown';
+    mounts.push({ type, source: (type === 'volume' ? nonEmptyText(entry.Name) : nonEmptyText(entry.Source)) ?? '', destination, readOnly: entry.RW === false });
   }
   return mounts;
 }
@@ -155,7 +155,7 @@ function parsePorts(value: unknown): string[] {
   if (!isRecord(value)) return [];
   const ports: string[] = [];
   for (const [port, bindings] of Object.entries(value)) {
-    const published = Array.isArray(bindings) ? bindings.flatMap((binding) => (isRecord(binding) && text(binding.HostPort) !== undefined ? [text(binding.HostPort)!] : [])) : [];
+    const published = Array.isArray(bindings) ? bindings.flatMap((binding) => (isRecord(binding) && nonEmptyText(binding.HostPort) !== undefined ? [nonEmptyText(binding.HostPort)!] : [])) : [];
     if (published.length === 0) ports.push(port);
     else for (const host of [...new Set(published)]) ports.push(`${host} → ${port}`);
   }
@@ -170,17 +170,17 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
       const config = isRecord(value.Config) ? value.Config : {};
       const state = isRecord(value.State) ? value.State : {};
       const host = isRecord(value.HostConfig) ? value.HostConfig : {};
-      const restart = isRecord(host.RestartPolicy) ? text(host.RestartPolicy.Name) : undefined;
+      const restart = isRecord(host.RestartPolicy) ? nonEmptyText(host.RestartPolicy.Name) : undefined;
       const network = isRecord(value.NetworkSettings) ? value.NetworkSettings : {};
       const exitCode = typeof state.ExitCode === 'number' ? state.ExitCode : undefined;
       return {
         kind,
         labels: labelsOf(config.Labels),
-        ...optional('createdAt', text(value.Created)),
-        ...optional('image', text(config.Image)),
-        ...optional('imageId', text(value.Image)),
-        ...optional('startedAt', text(state.StartedAt)),
-        ...optional('finishedAt', text(state.FinishedAt)),
+        ...optional('createdAt', nonEmptyText(value.Created)),
+        ...optional('image', nonEmptyText(config.Image)),
+        ...optional('imageId', nonEmptyText(value.Image)),
+        ...optional('startedAt', nonEmptyText(state.StartedAt)),
+        ...optional('finishedAt', nonEmptyText(state.FinishedAt)),
         ...optional('exitCode', exitCode),
         ...optional('restartPolicy', restart),
         env: keptEnv(config.Env),
@@ -194,36 +194,36 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
       return {
         kind,
         labels: labelsOf(config.Labels),
-        ...optional('createdAt', text(value.Created)),
+        ...optional('createdAt', nonEmptyText(value.Created)),
         repoDigests: texts(value.RepoDigests),
-        ...optional('architecture', text(value.Architecture)),
-        ...optional('os', text(value.Os)),
+        ...optional('architecture', nonEmptyText(value.Architecture)),
+        ...optional('os', nonEmptyText(value.Os)),
       };
     }
     case 'volume':
       return {
         kind,
         labels: labelsOf(value.Labels),
-        ...optional('createdAt', text(value.CreatedAt)),
-        ...optional('driver', text(value.Driver)),
-        ...optional('scope', text(value.Scope)),
+        ...optional('createdAt', nonEmptyText(value.CreatedAt)),
+        ...optional('driver', nonEmptyText(value.Driver)),
+        ...optional('scope', nonEmptyText(value.Scope)),
         users: [],
         moreUsers: false,
       };
     case 'network': {
       const ipam = isRecord(value.IPAM) ? value.IPAM : {};
-      const subnets = Array.isArray(ipam.Config) ? ipam.Config.flatMap((entry) => (isRecord(entry) && text(entry.Subnet) !== undefined ? [text(entry.Subnet)!] : [])) : [];
+      const subnets = Array.isArray(ipam.Config) ? ipam.Config.flatMap((entry) => (isRecord(entry) && nonEmptyText(entry.Subnet) !== undefined ? [nonEmptyText(entry.Subnet)!] : [])) : [];
       const containers = isRecord(value.Containers)
         ? Object.values(value.Containers)
-            .flatMap((entry) => (isRecord(entry) && text(entry.Name) !== undefined ? [text(entry.Name)!] : []))
+            .flatMap((entry) => (isRecord(entry) && nonEmptyText(entry.Name) !== undefined ? [nonEmptyText(entry.Name)!] : []))
             .sort()
         : [];
       return {
         kind,
         labels: labelsOf(value.Labels),
-        ...optional('createdAt', text(value.Created)),
-        ...optional('driver', text(value.Driver)),
-        ...optional('scope', text(value.Scope)),
+        ...optional('createdAt', nonEmptyText(value.Created)),
+        ...optional('driver', nonEmptyText(value.Driver)),
+        ...optional('scope', nonEmptyText(value.Scope)),
         internal: value.Internal === true,
         subnets,
         containers,
@@ -243,7 +243,10 @@ export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, ob
   // found ones and ends with exit code 1, onlyMissingContainers).
   const run = async (args: string[], containers = false): Promise<unknown[]> => {
     const result = await docker.run(args, options);
-    if ((result.exitCode !== 0 && !(containers && onlyMissingContainers(result.stderr))) || result.timedOut) throw new CommandError(commandText(args), result.exitCode, result.stdout, result.stderr, result.timedOut);
+    if ((result.exitCode !== 0 && !(containers && onlyMissingContainers(result.stderr))) || result.timedOut) {
+      const stderr = result.timedOut ? `${result.stderr.trimEnd()}\nThe command did not end within the time limit.`.trim() : result.stderr;
+      throw new CommandError(commandText(args), result.exitCode, result.stdout, stderr, result.timedOut);
+    }
     return parseJsonLines(result.stdout);
   };
   const args = inspectArgs(object.kind, [object.id]);
@@ -259,8 +262,8 @@ export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, ob
     return { ...details, usersProblem: error instanceof Error ? error.message : String(error) };
   }
   const users: VolumeUser[] = listed.flatMap((entry) => {
-    const id = text(entry.ID);
-    return id === undefined ? [] : [{ id, name: (text(entry.Names) ?? id).split(',')[0], ...optional('state', text(entry.State)) }];
+    const id = nonEmptyText(entry.ID);
+    return id === undefined ? [] : [{ id, name: (nonEmptyText(entry.Names) ?? id).split(',')[0], ...optional('state', nonEmptyText(entry.State)) }];
   });
   const shown = users.slice(0, MAX_VOLUME_USERS);
   if (shown.length > 0) {

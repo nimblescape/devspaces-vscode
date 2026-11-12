@@ -254,3 +254,11 @@ function topLevel(file: MonitorFile, records: MonitorRecords, parsed: RecordPars
 function assign<K extends keyof MonitorRecords>(records: MonitorRecords, key: K, value: MonitorRecords[K] | undefined): void {
   if (value !== undefined) records[key] = value;
 }
+
+/**
+ * The state of the background run is known: the reader gave the text of cache-run.json, or its complete list of the
+ * volume has no such file (a new Monitor).
+ */
+export function cacheRunKnown(records: Pick<MonitorRecords, 'cacheRun' | 'textless' | 'cut'>): boolean {
+  return !records.textless.includes(CACHE_RUN_FILE) && (records.cacheRun !== undefined || !records.cut);
+}

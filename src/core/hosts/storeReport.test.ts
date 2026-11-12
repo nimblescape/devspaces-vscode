@@ -137,8 +137,13 @@ describe('the report of the store of VS Code', () => {
     const textless = monitorRecords({ cut: false, textsDropped: true, files: [{ path: 'cache-run.json', bytes: 10, omitted: 'output' }] });
     const report = vscodeStoreReport(store(), textless, CLOCK, 'linux-x64');
     const failed = section(report.sections, 'Downloads that failed');
-    expect(failed.kind === 'table' ? failed.empty : undefined).toBe('Not known: the reader left out the text of cache-run.json or extensions/failures.json.');
-    expect(facts(section(report.sections, 'Cleanup and downloads'))['Last cleanup']).toBe('not known: the reader left out the text of cache-run.json');
+    expect(failed.kind === 'table' ? failed.empty : undefined).toBe('Not known: the reader could not read cache-run.json or extensions/failures.json whole.');
+    expect(facts(section(report.sections, 'Cleanup and downloads'))['Last cleanup']).toBe('not known: the reader could not read cache-run.json whole');
+  });
+
+  it('names the next cleanup of a store that was never cleaned', () => {
+    const fresh = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('cache-run.json', { lastEndAt: NOW - HOUR })] });
+    expect(facts(section(vscodeStoreReport(store(), fresh, CLOCK, 'linux-x64').sections, 'Cleanup and downloads'))).toMatchObject({ 'Last cleanup': 'none yet', 'Next cleanup': 'with the next run' });
   });
 
   it('orders the builds of one version by their download, as the releases come', () => {
@@ -223,7 +228,7 @@ describe('the report of the store of VS Code', () => {
     const cut = vscodeStoreReport(store({ cut: true }), records, CLOCK, 'linux-x64');
     expect(rows(section(cut.sections, 'Extensions')).map((row) => row[5].chip?.tone)).toEqual([undefined, undefined, undefined, undefined, 'info', undefined]);
     expect(cut.notices).toEqual(['The store holds more entries than the reader lists: some lists are incomplete, and the rules of the extension files are missing.']);
-    expect(report.notices).toEqual([expect.stringContaining('more entries than the reader lists'), expect.stringContaining('devspaces-monitor could not be read')]);
+    expect(report.notices).toEqual([expect.stringContaining('more entries than the reader lists'), expect.stringContaining('devspaces-monitor is not there')]);
   });
 
   it('shows at most MAX_EXTENSION_ROWS extension files and counts the others', () => {

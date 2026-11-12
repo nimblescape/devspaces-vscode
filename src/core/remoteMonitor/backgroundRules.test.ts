@@ -12,6 +12,7 @@ import {
   STORE_CLEANUP_INTERVAL_MS,
   backgroundRunDue,
   cleanupDue,
+  nextBackgroundRunAt,
   parseCacheRunState,
   qualitiesToFetch,
   runRetryDelay,
@@ -78,6 +79,19 @@ describe('the retry of a run that did not reach the network', () => {
     expect(due(NOW - 2 * 60 * MINUTE, NOW + 10 * MINUTE, NOW - 60 * MINUTE)).toBe(true);
     expect(due(NOW - 2 * 60 * MINUTE, NOW - 1, NOW - 30 * MINUTE)).toBe(true);
     expect(due(NOW - 2 * 60 * MINUTE, NOW + 10 * MINUTE, undefined)).toBe(false);
+  });
+
+  it('gives the time of the next run, and counts an end far ahead of the clock as now (a corrected clock)', () => {
+    const hourly = parseCacheSchedule('60')!;
+    const next = (lastEndAt: number | undefined, retryAt?: number, lastAttemptAt?: number) => nextBackgroundRunAt({ lastEndAt, retryAt, lastAttemptAt }, hourly, 'UTC', NOW);
+    expect(next(NOW - 20 * MINUTE)).toBe(NOW + 40 * MINUTE);
+    expect(next(undefined)).toBe(NOW);
+    expect(next(NOW + CLOCK_RESET_MS)).toBe(NOW + CLOCK_RESET_MS + 60 * MINUTE);
+    expect(next(NOW + CLOCK_RESET_MS + 1)).toBe(NOW + 60 * MINUTE);
+    expect(next(NOW - 20 * MINUTE, NOW + 50 * MINUTE, NOW - 20 * MINUTE)).toBe(NOW + 40 * MINUTE);
+    expect(next(NOW - 20 * MINUTE, NOW + 30 * MINUTE, NOW - 20 * MINUTE)).toBe(NOW + 30 * MINUTE);
+    // A retry far ahead of the clock is due now.
+    expect(next(NOW - 20 * MINUTE, NOW + 3 * DAY)).toBe(NOW);
   });
 });
 

@@ -23,9 +23,8 @@ import {
   type ExtensionFolder,
 } from '../vscodeExtensions';
 import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_FAILURES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
-import { CACHE_RUN_FILE } from '../remoteMonitor/protocol';
 import { serverVersionName } from '../worker/vscodeServerStore';
-import type { MonitorRecords } from './monitorRecords';
+import { cacheRunKnown, type MonitorRecords } from './monitorRecords';
 import { ageText, cell, chip, countText, fact, sizeText, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportSection } from './reportModel';
 import type { StoredServer, VscodeStoreReading, WorkerCacheReading } from './volumeReader';
 
@@ -106,8 +105,8 @@ function nextTry(failedAt: number, waitMs: number, due: boolean, clock: ReportCl
 }
 
 /**
- * The report of the store of VS Code (devspaces-vscode). `records`: those of the volume of the Monitor, when it could be
- * read (the failed downloads, the time of the last cleanup, and the rule of each extension file need them). `platform`:
+ * The report of the store of VS Code (devspaces-vscode). `records`: those of the volume of the Monitor, when it is
+ * there (the failed downloads, the time of the last cleanup, and the rule of each extension file need them). `platform`:
  * the platform of the engine (serverPlatform of its architecture), when it is known: the Monitor cleans only its server
  * versions.
  */
@@ -146,13 +145,14 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   for (const [entry, at] of [...(records?.extensionFailures ?? new Map<string, number>())].sort(([, a], [, b]) => b - a)) {
     failures.push([cell(`Extension ${entry}`), cell(timeText(at, clock)), nextTry(at, EXTENSION_RETRY_MS, !extensionRetryWaits(at, clock.now), clock)]);
   }
-  // A record of the failures whose text the reader left out: its failures are not known.
-  const failuresKnown = records !== undefined && !records.textless.includes(CACHE_RUN_FILE) && !records.textless.includes(`${STATE_EXTENSION_FOLDER}/${EXTENSION_FAILURES_FILE}`);
+  // A record of the failures whose text the reader left out, or a list of the volume that stopped early (it can miss
+  // extensions/failures.json): the failures are not known.
+  const failuresKnown = records !== undefined && cacheRunKnown(records) && !records.cut && !records.textless.includes(`${STATE_EXTENSION_FOLDER}/${EXTENSION_FAILURES_FILE}`);
   if (records !== undefined) {
     sections.push({
       title: 'Downloads that failed',
       ...(failures.length > 0 ? { chip: chip(countText(failures.length, 'failure'), 'warn') } : !failuresKnown ? { chip: chip('not known', 'warn') } : {}),
-      body: { kind: 'table', columns: ['Item', 'Failed', 'Next try'], rows: failures, empty: failuresKnown ? 'None: the last downloads of the Monitor worked.' : 'Not known: the reader left out the text of cache-run.json or extensions/failures.json.' },
+      body: { kind: 'table', columns: ['Item', 'Failed', 'Next try'], rows: failures, empty: failuresKnown ? 'None: the last downloads of the Monitor worked.' : 'Not known: the reader could not read cache-run.json or extensions/failures.json whole.' },
       from: 'From cache-run.json and extensions/failures.json in devspaces-monitor. The Monitor tries a failed download again after one day.',
     });
   }
@@ -160,9 +160,12 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   sections.push(extensions.section);
   const cleanupFacts = [];
   const lastCleanup = records?.cacheRun?.lastCleanupAt;
-  if (records?.textless.includes(CACHE_RUN_FILE) === true) cleanupFacts.push(fact('Last cleanup', 'not known: the reader left out the text of cache-run.json', chip('too large for one read', 'warn')));
-  else if (records !== undefined) cleanupFacts.push(fact('Last cleanup', lastCleanup !== undefined ? `${timeText(lastCleanup, clock)} · at most once a day` : 'none yet'));
-  if (lastCleanup !== undefined) cleanupFacts.push(fact('Next cleanup', cleanupDue(lastCleanup, clock.now) ? 'with the next run' : `with the first run after ${timeText(lastCleanup + STORE_CLEANUP_INTERVAL_MS, clock)}`));
+  if (records !== undefined && !cacheRunKnown(records)) cleanupFacts.push(fact('Last cleanup', 'not known: the reader could not read cache-run.json whole', chip('the record cannot be read', 'warn')));
+  else if (records !== undefined) {
+    cleanupFacts.push(fact('Last cleanup', lastCleanup !== undefined ? `${timeText(lastCleanup, clock)} · at most once a day` : 'none yet'));
+    // A store that was never cleaned is cleaned with the next run (cleanupDue).
+    cleanupFacts.push(fact('Next cleanup', cleanupDue(lastCleanup, clock.now) ? 'with the next run' : `with the first run after ${timeText(lastCleanup! + STORE_CLEANUP_INTERVAL_MS, clock)}`));
+  }
   const downloads = store.temporary.files + store.extensionTemporary.files;
   cleanupFacts.push(fact('Downloads now', downloads === 0 ? 'none' : `${countText(downloads, 'temporary file')} (${sizeText(store.temporary.bytes + store.extensionTemporary.bytes, !store.temporary.cut && !store.extensionTemporary.cut)}): a download runs, or the cleanup removes what an ended one left`));
   cleanupFacts.push(fact('Lock files', `${store.locks}: one for each server version and extension file that a download or a cleanup used; they stay`));
@@ -173,7 +176,7 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   if (failures.length > 0) summary.push(chip(countText(failures.length, 'download failed', 'downloads failed'), 'warn'));
   const notices: string[] = [];
   if (store.cut) notices.push('The store holds more entries than the reader lists: some lists are incomplete, and the rules of the extension files are missing.');
-  if (records === undefined) notices.push('The volume devspaces-monitor could not be read: the failed downloads, the last cleanup and the rules of the extension files are missing.');
+  if (records === undefined) notices.push('The volume devspaces-monitor is not there: the failed downloads, the last cleanup and the rules of the extension files are missing.');
   else if (!extensionRecordsKnown(records)) notices.push('Some records of the Monitor that the rules of the extension files need could not be read whole: these rules are missing.');
   if (platform === undefined && store.servers.length > 0) notices.push('The platform of the engine is not known: the server versions that the next cleanup removes are not known.');
   return { summary, sections, notices, monitorLog: false };

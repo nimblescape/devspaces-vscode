@@ -8,14 +8,13 @@
 // devspaces-monitor (its mode and version, and what its last runs did). From the records of the Monitor
 // (monitorRecords.ts) and the facts of Docker of its container (objectDetails.ts). Pure; no I/O.
 import { CACHE_RUN_FILE, IMAGES_IN_USE_MAX_AGE_MS, IMAGE_SETTINGS_FILE, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, UNUSED_END_MS } from '../remoteMonitor/protocol';
-import { IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
-import { nextCronTime } from '../remoteMonitor/cron';
+import { DEFAULT_CACHE_UPDATE_SCHEDULE, IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
 import { freshRegistryDigests, registryReferenceKey } from '../remoteMonitor/registryAnswers';
-import { backgroundRunDue, runRetryDue } from '../remoteMonitor/backgroundRules';
+import { nextBackgroundRunAt } from '../remoteMonitor/backgroundRules';
 import { RUN_FAILURE_EVENTS, type RunEvent, type RunReport } from '../remoteMonitor/runReport';
 import { compareDevspacesVersions, isDevspacesVersion } from '../http';
-import { RECORDED_LIST_MS } from '../vscodeExtensions';
-import type { MonitorRecords } from './monitorRecords';
+import { RECORDED_LIST_MS, RECORD_AHEAD_MS } from '../vscodeExtensions';
+import { cacheRunKnown, type MonitorRecords } from './monitorRecords';
 import type { ContainerDetails } from './objectDetails';
 import { ageText, cell, chip, countText, dockerTimeText, fact, itemsText, shortDigest, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportFact, type ReportSection } from './reportModel';
 
@@ -49,8 +48,8 @@ export function scheduleText(schedule: string | undefined, timeZone: string | un
 function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<string, string> | undefined): { schedule: CacheSchedule; timeZone: string; from: string } | undefined {
   if (records.unreadable.includes(IMAGE_SETTINGS_FILE)) return undefined;
   const settings = records.settings;
-  const stored = settings !== undefined ? parseCacheSchedule(settings.schedule) : undefined;
-  if (settings !== undefined && stored !== undefined) return { schedule: stored, timeZone: settings.timeZone, from: 'sent by the last start of a window' };
+  // The parse of the settings takes only a schedule that parseCacheSchedule takes.
+  if (settings !== undefined) return { schedule: parseCacheSchedule(settings.schedule)!, timeZone: settings.timeZone, from: 'sent by the last start of a window' };
   if (containerEnv === undefined) return undefined;
   return { ...cacheScheduleFromEnv(Object.fromEntries(containerEnv)), from: 'of its container: no window has sent one since its start' };
 }
@@ -71,35 +70,38 @@ function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerE
   const facts: ReportFact[] = [];
   const active = activeSchedule(records, containerEnv);
   facts.push(active !== undefined ? fact('Schedule', `${scheduleText(active.schedule.text, active.timeZone)} · ${active.from}`) : unknownScheduleFact(records));
-  if (records.textless.includes(CACHE_RUN_FILE)) {
-    facts.push(fact('Last run ended', 'not known: the reader left out the text of cache-run.json', chip('too large for one read', 'warn')));
+  if (!cacheRunKnown(records)) {
+    facts.push(fact('Last run ended', records.textless.includes(CACHE_RUN_FILE) ? 'not known: the reader left out the text of cache-run.json' : 'not known: the reader did not list all the files of the volume', chip('the record cannot be read', 'warn')));
     return facts;
   }
   const state = records.cacheRun ?? {};
   facts.push(fact('Last run ended', state.lastEndAt !== undefined ? timeText(state.lastEndAt, clock) : 'no run ended yet'));
   const retries = state.retryAt !== undefined ? chip(`the last ${countText(state.retries ?? 1, 'run')} did not reach the network`, 'warn') : undefined;
   const nextFact = (text: string): ReportFact => fact('Next run', text, retries);
-  const nextTime = (from: number, { schedule, timeZone }: { schedule: CacheSchedule; timeZone: string }): number | undefined =>
-    schedule.kind === 'interval' ? from + schedule.minutes * 60_000 : nextCronTime(from, schedule.cron, timeZone);
-  if (state.retryAt === undefined && state.lastEndAt === undefined) {
-    facts.push(nextFact('at the next check of the Monitor: no run is known'));
-  } else if (active === undefined) {
-    // Without the last attempt, only the retry counts (backgroundRunDue).
-    if (state.retryAt !== undefined) facts.push(nextFact(runRetryDue(state.retryAt, clock.now) ? 'now: it runs at the next check of the Monitor' : `a retry ${timeText(state.retryAt, clock)}${state.lastAttemptAt !== undefined ? ', or before it by the schedule' : ''}`));
+  const times = { lastEndAt: state.lastEndAt, retryAt: state.retryAt, lastAttemptAt: state.lastAttemptAt };
+  // Without the schedule, only a retry without a last attempt, or a first run, has a known time (nextBackgroundRunAt).
+  const known = active !== undefined || (state.retryAt !== undefined && state.lastAttemptAt === undefined) || (state.retryAt === undefined && state.lastEndAt === undefined);
+  const next = known ? nextBackgroundRunAt(times, active?.schedule ?? DEFAULT_SCHEDULE, active?.timeZone ?? 'UTC', clock.now) : undefined;
+  // A Monitor that no window used for UNUSED_END_MS ends, and starts no run that is only due (UnusedEnd.paused).
+  const unused = records.lastUse !== undefined && clock.now - records.lastUse.at >= UNUSED_END_MS;
+  if (!known) {
+    if (state.retryAt !== undefined) facts.push(nextFact(`a retry ${timeText(state.retryAt, clock)}, or before it by the schedule`));
     else facts.push(nextFact(records.unreadable.includes(IMAGE_SETTINGS_FILE) ? 'not known: the schedule is not known' : 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
-  } else if (backgroundRunDue({ lastEndAt: state.lastEndAt, retryAt: state.retryAt, lastAttemptAt: state.lastAttemptAt }, active.schedule, active.timeZone, clock.now)) {
-    facts.push(nextFact('now: it runs at the next check of the Monitor'));
-  } else if (state.retryAt !== undefined) {
-    // The retry, or the schedule counted from the last attempt, whichever comes first (backgroundRunDue).
-    const scheduled = state.lastAttemptAt !== undefined ? nextTime(state.lastAttemptAt, active) : undefined;
-    facts.push(nextFact(scheduled !== undefined && scheduled < state.retryAt ? `${timeText(scheduled, clock)} by the schedule, before the retry ${timeText(state.retryAt, clock)}` : `a retry ${timeText(state.retryAt, clock)}`));
+  } else if (next === undefined) {
+    facts.push(nextFact('none: the schedule has no time'));
+  } else if (next <= clock.now) {
+    facts.push(nextFact(unused ? `not now: no window used this engine for ${spanText(UNUSED_END_MS)}, so the Monitor ends; the next start of a window starts it again` : state.retryAt === undefined && state.lastEndAt === undefined ? 'at the next check of the Monitor: no run is known' : 'now: it runs at the next check of the Monitor'));
+  } else if (state.retryAt !== undefined && next < state.retryAt) {
+    facts.push(nextFact(`${timeText(next, clock)} by the schedule, before the retry ${timeText(state.retryAt, clock)}`));
   } else {
-    const next = nextTime(state.lastEndAt!, active);
-    facts.push(nextFact(next === undefined ? 'none: the schedule has no time' : timeText(next, clock)));
+    facts.push(nextFact(state.retryAt !== undefined ? `a retry ${timeText(next, clock)}` : timeText(next, clock)));
   }
   if (state.lastCleanupAt !== undefined) facts.push(fact('Last cleanup of the store', timeText(state.lastCleanupAt, clock)));
   return facts;
 }
+
+/** A schedule for nextBackgroundRunAt where its time does not depend on the schedule (a retry without a last attempt, a first run). */
+const DEFAULT_SCHEDULE = parseCacheSchedule(DEFAULT_CACHE_UPDATE_SCHEDULE)!;
 
 /** The computer of a record: this one, or another one. */
 function computerText(source: string, computer: ReportComputer): string {
@@ -232,6 +234,8 @@ function extensionListsSection(records: MonitorRecords, computer: ReportComputer
         const record = list.record;
         if (record === undefined) return [cell(devspaceText(list.devspaceId, computer)), cell(''), cell(''), cell(''), cell('', chip('the record cannot be read', 'warn'))];
         const until = record.at + RECORDED_LIST_MS;
+        // As wantedExtensions: a list whose time lies more than RECORD_AHEAD_MS ahead of the clock does not count.
+        if (record.at - clock.now > RECORD_AHEAD_MS) return [cell(devspaceText(list.devspaceId, computer)), cell(String(record.configuration.length)), cell(String(record.defaults.length)), cell(timeText(record.at, clock)), cell('', chip('does not count: its time lies ahead of the clock of the host', 'warn'))];
         return [
           cell(devspaceText(list.devspaceId, computer)),
           cell(String(record.configuration.length)),
@@ -355,5 +359,6 @@ export function monitorContainerReport(details: ContainerDetails | undefined, re
     const failed = records.runs[0] !== undefined ? failureCount(records.runs[0]) : 0;
     if (failed > 0) summary.push(chip(`${countText(failed, 'failure')} in the last run`, 'warn'));
   }
-  return { summary, sections, notices: records === undefined ? ['The volume devspaces-monitor could not be read: the background run and the last runs are missing.'] : [], monitorLog: true };
+  // Why the records are missing is a notice of the read (resourceReport).
+  return { summary, sections, notices: [], monitorLog: true };
 }
