@@ -149,7 +149,7 @@ describe('the script of the reader', () => {
     write('worker-cache/state.json', '{}');
     fs.symlinkSync('/etc/passwd', path.join(root, 'worker-cache', 'link'));
     const cache = runReader().workerCache;
-    expect(cache?.more).toBe(0);
+    expect(cache?.more).toBe(false);
     expect(cache?.entries.map(({ name, kind, usage }) => ({ name, kind, usage }))).toEqual([
       { name: 'devcontainer-cli', kind: 'folder', usage: { bytes: 30, files: 2, cut: false } },
       { name: 'link', kind: 'link', usage: { bytes: '/etc/passwd'.length, files: 1, cut: false } },
@@ -207,16 +207,16 @@ describe('the script of the reader', () => {
     }
   });
 
-  it('stops at its limit of entries: the sizes and lists are then incomplete', () => {
+  it('stops at its limit of steps: the sizes and lists are then incomplete', () => {
     for (let i = 0; i < 30; i++) write(`vscode/extensions/universal/a.b${i}-1.0.0`, 'x');
     write('worker-cache/one/file', 'x');
-    const code = VOLUME_READER_CODE.replace(/entries: \d+,/, 'entries: 10,');
+    const code = VOLUME_READER_CODE.replace(/steps: \d+,/, 'steps: 25,');
     expect(code).not.toBe(VOLUME_READER_CODE);
     const reading = parseVolumeReading(execFileSync(process.execPath, ['-e', code, root], { encoding: 'utf8' }));
     expect(reading?.stopped).toBe(true);
     expect(reading?.vscode?.cut).toBe(true);
     expect(reading?.vscode?.extensions.length).toBeLessThan(30);
-    expect(reading?.workerCache).toEqual({ entries: [], more: 1 });
+    expect(reading?.workerCache).toEqual({ entries: [], more: true });
   });
 
   it('leaves out the texts when the output would be longer than its limit in bytes, also with characters of several bytes', () => {
@@ -254,6 +254,12 @@ describe('the script of the reader', () => {
       ['a.json', 600, undefined],
       ['b.json', undefined, 'budget'],
     ]);
+  });
+
+  it('says when even the output without the texts is too long, and that no limit of steps was reached', () => {
+    write('monitor/runs.json', '{}');
+    const code = VOLUME_READER_CODE.replace(/output: \d+,/, 'output: 20,');
+    expect(parseVolumeReading(execFileSync(process.execPath, ['-e', code, root], { encoding: 'utf8' }))).toEqual({ stopped: false, unreadable: 0, tooLong: true });
   });
 
   it('keeps its limits in the code that it sends', () => {
@@ -302,7 +308,7 @@ describe('the output of the reader', () => {
           extensions: [{ folder: 'universal', name: 'a.b-1.0.0', bytes: 3 }, { folder: 'universal', name: 'c.d-1.0.0' }],
           locks: 'many',
         },
-        workerCache: { entries: [{ name: 'a', kind: 'socket', usage: {} }, { name: 'b', kind: 'file', usage: { bytes: 1, files: 1 } }], more: 3 },
+        workerCache: { entries: [{ name: 'a', kind: 'socket', usage: {} }, { name: 'b', kind: 'file', usage: { bytes: 1, files: 1 } }], more: true },
       }),
     );
     expect(reading).toEqual({
@@ -327,7 +333,7 @@ describe('the output of the reader', () => {
         locks: 0,
         cut: false,
       },
-      workerCache: { entries: [{ name: 'b', kind: 'file', usage: { bytes: 1, files: 1, cut: false } }], more: 3 },
+      workerCache: { entries: [{ name: 'b', kind: 'file', usage: { bytes: 1, files: 1, cut: false } }], more: true },
     });
   });
 });

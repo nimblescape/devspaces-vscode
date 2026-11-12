@@ -28,16 +28,16 @@ export type ReaderVolume = (typeof READER_VOLUMES)[number];
 /** The names of the volumes to mount (only those that exist on the host: a mount would create a missing one). */
 export type ReaderVolumeNames = Partial<Record<ReaderVolume, string>>;
 
-/** The time limit of one run of the reader (its script stops visiting entries after READER_TIME_MS). */
+/** The time limit of one run of the reader (its script stops after READER_TIME_MS). */
 export const READER_TIMEOUT_MS = 2 * 60_000;
 /**
- * The time after which the script visits no more entries (the sizes and lists are then marked as incomplete): short,
+ * The time after which the script takes no more steps (the sizes and lists are then marked as incomplete): short,
  * because the run waits on the shared shell of the host, where the other calls of the view and the takeover of the shell
  * by a connection of the relay wait behind it.
  */
 export const READER_TIME_MS = 10_000;
-/** The most entries that the script visits. */
-export const READER_MAX_ENTRIES = 400_000;
+/** The most steps of the script: a name read from a folder, an lstat, or a text. */
+export const READER_MAX_STEPS = 1_000_000;
 /** The largest file whose text the script prints. */
 export const READER_MAX_FILE = 1024 * 1024;
 /** The most text of files that the script prints. */
@@ -47,7 +47,7 @@ export const READER_MAX_TEXTS = 6 * 1024 * 1024;
  * takes at most MAX_SHELL_COMMAND_OUTPUT, 16 MiB).
  */
 export const READER_MAX_OUTPUT = 12 * 1024 * 1024;
-/** The most rows of each list (servers, markers, extension files, files of the Monitor). */
+/** The most names of a folder in a list (servers, markers, extension files, files of the Monitor). */
 export const READER_MAX_ROWS = 5000;
 /** The most entries of the top level of the cache of the workers. */
 export const READER_MAX_TOP = 500;
@@ -62,62 +62,81 @@ export const READER_PROTOCOL = 1;
  * (small, and the most important), the store of VS Code, the cache of the workers:
  * - the Monitor: every file `*.json` at the top, in heartbeats/, extensions/ and extensions/wanted/ with its text (or
  *   why it was left out), and every file of worker-scripts/ (the texts of its records `*.json` only);
- * - the store of VS Code: each server folder server/QUALITY/PLATFORM/COMMIT with the version of its product.json,
- *   whether `node` and the script of its quality are there and its size; the markers used/VERSION with their time; the
- *   files extensions/FOLDER/NAME; the sizes of tmp/ and extensions/tmp/ and the number of the locks;
+ * - the store of VS Code: the markers used/VERSION with their time and the files extensions/FOLDER/NAME first (they
+ *   cost little), then each server folder server/QUALITY/PLATFORM/COMMIT with the version of its product.json, whether
+ *   `node` and the script of its quality are there and its size; the sizes of tmp/ and extensions/tmp/ and the number of
+ *   the locks;
  * - the cache of the workers: each entry of its top level with its kind, its time and its size.
  * It never follows a link: lstat, a folder is listed only when it is no link, and the texts are opened with O_NOFOLLOW
- * (and O_NONBLOCK, so that a FIFO cannot hold it). A size is the sum of the sizes of the files (as Docker counts the size
- * of a volume: a file with several hard links once); `cut` says that a walk stopped at a limit or found an entry that
- * it could not read (a folder that it could not list, or a name that is no UTF-8), so the numbers are at least those. Each entry that it visits counts against READER_MAX_ENTRIES and READER_TIME_MS; `stopped` says that
- * one of them was reached. `unreadable` counts the folders that could not be listed.
+ * (and O_NONBLOCK, so that a FIFO cannot hold it). It reads a folder name by name (opendir), so that a huge folder
+ * cannot hold it either. A size is the sum of the sizes of the files (as Docker counts the size of a volume: a file with
+ * several hard links once); `cut` says that a list or a walk stopped at a limit or found an entry that it could not read
+ * (a folder that it could not list, or a name that is no UTF-8), so the numbers are at least those. Each step (a name
+ * read from a folder, an lstat, a text) counts against READER_MAX_STEPS and READER_TIME_MS; `stopped` says that one of
+ * them was reached. `unreadable` counts the folders that could not be listed.
  */
 export const VOLUME_READER_SCRIPT = String.raw`
 "use strict";
 const fs = require("fs");
 const path = require("path");
 const root = process.argv[1];
-const LIMITS = { entries: ${READER_MAX_ENTRIES}, ms: ${READER_TIME_MS}, file: ${READER_MAX_FILE}, texts: ${READER_MAX_TEXTS}, output: ${READER_MAX_OUTPUT}, rows: ${READER_MAX_ROWS}, top: ${READER_MAX_TOP} };
+const LIMITS = { steps: ${READER_MAX_STEPS}, ms: ${READER_TIME_MS}, file: ${READER_MAX_FILE}, texts: ${READER_MAX_TEXTS}, output: ${READER_MAX_OUTPUT}, rows: ${READER_MAX_ROWS}, top: ${READER_MAX_TOP} };
 const started = Date.now();
-let visited = 0;
+let steps = 0;
 let texts = 0;
 let unreadable = 0;
 let stopped = false;
-function lstat(file) { try { return fs.lstatSync(file); } catch { return undefined; } }
-// The names in a folder, sorted; none when it is no folder (also a link to one: no walk follows a link). "checked": the
-// caller has seen with lstat that it is a folder.
-function list(dir, checked) { if (!checked) { const stat = lstat(dir); if (stat === undefined || !stat.isDirectory()) { return []; } } try { return fs.readdirSync(dir).sort(); } catch { unreadable++; return []; } }
-function isFolder(file) { const stat = lstat(file); return stat !== undefined && stat.isDirectory(); }
+// One more step; false once a limit is reached (the time is read every 100 steps).
+function spend() { if (stopped) { return false; } steps++; if (steps > LIMITS.steps || (steps % 100 === 0 && Date.now() - started > LIMITS.ms)) { stopped = true; } return !stopped; }
+function lstat(file) { if (!spend()) { return undefined; } try { return fs.lstatSync(file); } catch { return undefined; } }
+// The names in a folder, sorted, at most "max" of them, read name by name: "cut" when it stopped before the end or could
+// not read the folder. None when it is no folder (also a link to one: no walk follows a link). "checked": the caller has
+// seen with lstat that it is a folder.
+function list(dir, checked, max) {
+  const result = { names: [], cut: false };
+  if (!checked) { const stat = lstat(dir); if (stat === undefined || !stat.isDirectory()) { result.cut = stopped; return result; } }
+  let handle;
+  try {
+    handle = fs.opendirSync(dir);
+    while (true) {
+      if (!spend()) { result.cut = true; break; }
+      const entry = handle.readSync();
+      if (entry === null) { break; }
+      if (result.names.length >= max) { result.cut = true; break; }
+      result.names.push(entry.name);
+    }
+  } catch { unreadable++; result.cut = true; } finally { if (handle !== undefined) { try { handle.closeSync(); } catch {} } }
+  result.names.sort();
+  return result;
+}
 function isFile(file) { const stat = lstat(file); return stat !== undefined && stat.isFile(); }
-// One more entry; false once a limit is reached (the time is read every 100 entries).
-function spend() { if (stopped) { return false; } visited++; if (visited > LIMITS.entries || (visited % 100 === 0 && Date.now() - started > LIMITS.ms)) { stopped = true; } return !stopped; }
 // The size of a folder. A file with several hard links counts once (as Docker counts it); an entry that lstat cannot
 // read (a name that is no UTF-8, or one that went meanwhile) makes the size incomplete.
 function usage(dir) {
   const result = { bytes: 0, files: 0, cut: false };
-  const before = unreadable;
   const linked = new Set();
   const stack = [[dir, false]];
   while (stack.length > 0) {
+    if (stopped) { result.cut = true; break; }
     const [current, checked] = stack.pop();
-    for (const name of list(current, checked)) {
-      if (!spend()) { result.cut = true; return result; }
+    const listed = list(current, checked, Infinity);
+    if (listed.cut) { result.cut = true; }
+    for (const name of listed.names) {
       const file = path.join(current, name);
       const stat = lstat(file);
-      if (stat === undefined) { result.cut = true; continue; }
+      if (stat === undefined) { result.cut = true; if (stopped) { break; } continue; }
       if (stat.isDirectory()) { stack.push([file, true]); continue; }
       if (stat.nlink > 1) { const key = stat.dev + ":" + stat.ino; if (linked.has(key)) { continue; } linked.add(key); }
       result.bytes += stat.size;
       result.files++;
     }
   }
-  if (unreadable > before) { result.cut = true; }
   return result;
 }
 // The text of a regular file: { text }, or { omitted } with the reason: "size" (over LIMITS.file), "budget" (over the
 // rest of LIMITS.texts, when "counted"), "time" (a limit was reached), "error" (it could not be read).
 function text(file, counted) {
-  if (stopped) { return { omitted: "time" }; }
+  if (!spend()) { return { omitted: "time" }; }
   let fd;
   try {
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -136,31 +155,54 @@ function monitor(dir) {
   const files = [];
   let cut = false;
   function add(relative, read) {
-    if (files.length >= LIMITS.rows || !spend()) { cut = true; return; }
+    if (files.length >= LIMITS.rows) { cut = true; return; }
     const stat = lstat(path.join(dir, relative));
-    if (stat === undefined || !stat.isFile()) { return; }
+    if (stat === undefined) { cut = true; return; }
+    if (!stat.isFile()) { return; }
     const entry = { path: relative, bytes: stat.size, modifiedAt: stat.mtimeMs };
     if (read) { const content = text(path.join(dir, relative), true); if (content.text !== undefined) { entry.text = content.text; } else { entry.omitted = content.omitted; } }
     files.push(entry);
   }
-  for (const name of list(dir, true)) { if (name.endsWith(".json")) { add(name, true); } }
-  for (const folder of ["heartbeats", "extensions", "extensions/wanted"]) { for (const name of list(path.join(dir, folder), false)) { if (name.endsWith(".json")) { add(folder + "/" + name, true); } } }
-  for (const name of list(path.join(dir, "worker-scripts"), false)) { add("worker-scripts/" + name, name.endsWith(".json")); }
+  function folder(relative, checked, read) {
+    const listed = list(relative === "" ? dir : path.join(dir, relative), checked, LIMITS.rows);
+    if (listed.cut) { cut = true; }
+    for (const name of listed.names) { if (read(name)) { add(relative === "" ? name : relative + "/" + name, name.endsWith(".json")); } }
+  }
+  const isJson = (name) => name.endsWith(".json");
+  folder("", true, isJson);
+  folder("heartbeats", false, isJson);
+  folder("extensions", false, isJson);
+  folder("extensions/wanted", false, isJson);
+  folder("worker-scripts", false, () => true);
   return { files, cut };
 }
 function vscode(dir) {
-  const servers = [];
-  const serverRoot = path.join(dir, "server");
   let cut = false;
-  for (const quality of list(serverRoot, false)) {
-    if (stopped) { cut = true; break; }
-    for (const platform of list(path.join(serverRoot, quality), false)) {
-      if (stopped) { cut = true; break; }
-      for (const commit of list(path.join(serverRoot, quality, platform), false)) {
-        if (servers.length >= LIMITS.rows || !spend()) { cut = true; break; }
-        const folder = path.join(serverRoot, quality, platform, commit);
+  const listed = (relative) => { const result = list(path.join(dir, relative), false, LIMITS.rows); if (result.cut) { cut = true; } return result.names; };
+  const used = [];
+  for (const name of listed("used")) {
+    const stat = lstat(path.join(dir, "used", name));
+    if (stat === undefined) { cut = true; continue; }
+    if (stat.isFile()) { used.push({ name, at: stat.mtimeMs }); }
+  }
+  const extensions = [];
+  for (const folder of ["universal", "linux-x64", "linux-arm64"]) {
+    for (const name of listed(path.join("extensions", folder))) {
+      if (extensions.length >= LIMITS.rows) { cut = true; break; }
+      const stat = lstat(path.join(dir, "extensions", folder, name));
+      if (stat === undefined) { cut = true; continue; }
+      if (stat.isFile()) { extensions.push({ folder, name, bytes: stat.size, modifiedAt: stat.mtimeMs }); }
+    }
+  }
+  const servers = [];
+  for (const quality of listed("server")) {
+    for (const platform of listed(path.join("server", quality))) {
+      for (const commit of listed(path.join("server", quality, platform))) {
+        if (servers.length >= LIMITS.rows || stopped) { cut = true; break; }
+        const folder = path.join(dir, "server", quality, platform, commit);
         const stat = lstat(folder);
-        if (stat === undefined || !stat.isDirectory()) { continue; }
+        if (stat === undefined) { cut = true; continue; }
+        if (!stat.isDirectory()) { continue; }
         let version;
         try { version = JSON.parse(text(path.join(folder, "product.json"), false).text).version; } catch {}
         const script = quality === "insider" ? "code-server-insiders" : "code-server";
@@ -168,38 +210,24 @@ function vscode(dir) {
       }
     }
   }
-  const used = [];
-  for (const name of list(path.join(dir, "used"), false)) {
-    if (used.length >= LIMITS.rows || !spend()) { cut = true; break; }
-    const stat = lstat(path.join(dir, "used", name));
-    if (stat !== undefined && stat.isFile()) { used.push({ name, at: stat.mtimeMs }); }
-  }
-  const extensions = [];
-  for (const folder of ["universal", "linux-x64", "linux-arm64"]) {
-    if (stopped) { cut = true; break; }
-    for (const name of list(path.join(dir, "extensions", folder), false)) {
-      if (extensions.length >= LIMITS.rows || !spend()) { cut = true; break; }
-      const stat = lstat(path.join(dir, "extensions", folder, name));
-      if (stat !== undefined && stat.isFile()) { extensions.push({ folder, name, bytes: stat.size, modifiedAt: stat.mtimeMs }); }
-    }
-  }
-  return { servers, used, extensions, temporary: usage(path.join(dir, "tmp")), extensionTemporary: usage(path.join(dir, "extensions", "tmp")), locks: list(path.join(dir, "locks"), false).length, cut };
+  const locks = list(path.join(dir, "locks"), false, Infinity);
+  return { servers, used, extensions, temporary: usage(path.join(dir, "tmp")), extensionTemporary: usage(path.join(dir, "extensions", "tmp")), locks: locks.names.length, cut: cut || locks.cut };
 }
 function cache(dir) {
-  const names = list(dir, true);
+  const listed = list(dir, true, LIMITS.top);
   const rows = [];
-  let more = Math.max(0, names.length - LIMITS.top);
-  for (let i = 0; i < Math.min(names.length, LIMITS.top); i++) {
-    if (!spend()) { more = names.length - i; break; }
-    const name = names[i];
+  let more = listed.cut;
+  for (const name of listed.names) {
     const file = path.join(dir, name);
     const stat = lstat(file);
-    if (stat === undefined) { continue; }
+    if (stat === undefined) { more = true; continue; }
     const kind = stat.isDirectory() ? "folder" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "link" : "other";
     rows.push({ name, kind, modifiedAt: stat.mtimeMs, usage: kind === "folder" ? usage(file) : { bytes: stat.size, files: 1, cut: false } });
   }
   return { entries: rows, more };
 }
+// Whether a volume is mounted: not a step, so that a volume after a limit is still named (with its lists cut).
+function isFolder(file) { try { return fs.lstatSync(file).isDirectory(); } catch { return false; } }
 const out = { reader: ${READER_PROTOCOL} };
 if (isFolder(path.join(root, "monitor"))) { out.monitor = monitor(path.join(root, "monitor")); }
 if (isFolder(path.join(root, "vscode"))) { out.vscode = vscode(path.join(root, "vscode")); }
@@ -208,7 +236,7 @@ out.stopped = stopped;
 out.unreadable = unreadable;
 let json = JSON.stringify(out);
 if (Buffer.byteLength(json) > LIMITS.output && out.monitor !== undefined) { for (const file of out.monitor.files) { if (file.text !== undefined) { delete file.text; file.omitted = "output"; } } out.monitor.textsDropped = true; json = JSON.stringify(out); }
-if (Buffer.byteLength(json) > LIMITS.output) { json = JSON.stringify({ reader: out.reader, stopped: true, unreadable, tooLong: true }); }
+if (Buffer.byteLength(json) > LIMITS.output) { json = JSON.stringify({ reader: out.reader, stopped, unreadable, tooLong: true }); }
 process.stdout.write(json);
 `;
 
@@ -281,7 +309,7 @@ const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${READER_R
  * the other calls of the view Docker Hosts, because it needs nothing of this computer (no file, no input).
  */
 export function isVolumeReaderCall(args: readonly string[]): boolean {
-  if (args[0] !== 'run' || args[2] !== '--name') return false;
+  if (args[0] !== 'run' || args[2] !== '--name' || args[args.length - 1] !== READER_ROOT) return false;
   const name = args[3] ?? '';
   const image = args[args.indexOf('--entrypoint') + 2] ?? '';
   const volumes: ReaderVolumeNames = {};
@@ -386,8 +414,8 @@ export interface CacheEntry {
 /** What the cache of the workers (devspaces-worker-cache) contains. */
 export interface WorkerCacheReading {
   entries: CacheEntry[];
-  /** The entries after the first READER_MAX_TOP. */
-  more: number;
+  /** It has more entries than these (more than READER_MAX_TOP, or the reader stopped at a limit). */
+  more: boolean;
 }
 
 /** What the reader read: each volume that was mounted and could be read. */
@@ -516,7 +544,7 @@ function parseWorkerCache(value: unknown): WorkerCacheReading | undefined {
     const modifiedAt = timeOf(entry.modifiedAt);
     entries.push({ name, kind, ...(modifiedAt !== undefined ? { modifiedAt } : {}), usage: parseUsage(entry.usage) });
   }
-  return { entries, more: countOf(value.more) ?? 0 };
+  return { entries, more: value.more === true };
 }
 
 /** The output of the script (VOLUME_READER_SCRIPT), checked; undefined for anything else (also another protocol). */

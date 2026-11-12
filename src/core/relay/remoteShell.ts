@@ -125,14 +125,11 @@ interface Running {
   finish(result: RunResult): void;
 }
 
-/** The smallest memory of the output of a command that has output. */
-const MIN_OUTPUT_ROOM = 64 * 1024;
-
 /** Adds `chunk` to the output of `running` (Running.room: in linear time also for an output of many chunks). */
 function appendOutput(running: Running, chunk: Buffer): void {
   const length = running.stdout.length + chunk.length;
   if (length > running.room.length) {
-    const room = Buffer.allocUnsafe(Math.max(length, 2 * running.room.length, MIN_OUTPUT_ROOM));
+    const room = Buffer.allocUnsafe(Math.max(length, 2 * running.room.length));
     running.stdout.copy(room);
     running.room = room;
   }
