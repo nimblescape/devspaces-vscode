@@ -295,8 +295,12 @@ class UsagePage {
     // Each start reads the sizes again after its first sample, unless they were read less than a minute ago (a quick
     // switch back to the page).
     if (this.sizesReadAt === undefined || this.timers.now() - this.sizesReadAt >= SIZES_FRESH_MS) this.sizesDueAt = undefined;
-    // After a failed read in the background, only a click (the open, Resume, Retry, Start the VM) reads by itself again.
-    if (flow) this.sizesAuto = true;
+    // After a failed read in the background, only a click (the open, Resume, Retry, Start the VM) reads by itself again,
+    // also within a minute of the failed read.
+    if (flow && !this.sizesAuto) {
+      this.sizesAuto = true;
+      this.sizesDueAt = undefined;
+    }
     const runAbort = new AbortController();
     this.runAbort = runAbort;
     // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).

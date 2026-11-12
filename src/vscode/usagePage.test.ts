@@ -934,6 +934,17 @@ describe('UsagePages', () => {
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
   });
 
+  it('reads again at once after a click on Resume within a minute of a failed read in the background', async () => {
+    readSizes.mockRejectedValueOnce(new Error('permission denied'));
+    const panel = await openRead(pages(), 'build-box');
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    panel.receive({ type: 'pause' });
+    panel.receive({ type: 'resume' });
+    await secondSample('build-box');
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+  });
+
   it('shows no error of a read in the background that ended because the VM went to sleep, and tries again after a minute', async () => {
     shells.open.add(LIMA_HOST);
     readSizes.mockImplementationOnce(async () => {
