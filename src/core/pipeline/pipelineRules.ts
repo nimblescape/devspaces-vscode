@@ -144,10 +144,13 @@ export const PREPARE_LIMIT_MS = 30 * 60_000;
 export const PREPARE_STOP_WAIT_SECONDS = 20;
 
 /**
- * The hash that identifies a prepare (its PrepareKey, as JSON with sorted keys, and the ID of the helper image that
- * runs it), for the record of a prepare that the time limit stopped: the same hash is not tried again.
+ * The hash that identifies a prepare (its PrepareKey, as JSON with sorted keys, the ID of the helper image that runs
+ * it, and the hash of the lockfile that it read, `lockfileText`, when there is one), for the record of a prepare that
+ * the time limit stopped or whose build failed: the same hash is not tried again. The lockfile is not part of the key
+ * (configHash), but the build fails on one that does not match the configuration or that changed after it was read:
+ * a new lockfile is tried again.
  */
-export function prepareKeyHash(key: Omit<RefusedUpdate, 'items' | 'reason'>, helperImage: string): string {
+export function prepareKeyHash(key: Omit<RefusedUpdate, 'items' | 'reason'>, helperImage: string, lockfileText?: string): string {
   const sorted = (digests: Record<string, string>) => Object.fromEntries(Object.entries(digests).map(([name, digest]) => [name, digest.toLowerCase()]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   const text = JSON.stringify({
     configPath: key.configPath,
@@ -156,6 +159,7 @@ export function prepareKeyHash(key: Omit<RefusedUpdate, 'items' | 'reason'>, hel
     features: sorted(key.features),
     hostAccessChecks: key.hostAccessChecks ?? 'on',
     helperImage: helperImage.toLowerCase(),
+    ...(lockfileText !== undefined ? { lockfile: crypto.createHash('sha256').update(lockfileText).digest('hex') } : {}),
   });
   return `sha256:${crypto.createHash('sha256').update(text).digest('hex')}`;
 }

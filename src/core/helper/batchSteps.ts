@@ -14,6 +14,7 @@ import { COMPOSE_MODEL_PATH } from './compose';
 import { CONTAINER_CREDENTIAL_HELPER } from './containerGit';
 import { buildArgs, readConfigurationArgs, runUserCommandsArgs, upArgs } from './devcontainerCli';
 import {
+  MAX_LOCKFILE_LENGTH,
   OVERRIDE_CONFIG_PATH,
   cloneCommand,
   composeHashCommand,
@@ -247,7 +248,7 @@ export function batchStepCommand(kind: string, params: unknown): BatchStepComman
       };
     }
     case 'build': {
-      const p = fields(kind, params, ['repository', 'configPath', 'imageName'], ['override', 'files', 'env', 'frozenLockfile']);
+      const p = fields(kind, params, ['repository', 'configPath', 'imageName'], ['override', 'files', 'env', 'frozenLockfile', 'lockfileText']);
       const { folder } = folderOf(kind, p.repository);
       const configFile = `${folder}/${checked(kind, () => checkConfigPath(text(kind, p.configPath)))}`;
       const imageName = text(kind, p.imageName, 255);
@@ -259,11 +260,15 @@ export function batchStepCommand(kind: string, params: unknown): BatchStepComman
       // Every build runs through WRITE_AND_RUN_SCRIPT, for its lockfile rule.
       const override = p.override === undefined ? undefined : jsonObject(kind, p.override);
       const files = helperFiles(kind, p.files);
+      // The lockfile that the build must find (R-DS-010: the one of the image key), or none (`null`). Any text that the
+      // read of the configuration takes (it goes on standard input as JSON, never on a command line).
+      if (p.lockfileText !== undefined && p.lockfileText !== null && (typeof p.lockfileText !== 'string' || p.lockfileText.length > MAX_LOCKFILE_LENGTH)) fail(kind);
+      const lockfile = p.lockfileText as string | null | undefined;
       const config = override !== undefined ? OVERRIDE_CONFIG_PATH : configFile;
       const args = buildArgs({ workspaceFolder: folder, configPath: config, imageName, ...(p.frozenLockfile === true ? { frozenLockfile: true } : {}) });
       return {
         command: writeAndRunCommand({ repositoryConfig: configFile, config: override !== undefined ? OVERRIDE_CONFIG_PATH : undefined }, args),
-        input: checked(kind, () => writeAndRunInput(files, override)),
+        input: checked(kind, () => writeAndRunInput(files, override, lockfile)),
         env,
         git: false,
         // The token only masked in the output, as for `up` and run-user-commands.

@@ -25,6 +25,7 @@ import {
   OVERRIDE_FOLDER,
   TOKEN_FILE,
   UP_SCRIPT,
+  LOCKFILE_CHANGED_EXIT,
   WRITE_AND_RUN_SCRIPT,
   cloneCommand,
   composeModelCommand,
@@ -192,10 +193,11 @@ describe('WRITE_AND_RUN_SCRIPT (Docker Compose runs of the Dev Container CLI)', 
     files: Record<string, string>,
     args: string[],
     configs: { repository?: string; own?: string } = {},
+    extra: { lockfile?: string | null } = {},
   ): { status: number | null; stdout: string; stderr: string } {
     const result = spawnSync(process.execPath, ['-e', WRITE_AND_RUN_SCRIPT, folder, configs.repository ?? '', configs.own ?? '', ...args], {
       encoding: 'utf8',
-      input: JSON.stringify({ files }),
+      input: JSON.stringify({ files, ...extra }),
       env,
       timeout: 10_000,
     });
@@ -406,6 +408,35 @@ describe('WRITE_AND_RUN_SCRIPT (Docker Compose runs of the Dev Container CLI)', 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain(`is longer than ${MAX_LOCKFILE_LENGTH} characters.`);
+  });
+
+  // R-DS-010: a build of a shared image passes the lockfile text of its key (writeAndRunInput); the run must find that
+  // text next to the configuration of the repository (none: null), else it fails before the CLI starts.
+  it('fails when the lockfile of the repository is not the one that the run must find, and runs when it is', () => {
+    const { dir, folder, env } = setup();
+    const repo = path.join(dir, 'repo');
+    const build = ['build', '--workspace-folder', repo];
+    const printed = `build\n--workspace-folder\n${repo}\n`;
+    const repositoryConfig = path.join(repo, '.devcontainer', 'devcontainer.json');
+    write(repositoryConfig, '{}');
+    const own = `${folder}/devcontainer.json`;
+    // No lockfile, and none expected.
+    expect(run(folder, env, { [own]: '{}' }, build, { repository: repositoryConfig, own }, { lockfile: null }).stdout).toBe(`${printed}--no-lockfile\n`);
+    // A lockfile where none was read, and none where one was read.
+    const changed = run(folder, env, { [own]: '{}' }, build, { repository: repositoryConfig, own }, { lockfile: '{"features":{}}' });
+    expect(changed.status).toBe(LOCKFILE_CHANGED_EXIT);
+    expect(changed.stdout).toBe('');
+    expect(changed.stderr).toContain('The lockfile .devcontainer/devcontainer-lock.json changed after it was read.');
+    write(path.join(repo, '.devcontainer', 'devcontainer-lock.json'), '{"features":{}}');
+    expect(run(folder, env, { [own]: '{}' }, build, { repository: repositoryConfig, own }, { lockfile: null }).stderr).toContain('changed after it was read.');
+    // Another text, and the same text.
+    expect(run(folder, env, { [own]: '{}' }, build, { repository: repositoryConfig, own }, { lockfile: '{"features":{"a":{}}}' }).status).toBe(LOCKFILE_CHANGED_EXIT);
+    // Another failure before the CLI keeps its exit code 2.
+    write(path.join(repo, '.devcontainer', 'devcontainer-lock.json'), 'x'.repeat(MAX_LOCKFILE_LENGTH + 1));
+    expect(run(folder, env, { [own]: '{}' }, build, { repository: repositoryConfig, own }, { lockfile: null }).status).toBe(2);
+    write(path.join(repo, '.devcontainer', 'devcontainer-lock.json'), '{"features":{}}');
+    expect(run(folder, env, { [own]: '{}' }, build, { repository: repositoryConfig, own }, { lockfile: '{"features":{}}' }).stdout).toBe(printed);
+    expect(fs.readFileSync(`${folder}/devcontainer-lock.json`, 'utf8')).toBe('{"features":{}}');
   });
 
   it.each<[string, (repo: string) => { args: string[]; config: string }]>([

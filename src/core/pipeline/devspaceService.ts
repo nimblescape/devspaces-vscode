@@ -97,7 +97,7 @@ import {
 import { findLocalEnvNames, helperEnvNames } from '../helper/localEnv';
 import type { HelperImageUse } from '../helper/helperImage';
 import { DEVCONTAINER_CLI_VERSION } from '../helper/helperImageBuild';
-import type { HelperFiles } from '../helper/stepInputs';
+import { isLockfileChanged, type HelperFiles } from '../helper/stepInputs';
 import {
   compareWithBuildRecord,
   type CheckedOutcome,
@@ -131,7 +131,8 @@ import {
   devspaceImageName,
   devspaceImageRepository,
   isConfigPathLabelValue,
-  isImageKey,
+  hasDevspaceImageLabel,
+  isKeyOnlyImage,
   newDevspaceId,
   ownDevspaceLabel,
   preparedImageName,
@@ -144,7 +145,7 @@ import { sameSource, sourceLabel, sourceOf, sourceOperationKey, sourceSegment } 
 import { MAX_REFERENCE_LENGTH } from '../imageCheck/dockerfile';
 import { namePair } from '../namePairs';
 import { buildRecordLabel, containerBuildRecord, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
-import { chosenSharedImage, hasDevspaceImageLabel, imageKey, isSharedImage, isSharedImageCandidate, sharedImageInputs } from './imageKey';
+import { chosenSharedImage, imageKey, isSharedImage, isSharedImageCandidate, sameImageId, sharedImageInputs } from './imageKey';
 import { ownerOf } from '../ownership';
 import { keepFlagsOf, keptWhenClosed } from '../session/sessionRules';
 import { BRANCH_EXEC_TIMEOUT_MS, readBranch, readGitSummary } from './refreshStates';
@@ -842,6 +843,15 @@ export function kindSwitchFailure(
  */
 export function additionalVolumeLabels(devspace: Devspace): Record<string, string> {
   return { ...volumeLabels(devspace), [LABEL_VOLUME]: VOLUME_KIND_ADDITIONAL };
+}
+
+/**
+ * Whether the dev container can carry the build record `record` as its label (buildRecordLabel: not too long;
+ * devspaceContainerLabels: no variable of the CLI). Only such a record vouches for a shared image (R-DS-010).
+ */
+function fitsOnDevContainer(record: BuildRecord): boolean {
+  const label = buildRecordLabel(record);
+  return label !== '' && ownDevspaceLabel(`${LABEL_BUILD_RECORD}=${label}`) !== undefined;
 }
 
 /**
@@ -2669,7 +2679,7 @@ export class DevspaceService extends OperationBase {
     const found = labels === undefined ? undefined : imageBuildRecord(labels, env, newest.tag, newest.number);
     if (id === undefined || found === undefined) {
       // A shared image (R-DS-010) carries no build record: the record is on the dev container, which is gone here.
-      const shared = labels !== undefined && isImageKey(labels[LABEL_IMAGE_KEY]) && !hasDevspaceImageLabel(labels);
+      const shared = labels !== undefined && isKeyOnlyImage(labels);
       const why = id === undefined ? 'it is gone' : shared ? 'it is a shared image, whose build record is only on the dev container' : 'its labels do not fit';
       return {
         reason: `its devspace image ${newest.tag} has no build record of it (${why})`,
@@ -2832,41 +2842,16 @@ export class DevspaceService extends OperationBase {
     ctx.steps.step('preparing');
     // R-DS-010: the key of a shared image (after the pulls: the IDs of the local images are part of it), unless a
     // prepared image is taken.
-    let sharedKey = prepared === undefined ? await this.sharedImageKey(ctx, loaded, plan) : undefined;
+    let sharedKey = prepared === undefined ? await this.sharedImageKey(ctx, loaded, plan.check) : undefined;
     const buildNumber = await this.nextBuildNumber(env);
     const imageName = devspaceImageName(env.repository, env.id, buildNumber);
     this.entryUpdated(ctx, await this.openRecords.build(ctx.env.id, { kind: 'number', buildNumber }));
     // The build record of the new image, before the build, so that the image carries it (imageRecordLabels); its pinned
     // ID follows after the labels.
-    const current = plan.check.kind === 'checked' ? plan.check.outcome : undefined;
-    const builtRecord: BuildRecord = {
-      builtAt: isoTime(this.deps.clock),
-      devspaceImage: imageName,
-      buildNumber,
-      configPath: loaded.configPath,
-      configHash: loaded.configHash,
-      ...(loaded.defaultImage !== undefined ? { defaultImage: loaded.defaultImage } : {}),
-      images: recordDigests(loaded.references.images, current?.images, record?.images, stale),
-      features: recordDigests(loaded.references.features, current?.features, record?.features),
-      // The dev container carries the record: it vouches for the shared image (isSharedImage).
-      ...(sharedKey !== undefined ? { imageKey: sharedKey } : {}),
-      ...(loaded.compose
-        ? {
-            compose: {
-              service: loaded.compose.service,
-              images: builtServiceImages(loaded.compose.output.model, loaded.compose.project, loaded.compose.service),
-              serviceImages: composeServiceImageReferences(loaded.compose.output.model, loaded.compose.service),
-              version: loaded.compose.output.version,
-              inputsHash: loaded.compose.inputsHash,
-              // The paths that other services mount are in Devspace.serviceFolders.
-            },
-          }
-        : {}),
-    };
-    // A record that the dev container cannot carry (too long, or with a variable of the CLI: buildRecordLabel,
-    // devspaceContainerLabels) cannot vouch for a shared image, so the image is built for this devspace alone.
-    const recordLabel = buildRecordLabel(builtRecord);
-    if (sharedKey !== undefined && (recordLabel === '' || ownDevspaceLabel(`${LABEL_BUILD_RECORD}=${recordLabel}`) === undefined)) {
+    const builtRecord = this.newBuildRecord(env, loaded, plan.check, record, stale, buildNumber, sharedKey);
+    // A record that the dev container cannot carry cannot vouch for a shared image, so the image is built for this
+    // devspace alone.
+    if (sharedKey !== undefined && !fitsOnDevContainer(builtRecord)) {
       this.logger.info(`The devspace image of ${env.repository} is not shared: its build record does not fit on its dev container.`);
       sharedKey = undefined;
       delete builtRecord.imageKey;
@@ -2879,7 +2864,15 @@ export class DevspaceService extends OperationBase {
       } else {
         // A rebuild that the user asked for builds its image again, also when a shared image of its key exists.
         const tagged = sharedKey !== undefined && ctx.rebuild !== true ? await this.tagSharedImage(ctx, sharedKey, imageName) : undefined;
-        builtImageId = tagged ?? (await this.buildDevspaceImage(ctx, loaded, imageName, builtRecord, sharedKey));
+        builtImageId = tagged ?? (await this.buildDevspaceImage(ctx, loaded, imageName, builtRecord, sharedKey).catch(async (error: unknown) => {
+          // The lockfile changed after the read of the key (the build stopped before the Dev Container CLI started):
+          // the image is built for this devspace alone, from the files of the volume, as without a key.
+          if (sharedKey === undefined || !isLockfileChanged(error)) throw error;
+          this.logger.info(`The devspace image of ${env.repository} is not shared: its lockfile changed after it was read. It is built for the devspace alone.`);
+          sharedKey = undefined;
+          delete builtRecord.imageKey;
+          return this.buildDevspaceImage(ctx, loaded, imageName, builtRecord);
+        }));
       }
     } catch (error) {
       // The helper image of the open is gone; no "started instead" and no buildFailed.
@@ -3095,9 +3088,10 @@ export class DevspaceService extends OperationBase {
    * R-DS-010: the image key of the build of `loaded` in this open (imageKey: the configuration as written and as
    * resolved, the IDs of the local images after the pulls, the digests of the Features that the registry answered in this
    * open, the lockfile, and the version of the Dev Container CLI), or `undefined` when the build gives no shared image
-   * (sharedImageInputs; the reason goes to the log). A failed read of the local image is no key.
+   * (sharedImageInputs; the reason goes to the log). A failed read of the local image is no key. `check`: the image check
+   * of this open or prepare (its answered Features).
    */
-  private async sharedImageKey(ctx: PipelineContext, loaded: LoadedConfiguration, plan: UpdatePlan): Promise<string | undefined> {
+  private async sharedImageKey(ctx: PipelineContext, loaded: LoadedConfiguration, check: ImageCheckState): Promise<string | undefined> {
     const notShared = (reason: string): undefined => {
       this.logger.info(`The devspace image of ${ctx.env.repository} is not shared: ${reason}.`);
       return undefined;
@@ -3109,7 +3103,7 @@ export class DevspaceService extends OperationBase {
       dockerfile: loaded.dockerfileText !== undefined,
       hostAccessChecks: ctx.hostAccessChecks,
       lockfileUnreadable: loaded.lockfile?.lockfileUnreadable === true,
-      answeredFeatures: plan.check.kind === 'checked' ? plan.check.outcome.features : undefined,
+      answeredFeatures: check.kind === 'checked' ? check.outcome.features : undefined,
     });
     if ('reason' in inputs) return notShared(inputs.reason);
     // The ID and the labels of the local image that the build starts from.
@@ -3125,6 +3119,23 @@ export class DevspaceService extends OperationBase {
     // The image of a devspace of the account (the policy allows it as a base): its labels of that devspace would stay on
     // an image that gets only the key. The build of this devspace alone writes its own labels over them.
     if (hasDevspaceImageLabel(labels)) return notShared(`its image ${inputs.image} was built for one devspace`);
+    // The configuration and the lockfile as the build finds them (not of the default image, whose configuration is not in
+    // the volume): a change since they were read, for example while the question of the update was open or during the
+    // pulls, gives no key, so the build reads them as without a key (an image of the devspace alone); the build of a key
+    // fails on a lockfile that changed after this read (sharedBuildOptions).
+    if (loaded.defaultImage === undefined) {
+      let now: ConfigFiles | undefined;
+      try {
+        now = await this.deps.helper.readConfigFiles({ volumeName: ctx.env.volumeName, repository: ctx.env.repository, configPath: loaded.configPath, image: ctx.helperImage, signal: ctx.signal });
+      } catch (error) {
+        if (this.isCancellation(error, ctx.signal)) throw error;
+        return notShared(`its configuration could not be read again: ${errorMessage(error)}`);
+      }
+      const lockfile = loaded.lockfile?.lockfileText ?? null;
+      if (now === undefined || configHash(now.configText) !== loaded.configHash || now.lockfileUnreadable === true || (now.lockfileText ?? null) !== lockfile) {
+        return notShared('its configuration or its lockfile changed since they were read');
+      }
+    }
     return imageKey({
       cliVersion: DEVCONTAINER_CLI_VERSION,
       written: inputs.written,
@@ -3133,6 +3144,46 @@ export class DevspaceService extends OperationBase {
       features: inputs.features,
       lockfileText: loaded.lockfile?.lockfileText ?? null,
     });
+  }
+
+  /**
+   * The build record of the new devspace image of the build number `buildNumber` of an update of `env` (step 8; the
+   * record of the existing image `record`, the references whose pull failed `stale`), with the image key `key` of a shared
+   * image (R-DS-010: the dev container carries the record, so it vouches for the shared image, isSharedImage).
+   */
+  private newBuildRecord(
+    env: Devspace,
+    loaded: LoadedConfiguration,
+    check: ImageCheckState,
+    record: BuildRecord | undefined,
+    stale: ReadonlySet<string>,
+    buildNumber: number,
+    key: string | undefined,
+  ): BuildRecord {
+    const current = check.kind === 'checked' ? check.outcome : undefined;
+    return {
+      builtAt: isoTime(this.deps.clock),
+      devspaceImage: devspaceImageName(env.repository, env.id, buildNumber),
+      buildNumber,
+      configPath: loaded.configPath,
+      configHash: loaded.configHash,
+      ...(loaded.defaultImage !== undefined ? { defaultImage: loaded.defaultImage } : {}),
+      images: recordDigests(loaded.references.images, current?.images, record?.images, stale),
+      features: recordDigests(loaded.references.features, current?.features, record?.features),
+      ...(key !== undefined ? { imageKey: key } : {}),
+      ...(loaded.compose
+        ? {
+            compose: {
+              service: loaded.compose.service,
+              images: builtServiceImages(loaded.compose.output.model, loaded.compose.project, loaded.compose.service),
+              serviceImages: composeServiceImageReferences(loaded.compose.output.model, loaded.compose.service),
+              version: loaded.compose.output.version,
+              inputsHash: loaded.compose.inputsHash,
+              // The paths that other services mount are in Devspace.serviceFolders.
+            },
+          }
+        : {}),
+    };
   }
 
   /**
@@ -3145,11 +3196,8 @@ export class DevspaceService extends OperationBase {
     const env = ctx.env;
     let shared: LabelledImage | undefined;
     try {
-      const candidates = (await this.deps.docker.imagesByLabel(LABEL_IMAGE_KEY, key, ctx.signal)).filter((image) => isSharedImageCandidate(image, key));
-      // The dev containers of every devspace vouch for the shared images that they were created from (isSharedImage);
-      // they are listed only when an image may be one (not for the first build of a key).
-      const containers = candidates.length > 0 ? await this.deps.docker.listDevspaceContainers(ctx.signal) : [];
-      shared = chosenSharedImage(candidates.filter((image) => isSharedImage(image, key, containers)));
+      const found = await this.sharedImages(key, ctx.signal);
+      shared = chosenSharedImage(found.images, found.recorded);
     } catch (error) {
       if (this.isCancellation(error, ctx.signal)) throw error;
       this.logger.warn(`The shared images of ${env.repository} could not be listed: ${errorMessage(error)}. The devspace image is built.`);
@@ -3159,20 +3207,50 @@ export class DevspaceService extends OperationBase {
       this.logger.info(`No shared image has the key ${key} of ${env.repository}. The devspace image is built, as a shared image.`);
       return undefined;
     }
+    let id: string;
     try {
-      await this.deps.docker.tagImage(shared.id, imageName, ctx.signal);
-      // The image that the tag names now: the shared image may have been removed in between (with its last tag).
-      const id = await this.deps.docker.imageId(imageName);
-      if (id === undefined || id.toLowerCase() !== shared.id.toLowerCase()) throw new Error(`the tag names ${id ?? 'no image'}`);
-      // Only the number of its tags: they name the devspaces of other repositories, also of other accounts.
-      const count = `${shared.tags.length} ${shared.tags.length === 1 ? 'tag' : 'tags'}`;
-      this.logger.info(`The devspace image ${imageName} of ${env.repository} is the shared image ${shared.id}, which had ${count}: its inputs are the same, so it is not built.`);
-      return id;
+      id = await this.tagAndCheck(shared.id, imageName, ctx.signal);
     } catch (error) {
       if (this.isCancellation(error, ctx.signal)) throw error;
       this.logger.warn(`The shared image ${shared.id} could not be tagged ${imageName}: ${errorMessage(error)}. The devspace image is built.`);
-      await this.quietly(`remove the image ${imageName}`, () => this.deps.docker.removeImage(imageName));
       return undefined;
+    }
+    // Only the number of its tags: they name the devspaces of other repositories, also of other accounts.
+    const count = `${shared.tags.length} ${shared.tags.length === 1 ? 'tag' : 'tags'}`;
+    this.logger.info(`The devspace image ${imageName} of ${env.repository} is the shared image ${shared.id}, which had ${count}: its inputs are the same, so it is not built.`);
+    return id;
+  }
+
+  /**
+   * R-DS-010: every shared image of the key `key` that a build or a prepare may tag instead of building (isSharedImage;
+   * chosenSharedImage chooses one), and the image ID of the record of a prepare for the key (sharedImageRecords), if any
+   * (`undefined` without a candidate). The dev containers of every devspace, and the record, vouch for an image; both
+   * are read only when an image may be one (not for the first build of a key), the dev containers only for a candidate
+   * that the record does not name. Throws when the engine cannot list them.
+   */
+  private async sharedImages(key: string, signal: AbortSignal | undefined): Promise<{ images: LabelledImage[]; recorded: string | undefined }> {
+    const candidates = (await this.deps.docker.imagesByLabel(LABEL_IMAGE_KEY, key, signal)).filter((image) => isSharedImageCandidate(image, key));
+    if (candidates.length === 0) return { images: [], recorded: undefined };
+    const recorded = await this.deps.sharedImageRecords?.read(key);
+    const containers = candidates.some((image) => recorded === undefined || !sameImageId(image.id, recorded)) ? await this.deps.docker.listDevspaceContainers(signal) : [];
+    return { images: candidates.filter((image) => isSharedImage(image, key, containers, recorded)), recorded };
+  }
+
+  /**
+   * Tags the image `image` (an ID) `reference` and checks that the tag names it now (the image may have been removed in
+   * between, with its last tag); resolves with the ID that the tag names. A failure, also a cancellation, removes the tag
+   * again (only the tag: the image keeps its other tags; the engine may have set it although the answer failed) and
+   * throws.
+   */
+  private async tagAndCheck(image: string, reference: string, signal: AbortSignal | undefined): Promise<string> {
+    try {
+      await this.deps.docker.tagImage(image, reference, signal);
+      const id = await this.deps.docker.imageId(reference);
+      if (id === undefined || !sameImageId(id, image)) throw new Error(`the tag names ${id ?? 'no image'}`);
+      return id;
+    } catch (error) {
+      await this.quietly(`remove the image ${reference}`, () => this.deps.docker.removeImage(reference));
+      throw error;
     }
   }
 
@@ -3191,8 +3269,7 @@ export class DevspaceService extends OperationBase {
       repository: env.repository,
       configPath: loaded.configPath,
       imageName,
-      // Docker Compose builds our copy of the configuration; the default image its synthesized configuration.
-      ...(loaded.compose ? this.composeBuildOptions(env, loaded.compose) : this.defaultImageBuildOptions(loaded)),
+      ...this.buildOptions(env, loaded, key, false),
       // Only masked in the build's output, like for `up`.
       token: ctx.session.token,
       onOutput: this.output,
@@ -3237,7 +3314,10 @@ export class DevspaceService extends OperationBase {
    * devspace, the key of this update (updateKey: the configuration and the digests that this open checked), and the
    * helper image of this open. The image comes from the engine: its labels only skip the build, and the image is
    * checked before `up` as any new devspace image (runUp, checkImageHostAccess). One that does not fit is left; the
-   * removal of the old images at the end of the update removes it.
+   * removal of the old images at the end of the update removes it. R-DS-010: a shared image that a prepare built or
+   * tagged for the devspace carries only its key (isKeyOnlyImage): it is no prepared image here; after the pulls (no
+   * download: the prepare pulled the same digests), the build takes it by its key (tagSharedImage), as any shared image,
+   * so it is taken only when its key is the key of the images as the update pulls them.
    */
   private async preparedImage(
     ctx: PipelineContext,
@@ -3278,6 +3358,10 @@ export class DevspaceService extends OperationBase {
       return undefined;
     }
     if (id === undefined || labels === undefined) return undefined;
+    if (isKeyOnlyImage(labels)) {
+      this.logger.info(`The prepared image ${name} of ${env.repository} is a shared image: the build takes it by its image key after the pulls, when the key is the same.`);
+      return undefined;
+    }
     const mismatch = preparedImageMismatch(labels, env, this.updateKey(ctx, loaded, record, plan.check.outcome), ctx.helperImage?.id);
     if (mismatch !== undefined) {
       this.logger.info(`The prepared image ${name} is not used for ${env.repository}: ${mismatch}. The devspace image is built.`);
@@ -3329,7 +3413,8 @@ export class DevspaceService extends OperationBase {
    * wait), a key that the time limit stopped or whose build failed before, and a prepared image that fits already. Only
    * the prepare lock is held (never the devspace lock: an open that waits for the prepare holds that one). At most
    * one prepared image per devspace: an older one is removed first. The build uses `--frozen-lockfile` (Docker
-   * Compose: a copy of the lockfile in the helper, as at the open) and no token; after it, the volume must still be
+   * Compose, the default image, and a shared image of R-DS-010: our copy of the configuration, with a copy of the
+   * lockfile in the helper, as at the open; buildOptions) and no token; after it, the volume must still be
    * there and the configuration still the approved one, else the image is removed. After `run.limitMs`
    * (PREPARE_LIMIT_MS) the prepare stops: its build helper ends with the batch helper, its image is removed, and its
    * key is recorded (run.recordStopped). So is the key of a prepare that failed from its build on. A stop request of a
@@ -3397,7 +3482,9 @@ export class DevspaceService extends OperationBase {
       if (error instanceof HostAccessError) return end('skipped', `the host access policy refuses its configuration (${error.items.join(', ')})`);
       // A build that failed for a key is not tried again until the key changes (no daily build that fails the same way,
       // such as a lockfile that does not match), recorded as a stop is.
-      if (state.building && state.keyHash !== undefined) await run.recordStopped(devspaceId, state.keyHash);
+      // Not a lockfile that changed during the build (R-DS-010: after the read of the image key): the next pass reads it
+      // again.
+      if (state.building && state.keyHash !== undefined && !isLockfileChanged(error)) await run.recordStopped(devspaceId, state.keyHash);
       return end('failed', errorMessage(error));
     } finally {
       clearTimeout(timer);
@@ -3474,19 +3561,23 @@ export class DevspaceService extends OperationBase {
     const helperImage = ctx.helperImage?.id;
     if (helperImage === undefined) throw new Error('The helper image of the prepare has no ID.');
     const key: PrepareKey = this.updateKey(ctx, loaded, record, check.outcome);
-    const hash = prepareKeyHash(key, helperImage);
+    const hash = prepareKeyHash(key, helperImage, loaded.lockfile?.lockfileText);
     state.keyHash = hash;
     if ((await run.stoppedKey(env.id)) === hash) {
       throw new PrepareSkipped('a prepare of the same update failed or was stopped by the time limit before (it is tried again when the update changes)');
     }
-    // At most one prepared image: one that fits stays; another one goes before the build.
+    // At most one prepared image: one with the labels of a prepare that fits stays; a shared one (only its key) is
+    // decided after the pulls, by the key of the images as they are then (R-DS-010); another one goes before the build
+    // (its tag only, when it has others: a shared image stays for the devspaces that tagged it).
     const name = preparedImageName(env.repository, env.id);
-    const existing = await docker.imageId(name);
+    let existing = await docker.imageId(name);
     if (existing !== undefined) {
       const labels = await docker.imageLabels(existing);
-      if (labels !== undefined && preparedImageMismatch(labels, env, key, helperImage) === undefined) throw new PrepareSkipped(`the newer image is prepared already (${name})`);
-      this.logger.info(`The older prepared image ${name} (${existing}) of ${env.repository} is replaced.`);
-      await this.quietly(`remove the image ${name}`, () => docker.removeImage(name));
+      if (labels === undefined || !isKeyOnlyImage(labels)) {
+        if (labels !== undefined && preparedImageMismatch(labels, env, key, helperImage) === undefined) throw new PrepareSkipped(`the newer image is prepared already (${name})`);
+        await this.replacePreparedImage(env, name, existing);
+        existing = undefined;
+      }
     }
     // Step 8a: the pulls of the changed images, anonymously; a failed pull ends the prepare (no build on an older
     // base). Of Docker Compose only the base images of the dev service (preparePulls).
@@ -3494,23 +3585,41 @@ export class DevspaceService extends OperationBase {
     for (const reference of this.preparePulls(loaded, imagesToPull({ images: loaded.references.images, check, hasRecord: true, imagePresent: true, forced: false }))) {
       await this.pull(ctx, reference, false, stale);
     }
+    // R-DS-010: the key of a shared image, as the open computes it (after the pulls: the IDs of the local images are part
+    // of it). A shared image of the key that exists already (built by the prepare of another devspace, or by an open) is
+    // tagged instead of a build. Only with the records of the prepares (sharedImageRecords): without one, no other
+    // devspace could take the image that this prepare builds before a dev container vouches for it. A list that fails
+    // fails the prepare (tried again at the next pass), without a build and without a removal.
+    let sharedKey = this.deps.sharedImageRecords !== undefined ? await this.sharedImageKey(ctx, loaded, check) : undefined;
+    // As at the open: a build record that the dev container of the open cannot carry gives no shared image (the open
+    // would build its image for the devspace alone), so the image is prepared for the devspace alone.
+    if (sharedKey !== undefined && !fitsOnDevContainer(this.newBuildRecord(env, loaded, check, record, stale, await this.nextBuildNumber(env), sharedKey))) {
+      this.logger.info(`The prepared image ${name} of ${env.repository} is not shared: the build record of its open would not fit on its dev container.`);
+      sharedKey = undefined;
+    }
+    const vouched = sharedKey !== undefined ? await this.sharedImages(sharedKey, signal) : { images: [], recorded: undefined };
+    // The record of the key names a shared image of the key that stays: it stays (that image stays vouched for the
+    // devspaces that tagged it), and it is the image that this prepare tags; otherwise the image that this prepare keeps,
+    // tags, or builds becomes the record of the key (a dev container that vouches for it may be gone by the open).
+    const recordStays = vouched.recorded !== undefined && vouched.images.some((image) => sameImageId(image.id, vouched.recorded!));
+    if (existing !== undefined && vouched.images.some((image) => sameImageId(image.id, existing!))) {
+      if (!recordStays) await this.deps.sharedImageRecords?.write(sharedKey!, existing);
+      throw new PrepareSkipped(`the newer image is prepared already (${name})`);
+    }
+    if (existing !== undefined) await this.replacePreparedImage(env, name, existing);
+    const shared = chosenSharedImage(vouched.images, vouched.recorded);
+    if (sharedKey !== undefined && shared !== undefined) {
+      const tagged = await this.tagPreparedSharedImage(ctx, sharedKey, name, shared, !recordStays);
+      if (tagged !== undefined) return `the newer image is the shared image ${tagged} with the same inputs, tagged ${name} without a build`;
+    }
     state.building = true;
-    // No token, and the lockfile of the repository stays as it is. Docker Compose builds with our copy of
-    // devcontainer.json, next to which WRITE_AND_RUN_SCRIPT writes a copy of the lockfile (the CLI writes only there,
-    // in the helper), as at the open; the batch step takes `--frozen-lockfile` only without that copy. The build model
-    // names the images of a prepare (composeBuildOptions): the dev service builds `name` itself.
-    // The default image builds its synthesized configuration (our copy, like Docker Compose: the lockfile copy next to
-    // it, without `--frozen-lockfile`).
+    // No token, and the lockfile of the repository stays as it is (buildOptions).
     await this.deps.helper.build({
       volumeName: env.volumeName,
       repository: env.repository,
       configPath: loaded.configPath,
       imageName: name,
-      ...(compose !== undefined
-        ? this.composeBuildOptions(env, compose, true)
-        : loaded.defaultImage !== undefined
-          ? this.defaultImageBuildOptions(loaded)
-          : { frozenLockfile: true as const }),
+      ...this.buildOptions(env, loaded, sharedKey, true),
       onOutput: this.output,
       image: ctx.helperImage,
       signal,
@@ -3527,9 +3636,48 @@ export class DevspaceService extends OperationBase {
       }
     }
     this.throwIfCancelled(signal);
+    if (sharedKey !== undefined && recordStays) {
+      // (The shared image of the record could not be tagged.)
+      this.logger.info(`The prepared image ${name} of ${env.repository} is not shared: the record of its key names another shared image.`);
+    } else if (sharedKey !== undefined) {
+      // A shared image: only its key, and the record of this prepare, which vouches for it (isSharedImage).
+      await docker.labelImage(name, { [LABEL_IMAGE_KEY]: sharedKey }, signal);
+      const shared = await docker.imageId(name);
+      if (shared === undefined) throw new Error(`The prepared image ${name} is missing after its labels.`);
+      if (await this.deps.sharedImageRecords!.write(sharedKey, shared)) return `the newer image was prepared as ${name} (${shared}), as a shared image`;
+      // Without its record, no other devspace may take it: it gets the labels of this devspace (over its key) instead.
+      this.logger.info(`The prepared image ${name} of ${env.repository} is not shared: its record could not be written.`);
+    }
     await docker.labelImage(name, preparedImageLabels(env, { key, helperImage }), signal);
     const id = await docker.imageId(name);
     return `the newer image was prepared as ${name}${id !== undefined ? ` (${id})` : ''}`;
+  }
+
+  /** Removes the prepared image `name` (`id`) of `env` before a new one: its tag only, when the image has others. */
+  private async replacePreparedImage(env: Devspace, name: string, id: string): Promise<void> {
+    this.logger.info(`The older prepared image ${name} (${id}) of ${env.repository} is replaced.`);
+    await this.quietly(`remove the image ${name}`, () => this.deps.docker.removeImage(name));
+  }
+
+  /**
+   * R-DS-010: tags the shared image `shared` of the key `key` (sharedImages) as the prepared image `name` of a prepare;
+   * resolves with its ID, or `undefined` when it could not be tagged (the prepare builds; a tag that was set is removed
+   * again). With `record` (the key has no record, or its record names an image that is no shared image of the key any
+   * more, for example one that is gone), the image becomes the record of the key: Devspaces built it for the key, and
+   * the dev container that vouched for it may be gone by the open. A record that names another shared image of the key
+   * stays, so that image stays vouched for the devspaces that tagged it. Throws only a cancellation.
+   */
+  private async tagPreparedSharedImage(ctx: PipelineContext, key: string, name: string, shared: LabelledImage, record: boolean): Promise<string | undefined> {
+    let id: string;
+    try {
+      id = await this.tagAndCheck(shared.id, name, ctx.signal);
+    } catch (error) {
+      if (this.isCancellation(error, ctx.signal)) throw error;
+      this.logger.warn(`The shared image ${shared.id} could not be tagged ${name}: ${errorMessage(error)}. The newer image is built.`);
+      return undefined;
+    }
+    if (record) await this.deps.sharedImageRecords?.write(key, id);
+    return id;
   }
 
   /**
@@ -3583,6 +3731,47 @@ export class DevspaceService extends OperationBase {
       signal: ctx.signal,
     });
     return 'error' in output ? undefined : composeConfigHash(files.configText, output.model, output.dockerfiles);
+  }
+
+  /**
+   * R-DS-010: `devcontainer build` of a shared image from the inputs of its key only: our copy of the configuration as
+   * written (the one in the key; of the default image its synthesized configuration), never the file of the volume, and
+   * the lockfile text of the key, which the build must find next to the configuration of the repository (else it fails;
+   * the CLI writes only our copy of it). So a change of the configuration or of the lockfile in the volume after the key
+   * was computed (for example from the running dev container of the devspace) never goes into an image of that key.
+   * The default image has no lockfile in its key and no Features, so a lockfile of the repository changes nothing in
+   * its image: it is not pinned (it is copied next to our copy, as without a key). Only for a key (sharedImageInputs:
+   * the written configuration is an object, the lockfile could be read).
+   */
+  private sharedBuildOptions(loaded: LoadedConfiguration): { override: Record<string, unknown>; lockfileText?: string | null } {
+    if (!isRecord(loaded.written)) throw new Error('The configuration of a shared image is no JSON object.');
+    return {
+      override: loaded.written,
+      ...(loaded.defaultImage === undefined ? { lockfileText: loaded.lockfile?.lockfileText ?? null } : {}),
+    };
+  }
+
+  /**
+   * The options of `devcontainer build` of the open and of a prepare (`prepare`): Docker Compose builds our copy of
+   * devcontainer.json (composeBuildOptions; of a prepare with the build model of the images of a prepare), next to which
+   * WRITE_AND_RUN_SCRIPT writes a copy of the lockfile (the CLI writes only there, in the helper); a shared image of the
+   * key `key` our copy of the configuration of its key with the lockfile of its key (sharedBuildOptions); the default
+   * image its synthesized configuration (our copy, like Docker Compose); else the configuration of the volume. Our copy
+   * never lets the CLI write the lockfile of the repository (it writes only the copy next to our copy), so only a
+   * prepare with the configuration of the volume builds with `--frozen-lockfile`, which keeps the lockfile of the
+   * repository as it is (and fails on one that does not match the configuration). A shared image is built the same way
+   * at the open and by a prepare, so that both give the image of its key.
+   */
+  private buildOptions(
+    env: Devspace,
+    loaded: LoadedConfiguration,
+    key: string | undefined,
+    prepare: boolean,
+  ): { override?: Record<string, unknown>; files?: HelperFiles; env?: Record<string, string>; lockfileText?: string | null; frozenLockfile?: true } {
+    if (loaded.compose !== undefined) return this.composeBuildOptions(env, loaded.compose, prepare);
+    if (key !== undefined) return this.sharedBuildOptions(loaded);
+    if (loaded.defaultImage !== undefined) return this.defaultImageBuildOptions(loaded);
+    return prepare ? { frozenLockfile: true } : {};
   }
 
   /**

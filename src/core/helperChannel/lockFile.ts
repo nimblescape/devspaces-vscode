@@ -68,6 +68,43 @@ export function ensureLockFolder(stateDir: string): string {
 }
 
 /**
+ * Writes `text` into the plain file `file` of the lock folder of `stateDir` (ensureLockFolder): created with 0600, its
+ * mode set to 0600, written over, never through a link (O_NOFOLLOW), never anything but a plain file (O_NONBLOCK: a FIFO
+ * does not block). Throws when it cannot. The files of a prepare (prepareFiles.ts) and the records of the shared images
+ * (sharedImageRecords.ts).
+ */
+export function writePlain(stateDir: string, file: string, text: string): void {
+  ensureLockFolder(stateDir);
+  const { O_WRONLY, O_CREAT, O_TRUNC, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(file, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_NONBLOCK, 0o600);
+  try {
+    if (!fs.fstatSync(fd).isFile()) throw new Error(`${file} is not a plain file.`);
+    fs.fchmodSync(fd, 0o600);
+    fs.writeSync(fd, text);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** The text of the plain file `file` (at most `max` bytes), never through a link, or undefined. Never throws. */
+export function readPlain(file: string, max: number): string | undefined {
+  let fd: number | undefined;
+  try {
+    const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+    fd = fs.openSync(file, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > max) return undefined;
+    const buffer = Buffer.alloc(max);
+    const read = fs.readSync(fd, buffer, 0, max, 0);
+    return buffer.subarray(0, read).toString('utf8');
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
  * Opens (creates) the lock file `file` as openLockFile does it (O_NOFOLLOW, O_NONBLOCK, 0600, a plain file only; `what`
  * names it in the refusal). Also the lock file of the shared VS Code server store (vscodeServerStore.ts).
  */

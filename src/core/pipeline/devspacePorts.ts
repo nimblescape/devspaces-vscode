@@ -272,6 +272,13 @@ export interface DevspaceServiceDeps extends OperationBaseDeps {
    */
   prepareLock?: PrepareLock;
   /**
+   * R-DS-010: the records of the shared images that a background prepare built (in the worker: sharedImageRecords of
+   * the volume of the Monitor, which no dev container mounts). A record vouches for its image before a dev container was
+   * created from it (isSharedImage). Without it (the tests that are not about it): no record is read or written, and a
+   * prepare builds its image for its devspace alone.
+   */
+  sharedImageRecords?: PreparedSharedImages;
+  /**
    * The name of the shared VS Code server store of the engine (the volume that the worker mounts read-write,
    * OwnHelper.vscodeStore; default VSCODE_STORE_VOLUME). The host access policy allows its mount in the override
    * configuration (HostAccessInput.vscodeStoreVolume), the creation of the additional volumes never creates or records
@@ -306,6 +313,17 @@ export interface PrepareLock {
    * only with an AbortError. Without it, a Delete stops no prepare.
    */
   stop?(devspaceId: string, waitSeconds: number, signal: AbortSignal | undefined): Promise<boolean>;
+}
+
+/**
+ * The records of the shared images that a background prepare built (DevspaceServiceDeps.sharedImageRecords): one image
+ * ID per image key.
+ */
+export interface PreparedSharedImages {
+  /** The ID of the image that a prepare built for the key `key` (lower case), if any. Never rejects. */
+  read(key: string): Promise<string | undefined>;
+  /** Records `imageId` as the image that a prepare built for `key`: false when it could not (logged). Never rejects. */
+  write(key: string, imageId: string): Promise<boolean>;
 }
 
 /**

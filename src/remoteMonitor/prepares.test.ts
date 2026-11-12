@@ -13,7 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vit
 import { CHANNEL_ENTRY, OP_PREPARE, type PrepareValue } from '../core/helperChannel/protocol';
 import { setUserAgentVersion } from '../core/http';
 import { PIPE_LOADER, bundleHash } from '../core/loader/pipeLoader';
-import { LABEL_CONFIG_PATH, LABEL_DEFAULT_IMAGE, LABEL_DEVSPACE_ID, LABEL_PREPARED, LABEL_REPOSITORY, LABEL_VOLUME, preparedImageName, resourceName } from '../core/names';
+import { LABEL_CONFIG_PATH, LABEL_DEFAULT_IMAGE, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, LABEL_PREPARED, LABEL_REPOSITORY, LABEL_VOLUME, devspaceImageName, preparedImageName, resourceName } from '../core/names';
+import type { SharedImageRecords } from '../core/helperChannel/sharedImageRecords';
 import { PREPARE_LIMIT_MS } from '../core/pipeline/pipelineRules';
 import type { StartOptions, StartedProcess } from '../core/ports';
 import { storeWorkerScript, workerScriptPath } from '../core/remoteMonitor/workerScript';
@@ -29,8 +30,10 @@ import {
   prepareLine,
   prepareOrder,
   removeStalePreparedImages,
+  removeStalePreparedSharedTags,
+  scanDevspaceVolumes,
+  removeStaleSharedImageRecords,
   storedPrepareWorker,
-  workspaceDevspaces,
   type PrepareSession,
   type PrepareWorker,
 } from './prepares';
@@ -105,7 +108,7 @@ describe('the devspaces of the prepares', () => {
       'not-the-name': { [LABEL_DEVSPACE_ID]: C, [LABEL_REPOSITORY]: REPO_C },
       [resourceName(REPO_C, C)]: { [LABEL_DEVSPACE_ID]: C, [LABEL_REPOSITORY]: 'no slash' },
     });
-    expect(await workspaceDevspaces(engine)).toEqual([{ id: A, repository: REPO_A }]);
+    expect((await scanDevspaceVolumes(engine)).devspaces).toEqual([{ id: A, repository: REPO_A }]);
   });
 
   it('are also the volumes named with the word of their source (version 0.6.0 and later), as their labels name it', async () => {
@@ -123,7 +126,7 @@ describe('the devspaces of the prepares', () => {
       // A volume of version 0.5.0 or older, whose labels do not name its source.
       ...volume(REPO_C, F),
     });
-    expect(await workspaceDevspaces(engine)).toEqual([
+    expect((await scanDevspaceVolumes(engine)).devspaces).toEqual([
       { id: A, repository: REPO_A },
       { id: B, repository: REPO_B },
       { id: C, repository: REPO_C },
@@ -255,6 +258,131 @@ describe('the stale prepared images', () => {
     const { engine, removed } = fakeEngine({}, [image(ID_2, REPO_B, B)]);
     await prepareDevspaces({ engine, log: () => {}, monotonic: () => 0, lastUsed: async () => new Map(), worker: () => ({ reason: 'none' }) });
     expect(removed).toEqual([preparedImageName(REPO_B, B)]);
+  });
+});
+
+describe('the stale prepared shared images and their records (R-DS-010)', () => {
+  const KEY = `sha256:${'9'.repeat(64)}`;
+  const SHARED = `sha256:${'6'.repeat(64)}`;
+  const OWN = `sha256:${'7'.repeat(64)}`;
+  const shared = (id: string, tags: string[], labels: Record<string, string> = { [LABEL_IMAGE_KEY]: KEY }): EngineImage => ({
+    id,
+    repoTags: tags,
+    repoDigests: [],
+    created: '2026-11-12T00:00:00Z',
+    labels,
+  });
+
+  it('removes from shared images the tags <resource>:prepared of devspaces without a volume, by the tag; the others stay', async () => {
+    const { engine, removed } = fakeEngine(volume(REPO_A, A), [
+      shared(SHARED, [preparedImageName(REPO_A, A), preparedImageName(REPO_B, B), devspaceImageName(REPO_C, C, 3)]),
+      // An image built for one devspace (its labels) is the part of removeStalePreparedImages.
+      shared(OWN, [preparedImageName(REPO_C, C)], { [LABEL_IMAGE_KEY]: KEY, [LABEL_DEVSPACE_ID]: C }),
+    ]);
+    const lines: string[] = [];
+    await removeStalePreparedSharedTags(engine, (line) => lines.push(line));
+    expect(removed).toEqual([preparedImageName(REPO_B, B)]);
+    expect(lines).toEqual([`Removed the tag ${preparedImageName(REPO_B, B)} of a shared image: its devspace has no volume on this engine.`]);
+  });
+
+  it('says so when Docker keeps the image in use, and removes nothing when the volumes cannot be listed', async () => {
+    const { engine } = fakeEngine({}, [shared(SHARED, [preparedImageName(REPO_B, B)])]);
+    const lines: string[] = [];
+    await removeStalePreparedSharedTags({ ...engine, removeImage: async () => 'inUse' }, (line) => lines.push(line));
+    expect(lines).toEqual([`The tag ${preparedImageName(REPO_B, B)} of a shared image stays: Docker says the image is in use.`]);
+    lines.length = 0;
+    const removed: string[] = [];
+    await removeStalePreparedSharedTags(
+      { ...engine, volumeNames: async () => Promise.reject(new Error('down')), removeImage: async (reference) => (removed.push(reference), 'removed') },
+      (line) => lines.push(line),
+    );
+    expect(removed).toEqual([]);
+    expect(lines).toEqual(['The prepared shared images could not be listed, so no tag is removed: down']);
+  });
+
+  it('takes a volume that is gone after the list for none, and removes nothing when a volume cannot be read', async () => {
+    const { engine, removed } = fakeEngine(volume(REPO_A, A), [shared(SHARED, [preparedImageName(REPO_A, A), preparedImageName(REPO_B, B)])]);
+    const listed = async () => [resourceName(REPO_A, A), 'removed-meanwhile'];
+    const lines: string[] = [];
+    await removeStalePreparedSharedTags({ ...engine, volumeNames: listed }, (line) => lines.push(line));
+    expect(removed).toEqual([preparedImageName(REPO_B, B)]);
+    removed.length = 0;
+    lines.length = 0;
+    await removeStalePreparedSharedTags({ ...engine, inspect: async () => Promise.reject(new Error('busy')) }, (line) => lines.push(line));
+    expect(removed).toEqual([]);
+    expect(lines).toEqual(['The prepared shared images could not be listed, so no tag is removed: busy']);
+    lines.length = 0;
+    await removeStalePreparedSharedTags({ ...engine, inspect: async (_kind, name) => ({ Name: name }) }, (line) => lines.push(line));
+    expect(removed).toEqual([]);
+    expect(lines).toEqual(['The prepared shared images could not be listed, so no tag is removed: a volume of a devspace could not be read']);
+  });
+
+  it('takes the volumes that the run read at its start, and reads them again only before a removal', async () => {
+    const volumes: Record<string, Record<string, string>> = { ...volume(REPO_A, A) };
+    const { engine, removed } = fakeEngine(volumes, [shared(SHARED, [preparedImageName(REPO_A, A)])]);
+    const inspected: string[] = [];
+    const counting: PrepareEngine = { ...engine, inspect: async (kind, name, signal) => (inspected.push(name), engine.inspect(kind, name, signal)) };
+    const run = () => prepareDevspaces({ engine: counting, log: () => {}, monotonic: () => 0, lastUsed: async () => new Map(), worker: () => ({ reason: 'none' }) });
+    // Nothing to remove: the volumes are read once.
+    await run();
+    expect(inspected).toEqual([resourceName(REPO_A, A)]);
+    expect(removed).toEqual([]);
+    // A tag of a devspace without a volume: read again, then removed.
+    const { engine: second, removed: removedSecond } = fakeEngine(volumes, [shared(SHARED, [preparedImageName(REPO_A, A), preparedImageName(REPO_B, B)])]);
+    inspected.length = 0;
+    await prepareDevspaces({ engine: { ...second, inspect: counting.inspect }, log: () => {}, monotonic: () => 0, lastUsed: async () => new Map(), worker: () => ({ reason: 'none' }) });
+    expect(inspected).toEqual([resourceName(REPO_A, A), resourceName(REPO_A, A)]);
+    expect(removedSecond).toEqual([preparedImageName(REPO_B, B)]);
+  });
+
+  it('keeps the tag of a devspace whose volume came during the run', async () => {
+    const volumes: Record<string, Record<string, string>> = { ...volume(REPO_A, A) };
+    const { engine, removed } = fakeEngine(volumes, [shared(SHARED, [preparedImageName(REPO_B, B)])]);
+    const start = await scanDevspaceVolumes(engine);
+    Object.assign(volumes, volume(REPO_B, B));
+    await removeStalePreparedSharedTags(engine, () => {}, start);
+    expect(removed).toEqual([]);
+  });
+
+  /** Records of the test (SharedImageRecords) by key. */
+  function fakeRecords(entries: Record<string, string | undefined>): SharedImageRecords & { keys: () => string[] } {
+    const map = new Map(Object.entries(entries));
+    return {
+      read: (key) => map.get(key),
+      write: (key, imageId) => void map.set(key, imageId),
+      list: () => [...map].map(([key, imageId]) => ({ key, imageId })),
+      remove: (key) => void map.delete(key),
+      keys: () => [...map.keys()],
+    };
+  }
+
+  it('removes the records whose image is gone or that hold no image ID; one whose image cannot be asked about stays', async () => {
+    const GONE = `sha256:${'1'.repeat(64)}`;
+    const ASK = `sha256:${'2'.repeat(64)}`;
+    const keys = [`sha256:${'a'.repeat(64)}`, `sha256:${'b'.repeat(64)}`, `sha256:${'c'.repeat(64)}`, `sha256:${'d'.repeat(64)}`];
+    const records = fakeRecords({ [keys[0]]: SHARED, [keys[1]]: GONE, [keys[2]]: undefined, [keys[3]]: ASK });
+    const { engine } = fakeEngine({});
+    const inspect: PrepareEngine['inspect'] = async (kind, reference) => {
+      if (kind === 'image' && reference === ASK) throw new Error('down');
+      return kind === 'image' && reference === SHARED ? { Id: SHARED } : undefined;
+    };
+    const lines: string[] = [];
+    await removeStaleSharedImageRecords({ ...engine, inspect }, records, (line) => lines.push(line));
+    expect(records.keys()).toEqual([keys[0], keys[3]]);
+    expect(lines).toEqual([
+      `Removed the record of the shared image key ${keys[1]}: its image ${GONE} is gone.`,
+      `Removed the record of the shared image key ${keys[2]}: it holds no image ID.`,
+      `The image ${ASK} of the record of the shared image key ${keys[3]} could not be asked about: down`,
+    ]);
+  });
+
+  it('run after the prepares of the part, with the records of the volume', async () => {
+    const records = fakeRecords({ [KEY]: SHARED });
+    const { engine, removed } = fakeEngine({}, [shared(SHARED, [preparedImageName(REPO_B, B)])]);
+    await prepareDevspaces({ engine, log: () => {}, monotonic: () => 0, lastUsed: async () => new Map(), worker: () => ({ reason: 'none' }), sharedImageRecords: records });
+    expect(removed).toEqual([preparedImageName(REPO_B, B)]);
+    // The fake engine knows no image: the record goes.
+    expect(records.keys()).toEqual([]);
   });
 });
 

@@ -27,13 +27,13 @@ import {
   LABEL_REPOSITORY,
   LABEL_SERVICE_DATA,
   LABEL_VOLUME,
-  PREPARED_IMAGE_TAG,
   RESOURCE_NAME_PREFIX,
   VOLUME_KIND_ADDITIONAL,
   VOLUME_KIND_COMPOSE,
   HELPER_CACHE_VOLUME,
   VSCODE_STORE_VOLUME,
-  isDevspaceImageName,
+  isPreparedImageTag,
+  isSharedImageTag,
   resourceName,
 } from '../names';
 import { isAbortError, type Logger, type RunResult } from '../ports';
@@ -541,9 +541,20 @@ function classifyImage(
   };
   if (helper) return { ...base, purpose: 'helperImage' };
   if (ordered.some((tag) => tag.startsWith(`${BUILDX_REPOSITORY}:`))) return { ...base, purpose: 'buildImage' };
-  const byName = ordered.map((tag) => devspaceByName(tag, input.known)).find((devspace) => devspace !== undefined);
+  // A shared image (R-DS-010) can be the image of one devspace and the prepared image of another: it belongs to a
+  // devspace of this computer whose image it is first, else to one whose prepared image it is, and its role is the one
+  // for that devspace. For the devspaces of others, it is a prepared image only when every devspace tag on it is one.
+  const devspaceOf = (list: readonly string[]) => list.map((tag) => devspaceByName(tag, input.known)).find((devspace) => devspace !== undefined);
+  const imageOf = devspaceOf(ordered.filter((tag) => !isPreparedImageTag(tag)));
+  const byName = imageOf ?? devspaceOf(ordered);
   if (input.devspaceImageIds.has(id) || byName !== undefined) {
-    const prepared = ordered.some((tag) => tag.slice(tag.lastIndexOf(':') + 1).startsWith(PREPARED_IMAGE_TAG));
+    let prepared: boolean;
+    if (byName !== undefined) {
+      prepared = imageOf === undefined;
+    } else {
+      const devspaceTags = ordered.filter((tag) => isSharedImageTag(tag) || isPreparedImageTag(tag));
+      prepared = devspaceTags.length > 0 && devspaceTags.every(isPreparedImageTag);
+    }
     return { ...base, ...devspaceFields(undefined, byName, input.known, undefined), role: prepared ? 'prepared image' : 'image' };
   }
   if (ordered.some((tag) => input.baseImages.has(normalizedReference(tag)))) return { ...base, purpose: 'baseImage' };
@@ -754,8 +765,8 @@ export async function readHostInventory(
     docker.listImagesByLabel(`${LABEL_HELPER}=true`),
   ]);
   // The images built for one devspace (its ID), and the shared images (their key, R-DS-010) with the tag of a devspace
-  // image, not another image with a key label (which a Dockerfile can write).
-  const sharedImages = keyImages.filter((image) => image.tags.some(isDevspaceImageName));
+  // image or of a prepared devspace image, not another image with a key label (which a Dockerfile can write).
+  const sharedImages = keyImages.filter((image) => image.tags.some(isSharedImageTag));
   const devspaceImageIds = new Set([...devspaceImages, ...sharedImages].map((image) => image.id));
   const helperImageIds = new Set(helperImages.map((image) => image.id));
   const networkList = await docker.run(NETWORK_LS_ARGS, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });

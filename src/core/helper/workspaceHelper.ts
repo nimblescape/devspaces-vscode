@@ -388,6 +388,12 @@ export class WorkspaceHelper {
      */
     frozenLockfile?: boolean;
     /**
+     * R-DS-010: the lockfile text that the build must find next to the configuration of the repository (`null`: none),
+     * else it fails (WRITE_AND_RUN_SCRIPT): the lockfile of the image key of a shared image, so that a change after the
+     * key was computed never goes into an image of that key.
+     */
+    lockfileText?: string | null;
+    /**
      * The token of the open, removed from the output and from the error like for `up` and run-user-commands (also when
      * it is split across chunks; none of the commands of the build reads it).
      */
@@ -402,7 +408,7 @@ export class WorkspaceHelper {
     this.deps.logger.info(`Building the devspace image ${p.imageName} from ${p.configPath}.`);
     // Every build runs through WRITE_AND_RUN_SCRIPT, for its lockfile rule (batchStepCommand).
     // Only the local check of the files ("Invalid helper file"); the batch helper builds the input of the step itself.
-    writeAndRunInput(p.files, p.override);
+    writeAndRunInput(p.files, p.override, p.lockfileText);
     return this.runDevcontainer('devcontainer build', p.volumeName, {
       batch: {
         kind: 'build',
@@ -413,6 +419,7 @@ export class WorkspaceHelper {
           ...(p.override !== undefined ? { override: p.override } : {}),
           ...(p.files !== undefined ? { files: p.files } : {}),
           ...(p.frozenLockfile === true ? { frozenLockfile: true } : {}),
+          ...(p.lockfileText !== undefined ? { lockfileText: p.lockfileText } : {}),
         },
       },
       env: p.env,

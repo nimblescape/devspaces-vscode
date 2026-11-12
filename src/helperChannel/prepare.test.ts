@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { LOCK_BUSY_EXIT, flockNoWaitArgs, parsePrepareParams, parsePrepareValue, prepareStopFilePath, prepareStoppedFilePath, type AskKind } from '../core/helperChannel/protocol';
 import { FLOCK_FD, type FlockProcess } from '../core/helperChannel/lockFile';
 import { LABEL_DEVSPACE_ID, LABEL_OWNER_ID, LABEL_REPOSITORY, resourceName } from '../core/names';
-import { isAbortError } from '../core/ports';
+import { isAbortError, type Logger } from '../core/ports';
 import type { DockerEngine } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
 import type { OwnHelper } from '../core/worker/ownHelper';
@@ -22,7 +22,8 @@ import { contextSecrets } from './operationContext.testkit';
 import { PREPARE_FILES, type PrepareFiles } from './prepareFiles';
 import { runPrepare } from './prepare';
 import type { OperationContext } from './server';
-import { takePrepareLock, workerPrepareLock } from './workerLock';
+import { sharedImageRecordsDeps, takePrepareLock, workerPrepareLock } from './workerLock';
+import { sharedImageRecords } from '../core/helperChannel/sharedImageRecords';
 
 const ID = '3f2a9c1e-5b7d-4e8a-9c0f-2d1e6a7b8c9d';
 const REPO = 'acme/api';
@@ -232,6 +233,29 @@ describe('the stop of a prepare by a Delete (workerPrepareLock.stop)', () => {
     expect(await lock.stop!(ID, 20, undefined)).toBe(false);
     expect(files.events).toEqual([`request ${ID}`]);
     expect(files.stopRequested('/state', ID)).toBe(true);
+  });
+});
+
+describe('the records of the shared images of the worker (sharedImageRecordsDeps)', () => {
+  const KEY = `sha256:${'b'.repeat(64)}`;
+  const IMAGE = `sha256:${'c'.repeat(64)}`;
+  const logger = (warnings: string[]): Logger => ({ info: () => {}, warn: (text) => warnings.push(text), error: () => {}, output: () => {} });
+
+  it('reads and writes the records in the lock folder of its state folder', async () => {
+    const dir = tempDir();
+    const records = sharedImageRecordsDeps({ ...lockDeps(0), stateDir: dir, sharedImageRecords }, logger([])).sharedImageRecords!;
+    expect(await records.read(KEY)).toBeUndefined();
+    expect(await records.write(KEY, IMAGE)).toBe(true);
+    expect(await records.read(KEY)).toBe(IMAGE);
+    expect(sharedImageRecords(dir).list()).toEqual([{ key: KEY, imageId: IMAGE }]);
+  });
+
+  it('resolves false with a warning when a record cannot be written, and is none without the records', async () => {
+    const warnings: string[] = [];
+    const records = sharedImageRecordsDeps({ ...lockDeps(0), stateDir: tempDir(), sharedImageRecords }, logger(warnings)).sharedImageRecords!;
+    expect(await records.write(KEY, 'not an image ID')).toBe(false);
+    expect(warnings).toEqual([`The shared image not an image ID of the key ${KEY} could not be recorded: The image ID of the record is invalid.`]);
+    expect(sharedImageRecordsDeps(lockDeps(0), logger([]))).toEqual({});
   });
 });
 

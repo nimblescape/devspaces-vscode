@@ -246,6 +246,28 @@ export function isImageKey(value: unknown): value is string {
   return typeof value === 'string' && /^sha256:[0-9a-f]{64}$/.test(value);
 }
 /**
+ * The labels of an image that was built for one devspace (imageRecordLabels, preparedImageLabels of
+ * ./pipeline/imageRecord.ts; imageKey.test.ts compares the lists).
+ */
+export const DEVSPACE_IMAGE_LABELS: readonly string[] = [LABEL_DEVSPACE_ID, LABEL_REPOSITORY, LABEL_OWNER_ID, LABEL_BUILD_RECORD, LABEL_PREPARED];
+
+/**
+ * Whether `labels` (of an image) hold a label of an image built for one devspace (DEVSPACE_IMAGE_LABELS), whatever its
+ * value: such an image is no shared image, and no base image of one (a shared image gets only its key, so the labels
+ * of the devspace of its base image would stay on it).
+ */
+export function hasDevspaceImageLabel(labels: Readonly<Record<string, string>>): boolean {
+  return DEVSPACE_IMAGE_LABELS.some((label) => Object.prototype.hasOwnProperty.call(labels, label));
+}
+
+/**
+ * Whether `labels` (of an image) are those of a shared image: the image key (LABEL_IMAGE_KEY) and none of the labels of an
+ * image built for one devspace (hasDevspaceImageLabel). The labels alone never make it a shared image (isSharedImage).
+ */
+export function isKeyOnlyImage(labels: Readonly<Record<string, string>>): boolean {
+  return Object.prototype.hasOwnProperty.call(labels, LABEL_IMAGE_KEY) && !hasDevspaceImageLabel(labels);
+}
+/**
  * Every label key that the extension reads or writes (on containers, images, and volumes), each with LABEL_PREFIX, in
  * lower case. The host access policy refuses every key with LABEL_PREFIX in a configuration and on images
  * (isReservedLabel in ./policy/rules.ts), these and any later one: such a label would hide a container or volume from
@@ -529,6 +551,32 @@ export const PREPARED_IMAGE_TAG = 'prepared';
  */
 export function preparedImageName(repository: string, devspaceId: string): string {
   return `${devspaceImageRepository(repository, devspaceId)}:${PREPARED_IMAGE_TAG}`;
+}
+
+/**
+ * Whether `reference` has the shape of a prepared devspace image (preparedImageName): the name of a devspace
+ * (isDevspaceResourceName) and the tag `prepared`.
+ */
+export function isPreparedImageName(reference: string): boolean {
+  const colon = reference.lastIndexOf(':');
+  return colon > 0 && reference.slice(colon + 1) === PREPARED_IMAGE_TAG && isDevspaceResourceName(reference.slice(0, colon));
+}
+
+/**
+ * Whether `reference` is the tag of an image of a prepare: `<resource>:prepared` (isPreparedImageName) or the image of
+ * another built service of Docker Compose `<resource>:prepared-<service>` (preparedServiceImageName).
+ */
+export function isPreparedImageTag(reference: string): boolean {
+  const colon = reference.lastIndexOf(':');
+  return colon > 0 && reference.slice(colon + 1).startsWith(PREPARED_IMAGE_TAG) && isDevspaceResourceName(reference.slice(0, colon));
+}
+
+/**
+ * Whether `reference` is a tag that a shared image (R-DS-010) can carry: the tag of a devspace image
+ * (isDevspaceImageName) or of a prepared devspace image (isPreparedImageName).
+ */
+export function isSharedImageTag(reference: string): boolean {
+  return isDevspaceImageName(reference) || isPreparedImageName(reference);
 }
 
 /**

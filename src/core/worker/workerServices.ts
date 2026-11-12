@@ -26,7 +26,7 @@ import { LOCK_STATE_DIR, SECRET_REGISTRY, type VscodeServerRef } from '../helper
 import { LABEL_VOLUME, VSCODE_STORE_DIR } from '../names';
 import { Messages } from '../messages';
 import { DevspaceService, devspaceOfVolume } from '../pipeline/devspaceService';
-import type { DevspaceServiceDeps, DevspaceSessionMonitor, PrepareLock, VscodeExtensionCache } from '../pipeline/devspacePorts';
+import type { DevspaceServiceDeps, DevspaceSessionMonitor, PrepareLock, PreparedSharedImages, VscodeExtensionCache } from '../pipeline/devspacePorts';
 import type { DevspaceSessionFiles, DevspaceStore } from '../pipeline/operationBase';
 import type { DevspaceBusyMarks } from '../pipeline/busyMarks';
 import type { OpenRecords } from '../pipeline/openRecords';
@@ -350,6 +350,8 @@ export interface WorkerServicesDeps {
   devspaceLock: (devspaceId: string, waitSeconds: number, signal: AbortSignal | undefined) => Promise<HeldDevspaceLock>;
   /** The prepare lock of a devspace, for an open (workerPrepareLock); without it no prepare is seen. */
   prepareLock?: PrepareLock;
+  /** The records of the shared images that a prepare built (sharedImageRecordsDeps); without them none is read. */
+  sharedImageRecords?: PreparedSharedImages;
   /** The settings of the pipeline of an open (openSettingsOf of its parameters); a read without them fails closed. */
   settings?: ExtensionSettings;
   /** The id of the computer that sent the operation in the Monitor (Delete's `forget`). */
@@ -458,6 +460,11 @@ export interface HeadlessServicesDeps {
   analyzer: ConfigurationAnalyzer;
   /** The folder of the Monitor's registry answers (default LOCK_STATE_DIR; for the tests). */
   registryAnswersDir?: string;
+  /**
+   * The records of the shared images that a prepare built (sharedImageRecordsDeps); without them the prepare builds its
+   * image for its devspace alone.
+   */
+  sharedImageRecords?: PreparedSharedImages;
 }
 
 /**
@@ -546,6 +553,7 @@ export function headlessServiceDeps(deps: HeadlessServicesDeps): DevspaceService
   const store = deps.ownHelper.vscodeStore;
   return {
     ...(store !== undefined ? { vscodeStoreVolume: store } : {}),
+    ...(deps.sharedImageRecords !== undefined ? { sharedImageRecords: deps.sharedImageRecords } : {}),
     docker,
     helper,
     startDocker: async ({ signal }) => {
@@ -695,6 +703,7 @@ export function workerServiceDeps(deps: WorkerServicesDeps): DevspaceServiceDeps
     dockerTarget: async () => ({ kind: deps.dockerHost === '' ? 'local' : 'remote', host: deps.dockerHost, endpoint: '' }),
     devspaceLock: deps.devspaceLock,
     ...(deps.prepareLock !== undefined ? { prepareLock: deps.prepareLock } : {}),
+    ...(deps.sharedImageRecords !== undefined ? { sharedImageRecords: deps.sharedImageRecords } : {}),
     // The flows and the refresh through a worker are the window's (DevspaceOperations), not the pipeline's.
   };
 }

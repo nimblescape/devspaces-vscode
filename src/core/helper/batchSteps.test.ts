@@ -14,6 +14,7 @@ import { COMPOSE_MODEL_PATH } from './compose';
 import { CONTAINER_CREDENTIAL_HELPER } from './containerGit';
 import { buildArgs, readConfigurationArgs, runUserCommandsArgs, upArgs } from './devcontainerCli';
 import {
+  MAX_LOCKFILE_LENGTH,
   OVERRIDE_CONFIG_PATH,
   cloneCommand,
   composeHashCommand,
@@ -164,6 +165,26 @@ describe('batchStepCommand', () => {
     expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', frozenLockfile: false })).toThrow(BatchStepError);
     expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', frozenLockfile: 'yes' })).toThrow(BatchStepError);
     expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', frozenLockfile: true, override, files })).toThrow(BatchStepError);
+    // R-DS-010: a shared image builds our copy of the configuration of its key, with the lockfile text of its key (or
+    // none: null), which WRITE_AND_RUN_SCRIPT must find next to the configuration of the repository.
+    for (const lockfileText of ['{ "features": {} }', '', 'a\0b', null]) {
+      expect(batchStepCommand('build', { repository: REPO, configPath: '.devcontainer/devcontainer.json', imageName: 'devspaces-x:1', override, lockfileText })).toEqual({
+        command: writeAndRunCommand({ repositoryConfig: configFile, config: OVERRIDE_CONFIG_PATH }, buildArgs({ workspaceFolder: FOLDER, configPath: OVERRIDE_CONFIG_PATH, imageName: 'devspaces-x:1' })),
+        input: writeAndRunInput(undefined, override, lockfileText),
+        env: { BUILDX_BAKE_ENTITLEMENTS_FS: '0' },
+        git: false,
+        secret: 'mask',
+      });
+    }
+    expect(JSON.parse(writeAndRunInput(undefined, override, null))).toHaveProperty('lockfile', null);
+    expect(JSON.parse(writeAndRunInput(undefined, override))).not.toHaveProperty('lockfile');
+    for (const lockfileText of [1, {}, 'x'.repeat(MAX_LOCKFILE_LENGTH + 1)]) {
+      expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, lockfileText }), String(lockfileText).slice(0, 10)).toThrow(BatchStepError);
+    }
+    expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, lockfileText: 'x'.repeat(MAX_LOCKFILE_LENGTH) })).not.toThrow();
+    // Never --frozen-lockfile with our copy: the CLI writes only the copy of the lockfile next to it.
+    expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, lockfileText: null, frozenLockfile: true })).toThrow(BatchStepError);
+    expect(() => batchStepCommand('build', { repository: REPO, configPath: 'a.json', imageName: 'x', override, frozenLockfile: true })).toThrow(BatchStepError);
     const up = upArgs({ workspaceFolder: FOLDER, overrideConfigPath: OVERRIDE_CONFIG_PATH, idLabel, removeExistingContainer: true });
     expect(batchStepCommand('up', { repository: REPO, override, devspaceId: ID, removeExistingContainer: true })).toEqual({
       command: overrideCommand(up, undefined),

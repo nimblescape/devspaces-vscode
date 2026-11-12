@@ -11,7 +11,9 @@ import { LOCK_BUSY_CODE } from '../core/helperChannel/protocol';
 import { abortError } from '../core/ports';
 import type { HelperBatchSession } from '../core/helperChannel/helperChannel';
 import { acquireFlock, flockFailure } from '../core/helperChannel/lockFile';
-import type { PrepareLock } from '../core/pipeline/devspacePorts';
+import type { PrepareLock, PreparedSharedImages } from '../core/pipeline/devspacePorts';
+import { errorMessage } from '../core/errors';
+import type { Logger } from '../core/ports';
 import { takeDevspaceLock, type LockDeps } from './lock';
 import { OperationError, type OperationContext } from './server';
 
@@ -165,5 +167,29 @@ export function workerDevspaceLock(
         release();
       },
     };
+  };
+}
+
+/**
+ * The records of the shared images that a prepare built (R-DS-010) for the worker's own pipeline, in the lock folder of
+ * LockDeps (LockDeps.sharedImageRecords), as a part of its deps (none without them). A read that fails is no record; a
+ * write that fails is logged and resolves false.
+ */
+export function sharedImageRecordsDeps(lockDeps: LockDeps, logger: Logger): { sharedImageRecords?: PreparedSharedImages } {
+  const records = lockDeps.sharedImageRecords?.(lockDeps.stateDir);
+  if (records === undefined) return {};
+  return {
+    sharedImageRecords: {
+      read: async (key) => records.read(key),
+      write: async (key, imageId) => {
+        try {
+          records.write(key, imageId);
+          return true;
+        } catch (error) {
+          logger.warn(`The shared image ${imageId} of the key ${key} could not be recorded: ${errorMessage(error)}`);
+          return false;
+        }
+      },
+    },
   };
 }

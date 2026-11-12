@@ -5,10 +5,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
-import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, isImageKey } from '../names';
+import { DEVSPACE_IMAGE_LABELS, LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, isImageKey } from '../names';
 import type { BuildRecord, Devspace } from '../types';
 import { buildRecordLabel, imageRecordLabels, preparedImageLabels } from './imageRecord';
-import { DEVSPACE_IMAGE_LABELS, NOT_IN_IMAGE_PROPERTIES, canonicalJson, chosenSharedImage, imageKey, isSharedImage, sharedImageInputs, type ImageKeyInput, type SharedImageFacts } from './imageKey';
+import { NOT_IN_IMAGE_PROPERTIES, canonicalJson, chosenSharedImage, imageKey, isSharedImage, sharedImageInputs, type ImageKeyInput, type SharedImageFacts } from './imageKey';
 
 const BASE: ImageKeyInput = {
   cliVersion: '0.90.0',
@@ -152,12 +152,27 @@ describe('isSharedImage', () => {
     expect(isSharedImage({ id: ID, tags: ['other:latest', TAG], labels: { [LABEL_IMAGE_KEY]: KEY, 'org.opencontainers.image.title': 'x' } }, KEY, VOUCHED)).toBe(true);
   });
 
+  it('takes the image with the tag of a prepared devspace image too (a shared image that a prepare built or tagged)', () => {
+    expect(isSharedImage({ id: ID, tags: ['devspaces-acme-web-config-happy-turing:prepared'], labels: { [LABEL_IMAGE_KEY]: KEY } }, KEY, VOUCHED)).toBe(true);
+  });
+
+  it('takes an image that the record of a prepare for the key names, without a dev container; never another image', () => {
+    const image = { id: ID, tags: ['devspaces-acme-web-config-happy-turing:prepared'], labels: { [LABEL_IMAGE_KEY]: KEY } };
+    expect(isSharedImage(image, KEY, [], ID.toUpperCase())).toBe(true);
+    expect(isSharedImage(image, KEY, [], `sha256:${'9'.repeat(64)}`)).toBe(false);
+    expect(isSharedImage(image, KEY, [])).toBe(false);
+    // The record vouches only for a candidate: the key, no label of a devspace, the tag of a devspace image.
+    expect(isSharedImage({ ...image, labels: { [LABEL_IMAGE_KEY]: `sha256:${'7'.repeat(64)}` } }, KEY, [], ID)).toBe(false);
+    expect(isSharedImage({ ...image, labels: { [LABEL_IMAGE_KEY]: KEY, [LABEL_DEVSPACE_ID]: 'web' } }, KEY, [], ID)).toBe(false);
+    expect(isSharedImage({ ...image, tags: ['devspaces-acme-web-config-happy-turing:prepared-db'] }, KEY, [], ID)).toBe(false);
+  });
+
   it('refuses another key, a label of a devspace, and an image without the tag of a devspace image', () => {
     expect(isSharedImage({ id: ID, tags: [TAG], labels: { [LABEL_IMAGE_KEY]: `sha256:${'7'.repeat(64)}` } }, KEY, VOUCHED)).toBe(false);
     for (const label of DEVSPACE_IMAGE_LABELS) {
       expect(isSharedImage({ id: ID, tags: [TAG], labels: { [LABEL_IMAGE_KEY]: KEY, [label]: '' } }, KEY, VOUCHED)).toBe(false);
     }
-    for (const tag of ['devspaces-acme-api-config-curious-hopper:prepared', 'devspaces-acme-api-config-curious-hopper:0', 'ghcr.io/x/devspaces-acme-api-config-curious-hopper:3', 'devspaces-tools:3']) {
+    for (const tag of ['devspaces-acme-api-config-curious-hopper:prepared-db', 'devspaces-acme-api-config-curious-hopper:0', 'devspaces-tools:prepared', 'ghcr.io/x/devspaces-acme-api-config-curious-hopper:3', 'devspaces-tools:3']) {
       expect(isSharedImage({ id: ID, tags: [tag], labels: { [LABEL_IMAGE_KEY]: KEY } }, KEY, VOUCHED)).toBe(false);
     }
     expect(isSharedImage({ id: ID, tags: [], labels: { [LABEL_IMAGE_KEY]: KEY } }, KEY, VOUCHED)).toBe(false);
@@ -194,5 +209,8 @@ describe('chosenSharedImage', () => {
     expect(chosenSharedImage([c, a, b])).toBe(b);
     expect(chosenSharedImage([c, { id: 'sha256:d', createdAt: '2026-11-02T00:00:00Z' }, a])?.id).toBe('sha256:d');
     expect(chosenSharedImage([])).toBeUndefined();
+    // The image of the record of a prepare first (by its ID, without case), when it is one of them.
+    expect(chosenSharedImage([c, a, b], c.id.toUpperCase().replace('SHA256', 'sha256'))).toBe(c);
+    expect(chosenSharedImage([c, a, b], 'sha256:gone')).toBe(b);
   });
 });

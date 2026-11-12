@@ -7,7 +7,8 @@
 // steps of WorkspaceHelper run only in the batch helper.
 // Pure functions. No `vscode`.
 import { splitRepository } from '../names';
-import { OVERRIDE_CONFIG_PATH, OVERRIDE_FOLDER, upCommand, writeAndRunCommand } from './scripts';
+import { CommandError } from '../errors';
+import { LOCKFILE_CHANGED_EXIT, LOCKFILE_CHANGED_TEXT, OVERRIDE_CONFIG_PATH, OVERRIDE_FOLDER, upCommand, writeAndRunCommand } from './scripts';
 
 /** Files of the extension for a run of the Dev Container CLI (WRITE_AND_RUN_SCRIPT): absolute path below OVERRIDE_FOLDER → text. */
 export type HelperFiles = Readonly<Record<string, string>>;
@@ -67,12 +68,25 @@ function checkHelperFiles(files: HelperFiles): void {
   }
 }
 
-/** Standard input of WRITE_AND_RUN_SCRIPT: the files, and the override configuration at OVERRIDE_CONFIG_PATH. */
-export function writeAndRunInput(files: HelperFiles | undefined, override: Record<string, unknown> | undefined): string {
+/**
+ * Standard input of WRITE_AND_RUN_SCRIPT: the files, and the override configuration at OVERRIDE_CONFIG_PATH; `lockfile`,
+ * the lockfile text that the run must find next to the configuration of the repository (`null`: none), else the script
+ * fails (R-DS-010: the lockfile of the image key of a shared image, read before the build).
+ */
+export function writeAndRunInput(files: HelperFiles | undefined, override: Record<string, unknown> | undefined, lockfile?: string | null): string {
   const all: Record<string, string> = { ...(files ?? {}) };
   if (override !== undefined) all[OVERRIDE_CONFIG_PATH] = JSON.stringify(override, null, 2);
   checkHelperFiles(all);
-  return JSON.stringify({ files: all });
+  return JSON.stringify({ files: all, ...(lockfile !== undefined ? { lockfile } : {}) });
+}
+
+/**
+ * Whether `error` is the failure of a run of WRITE_AND_RUN_SCRIPT whose lockfile was not the one that it must find
+ * (writeAndRunInput: R-DS-010, it changed after it was read for the image key): its exit code LOCKFILE_CHANGED_EXIT
+ * and its message, before the Dev Container CLI started.
+ */
+export function isLockfileChanged(error: unknown): boolean {
+  return error instanceof CommandError && error.exitCode === LOCKFILE_CHANGED_EXIT && error.stderr.includes(LOCKFILE_CHANGED_TEXT);
 }
 
 /**

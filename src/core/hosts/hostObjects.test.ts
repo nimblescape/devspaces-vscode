@@ -590,6 +590,67 @@ describe('readHostInventory', () => {
     expect(Object.fromEntries(inventory.images.map((image) => [image.id, image.purpose]))).toEqual({ 'sha256:s': 'otherDevspace', 'sha256:k': 'notDevspaces', 'sha256:u': 'notDevspaces' });
   });
 
+  it('counts a shared image with the tag of a prepared devspace image too; a prepared image only when all its devspace tags are', async () => {
+    const prepared = 'devspaces-acme-web-config-curious-hopper:prepared';
+    const used = 'devspaces-acme-api-config-happy-turing:3';
+    const docker = {
+      ...fakeDocker({
+        'system df': ok(
+          JSON.stringify({
+            Images: [
+              { ID: 'sha256:p', Repository: prepared.split(':')[0], Tag: 'prepared' },
+              { ID: 'sha256:m', Repository: used.split(':')[0], Tag: '3' },
+              { ID: 'sha256:m', Repository: 'devspaces-acme-docs-config-brave-curie', Tag: 'prepared' },
+            ],
+            Containers: [],
+            Volumes: [],
+          }),
+        ),
+      }),
+      listImagesByLabel: async (label: string) =>
+        label === LABEL_IMAGE_KEY
+          ? [
+              { id: 'sha256:p', tags: [prepared], createdAt: '' },
+              { id: 'sha256:m', tags: [used, 'devspaces-acme-docs-config-brave-curie:prepared'], createdAt: '' },
+            ]
+          : [],
+    };
+    const inventory = await readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
+    expect(Object.fromEntries(inventory.images.map((image) => [image.id, [image.purpose, image.role]]))).toEqual({
+      'sha256:p': ['otherDevspace', 'prepared image'],
+      'sha256:m': ['otherDevspace', 'image'],
+    });
+  });
+
+  it('gives a shared image to the devspace whose image it is, not to a devspace that has only its prepared tag on it', async () => {
+    const docs = 'devspaces-acme-docs-config-brave-curie';
+    const api = 'devspaces-acme-api-config-happy-turing';
+    const docker = {
+      ...fakeDocker({
+        'system df': ok(
+          JSON.stringify({
+            Images: [
+              { ID: 'sha256:m', Repository: docs, Tag: 'prepared' },
+              { ID: 'sha256:m', Repository: api, Tag: '3' },
+            ],
+            Containers: [],
+            Volumes: [],
+          }),
+        ),
+      }),
+      listImagesByLabel: async (label: string) => (label === LABEL_IMAGE_KEY ? [{ id: 'sha256:m', tags: [`${docs}:prepared`, `${api}:3`], createdAt: '' }] : []),
+    };
+    const known = [
+      { id: 'docs-id', repository: 'acme/docs', names: [docs], additionalVolumes: [] },
+      { id: 'api-id', repository: 'acme/api', names: [api], additionalVolumes: [] },
+    ];
+    const inventory = await readHostInventory(docker, { known, baseImages: new Set(), helperBaseImages: new Set() });
+    expect(inventory.images.map((image) => [image.id, image.purpose, image.devspaceId, image.role])).toEqual([['sha256:m', 'devspace', 'api-id', 'image']]);
+    // Without the devspace whose image it is (another computer or account), it is the prepared image of the other one.
+    const only = await readHostInventory(docker, { known: [known[0]], baseImages: new Set(), helperBaseImages: new Set() });
+    expect(only.images.map((image) => [image.id, image.purpose, image.devspaceId, image.role])).toEqual([['sha256:m', 'devspace', 'docs-id', 'prepared image']]);
+  });
+
   it('reads what the running containers use with docker container inspect, in batches, and only when containers run', async () => {
     expect(runningUsesArgs(['c1', 'c2'])).toEqual([
       'container',

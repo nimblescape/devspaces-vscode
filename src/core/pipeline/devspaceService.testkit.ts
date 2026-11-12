@@ -67,7 +67,7 @@ import type {
   GitHubAccount,
 } from '../types';
 import { DevspaceService } from './devspaceService';
-import type { DevspaceDocker, DevspaceHelper, DevspaceServiceDeps, PrepareRun } from './devspacePorts';
+import type { DevspaceDocker, DevspaceHelper, DevspaceServiceDeps, PrepareRun, PreparedSharedImages } from './devspacePorts';
 import { engineDevspaceStore } from '../worker/workerServices';
 import type { DockerStarter } from './operationBase';
 import { DEFAULT_CONFIG_PATH } from './recordRules';
@@ -787,6 +787,8 @@ export class FakeHelper implements DevspaceHelper {
     env?: Record<string, string>;
     /** A prepare builds with `--frozen-lockfile`. */
     frozenLockfile?: true;
+    /** A keyed build passes the lockfile text that its key holds (`null`: none). */
+    lockfileText?: string | null;
   }> = [];
   /** `files` and `env` only for a Docker Compose configuration. */
   readonly ups: Array<{
@@ -1014,6 +1016,7 @@ export class FakeHelper implements DevspaceHelper {
     files?: Readonly<Record<string, string>>;
     env?: Record<string, string>;
     frozenLockfile?: boolean;
+    lockfileText?: string | null;
     token?: string;
     image?: HelperImageUse;
     signal?: AbortSignal;
@@ -1029,6 +1032,7 @@ export class FakeHelper implements DevspaceHelper {
       ...(p.files !== undefined ? { files: p.files } : {}),
       ...(p.env !== undefined ? { env: p.env } : {}),
       ...(p.frozenLockfile === true ? { frozenLockfile: true as const } : {}),
+      ...(p.lockfileText !== undefined ? { lockfileText: p.lockfileText } : {}),
     });
     await this.onBuild(p.imageName);
     if (p.signal?.aborted) throw abortError();
@@ -1822,7 +1826,7 @@ export async function seedDevspace(h: Harness, options: SeedOptions = {}): Promi
  * questions, the windows, the devspace lock) records its use in `hostUses` and throws, as the deps of a prepare in the
  * worker do (headlessServiceDeps). The devspaces come from the volumes (engineDevspaceStore).
  */
-export function headlessPrepareService(h: Harness): { service: DevspaceService; hostUses: string[] } {
+export function headlessPrepareService(h: Harness, extra: Partial<DevspaceServiceDeps> = {}): { service: DevspaceService; hostUses: string[] } {
   const hostUses: string[] = [];
   const computer = <T extends object>(what: string): T =>
     new Proxy({} as T, {
@@ -1861,8 +1865,27 @@ export function headlessPrepareService(h: Harness): { service: DevspaceService; 
     startDocker: computer<{ start: () => never }>('startDocker').start,
     analyzer: inProcessAnalyzer,
     devspaceLock: computer<{ take: () => never }>('devspaceLock').take,
+    ...extra,
   };
   return { service: new DevspaceService(deps), hostUses };
+}
+
+/**
+ * The records of the shared images that a prepare built (PreparedSharedImages, R-DS-010) in a map of the test, by key;
+ * `failWrite` makes each write fail (it resolves false, as the worker's does).
+ */
+export function fakeSharedImageRecords(): PreparedSharedImages & { records: Map<string, string>; failWrite: boolean } {
+  const fake = {
+    records: new Map<string, string>(),
+    failWrite: false,
+    read: async (key: string) => fake.records.get(key),
+    write: async (key: string, imageId: string) => {
+      if (fake.failWrite) return false;
+      fake.records.set(key, imageId);
+      return true;
+    },
+  };
+  return fake;
 }
 
 /**
