@@ -60,16 +60,16 @@ export const READER_PROTOCOL = 1;
  * double quotes and no template literal, so that VOLUME_READER_CODE can join it to one line (a line of the shared shell
  * carries no line break). It reads each folder of READER_VOLUMES under its root that exists, in this order: the Monitor
  * (small, and the most important), the store of VS Code, the cache of the workers:
- * - the Monitor: every file `*.json` at the top, in extensions/, heartbeats/ and extensions/wanted/ with its text, and
- *   every file of worker-scripts/ (the texts of its records `*.json` only);
+ * - the Monitor: every file `*.json` at the top, in heartbeats/, extensions/ and extensions/wanted/ with its text (or
+ *   why it was left out), and every file of worker-scripts/ (the texts of its records `*.json` only);
  * - the store of VS Code: each server folder server/QUALITY/PLATFORM/COMMIT with the version of its product.json,
  *   whether `node` and the script of its quality are there and its size; the markers used/VERSION with their time; the
  *   files extensions/FOLDER/NAME; the sizes of tmp/ and extensions/tmp/ and the number of the locks;
  * - the cache of the workers: each entry of its top level with its kind, its time and its size.
  * It never follows a link: lstat, a folder is listed only when it is no link, and the texts are opened with O_NOFOLLOW
  * (and O_NONBLOCK, so that a FIFO cannot hold it). A size is the sum of the sizes of the files (as Docker counts the size
- * of a volume); `cut` says that a walk stopped at a limit or found a folder that it could not list, so the numbers are
- * at least those. Each entry that it visits counts against READER_MAX_ENTRIES and READER_TIME_MS; `stopped` says that
+ * of a volume: a file with several hard links once); `cut` says that a walk stopped at a limit or found an entry that
+ * it could not read (a folder that it could not list, or a name that is no UTF-8), so the numbers are at least those. Each entry that it visits counts against READER_MAX_ENTRIES and READER_TIME_MS; `stopped` says that
  * one of them was reached. `unreadable` counts the folders that could not be listed.
  */
 export const VOLUME_READER_SCRIPT = String.raw`
@@ -79,47 +79,58 @@ const path = require("path");
 const root = process.argv[1];
 const LIMITS = { entries: ${READER_MAX_ENTRIES}, ms: ${READER_TIME_MS}, file: ${READER_MAX_FILE}, texts: ${READER_MAX_TEXTS}, output: ${READER_MAX_OUTPUT}, rows: ${READER_MAX_ROWS}, top: ${READER_MAX_TOP} };
 const started = Date.now();
-let entries = 0;
+let visited = 0;
 let texts = 0;
 let unreadable = 0;
 let stopped = false;
 function lstat(file) { try { return fs.lstatSync(file); } catch { return undefined; } }
-// The names in a folder, sorted; none when it is no folder (also a link to one: no walk follows a link).
-function list(dir) { const stat = lstat(dir); if (stat === undefined || !stat.isDirectory()) { return []; } try { return fs.readdirSync(dir).sort(); } catch { unreadable++; return []; } }
+// The names in a folder, sorted; none when it is no folder (also a link to one: no walk follows a link). "checked": the
+// caller has seen with lstat that it is a folder.
+function list(dir, checked) { if (!checked) { const stat = lstat(dir); if (stat === undefined || !stat.isDirectory()) { return []; } } try { return fs.readdirSync(dir).sort(); } catch { unreadable++; return []; } }
 function isFolder(file) { const stat = lstat(file); return stat !== undefined && stat.isDirectory(); }
 function isFile(file) { const stat = lstat(file); return stat !== undefined && stat.isFile(); }
-// One more entry; false once a limit is reached (the time is read every 1000 entries).
-function spend() { if (stopped) { return false; } entries++; if (entries > LIMITS.entries || (entries % 1000 === 0 && Date.now() - started > LIMITS.ms)) { stopped = true; } return !stopped; }
+// One more entry; false once a limit is reached (the time is read every 100 entries).
+function spend() { if (stopped) { return false; } visited++; if (visited > LIMITS.entries || (visited % 100 === 0 && Date.now() - started > LIMITS.ms)) { stopped = true; } return !stopped; }
+// The size of a folder. A file with several hard links counts once (as Docker counts it); an entry that lstat cannot
+// read (a name that is no UTF-8, or one that went meanwhile) makes the size incomplete.
 function usage(dir) {
   const result = { bytes: 0, files: 0, cut: false };
   const before = unreadable;
-  const stack = [dir];
+  const linked = new Set();
+  const stack = [[dir, false]];
   while (stack.length > 0) {
-    const current = stack.pop();
-    for (const name of list(current)) {
+    const [current, checked] = stack.pop();
+    for (const name of list(current, checked)) {
       if (!spend()) { result.cut = true; return result; }
       const file = path.join(current, name);
       const stat = lstat(file);
-      if (stat === undefined) { continue; }
-      if (stat.isDirectory()) { stack.push(file); } else { result.bytes += stat.size; result.files++; }
+      if (stat === undefined) { result.cut = true; continue; }
+      if (stat.isDirectory()) { stack.push([file, true]); continue; }
+      if (stat.nlink > 1) { const key = stat.dev + ":" + stat.ino; if (linked.has(key)) { continue; } linked.add(key); }
+      result.bytes += stat.size;
+      result.files++;
     }
   }
   if (unreadable > before) { result.cut = true; }
   return result;
 }
-// The text of a regular file of at most LIMITS.file bytes; counted against LIMITS.texts when "counted".
+// The text of a regular file: { text }, or { omitted } with the reason: "size" (over LIMITS.file), "budget" (over the
+// rest of LIMITS.texts, when "counted"), "time" (a limit was reached), "error" (it could not be read).
 function text(file, counted) {
+  if (stopped) { return { omitted: "time" }; }
   let fd;
   try {
     fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > LIMITS.file || (counted && texts + stat.size > LIMITS.texts)) { return undefined; }
+    if (!stat.isFile()) { return { omitted: "error" }; }
+    if (stat.size > LIMITS.file) { return { omitted: "size" }; }
+    if (counted && texts + stat.size > LIMITS.texts) { return { omitted: "budget" }; }
     const buffer = Buffer.alloc(stat.size);
     let length = 0;
     while (length < stat.size) { const n = fs.readSync(fd, buffer, length, stat.size - length, length); if (n === 0) { break; } length += n; }
     if (counted) { texts += length; }
-    return buffer.toString("utf8", 0, length);
-  } catch { return undefined; } finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
+    return { text: buffer.toString("utf8", 0, length) };
+  } catch { return { omitted: "error" }; } finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
 }
 function monitor(dir) {
   const files = [];
@@ -129,51 +140,54 @@ function monitor(dir) {
     const stat = lstat(path.join(dir, relative));
     if (stat === undefined || !stat.isFile()) { return; }
     const entry = { path: relative, bytes: stat.size, modifiedAt: stat.mtimeMs };
-    if (read) { const content = text(path.join(dir, relative), true); if (content !== undefined) { entry.text = content; } }
+    if (read) { const content = text(path.join(dir, relative), true); if (content.text !== undefined) { entry.text = content.text; } else { entry.omitted = content.omitted; } }
     files.push(entry);
   }
-  for (const name of list(dir)) { if (name.endsWith(".json")) { add(name, true); } }
-  for (const folder of ["extensions", "heartbeats", "extensions/wanted"]) { for (const name of list(path.join(dir, folder))) { if (name.endsWith(".json")) { add(folder + "/" + name, true); } } }
-  for (const name of list(path.join(dir, "worker-scripts"))) { add("worker-scripts/" + name, name.endsWith(".json")); }
+  for (const name of list(dir, true)) { if (name.endsWith(".json")) { add(name, true); } }
+  for (const folder of ["heartbeats", "extensions", "extensions/wanted"]) { for (const name of list(path.join(dir, folder), false)) { if (name.endsWith(".json")) { add(folder + "/" + name, true); } } }
+  for (const name of list(path.join(dir, "worker-scripts"), false)) { add("worker-scripts/" + name, name.endsWith(".json")); }
   return { files, cut };
 }
 function vscode(dir) {
   const servers = [];
   const serverRoot = path.join(dir, "server");
   let cut = false;
-  for (const quality of list(serverRoot)) {
-    for (const platform of list(path.join(serverRoot, quality))) {
-      for (const commit of list(path.join(serverRoot, quality, platform))) {
+  for (const quality of list(serverRoot, false)) {
+    if (stopped) { cut = true; break; }
+    for (const platform of list(path.join(serverRoot, quality), false)) {
+      if (stopped) { cut = true; break; }
+      for (const commit of list(path.join(serverRoot, quality, platform), false)) {
         if (servers.length >= LIMITS.rows || !spend()) { cut = true; break; }
         const folder = path.join(serverRoot, quality, platform, commit);
         const stat = lstat(folder);
         if (stat === undefined || !stat.isDirectory()) { continue; }
         let version;
-        try { version = JSON.parse(text(path.join(folder, "product.json"), false)).version; } catch {}
+        try { version = JSON.parse(text(path.join(folder, "product.json"), false).text).version; } catch {}
         const script = quality === "insider" ? "code-server-insiders" : "code-server";
         servers.push({ quality, platform, commit, version: typeof version === "string" ? version : undefined, modifiedAt: stat.mtimeMs, node: isFile(path.join(folder, "node")), script: isFile(path.join(folder, "bin", script)), usage: usage(folder) });
       }
     }
   }
   const used = [];
-  for (const name of list(path.join(dir, "used"))) {
+  for (const name of list(path.join(dir, "used"), false)) {
     if (used.length >= LIMITS.rows || !spend()) { cut = true; break; }
     const stat = lstat(path.join(dir, "used", name));
     if (stat !== undefined && stat.isFile()) { used.push({ name, at: stat.mtimeMs }); }
   }
   const extensions = [];
   for (const folder of ["universal", "linux-x64", "linux-arm64"]) {
-    for (const name of list(path.join(dir, "extensions", folder))) {
+    if (stopped) { cut = true; break; }
+    for (const name of list(path.join(dir, "extensions", folder), false)) {
       if (extensions.length >= LIMITS.rows || !spend()) { cut = true; break; }
       const stat = lstat(path.join(dir, "extensions", folder, name));
       if (stat !== undefined && stat.isFile()) { extensions.push({ folder, name, bytes: stat.size, modifiedAt: stat.mtimeMs }); }
     }
   }
-  return { servers, used, extensions, temporary: usage(path.join(dir, "tmp")), extensionTemporary: usage(path.join(dir, "extensions", "tmp")), locks: list(path.join(dir, "locks")).length, cut };
+  return { servers, used, extensions, temporary: usage(path.join(dir, "tmp")), extensionTemporary: usage(path.join(dir, "extensions", "tmp")), locks: list(path.join(dir, "locks"), false).length, cut };
 }
 function cache(dir) {
-  const names = list(dir);
-  const entries = [];
+  const names = list(dir, true);
+  const rows = [];
   let more = Math.max(0, names.length - LIMITS.top);
   for (let i = 0; i < Math.min(names.length, LIMITS.top); i++) {
     if (!spend()) { more = names.length - i; break; }
@@ -182,9 +196,9 @@ function cache(dir) {
     const stat = lstat(file);
     if (stat === undefined) { continue; }
     const kind = stat.isDirectory() ? "folder" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "link" : "other";
-    entries.push({ name, kind, modifiedAt: stat.mtimeMs, usage: kind === "folder" ? usage(file) : { bytes: stat.size, files: 1, cut: false } });
+    rows.push({ name, kind, modifiedAt: stat.mtimeMs, usage: kind === "folder" ? usage(file) : { bytes: stat.size, files: 1, cut: false } });
   }
-  return { entries, more };
+  return { entries: rows, more };
 }
 const out = { reader: ${READER_PROTOCOL} };
 if (isFolder(path.join(root, "monitor"))) { out.monitor = monitor(path.join(root, "monitor")); }
@@ -193,7 +207,7 @@ if (isFolder(path.join(root, "worker-cache"))) { out.workerCache = cache(path.jo
 out.stopped = stopped;
 out.unreadable = unreadable;
 let json = JSON.stringify(out);
-if (Buffer.byteLength(json) > LIMITS.output && out.monitor !== undefined) { for (const file of out.monitor.files) { delete file.text; } out.monitor.textsDropped = true; json = JSON.stringify(out); }
+if (Buffer.byteLength(json) > LIMITS.output && out.monitor !== undefined) { for (const file of out.monitor.files) { if (file.text !== undefined) { delete file.text; file.omitted = "output"; } } out.monitor.textsDropped = true; json = JSON.stringify(out); }
 if (Buffer.byteLength(json) > LIMITS.output) { json = JSON.stringify({ reader: out.reader, stopped: true, unreadable, tooLong: true }); }
 process.stdout.write(json);
 `;
@@ -340,7 +354,17 @@ export interface MonitorFile {
   modifiedAt?: number;
   /** Its text, when it is a record that the reader reads and it fits the limits. */
   text?: string;
+  /** Why the text of a record is not there (MonitorTextOmitted). */
+  omitted?: MonitorTextOmitted;
 }
+
+/**
+ * Why the reader left out the text of a record: `size` larger than READER_MAX_FILE, `budget` over the rest of
+ * READER_MAX_TEXTS, `time` a limit of the entries or of the time was reached, `output` the output would have been too
+ * long, `error` it could not be read.
+ */
+export type MonitorTextOmitted = 'size' | 'budget' | 'time' | 'output' | 'error';
+const TEXT_OMITTED: readonly MonitorTextOmitted[] = ['size', 'budget', 'time', 'output', 'error'];
 
 /** What the volume of the Monitor (devspaces-monitor) contains. */
 export interface MonitorStateReading {
@@ -417,7 +441,13 @@ function parseMonitor(value: unknown): MonitorStateReading | undefined {
     const bytes = countOf(entry.bytes);
     if (path === undefined || !MONITOR_PATH.test(path) || path.split('/').includes('..') || bytes === undefined) continue;
     const modifiedAt = timeOf(entry.modifiedAt);
-    files.push({ path, bytes, ...(modifiedAt !== undefined ? { modifiedAt } : {}), ...(typeof entry.text === 'string' ? { text: entry.text } : {}) });
+    const omitted = TEXT_OMITTED.find((reason) => reason === entry.omitted);
+    files.push({
+      path,
+      bytes,
+      ...(modifiedAt !== undefined ? { modifiedAt } : {}),
+      ...(typeof entry.text === 'string' ? { text: entry.text } : omitted !== undefined ? { omitted } : {}),
+    });
   }
   return { files, cut: value.cut === true, textsDropped: value.textsDropped === true };
 }

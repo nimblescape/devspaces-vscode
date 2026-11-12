@@ -229,9 +229,30 @@ describe('the script of the reader', () => {
     expect(Buffer.byteLength(output)).toBeLessThanOrEqual(1_000_000);
     const reading = parseVolumeReading(output);
     expect(reading?.monitor?.textsDropped).toBe(true);
-    expect(reading?.monitor?.files.map((file) => [file.path, file.text])).toEqual([
-      ['cleanup.json', undefined],
-      ['runs.json', undefined],
+    expect(reading?.monitor?.files.map((file) => [file.path, file.text, file.omitted])).toEqual([
+      ['cleanup.json', undefined, 'output'],
+      ['runs.json', undefined, 'output'],
+    ]);
+  });
+
+  it('counts a file with several hard links once, and makes a size with a name that is no UTF-8 incomplete', () => {
+    write('worker-cache/store/file', 'x'.repeat(100));
+    fs.linkSync(path.join(root, 'worker-cache', 'store', 'file'), path.join(root, 'worker-cache', 'store', 'link'));
+    write('vscode/tmp/plain', 'x'.repeat(3));
+    fs.writeFileSync(Buffer.concat([Buffer.from(path.join(root, 'vscode', 'tmp') + '/'), Buffer.from([0xff, 0x41])]), 'y'.repeat(5));
+    const reading = runReader();
+    expect(reading.workerCache?.entries).toEqual([{ name: 'store', kind: 'folder', modifiedAt: expect.any(Number), usage: { bytes: 100, files: 1, cut: false } }]);
+    expect(reading.vscode?.temporary).toEqual({ bytes: 3, files: 1, cut: true });
+  });
+
+  it('says why it left out the text of a record: over the rest of its budget, or after its limit of entries', () => {
+    write('monitor/a.json', 'x'.repeat(600));
+    write('monitor/b.json', 'y'.repeat(600));
+    const budget = VOLUME_READER_CODE.replace(/texts: \d+,/, 'texts: 1000,');
+    const files = parseVolumeReading(execFileSync(process.execPath, ['-e', budget, root], { encoding: 'utf8' }))?.monitor?.files;
+    expect(files?.map((file) => [file.path, file.text?.length, file.omitted])).toEqual([
+      ['a.json', 600, undefined],
+      ['b.json', undefined, 'budget'],
     ]);
   });
 
@@ -243,7 +264,7 @@ describe('the script of the reader', () => {
     write('monitor/registry-digests.json', 'x'.repeat(READER_MAX_FILE + 1));
     write('monitor/runs.json', '{}');
     const files = runReader().monitor?.files ?? [];
-    expect(files.find((file) => file.path === 'registry-digests.json')).toEqual({ path: 'registry-digests.json', bytes: READER_MAX_FILE + 1, modifiedAt: expect.any(Number) });
+    expect(files.find((file) => file.path === 'registry-digests.json')).toEqual({ path: 'registry-digests.json', bytes: READER_MAX_FILE + 1, modifiedAt: expect.any(Number), omitted: 'size' });
     expect(files.find((file) => file.path === 'runs.json')?.text).toBe('{}');
   });
 });
@@ -269,6 +290,8 @@ describe('the output of the reader', () => {
             { path: 'heartbeats/../../x', bytes: 2 },
             { path: 'other/x.json', bytes: 2 },
             { path: 'cleanup.json', bytes: -1 },
+            { path: 'registry-digests.json', bytes: 9, omitted: 'size' },
+            { path: 'images.json', bytes: 1, omitted: 'bogus' },
             'nonsense',
           ],
           cut: true,
@@ -286,7 +309,15 @@ describe('the output of the reader', () => {
       stopped: true,
       unreadable: 2,
       tooLong: false,
-      monitor: { files: [{ path: 'runs.json', bytes: 2, modifiedAt: 5, text: '{}' }], cut: true, textsDropped: false },
+      monitor: {
+        files: [
+          { path: 'runs.json', bytes: 2, modifiedAt: 5, text: '{}' },
+          { path: 'registry-digests.json', bytes: 9, omitted: 'size' },
+          { path: 'images.json', bytes: 1 },
+        ],
+        cut: true,
+        textsDropped: false,
+      },
       vscode: {
         servers: [{ quality: 'stable', platform: 'linux-x64', commit: COMMIT, node: false, script: true, usage: { bytes: 0, files: 1, cut: true } }],
         used: [{ name: 'x' }],
