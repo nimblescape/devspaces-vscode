@@ -12,6 +12,7 @@ import {
   configPathLabel,
   isConfigPathLabelValue,
   containerHostname,
+  devspaceContainerLabels,
   HELPER_CACHE_FOLDER,
   HOST_ACCESS_UNRESTRICTED_LABEL,
   TOKEN_TMPFS,
@@ -217,8 +218,9 @@ export class DevcontainerCommandError extends CommandError {
 /**
  * Override configuration for `up`: only image, workspaceMount, workspaceFolder, runArgs (the repository values as the
  * host access policy checks them, overrideRunArgs: without any --name and with 127.0.0.1 for published ports without an
- * address; plus `--label nimblescape.devspaces.container-version=<n>`, the labels `com.docker.compose.project` and
- * `com.docker.compose.service` with empty values (COMPOSE_CLEARED_LABELS), and `--name <container name>`, and
+ * address; plus `--label nimblescape.devspaces.container-version=<n>`, with `devspace` the labels of the devspace
+ * (devspaceContainerLabels: its repository, its owner, and the build record of the image), the labels
+ * `com.docker.compose.project` and `com.docker.compose.service` with empty values (COMPOSE_CLEARED_LABELS), and `--name <container name>`, and
  * `--hostname <repository name>` (containerHostname) unless the runArgs decide the host name themselves,
  * runArgsDecideHostname, then `--tmpfs TOKEN_TMPFS`, the folder of the token in memory, and last, with
  * `vscodeStoreVolume`, the read-only `--mount` of the shared VS Code server store), appPort (if set, on 127.0.0.1),
@@ -240,6 +242,11 @@ export function buildOverrideConfig(p: {
   /** The configuration path of the devspace, as the label nimblescape.devspaces.config-path. */
   configPath?: string;
   /**
+   * The labels of the devspace on the dev container (devspaceContainerLabels): its repository, the ID of its owner,
+   * and the build record of the devspace image as the value of its label (buildRecordLabel), when the open knows it.
+   */
+  devspace?: { repository: string; ownerId: string; buildRecord?: string };
+  /**
    * The volume of the shared VS Code server store, mounted read-only at VSCODE_STORE_TARGET (vscodeStoreMount), last;
    * without it, no store.
    */
@@ -249,6 +256,9 @@ export function buildOverrideConfig(p: {
   const labels = checksOn ? ['--label', CONTAINER_VERSION_LABEL] : ['--label', CONTAINER_VERSION_LABEL, '--label', HOST_ACCESS_UNRESTRICTED_LABEL];
   // Only a configuration path that reconcileFromVolumes takes; without the label, it takes the default configuration.
   if (p.configPath !== undefined && isConfigPathLabelValue(p.configPath)) labels.push('--label', configPathLabel(p.configPath));
+  // On the container itself, so that it names its devspace and the build record of its image also when the image
+  // carries no labels of a devspace.
+  if (p.devspace !== undefined) for (const label of devspaceContainerLabels(p.devspace)) labels.push('--label', label);
   // The labels of Docker Compose empty, whatever the image inherited.
   for (const label of COMPOSE_CLEARED_LABELS) labels.push('--label', label);
   const repositoryRunArgs = overrideRunArgs(p.runArgs, checksOn);

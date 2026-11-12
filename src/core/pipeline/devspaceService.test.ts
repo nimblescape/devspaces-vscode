@@ -81,6 +81,7 @@ import {
   CLEARED_COMPOSE_LABELS,
   TOKEN_TMPFS_ARGS,
   CONFIG_PATH_LABEL,
+  devspaceLabelArgs,
 } from './devspaceService.testkit';
 import { configHash } from './pipelineRules';
 import { hostAccessProblems } from '../policy';
@@ -186,6 +187,7 @@ describe('open: first open', () => {
       '--label',
       'nimblescape.devspaces.container-version=1',
       ...CONFIG_PATH_LABEL,
+      ...devspaceLabelArgs(env!.buildRecord),
       ...CLEARED_COMPOSE_LABELS,
       '--name',
       name,
@@ -4838,7 +4840,8 @@ describe('container-only Git', () => {
     }
     // With the labels of Docker Compose set empty, the label nimblescape.devspaces.config-path, and the tmpfs of the
     // token at the end.
-    expect((override.runArgs as string[]).slice(-14)).toEqual(['--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
+    const tail = ['--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await entry())?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS];
+    expect((override.runArgs as string[]).slice(-tail.length)).toEqual(tail);
   });
 
   it('starts a current container as it is', async () => {
@@ -5393,7 +5396,7 @@ describe('host access policy in the pipeline', () => {
     // What Docker gets passes the policy as a whole: the extension's --label and --name included.
     const given = h.helper.ups[0].override.runArgs as string[];
     // Checked as the override configuration (its labels of Docker Compose set empty).
-    expect(hostAccessProblems({ config: { runArgs: given }, ownVolume: NAME, overrideConfiguration: true })).toEqual([]);
+    expect(hostAccessProblems({ config: { runArgs: given }, ownVolume: NAME, overrideConfiguration: true, devspace: { id: ENV_ID, ownerId: ACCOUNT.id, repository: REPO } })).toEqual([]);
     // The tmpfs of the token at the end.
     expect(given.slice(-6)).toEqual(['--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     expect(given.filter((arg) => arg === '--name')).toHaveLength(runArgs.includes('--label') ? 2 : 1);
@@ -5421,7 +5424,7 @@ describe('host access policy in the pipeline', () => {
     await h.service.openDevspace(ENV_ID, options());
     // With the labels of Docker Compose set empty, the label nimblescape.devspaces.config-path, and the tmpfs of the
     // token at the end.
-    expect(h.helper.ups[0].override.runArgs).toEqual([...passed, '--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
+    expect(h.helper.ups[0].override.runArgs).toEqual([...passed, '--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await entry())?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
   });
 
   it('removes --rm, -i, -t, -d, and --name before up, and names them in the log', async () => {
@@ -5430,7 +5433,7 @@ describe('host access policy in the pipeline', () => {
     await h.service.openDevspace(ENV_ID, options());
     // With the labels of Docker Compose set empty, the label nimblescape.devspaces.config-path, and the tmpfs of the
     // token at the end.
-    expect(h.helper.ups[0].override.runArgs).toEqual(['--cap-drop', 'ALL', '--label', '--rm', '--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
+    expect(h.helper.ups[0].override.runArgs).toEqual(['--cap-drop', 'ALL', '--label', '--rm', '--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await entry())?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     const lines = h.logger.infos.filter((line) => line.startsWith(`Removed from the runArgs of ${REPO}: `));
     expect(lines).toHaveLength(1);
     for (const removed of ['--rm (Devspaces stops, starts, and recreates the container', '-it (the container runs without a terminal', '-d (the Dev Container CLI stays attached', '--name mine (the container gets the name of the devspace)']) {

@@ -11,7 +11,9 @@ import {
   LABEL_OWNER_ID,
   LABEL_PREPARED,
   LABEL_REPOSITORY,
+  MAX_BUILD_RECORD_LABEL_LENGTH,
   composeProjectName,
+  devspaceImageName,
   isConfigPathLabelValue,
 } from '../names';
 import { isBuildRecord } from '../storage/registry';
@@ -19,26 +21,29 @@ import type { BuildRecord, Devspace, RefusedUpdate } from '../types';
 import { hasOnlyKeys, isRecord } from '../valueChecks';
 
 /**
- * The largest build record (as JSON) that the label takes; a larger one is written as an empty label (the next computer
- * builds). 8 KiB, so that the labels on the command line of `docker build` stay far below the 32,767 characters of a
- * command line on Windows.
+ * The value of LABEL_BUILD_RECORD for the build record `record`, without its pinned image ID (the labels of an image
+ * change its ID): its JSON, or empty when that is longer than MAX_BUILD_RECORD_LABEL_LENGTH. The same value on the
+ * devspace image (imageRecordLabels) and on the dev container that `up` creates from it (devspaceContainerLabels, which
+ * writes a value with `${` empty: the Dev Container CLI would substitute it in the override configuration; the open
+ * then takes the record of the image).
  */
-export const MAX_RECORD_LABEL_LENGTH = 8 * 1024;
+export function buildRecordLabel(record: BuildRecord): string {
+  const { imageId: _pinned, ...stored } = record;
+  const json = JSON.stringify(stored);
+  return json.length <= MAX_BUILD_RECORD_LABEL_LENGTH ? json : '';
+}
 
 /**
  * The labels that DevspaceDocker.labelImage gives the devspace image of `env` with the build record `record`
- * (without its pinned image ID, which the labels change). The label of the record is always set, empty when the record
- * is longer than MAX_RECORD_LABEL_LENGTH, so that no such label of the base image or of the Dockerfile stays on the
- * image.
+ * (buildRecordLabel). The label of the record is always set, empty when the record does not fit, so that no such label
+ * of the base image or of the Dockerfile stays on the image.
  */
 export function imageRecordLabels(env: Pick<Devspace, 'id' | 'repository' | 'owner'>, record: BuildRecord): Record<string, string> {
-  const { imageId: _pinned, ...stored } = record;
-  const json = JSON.stringify(stored);
   return {
     [LABEL_DEVSPACE_ID]: env.id,
     [LABEL_REPOSITORY]: env.repository,
     [LABEL_OWNER_ID]: env.owner.id,
-    [LABEL_BUILD_RECORD]: json.length <= MAX_RECORD_LABEL_LENGTH ? json : '',
+    [LABEL_BUILD_RECORD]: buildRecordLabel(record),
   };
 }
 
@@ -55,17 +60,33 @@ export function imageBuildRecord(
   buildNumber: number,
 ): BuildRecord | undefined {
   if (labels[LABEL_DEVSPACE_ID] !== env.id || labels[LABEL_REPOSITORY] !== env.repository || labels[LABEL_OWNER_ID] !== env.owner.id) return undefined;
-  const text = labels[LABEL_BUILD_RECORD];
-  if (text === undefined || text.length > MAX_RECORD_LABEL_LENGTH) return undefined;
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
+  const value = recordLabelValue(labels);
   if (!isBuildRecord(value) || !buildRecordFits(value, env, tag, buildNumber)) return undefined;
   const { imageId: _ignored, ...record } = value;
   return record;
+}
+
+/** The parsed JSON of the label LABEL_BUILD_RECORD of `labels`, or `undefined` when it is missing, too long, or no JSON. */
+function recordLabelValue(labels: Readonly<Record<string, string>>): unknown {
+  const text = labels[LABEL_BUILD_RECORD];
+  if (text === undefined || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The build record in the labels `labels` of the dev container of `env` (its own labels and those that it inherits
+ * from its image), or `undefined` when they do not fit: as imageBuildRecord, for the devspace image of `env` that the
+ * record names by its build number (devspaceImageName). The pinned image ID is never taken from the labels; the caller
+ * pins the image that the container was created from.
+ */
+export function containerBuildRecord(labels: Readonly<Record<string, string>>, env: Pick<Devspace, 'id' | 'repository' | 'owner'>): BuildRecord | undefined {
+  const value = recordLabelValue(labels);
+  if (!isRecord(value) || typeof value.buildNumber !== 'number' || !Number.isSafeInteger(value.buildNumber) || value.buildNumber < 1) return undefined;
+  return imageBuildRecord(labels, env, devspaceImageName(env.repository, env.id, value.buildNumber), value.buildNumber);
 }
 
 /**
@@ -160,7 +181,7 @@ function sameDigests(a: Record<string, string>, b: Record<string, string>): bool
 
 /** The PreparedImageLabel of the label text `text`; `undefined` when it is missing, too long, or not of that shape. */
 function preparedImageLabel(text: string | undefined): PreparedImageLabel | undefined {
-  if (text === undefined || text === '' || text.length > MAX_RECORD_LABEL_LENGTH) return undefined;
+  if (text === undefined || text === '' || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
   let value: unknown;
   try {
     value = JSON.parse(text);

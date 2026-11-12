@@ -51,9 +51,11 @@ export interface VolumeInput {
    * The devspace that is checked (its ID and the GitHub user ID of its owner): an existing volume whose labels of
    * Devspace name it is its own (isOwnVolume) and may be mounted, and so may an additional volume of another
    * devspace of the same owner (isSameOwnerAdditionalVolume). Without it, every volume with
-   * nimblescape.devspaces.id is refused.
+   * nimblescape.devspaces.id is refused. With its repository too, the only values of the labels
+   * nimblescape.devspaces.repository and nimblescape.devspaces.owner-id that the override configuration and the merged
+   * configuration may give the dev container (devspaceContainerLabels; ./single.ts isLabelOfDevspace).
    */
-  devspace?: { id: string; ownerId: string };
+  devspace?: { id: string; ownerId: string; repository?: string };
   /**
    * The networks that the configuration names (runArgsNetworks, or the networks of a Docker Compose model) and that
    * exist, by name: their labels and the devspaces of the containers attached to them (foreignNetworkItem).

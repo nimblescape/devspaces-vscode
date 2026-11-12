@@ -16,10 +16,13 @@ import { MAX_DOCKERFILE_LENGTH } from '../imageCheck/dockerfile';
 import {
   COMPOSE_CLEARED_LABELS,
   LABEL_CONFIG_PATH,
+  LABEL_OWNER_ID,
+  LABEL_REPOSITORY,
   TOKEN_TMPFS,
   VSCODE_STORE_VOLUME,
   WORKSPACES_ROOT,
   isConfigPathLabelValue,
+  ownDevspaceLabel,
   vscodeStoreMount,
 } from '../names';
 import { exposingLocalPortHostValues, LOCAL_PORT_HOST_SETTING } from '../devContainers';
@@ -245,9 +248,9 @@ function hostAccessFindings(original: HostAccessInput, checksOn: boolean): Probl
         const cleared = source === input.merged || input.overrideConfiguration === true;
         // And the mount of the shared VS Code server store that the override configuration adds.
         const store = cleared ? vscodeStoreMount(input.vscodeStoreVolume ?? VSCODE_STORE_VOLUME) : undefined;
-        add(runArgsFindings(source.runArgs, volumes, cleared, store));
+        add(runArgsFindings(source.runArgs, volumes, cleared, store, input.devspace));
         // What Docker gets: the same list without the removed flags, and (checks on) with 127.0.0.1 for published ports.
-        add(runArgsFindings(overrideRunArgs(source.runArgs, checksOn), volumes, cleared, store));
+        add(runArgsFindings(overrideRunArgs(source.runArgs, checksOn), volumes, cleared, store, input.devspace));
       }
     }
     if (source.appPort !== undefined) {
@@ -844,13 +847,28 @@ function isOwnConfigPathLabel(value: string): boolean {
 }
 
 /**
+ * One of the labels of the devspace that the override configuration adds (isOwnDevspaceLabel), with the repository and
+ * the owner of `own`, the devspace of the check (VolumeInput.devspace; without it, or without its repository, these two
+ * are refused); a build record of any valid value (the policy does not know it).
+ */
+function isLabelOfDevspace(value: string, own: VolumeInput['devspace']): boolean {
+  const label = ownDevspaceLabel(value);
+  if (label === undefined) return false;
+  if (label.key === LABEL_REPOSITORY) return own?.repository !== undefined && label.text === own.repository;
+  if (label.key === LABEL_OWNER_ID) return own !== undefined && label.text === own.ownerId;
+  return true;
+}
+
+/**
  * `cleared`: the labels of Docker Compose with empty values that the override configuration adds
  * (COMPOSE_CLEARED_LABELS) are allowed, exactly as written there, the label nimblescape.devspaces.config-path of the
- * override configuration, and its `--tmpfs TOKEN_TMPFS`. `storeMount`, the value of the `--mount` of the shared VS Code
+ * override configuration, its labels of the devspace (isLabelOfDevspace: the repository and the owner of `own`, and
+ * the build record), and its
+ * `--tmpfs TOKEN_TMPFS`. `storeMount`, the value of the `--mount` of the shared VS Code
  * server store that the override configuration adds (vscodeStoreMount), allowed exactly as written there (the caller
  * gives it only where it gives `cleared`: the override and the merged configuration).
  */
-function runArgsFindings(runArgs: readonly unknown[], volumes: VolumeContext, cleared = false, storeMount?: string): Problem[] {
+function runArgsFindings(runArgs: readonly unknown[], volumes: VolumeContext, cleared = false, storeMount?: string, own?: VolumeInput['devspace']): Problem[] {
   const problems: Problem[] = [];
   for (const flag of parseFlags(runArgs, RUN_FLAGS)) {
     const rule = flag.rule;
@@ -862,6 +880,9 @@ function runArgsFindings(runArgs: readonly unknown[], volumes: VolumeContext, cl
       continue;
     } else if (cleared && (flag.name === '--label' || flag.name === '-l') && flag.value !== undefined && isOwnConfigPathLabel(flag.value)) {
       // The label nimblescape.devspaces.config-path that the override configuration adds.
+      continue;
+    } else if (cleared && (flag.name === '--label' || flag.name === '-l') && flag.value !== undefined && isLabelOfDevspace(flag.value, own)) {
+      // The labels of the devspace that the override configuration adds (devspaceContainerLabels).
       continue;
     } else if (cleared && flag.name === '--tmpfs' && flag.value === TOKEN_TMPFS) {
       // The tmpfs of the token that the override configuration adds, exactly as written there.
