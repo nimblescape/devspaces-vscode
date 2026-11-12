@@ -169,8 +169,8 @@ function notePrepare(env: PrepareDevspace, value: PrepareValue): void {
   const named = (why: string) => (why !== '' ? `${env.repository}: ${why}` : env.repository);
   if (value.outcome === 'prepared') noteRun('devspacePrepared', env.repository);
   else if (value.outcome === 'skipped') noteRun('devspacePrepareSkipped', named(detail));
-  // A cancel is a Delete of the devspace, no failure.
-  else if (value.outcome === 'cancelled') noteRun('devspacePrepareSkipped', named(detail !== '' ? `stopped by a Delete (${detail})` : 'stopped by a Delete'));
+  // A cancel (a Delete of the devspace asked it to stop) is no failure; the detail of the worker says why.
+  else if (value.outcome === 'cancelled') noteRun('devspacePrepareSkipped', named(detail !== '' ? `stopped: ${detail}` : 'stopped'));
   else if (value.outcome === 'stopped') noteRun('devspacePrepareFailed', named('stopped by its time limit'));
   else noteRun('devspacePrepareFailed', named(detail));
 }

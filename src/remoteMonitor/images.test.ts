@@ -298,6 +298,23 @@ describe('the images of the remote Monitor', () => {
     ]);
   });
 
+  // The report of the run (R-DS-003) names a new version only when the version before the pull is known.
+  it('an inspect that fails before the pull names no new version in the report', async () => {
+    // `${WEB}:1` is not on the engine, so it is pulled (as in the test above); the inspect of the pull before it fails.
+    const engine = fakeEngine({ pulled: { [`${WEB}:1`]: 'sha256:w101' }, images: [image(WEB, '1.0.1', 'sha256:w101', '2020-01-02')] });
+    let inspects = 0;
+    const inspect: ImageEngine['inspect'] = async (kind, name, signal) => {
+      if (name === `${WEB}:1` && ++inspects === 2) throw new Error('Docker did not answer within 60 seconds');
+      return engine.engine.inspect(kind, name, signal);
+    };
+    const notes = new RunReportBuilder(0);
+    const maintenance = new ImageMaintenance({ engine: { ...engine.engine, inspect }, registryTransport: fakeRegistry({}, CURRENT).transport, log: () => {}, ...inUse(`${WEB}:1`) });
+    await withRunNotes(notes, () => maintenance.pass());
+    expect(engine.calls.filter((call) => call[0] === 'pull')).toEqual([['pull', `${WEB}:1`]]);
+    expect(inspects).toBeGreaterThanOrEqual(2);
+    expect(notes.finish(0, true).events.imagePulled).toBeUndefined();
+  });
+
   // `latest` works as any other tag: an image of `latest` that no reference in use names is removed, as is every other
   // image that no rule keeps.
   it('removes an image of latest that is not in use, and every other image that no rule keeps', async () => {

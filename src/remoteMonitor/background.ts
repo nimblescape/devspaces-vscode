@@ -184,14 +184,27 @@ export class BackgroundRun {
     this.reached = false;
     log('The background run starts.');
     const notes = new RunReportBuilder(this.deps.now());
-    await withRunNotes(notes, () => this.parts());
+    try {
+      await withRunNotes(notes, () => this.parts());
+    } catch (error) {
+      // A failure outside the parts (the run itself, as the setup of the VS Code part): its report is still kept, and
+      // the schedule logs the failure (CacheSchedule).
+      notes.note('partFailed', `the background run: ${errorMessage(error)}`);
+      await this.keepReport(notes, true);
+      throw error;
+    }
     const reachedNone = this.offline && !this.reached;
     // The report before the line of the end, so that the log shows a failed write within the run.
-    await this.deps.reports?.add(notes.finish(this.deps.now(), !reachedNone)).catch((error: unknown) => {
-      log(`The report of the background run could not be kept in the volume: ${errorMessage(error)}`);
-    });
+    await this.keepReport(notes, !reachedNone);
     log(reachedNone ? 'The background run ended without reaching the network.' : 'The background run ended.');
     return !reachedNone;
+  }
+
+  /** Keeps the report of the run (deps.reports); a failure is one line of the log. Never throws. */
+  private async keepReport(notes: RunReportBuilder, reachedNetwork: boolean): Promise<void> {
+    await this.deps.reports?.add(notes.finish(this.deps.now(), reachedNetwork)).catch((error: unknown) => {
+      this.deps.log(`The report of the background run could not be kept in the volume: ${errorMessage(error)}`);
+    });
   }
 
   /** The parts of one run (see run). */

@@ -642,6 +642,22 @@ describe('the report of the background run', () => {
     expect(h.reports).toEqual([{ startedAt: at, endedAt: at, reachedNetwork: true, events: {} }]);
   });
 
+  it('a run that fails outside its parts still keeps its report, and rejects as before', async () => {
+    const reports: RunReport[] = [];
+    const run = new BackgroundRun({
+      log: () => {},
+      now: () => NOW,
+      images: async () => {},
+      vscode: () => {
+        throw new Error('the store path is not valid');
+      },
+      state: { read: async () => ({}), update: async () => {} },
+      reports: { add: async (report) => void reports.push(report) },
+    });
+    await expect(run.run()).rejects.toThrow('the store path is not valid');
+    expect(reports).toEqual([{ startedAt: at, endedAt: at, reachedNetwork: true, events: { partFailed: { count: 1, items: ['the background run: the store path is not valid'] } } }]);
+  });
+
   it('a report that cannot be kept is one line, and the run ends as before', async () => {
     const h = harness({ vscode: false, reportFails: new Error('no space left on device') });
     expect(await h.run.run()).toBe(true);

@@ -340,8 +340,11 @@ export class EngineCleanup {
     try {
       const { records, bytes } = await this.deps.engine.pruneBuildCache({ until: [BUILD_CACHE_UNUSED_FILTER] }, AbortSignal.timeout(BUILD_CACHE_PRUNE_TIMEOUT_MS));
       if (records > 0) {
-        noteRun('engineObjectRemoved', `${records} ${records === 1 ? 'record' : 'records'} of the build cache (${Math.round(bytes / 1_000_000)} MB)`, records);
-        this.deps.log(`Removed ${records} ${records === 1 ? 'record' : 'records'} of the build cache that no build used for 7 days (Docker counts ${Math.round(bytes / 1_000_000)} MB).`);
+        const what = `${records} ${records === 1 ? 'record' : 'records'} of the build cache`;
+        const size = `${Math.round(bytes / 1_000_000)} MB`;
+        // One event for the prune: its records are no objects of the view, and would hide the images in the count.
+        noteRun('engineObjectRemoved', `${what} (${size})`);
+        this.deps.log(`Removed ${what} that no build used for 7 days (Docker counts ${size}).`);
       }
     } catch (error) {
       this.deps.log(`The build cache could not be pruned: ${engineFailure(error, BUILD_CACHE_PRUNE_TIMEOUT_MS)}`);
