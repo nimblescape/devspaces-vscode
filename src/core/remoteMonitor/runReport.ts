@@ -103,8 +103,8 @@ export interface RunReport {
   reachedNetwork: boolean;
   /**
    * The number of runs in a row that did not reach the network and that this report holds (at least 2; none: one run).
-   * The retries of such runs come after minutes, so they share one report (runReportsText) and never push the last run
-   * that reached the network out of the file.
+   * The retries of such runs come after minutes, so they share one report for at most MAX_MERGED_RUN_MS
+   * (runReportsText); the last run that reached the network always stays in the file.
    */
   attempts?: number;
   /** The events that happened, by kind (a kind that did not happen has no entry). */
@@ -135,12 +135,14 @@ function useRoom(event: RunEvent, names: number, used: { items: number; failures
 export class RunReportBuilder {
   private readonly events: Partial<Record<RunEvent, RunEventNote>> = {};
   private readonly used = { items: 0, failures: 0 };
+  /** The report is made (finish): later events (of work that the run started and that outlived it) are left out. */
+  private finished = false;
 
   constructor(private readonly startedAt: number) {}
 
   /** One event, or `count` events of one kind (a removal of several objects at once); `item` names it, when given. */
   note(event: RunEvent, item?: string, count = 1): void {
-    if (!Number.isSafeInteger(count) || count < 1) return;
+    if (this.finished || !Number.isSafeInteger(count) || count < 1) return;
     const note = (this.events[event] ??= { count: 0, items: [] });
     note.count += count;
     if (item === undefined || note.items.length >= MAX_RUN_ITEMS_PER_EVENT || roomFor(event, this.used) <= 0) return;
@@ -150,8 +152,9 @@ export class RunReportBuilder {
     useRoom(event, 1, this.used);
   }
 
-  /** The report of the run that ended at `endedAt`. */
+  /** The report of the run that ended at `endedAt`; the events after it are left out. */
   finish(endedAt: number, reachedNetwork: boolean): RunReport {
+    this.finished = true;
     const events: Partial<Record<RunEvent, RunEventNote>> = {};
     for (const event of RUN_EVENTS) {
       const note = this.events[event];
@@ -229,7 +232,7 @@ export function parseRunReports(text: string): RunReport[] {
 /**
  * One report of two runs in a row that did not reach the network (`earlier`, then `later`): from the start of the
  * first to the end of the second, their attempts added, and their events added (the counts summed, the names of both
- * within the limits).
+ * within the limits, those of the later run first, so that the reasons of the last attempt stay).
  */
 export function mergeRunReports(earlier: RunReport, later: RunReport): RunReport {
   const events: Partial<Record<RunEvent, RunEventNote>> = {};
@@ -238,7 +241,7 @@ export function mergeRunReports(earlier: RunReport, later: RunReport): RunReport
     const first = earlier.events[event];
     const second = later.events[event];
     if (first === undefined && second === undefined) continue;
-    const names = [...new Set([...(first?.items ?? []), ...(second?.items ?? [])])].slice(0, Math.max(0, Math.min(MAX_RUN_ITEMS_PER_EVENT, roomFor(event, used))));
+    const names = [...new Set([...(second?.items ?? []), ...(first?.items ?? [])])].slice(0, Math.max(0, Math.min(MAX_RUN_ITEMS_PER_EVENT, roomFor(event, used))));
     useRoom(event, names.length, used);
     events[event] = { count: (first?.count ?? 0) + (second?.count ?? 0), items: names };
   }
@@ -263,5 +266,9 @@ function joins(newest: RunReport | undefined, report: RunReport): newest is RunR
 export function runReportsText(report: RunReport, earlier: readonly RunReport[]): string {
   const [newest, ...rest] = earlier;
   const runs = joins(newest, report) ? [mergeRunReports(newest, report), ...rest] : [report, ...earlier];
-  return JSON.stringify({ runs: runs.slice(0, MAX_RUN_REPORTS) });
+  const kept = runs.slice(0, MAX_RUN_REPORTS);
+  // The last run that reached the network always stays, in the last place, also after an outage of more than 7 days.
+  const lastReached = runs.find((run) => run.reachedNetwork);
+  if (lastReached !== undefined && !kept.includes(lastReached)) kept[kept.length - 1] = lastReached;
+  return JSON.stringify({ runs: kept });
 }

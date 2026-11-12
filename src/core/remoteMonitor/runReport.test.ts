@@ -93,6 +93,15 @@ describe('the report of a run', () => {
     expect(notes.finish(END, true).events).toEqual({ imagePulled: { count: 1, items: [] } });
   });
 
+  it('an event after the report is made is left out', () => {
+    const notes = new RunReportBuilder(START);
+    notes.note('imagePulled', 'node:24');
+    const made = notes.finish(END, true);
+    notes.note('imagePulled', 'later:1');
+    expect(made.events.imagePulled).toEqual({ count: 1, items: ['node:24'] });
+    expect(notes.finish(END, true).events.imagePulled).toEqual({ count: 1, items: ['node:24'] });
+  });
+
   it('the failures are the events of a failure', () => {
     expect([...RUN_FAILURE_EVENTS].every((event) => RUN_EVENTS.includes(event))).toBe(true);
     expect(RUN_FAILURE_EVENTS.has('partFailed')).toBe(true);
@@ -157,6 +166,22 @@ describe('the file of the last runs', () => {
     expect(MAX_MERGED_RUN_MS).toBe(24 * hour);
   });
 
+  it('the last run that reached the network stays, also after an outage of more than 7 days', () => {
+    const hour = 60 * 60_000;
+    const at = (ms: number) => new Date(START + ms).toISOString();
+    const reached: RunReport = { startedAt: at(0), endedAt: at(60_000), reachedNetwork: true, events: { imagePulled: { count: 1, items: ['node:24'] } } };
+    let reports = [reached];
+    for (let n = 1; n <= 10 * 24; n++) reports = parseRunReports(runReportsText({ startedAt: at(n * hour), endedAt: at(n * hour + 60_000), reachedNetwork: false, events: {} }, reports));
+    expect(reports).toHaveLength(MAX_RUN_REPORTS);
+    expect(reports.slice(0, -1).every((entry) => !entry.reachedNetwork)).toBe(true);
+    expect(reports.at(-1)).toEqual(reached);
+    // The next run that reaches the network replaces it as the last one that did.
+    const next: RunReport = { ...reached, startedAt: at(241 * hour), endedAt: at(241 * hour + 60_000) };
+    const after = parseRunReports(runReportsText(next, reports));
+    expect(after[0]).toEqual(next);
+    expect(after.filter((entry) => entry.reachedNetwork)).toEqual([next]);
+  });
+
   it('a merge keeps the names within the limits', () => {
     const names = (prefix: string) => Array.from({ length: MAX_RUN_ITEMS_PER_EVENT }, (_, i) => `${prefix}${i}`);
     const merged = mergeRunReports(
@@ -164,7 +189,8 @@ describe('the file of the last runs', () => {
       { ...report(2, { imageRemoved: { count: 10, items: names('b') }, partFailed: { count: 1, items: ['same'] } }), reachedNetwork: false },
     );
     expect(merged.attempts).toBe(4);
-    expect(merged.events.imageRemoved).toEqual({ count: 20, items: names('a') });
+    // The names of the later run first: the reasons of the last attempt stay.
+    expect(merged.events.imageRemoved).toEqual({ count: 20, items: names('b') });
     expect(merged.events.partFailed).toEqual({ count: 2, items: ['same'] });
   });
 

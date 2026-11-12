@@ -173,9 +173,11 @@ function harness(options: {
       if (options.busy?.includes(name)) return { kind: 'busy' };
       return { kind: 'locked', release: () => void released.push(name) };
     },
-    ensure: async (_deps, server, platform) => {
+    ensure: async (deps, server, platform) => {
       fetched.push({ server, platform });
       const ready = options.fetch?.(server) ?? true;
+      // A failed fetch gives its reason, as ensureServer does.
+      if (!ready) deps.onFailure?.('the download answered HTTP 500');
       // A server that the monitor fetched has no use by an open.
       if (ready) await readyServer(root, server, platform, 'never');
       return ready;
@@ -625,7 +627,7 @@ describe('the report of the background run', () => {
   it('a fetch that failed, and an update service that did not answer', async () => {
     const failed = harness({ commits: { stable: [C2, C1] }, fetch: () => false });
     await failed.run.run();
-    expect(failed.reports[0]!.events).toEqual({ serverDownloadFailed: { count: 1, items: [`${C2} (stable, linux-x64)`] } });
+    expect(failed.reports[0]!.events).toEqual({ serverDownloadFailed: { count: 1, items: [`${C2} (stable, linux-x64): the download answered HTTP 500`] } });
     const offline = harness({ commits: { stable: Object.assign(new Error('getaddrinfo ENOTFOUND update.code.visualstudio.com'), { code: 'ENOTFOUND' }) } });
     expect(await offline.run.run()).toBe(false);
     expect(offline.reports[0]).toMatchObject({

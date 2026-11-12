@@ -298,11 +298,14 @@ export class BackgroundRun {
       // entries are not kept (storeFailedFetches). The update service answered before this fetch, so the run reached a
       // server and a failed fetch waits a day, also one that failed for the network (RunNetwork).
       const named = `${server.commit} (${quality}, ${platform})`;
-      if (await (vscode.ensure ?? ensureServer)(vscode.store, server, platform, this.signal)) {
+      // The reason of a failed fetch, for the report of the run.
+      let why: string | undefined;
+      const store: VscodeStoreDeps = { ...vscode.store, onFailure: (reason) => void (why = reason) };
+      if (await (vscode.ensure ?? ensureServer)(store, server, platform, this.signal)) {
         noteRun('serverAdded', named);
         await this.linkIntoContainers(vscode, server, platform);
       } else {
-        noteRun('serverDownloadFailed', named);
+        noteRun('serverDownloadFailed', why !== undefined ? `${named}: ${why}` : named);
         failed[version] = this.deps.now();
       }
     }
