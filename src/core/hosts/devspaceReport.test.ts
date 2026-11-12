@@ -25,6 +25,7 @@ const RECORD: BuildRecord = { builtAt: '2026-11-10T13:22:00.000Z', devspaceImage
 const ENTRY: ReportDevspace = {
   id: DEVSPACE,
   repository: REPOSITORY,
+  volumeName: 'devspaces-majikmate-shop-brave-otter',
   configPath: '.devcontainer/devcontainer.json',
   createdAt: '2026-11-03T08:00:00.000Z',
   lastUsedAt: '2026-11-12T04:40:00.000Z',

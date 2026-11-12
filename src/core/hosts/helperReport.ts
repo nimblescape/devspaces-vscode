@@ -28,12 +28,17 @@ export function isHelperContainer(object: Pick<HostObject, 'kind' | 'purpose'>):
 /** The end of the name of a worker: `-worker` and its number (workerContainerBase in names.ts). */
 const WORKER_NAME = /^(.+)-worker\d+$/;
 
-/** The window that a worker serves, in words, from its name. */
+/**
+ * The window that a worker serves, in words, from its name: the worker of a devspace window starts with the name of
+ * the workspace volume of the devspace (windowDevspaceName; with the part of its source for a child row), else with
+ * `devspaces-` and the name of the window (workerNameStart).
+ */
 function windowText(name: string, computer: ReportComputer): string {
-  const base = WORKER_NAME.exec(name)?.[1];
+  const base = WORKER_NAME.exec(name)?.[1]?.toLowerCase();
   if (base === undefined) return 'not known: the name has no number of a worker';
   for (const devspace of computer.devspaces?.values() ?? []) {
-    if (resourceName(devspace.repository, devspace.id) === base) return `the window of the devspace ${devspace.repository}`;
+    const names = [devspace.volumeName, resourceName(devspace.repository, devspace.id)].map((entry) => entry.toLowerCase());
+    if (names.includes(base)) return `the window of the devspace ${devspace.repository}`;
   }
   return isDevspaceResourceName(base) ? 'the window of a devspace that this computer does not know' : 'a window of VS Code that is not connected to a devspace';
 }

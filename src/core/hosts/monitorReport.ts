@@ -22,7 +22,7 @@ import { ageText, cell, chip, countText, dockerTimeText, fact, itemsText, shortD
 /** The entry of a devspace in the registry of this computer, as far as the reports need it. */
 export type ReportDevspace = Pick<
   Devspace,
-  'id' | 'repository' | 'configPath' | 'defaultImage' | 'createdAt' | 'lastUsedAt' | 'lastSeenInUseAt' | 'gitSummary' | 'buildRecord' | 'owner' | 'keepRunning' | 'keepRunningOnce' | 'additionalVolumes' | 'serviceVolumes'
+  'id' | 'repository' | 'volumeName' | 'configPath' | 'defaultImage' | 'createdAt' | 'lastUsedAt' | 'lastSeenInUseAt' | 'gitSummary' | 'buildRecord' | 'owner' | 'keepRunning' | 'keepRunningOnce' | 'additionalVolumes' | 'serviceVolumes'
 >;
 
 /**

@@ -36,7 +36,7 @@ const RECORD: BuildRecord = {
   images: { [BASE]: OLD, 'postgres:16@sha256:77c1e9': `sha256:${'7'.repeat(64)}` },
   features: { 'ghcr.io/devcontainers/features/github-cli:1': FEATURE },
 };
-const ENTRY: ReportDevspace = { id: DEVSPACE, repository: REPOSITORY, configPath: '.devcontainer/devcontainer.json', createdAt: '2026-11-03T08:00:00.000Z', lastUsedAt: '2026-11-12T04:40:00.000Z', owner: { id: '1', login: 'scalarion' }, buildRecord: RECORD };
+const ENTRY: ReportDevspace = { id: DEVSPACE, repository: REPOSITORY, volumeName: NAME, configPath: '.devcontainer/devcontainer.json', createdAt: '2026-11-03T08:00:00.000Z', lastUsedAt: '2026-11-12T04:40:00.000Z', owner: { id: '1', login: 'scalarion' }, buildRecord: RECORD };
 const COMPUTER: ReportComputer = { id: SOURCE, repositories: new Map([[DEVSPACE, REPOSITORY]]), devspaces: new Map([[DEVSPACE, ENTRY]]), version: '0.4.2' };
 const RECORDS = monitorRecords({
   cut: false,
@@ -218,6 +218,11 @@ describe('the reports of the helper containers', () => {
     expect(worker(`${NAME}-worker1`)).toMatchObject({ Serves: { text: 'the window of the devspace majikmate/module-ts' }, Image: { text: HELPER, chip: { tone: 'keep' } } });
     expect(worker(`${resourceName('majikmate/web-basics', OTHER_DEVSPACE)}-worker2`).Serves.text).toBe('the window of a devspace that this computer does not know');
     expect(worker('devspaces-api-worker1').Serves.text).toBe('a window of VS Code that is not connected to a devspace');
+    // The worker of a child row starts with the name of its workspace volume, with the part of its source.
+    const child = resourceName(REPOSITORY, DEVSPACE, 'config');
+    const childComputer: ReportComputer = { ...COMPUTER, devspaces: new Map([[DEVSPACE, { ...ENTRY, volumeName: child }]]) };
+    const serves = helperReport({ object: { kind: 'container', id: 'w', name: `${child}-worker1`, purpose: 'worker' }, computer: childComputer });
+    expect(facts(serves, 'The worker').Serves.text).toBe('the window of the devspace majikmate/module-ts');
     const batch = facts(
       helperReport({ object: { kind: 'container', id: 'b', name: 'devspaces-batch-3f0c2a91', purpose: 'batchHelper' }, details: container({ image: 'devspaces-worker:ffffffffffff', mounts: [{ type: 'volume', source: NAME, destination: '/workspaces', readOnly: false }] }), computer: COMPUTER, currentHelperTag: HELPER }),
       'The batch helper',
