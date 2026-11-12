@@ -197,6 +197,27 @@ async function open(made: UsagePages, host: string): Promise<FakeWebviewPanel> {
   return panel;
 }
 
+/**
+ * After a start (Resume, a show): lets its first sample end at the time of the start, then lets the second sample come,
+ * with the first rate of the CPU of the start.
+ */
+async function secondSample(host: string): Promise<void> {
+  await flush();
+  await timers.advance(intervalOf(host));
+}
+
+/** The time between two samples on `host`. */
+function intervalOf(host: string): number {
+  return host === LIMA_HOST || host === WSL_HOST ? VM_USAGE_INTERVAL_MS : SSH_USAGE_INTERVAL_MS;
+}
+
+/** Opens the page and lets the second sample come: with the first rate of the CPU, the page reads the sizes by itself. */
+async function openRead(made: UsagePages, host: string): Promise<FakeWebviewPanel> {
+  const panel = await open(made, host);
+  await timers.advance(intervalOf(host));
+  return panel;
+}
+
 function lastView(panel: FakeWebviewPanel): UsagePageView {
   const views = panel.posted.filter((message) => message.type === 'view');
   const view = views.at(-1)?.view as UsagePageView | undefined;
@@ -381,11 +402,12 @@ describe('UsagePages', () => {
 
   it('forgets the sizes of before a new start of the host, and reads them again after the next sample', async () => {
     shells.open.add(LIMA_HOST);
-    const panel = await open(pages(), LIMA_HOST);
+    const panel = await openRead(pages(), LIMA_HOST);
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
     readSizes.mockImplementationOnce(() => new Promise<HostInventory>(() => {}));
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
-    await timers.advance(VM_USAGE_INTERVAL_MS);
+    // The sample with the new boot ID has no rate of the CPU yet; the read comes with the next one.
+    await timers.advance(VM_USAGE_INTERVAL_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(2);
     // The sizes of before are gone while the new read runs.
     expect(lastView(panel).docker.value).toBe('…');
@@ -393,24 +415,24 @@ describe('UsagePages', () => {
 
   it('sees a new start of the host also after a sample without a boot ID', async () => {
     shells.open.add(LIMA_HOST);
-    await open(pages(), LIMA_HOST);
+    await openRead(pages(), LIMA_HOST);
     shells.boot = 'unreadable';
     await timers.advance(VM_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(1);
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
-    await timers.advance(VM_USAGE_INTERVAL_MS);
+    await timers.advance(VM_USAGE_INTERVAL_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(2);
   });
 
   it('sees a new start of the host after a first sample of a resume without a boot ID', async () => {
     shells.open.add(LIMA_HOST);
-    const panel = await open(pages(), LIMA_HOST);
+    const panel = await openRead(pages(), LIMA_HOST);
     panel.receive({ type: 'pause' });
     await timers.advance(SIZES_FRESH_MS);
     shells.boot = 'unreadable';
     panel.receive({ type: 'resume' });
-    await flush();
-    // Each start reads the sizes after its first sample (here more than a minute after the last read).
+    await secondSample(LIMA_HOST);
+    // Each start reads the sizes after its first values (here more than a minute after the last read).
     expect(readSizes).toHaveBeenCalledTimes(2);
     // The sampler of the resume saw no boot ID before: the page compares with the boot ID of before the pause.
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
@@ -422,7 +444,7 @@ describe('UsagePages', () => {
     shells.open.add(LIMA_HOST);
     let release: (inventory: HostInventory) => void = () => {};
     readSizes.mockImplementationOnce(() => new Promise<HostInventory>((resolve) => (release = resolve)));
-    const panel = await open(pages(), LIMA_HOST);
+    const panel = await openRead(pages(), LIMA_HOST);
     shells.boot = 'd2f0b1a4-2c39-4b41-9d0e-8a7f1c3e5b6d';
     await timers.advance(VM_USAGE_INTERVAL_MS);
     release(emptyInventory());
@@ -741,8 +763,8 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.vm);
     panel.receive({ type: 'readSizes' });
     await flush();
-    // Only the read in the background after the first sample.
-    expect(readSizes).toHaveBeenCalledTimes(1);
+    // (The page paused before its second sample, so it read no sizes by itself either.)
+    expect(readSizes).not.toHaveBeenCalled();
   });
 
   it('starts no Read Sizes when the VM stops while it reads the state of the VM', async () => {
@@ -807,13 +829,13 @@ describe('UsagePages', () => {
     expect(lastView(panel).banner?.message).toBe(UsagePageTexts.pausedMessage.idle);
   });
 
-  it('reads the sizes in the background after the first sample, without a question and on an open login only, then every 10 minutes', async () => {
+  it('reads the sizes in the background after the first values, without a question and on an open login only, then every 10 minutes', async () => {
     const flows: boolean[] = [];
     readSizes.mockImplementation(async () => {
       flows.push(sshPromptsAllowed());
       return emptyInventory();
     });
-    const panel = await open(pages(), 'build-box');
+    const panel = await openRead(pages(), 'build-box');
     expect(readSizes).toHaveBeenCalledWith('build-box', expect.any(AbortSignal), { openLoginOnly: true });
     expect(flows).toEqual([false]);
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
@@ -831,13 +853,13 @@ describe('UsagePages', () => {
   });
 
   it('reads no sizes in the background while paused or hidden, and again after Resume and after a show that follows the end of the samples', async () => {
-    const panel = await open(pages(), 'build-box');
+    const panel = await openRead(pages(), 'build-box');
     expect(readSizes).toHaveBeenCalledTimes(1);
     panel.receive({ type: 'pause' });
     await timers.advance(SIZES_EVERY_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(1);
     panel.receive({ type: 'resume' });
-    await flush();
+    await secondSample('build-box');
     expect(readSizes).toHaveBeenCalledTimes(2);
     // A show within the 15 seconds goes on with the same samples: no new read.
     panel.setVisible(false);
@@ -849,32 +871,32 @@ describe('UsagePages', () => {
     await timers.advance(SIZES_EVERY_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(2);
     panel.setVisible(true);
-    await flush();
+    await secondSample('build-box');
     expect(readSizes).toHaveBeenCalledTimes(3);
     // A switch back within a minute of the last read does not read again; a pause and Resume after a minute does.
     panel.receive({ type: 'pause' });
     panel.receive({ type: 'resume' });
-    await flush();
+    await secondSample('build-box');
     expect(readSizes).toHaveBeenCalledTimes(3);
     panel.receive({ type: 'pause' });
     await timers.advance(SIZES_FRESH_MS);
     panel.receive({ type: 'resume' });
-    await flush();
+    await secondSample('build-box');
     expect(readSizes).toHaveBeenCalledTimes(4);
   });
 
   it('shows the error of a read in the background, and nothing when it found no open login', async () => {
     readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
-    const first = await open(pages(), 'build-box');
+    const first = await openRead(pages(), 'build-box');
     expect(lastView(first).docker.note).toBe(UsagePageTexts.sizesNotRead);
     readSizes.mockRejectedValueOnce(new Error('docker system df failed\nmore'));
-    const second = await open(pages(), 'other-box');
+    const second = await openRead(pages(), 'other-box');
     expect(lastView(second).docker.note).toBe(UsagePageTexts.sizesFailed('docker system df failed'));
   });
 
   it('reads the sizes by itself no more after a failed read until a click on Resume or a Refresh Sizes that worked', async () => {
     readSizes.mockRejectedValueOnce(new Error('permission denied'));
-    const panel = await open(pages(), 'build-box');
+    const panel = await openRead(pages(), 'build-box');
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesFailed('permission denied'));
     await timers.advance(SIZES_EVERY_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(1);
@@ -882,13 +904,13 @@ describe('UsagePages', () => {
     panel.setVisible(false);
     await timers.advance(HIDDEN_STOP_MS + SIZES_FRESH_MS);
     panel.setVisible(true);
-    await flush();
+    await secondSample('build-box');
     expect(lastView(panel).status.tone).toBe('live');
     expect(readSizes).toHaveBeenCalledTimes(1);
     // Resume, a click, reads again.
     panel.receive({ type: 'pause' });
     panel.receive({ type: 'resume' });
-    await flush();
+    await secondSample('build-box');
     expect(readSizes).toHaveBeenCalledTimes(2);
     readSizes.mockRejectedValueOnce(new Error('permission denied'));
     await timers.advance(SIZES_EVERY_MS);
@@ -907,26 +929,43 @@ describe('UsagePages', () => {
   it('reads no sizes in the background on a VM that does not run, and says nothing', async () => {
     shells.open.add(LIMA_HOST);
     vmState = { kind: 'stopped' };
-    const panel = await open(pages(), LIMA_HOST);
+    const panel = await openRead(pages(), LIMA_HOST);
     expect(readSizes).not.toHaveBeenCalled();
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
   });
 
+  it('shows no error of a read in the background that ended because the VM went to sleep, and tries again after a minute', async () => {
+    shells.open.add(LIMA_HOST);
+    readSizes.mockImplementationOnce(async () => {
+      vmState = { kind: 'stopped' };
+      throw new Error('Cannot connect to the Docker daemon');
+    });
+    const panel = await openRead(pages(), LIMA_HOST);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not be read'));
+    // The VM runs again (a start from somewhere else): the reads by itself stay on.
+    vmState = { kind: 'running' };
+    await timers.advance(SIZES_FRESH_MS);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+  });
+
   it('reads at the next start when a read in the background did not reach the host', async () => {
     readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
-    const panel = await open(pages(), 'build-box');
+    const panel = await openRead(pages(), 'build-box');
     expect(readSizes).toHaveBeenCalledTimes(1);
     // Within a minute: no sizes were read, so the start reads.
     panel.receive({ type: 'pause' });
     panel.receive({ type: 'resume' });
-    await flush();
+    await secondSample('build-box');
     expect(readSizes).toHaveBeenCalledTimes(2);
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
   });
 
   it('tries again a minute after a read in the background that did not reach the host', async () => {
     readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
-    const panel = await open(pages(), 'build-box');
+    const panel = await openRead(pages(), 'build-box');
     await timers.advance(SIZES_FRESH_MS - SSH_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(1);
     await timers.advance(SSH_USAGE_INTERVAL_MS);
@@ -940,7 +979,7 @@ describe('UsagePages', () => {
       signal = readSignal;
       return new Promise<HostInventory>(() => {});
     });
-    const panel = await open(pages(), 'build-box');
+    const panel = await openRead(pages(), 'build-box');
     expect(lastView(panel).status.text).toMatch(/^Live · every 5 s · updated .* · reading the sizes$/);
     panel.dispose();
     expect(signal?.aborted).toBe(false);
@@ -948,7 +987,7 @@ describe('UsagePages', () => {
 
   it('reads the sizes on click in a flow, never on a stopped VM', async () => {
     shells.open.add(LIMA_HOST);
-    const panel = await open(pages(), LIMA_HOST);
+    const panel = await openRead(pages(), LIMA_HOST);
     let flow: boolean | undefined;
     readSizes.mockImplementation(async () => {
       flow = sshPromptsAllowed();

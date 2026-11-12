@@ -430,8 +430,10 @@ class UsagePage {
     this.gapped = false;
     if (this.phase.kind === 'starting') this.phase = { kind: 'live' };
     this.post();
-    // The sizes in the background: after the first sample of a start, then every 10 minutes, on the login of the samples.
-    if (this.sizesAuto && (this.sizesDueAt === undefined || this.timers.now() >= this.sizesDueAt)) void this.readSizes(true);
+    // The sizes in the background: after the first values of a start, then every 10 minutes, on the login of the samples.
+    // Not before the first rates (of the CPU, the network, the disks), which need a second sample, so that the read
+    // does not hold that sample back.
+    if (this.sizesAuto && usage.intervalCs !== undefined && (this.sizesDueAt === undefined || this.timers.now() >= this.sizesDueAt)) void this.readSizes(true);
   }
 
   private onEnd(sampler: UsageSampler, end: UsageEnd): void {
@@ -657,8 +659,10 @@ class UsagePage {
       this.sizesAuto = true;
     } catch (error) {
       // An end of the read (vmClosing, the sleep of the WSL distribution) stops the shell: its error is no result. A read
-      // in the background without an open login ends with an AbortError too, and the next one comes in 10 minutes.
+      // in the background without an open login ends with an AbortError too, and the next try comes after a minute.
       if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
+      // The VM went to sleep during a read in the background (its shell ended): the samples see it themselves.
+      if (background && this.vm && (await this.vmStateNow()).kind !== 'running') return;
       ran = true;
       const detail = errorMessage(error);
       this.deps.logger.warn(`The sizes of ${this.host} could not be read${background ? ' (the page reads them by itself again after a start from a click, such as Resume, or a Read Sizes that works)' : ''}: ${detail}`);
