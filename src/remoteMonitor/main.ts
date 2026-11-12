@@ -1166,15 +1166,22 @@ export function cacheRunStore(stateDir: string): CacheRunStore {
 
 /**
  * The reports of the background runs in the volume (RUN_REPORTS_FILE): `add` puts a report first and keeps the newest
- * MAX_RUN_REPORTS (runReportsText), written atomically (writeStateFile). A file that cannot be read (none, a link, too
- * large, not valid) counts as no earlier report.
+ * MAX_RUN_REPORTS (runReportsText), written atomically (writeStateFile). No file, and a file that holds no valid report
+ * (a link, too large, not valid), count as no earlier report, so the next write replaces it; a read that fails (another
+ * error of the volume) rejects, and `add` then writes nothing, so that it never drops the earlier reports.
  */
 export function runReportStore(stateDir: string): { add(report: RunReport): Promise<void>; read(): Promise<RunReport[]> } {
   const read = async (): Promise<RunReport[]> => {
     const file = path.join(stateDir, RUN_REPORTS_FILE);
-    const stat = await fs.promises.lstat(file).catch(() => undefined);
-    if (stat?.isFile() !== true || stat.size > MAX_RUN_REPORTS_FILE_BYTES) return [];
-    return parseRunReports(await fs.promises.readFile(file, 'utf8').catch(() => ''));
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.lstat(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    if (!stat.isFile() || stat.size > MAX_RUN_REPORTS_FILE_BYTES) return [];
+    return parseRunReports(await fs.promises.readFile(file, 'utf8'));
   };
   return {
     read,

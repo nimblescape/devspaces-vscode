@@ -172,8 +172,11 @@ describe('the part "the workspace helper image" of the background run', () => {
 
     const failing = setup({});
     failing.deps.engine = { inspect: async () => Promise.reject(new Error('Cannot connect to the Docker daemon')) };
-    expect(await refreshHelperImage(failing.deps)).toBe('none');
+    const notes = new RunReportBuilder(0);
+    expect(await withRunNotes(notes, () => refreshHelperImage(failing.deps))).toBe('none');
     expect(failing.log).toEqual([`The workspace helper image ${TAG} could not be read: Cannot connect to the Docker daemon`]);
+    // A missing image is no failure of the run; an inspect that fails is.
+    expect(notes.finish(0, true).events).toEqual({ helperImageFailed: { count: 1, items: [`${TAG}: it could not be read: Cannot connect to the Docker daemon`] } });
     expect(failing.written()).toBeUndefined();
   });
 

@@ -19,14 +19,14 @@ describe('the events of the current run', () => {
       await Promise.all([
         (async () => {
           await tick();
-          noteRun('serverDownloaded', 'a');
+          noteRun('serverAdded', 'a');
         })(),
-        (async () => noteRun('serverDownloaded', 'b'))(),
+        (async () => noteRun('serverAdded', 'b'))(),
       ]);
       return 'done';
     });
     expect(result).toBe('done');
-    expect(notes.finish(0, true).events).toEqual({ imagePulled: { count: 1, items: ['node:24'] }, serverDownloaded: { count: 2, items: ['b', 'a'] } });
+    expect(notes.finish(0, true).events).toEqual({ imagePulled: { count: 1, items: ['node:24'] }, serverAdded: { count: 2, items: ['b', 'a'] } });
   });
 
   it('outside a run, an event is noted nowhere and never throws', async () => {

@@ -35,7 +35,9 @@ export const MAX_RUN_REPORTS_FILE_BYTES = 256 * 1024;
  *  - helperImageBuilt: the tag of the workspace helper image built again from a new base image;
  *  - helperImageFailed: why its check or its build failed;
  *  - engineObjectRemoved: an object of Devspaces that the cleanup of the engine removed, in words;
- *  - serverDownloaded, serverDownloadFailed, serverRemoved: a VS Code server as "<commit> (<quality>, <platform>)";
+ *  - serverAdded: a VS Code server that became ready in the shared store in this run (the Monitor downloaded it, or a
+ *    window did while the Monitor waited for its lock), as "<commit> (<quality>, <platform>)";
+ *  - serverDownloadFailed, serverRemoved: a VS Code server as "<commit> (<quality>, <platform>)";
  *  - serverCheckFailed: the quality and why the update service gave no releases;
  *  - serverLinked: "<commit> into <container>";
  *  - extensionDownloaded, extensionRemoved: the file of an extension in the shared cache;
@@ -51,7 +53,7 @@ export const RUN_EVENTS = [
   'helperImageBuilt',
   'helperImageFailed',
   'engineObjectRemoved',
-  'serverDownloaded',
+  'serverAdded',
   'serverDownloadFailed',
   'serverCheckFailed',
   'serverLinked',
@@ -89,6 +91,12 @@ export interface RunReport {
   endedAt: string;
   /** False when the run reached no server and failed for the network (the schedule tries it again). */
   reachedNetwork: boolean;
+  /**
+   * The number of runs in a row that did not reach the network and that this report holds (at least 2; none: one run).
+   * The retries of such runs come after minutes, so they share one report (runReportsText) and never push the last run
+   * that reached the network out of the file.
+   */
+  attempts?: number;
   /** The events that happened, by kind (a kind that did not happen has no entry). */
   events: Partial<Record<RunEvent, RunEventNote>>;
 }
@@ -96,7 +104,10 @@ export interface RunReport {
 /** A name for the report: one line, without control characters, at most MAX_RUN_ITEM_LENGTH characters. */
 export function runItemText(text: string): string {
   const line = text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return line.length <= MAX_RUN_ITEM_LENGTH ? line : `${line.slice(0, MAX_RUN_ITEM_LENGTH - 1)}…`;
+  if (line.length <= MAX_RUN_ITEM_LENGTH) return line;
+  // Never half of a character outside the Basic Multilingual Plane (a surrogate pair).
+  const cut = line.slice(0, MAX_RUN_ITEM_LENGTH - 1);
+  return `${/[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut}…`;
 }
 
 /** Collects the events of one run (noteRun of the Monitor) and makes its report. */
@@ -156,8 +167,9 @@ function parseNote(value: unknown, room: number): RunEventNote | undefined {
  */
 export function parseRunReport(value: unknown): RunReport | undefined {
   if (!isRecord(value)) return undefined;
-  const { startedAt, endedAt, reachedNetwork, events } = value;
+  const { startedAt, endedAt, reachedNetwork, attempts, events } = value;
   if (!isTime(startedAt) || !isTime(endedAt) || typeof reachedNetwork !== 'boolean' || !isRecord(events)) return undefined;
+  if (attempts !== undefined && (typeof attempts !== 'number' || !Number.isSafeInteger(attempts) || attempts < 2)) return undefined;
   const notes: Partial<Record<RunEvent, RunEventNote>> = {};
   let items = 0;
   // Only the events that this version knows (RUN_EVENTS); those of a newer version are left out.
@@ -168,7 +180,7 @@ export function parseRunReport(value: unknown): RunReport | undefined {
     items += note.items.length;
     notes[event] = note;
   }
-  return { startedAt, endedAt, reachedNetwork, events: notes };
+  return { startedAt, endedAt, reachedNetwork, ...(attempts !== undefined ? { attempts: attempts as number } : {}), events: notes };
 }
 
 /**
@@ -193,7 +205,32 @@ export function parseRunReports(text: string): RunReport[] {
   return reports;
 }
 
-/** The text of the file with `report` first, then the newest of `earlier`, MAX_RUN_REPORTS in all. */
+/**
+ * One report of two runs in a row that did not reach the network (`earlier`, then `later`): from the start of the
+ * first to the end of the second, their attempts added, and their events added (the counts summed, the names of both
+ * within the limits).
+ */
+export function mergeRunReports(earlier: RunReport, later: RunReport): RunReport {
+  const events: Partial<Record<RunEvent, RunEventNote>> = {};
+  let items = 0;
+  for (const event of RUN_EVENTS) {
+    const first = earlier.events[event];
+    const second = later.events[event];
+    if (first === undefined && second === undefined) continue;
+    const names = [...new Set([...(first?.items ?? []), ...(second?.items ?? [])])].slice(0, Math.max(0, Math.min(MAX_RUN_ITEMS_PER_EVENT, MAX_RUN_ITEMS - items)));
+    items += names.length;
+    events[event] = { count: (first?.count ?? 0) + (second?.count ?? 0), items: names };
+  }
+  return { startedAt: earlier.startedAt, endedAt: later.endedAt, reachedNetwork: false, attempts: (earlier.attempts ?? 1) + (later.attempts ?? 1), events };
+}
+
+/**
+ * The text of the file with `report` first, then the newest of `earlier`, MAX_RUN_REPORTS in all. A run that did not
+ * reach the network right after another such run joins its report (mergeRunReports), so that the retries of a night
+ * without a network take one place.
+ */
 export function runReportsText(report: RunReport, earlier: readonly RunReport[]): string {
-  return JSON.stringify({ runs: [report, ...earlier].slice(0, MAX_RUN_REPORTS) });
+  const [newest, ...rest] = earlier;
+  const runs = !report.reachedNetwork && newest !== undefined && !newest.reachedNetwork ? [mergeRunReports(newest, report), ...rest] : [report, ...earlier];
+  return JSON.stringify({ runs: runs.slice(0, MAX_RUN_REPORTS) });
 }

@@ -15,6 +15,7 @@ import {
   RUN_EVENTS,
   RUN_FAILURE_EVENTS,
   RunReportBuilder,
+  mergeRunReports,
   parseRunReport,
   parseRunReports,
   runItemText,
@@ -68,6 +69,10 @@ describe('the report of a run', () => {
     const long = runItemText('x'.repeat(500));
     expect(long).toHaveLength(MAX_RUN_ITEM_LENGTH);
     expect(long.endsWith('…')).toBe(true);
+    // A character outside the Basic Multilingual Plane at the cut is left out whole, never half of it.
+    const emoji = runItemText(`${'x'.repeat(MAX_RUN_ITEM_LENGTH - 2)}😀${'y'.repeat(10)}`);
+    expect(emoji).toBe(`${'x'.repeat(MAX_RUN_ITEM_LENGTH - 2)}…`);
+    expect(/[\ud800-\udfff]/.test(emoji)).toBe(false);
     const notes = new RunReportBuilder(START);
     notes.note('imagePulled', ' \n ');
     notes.note('imageRemoved', 'a', 0);
@@ -100,6 +105,40 @@ describe('the file of the last runs', () => {
     expect(parseRunReports(text)).toHaveLength(MAX_RUN_REPORTS);
   });
 
+  it('the runs in a row that did not reach the network share one report, so the last run that reached it stays', () => {
+    const offline = (n: number, events: RunReport['events'] = {}): RunReport => ({ ...report(n, events), reachedNetwork: false });
+    let text = runReportsText(report(0, { imagePulled: { count: 1, items: ['node:24'] } }), []);
+    for (let n = 1; n <= 12; n++) {
+      text = runReportsText(offline(n, n === 1 ? { engineObjectRemoved: { count: 2, items: ['2 stopped helper containers'] } } : { serverCheckFailed: { count: 1, items: ['stable (linux-x64): getaddrinfo ENOTFOUND'] } }), parseRunReports(text));
+    }
+    const reports = parseRunReports(text);
+    expect(reports).toHaveLength(2);
+    expect(reports[0]).toEqual({
+      startedAt: report(1).startedAt,
+      endedAt: report(12).endedAt,
+      reachedNetwork: false,
+      attempts: 12,
+      events: {
+        engineObjectRemoved: { count: 2, items: ['2 stopped helper containers'] },
+        serverCheckFailed: { count: 11, items: ['stable (linux-x64): getaddrinfo ENOTFOUND'] },
+      },
+    });
+    expect(reports[1]).toEqual(report(0, { imagePulled: { count: 1, items: ['node:24'] } }));
+    // The next run that reaches the network gets its own report.
+    expect(parseRunReports(runReportsText(report(13), reports)).map((entry) => entry.attempts)).toEqual([undefined, 12, undefined]);
+  });
+
+  it('a merge keeps the names within the limits', () => {
+    const names = (prefix: string) => Array.from({ length: MAX_RUN_ITEMS_PER_EVENT }, (_, i) => `${prefix}${i}`);
+    const merged = mergeRunReports(
+      { ...report(1, { imageRemoved: { count: 10, items: names('a') }, partFailed: { count: 1, items: ['same'] } }), reachedNetwork: false, attempts: 3 },
+      { ...report(2, { imageRemoved: { count: 10, items: names('b') }, partFailed: { count: 1, items: ['same'] } }), reachedNetwork: false },
+    );
+    expect(merged.attempts).toBe(4);
+    expect(merged.events.imageRemoved).toEqual({ count: 20, items: names('a') });
+    expect(merged.events.partFailed).toEqual({ count: 2, items: ['same'] });
+  });
+
   it('a text that is no file of runs holds none', () => {
     for (const text of ['', 'not json', '[]', '{"runs":{}}', 'null', JSON.stringify({ runs: [report(1)] }) + ' '.repeat(MAX_RUN_REPORTS_FILE_BYTES)]) {
       expect(parseRunReports(text)).toEqual([]);
@@ -112,6 +151,8 @@ describe('the file of the last runs', () => {
       { ...report(2), startedAt: 'yesterday' },
       { ...report(2), reachedNetwork: 'yes' },
       { ...report(2), events: [] },
+      { ...report(2), attempts: 1 },
+      { ...report(2), attempts: '2' },
       report(2, { imagePulled: { count: 0, items: [] } }),
       report(2, { imagePulled: { count: 1, items: ['a', 'b'] } }),
       report(2, { imagePulled: { count: 2, items: ['a', 3] as unknown as string[] } }),

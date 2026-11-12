@@ -69,6 +69,7 @@ import {
   type StoredServer,
 } from './backgroundRules';
 import { isNetworkError, isServerAnswer } from '../core/networkFailure';
+import { errorMessage } from '../core/errors';
 import { engineFailure, type VscodeEngine } from './engine';
 import { cleanupExtensions, downloadExtensions, type ExtensionRunDeps } from './extensionDownloads';
 import { REMOTE_MONITOR_STATE_DIR } from '../core/remoteMonitor/protocol';
@@ -187,7 +188,7 @@ export class BackgroundRun {
     const reachedNone = this.offline && !this.reached;
     // The report before the line of the end, so that the log shows a failed write within the run.
     await this.deps.reports?.add(notes.finish(this.deps.now(), !reachedNone)).catch((error: unknown) => {
-      log(`The report of the background run could not be kept in the volume: ${error instanceof Error ? error.message : String(error)}`);
+      log(`The report of the background run could not be kept in the volume: ${errorMessage(error)}`);
     });
     log(reachedNone ? 'The background run ended without reaching the network.' : 'The background run ended.');
     return !reachedNone;
@@ -247,7 +248,7 @@ export class BackgroundRun {
       await work();
     } catch (error) {
       if (network) this.network.failed(error);
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       noteRun('partFailed', `${what}: ${message}`);
       this.deps.log(`The background run could not do ${what}: ${message}`);
     }
@@ -298,7 +299,7 @@ export class BackgroundRun {
       // server and a failed fetch waits a day, also one that failed for the network (RunNetwork).
       const named = `${server.commit} (${quality}, ${platform})`;
       if (await (vscode.ensure ?? ensureServer)(vscode.store, server, platform, this.signal)) {
-        noteRun('serverDownloaded', named);
+        noteRun('serverAdded', named);
         await this.linkIntoContainers(vscode, server, platform);
       } else {
         noteRun('serverDownloadFailed', named);
@@ -322,7 +323,7 @@ export class BackgroundRun {
       // An answer that refuses (HTTP 404) or that is no release list still came from the server.
       if (network && isNetworkError(error)) this.network.failed(error);
       else if (network && isServerAnswer(error)) this.network.reached();
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       // Only part b notes it: the cleanup asks the qualities that no open used, which is no failure of an update.
       if (network) noteRun('serverCheckFailed', `${quality} (${platform}): ${message}`);
       this.deps.log(`The newest VS Code server (${quality}, ${platform}) could not be read from the update service: ${message}`);

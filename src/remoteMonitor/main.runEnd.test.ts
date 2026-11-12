@@ -167,6 +167,14 @@ describe('the reports of the background runs in the volume', () => {
     expect(fs.readdirSync(stateDir)).toEqual([RUN_REPORTS_FILE]);
   });
 
+  it('a read that fails writes nothing, so the earlier reports stay', async () => {
+    // The volume folder is a file: the read of the reports fails (ENOTDIR), not "no file".
+    const notAFolder = path.join(stateDir, 'not-a-folder');
+    fs.writeFileSync(notAFolder, 'x');
+    await expect(runReportStore(notAFolder).add(made(1))).rejects.toThrow(/ENOTDIR/);
+    expect(fs.readFileSync(notAFolder, 'utf8')).toBe('x');
+  });
+
   it('a file that is not valid, too large or a link counts as no earlier report, and is replaced', async () => {
     const file = path.join(stateDir, RUN_REPORTS_FILE);
     const store = runReportStore(stateDir);

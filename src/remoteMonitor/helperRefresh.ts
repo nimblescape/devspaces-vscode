@@ -99,7 +99,9 @@ export async function refreshHelperImage(deps: HelperRefreshDeps): Promise<Netwo
   try {
     image = currentImageOf(await deps.engine.inspect('image', tag, AbortSignal.timeout(HELPER_INSPECT_TIMEOUT_MS)));
   } catch (error) {
-    log(`The workspace helper image ${tag} could not be read: ${engineFailure(error, HELPER_INSPECT_TIMEOUT_MS)}`);
+    const reason = engineFailure(error, HELPER_INSPECT_TIMEOUT_MS);
+    noteRun('helperImageFailed', `${tag}: it could not be read: ${reason}`);
+    log(`The workspace helper image ${tag} could not be read: ${reason}`);
     return 'none';
   }
   if (image === undefined) {

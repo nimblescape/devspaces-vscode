@@ -611,7 +611,7 @@ describe('the report of the background run', () => {
         endedAt: at,
         reachedNetwork: true,
         events: {
-          serverDownloaded: { count: 1, items: [`${C5} (stable, linux-x64)`] },
+          serverAdded: { count: 1, items: [`${C5} (stable, linux-x64)`] },
           serverLinked: { count: 1, items: [`${C5} into dev-a`] },
           serverRemoved: { count: 3, items: [C3, C2, C1].map((c) => `${c} (stable, linux-x64)`) },
           partFailed: { count: 1, items: ['the images: registry down'] },
