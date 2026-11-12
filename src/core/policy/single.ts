@@ -866,7 +866,9 @@ function runArgsFindings(runArgs: readonly unknown[], volumes: VolumeContext, cl
       // The label nimblescape.devspaces.config-path that the override configuration adds.
       continue;
     } else if (cleared && (flag.name === '--label' || flag.name === '-l') && flag.value !== undefined && isOwnDevspaceLabel(flag.value)) {
-      // The labels of the devspace that the override configuration adds (devspaceContainerLabels).
+      // The labels of the devspace that the override configuration adds (devspaceContainerLabels). Any valid value, as
+      // for the label of the configuration path: the check of the repository configuration (not `cleared`) refuses
+      // these keys in its runArgs, which the override configuration takes over.
       continue;
     } else if (cleared && flag.name === '--tmpfs' && flag.value === TOKEN_TMPFS) {
       // The tmpfs of the token that the override configuration adds, exactly as written there.

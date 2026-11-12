@@ -2609,8 +2609,7 @@ export class DevspaceService extends OperationBase {
    * it is the record of the image that the container runs, also when that image carries no labels of the devspace.
    */
   private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
-    const fromContainer = await this.containerImageRecord(env, above);
-    const fromImage = await this.newestImageLabelRecord(env, above);
+    const [fromContainer, fromImage] = await Promise.all([this.containerImageRecord(env, above), this.newestImageLabelRecord(env, above)]);
     if (fromContainer === undefined) return fromImage;
     return 'record' in fromImage && fromImage.record.buildNumber > fromContainer.record.buildNumber ? fromImage : fromContainer;
   }
@@ -2651,17 +2650,18 @@ export class DevspaceService extends OperationBase {
 
   /**
    * The build record in the labels of the dev container of `env` (containerBuildRecord), with the ID of the image that
-   * the container was created from pinned, when that image still exists and the build number of the record is higher
-   * than `above`; else `undefined`, and the newest devspace image decides (newestImageRecord). A Docker failure only
-   * means that the container gives no record.
+   * the container was created from pinned, when the tag of the record still names that image and the build number of
+   * the record is higher than `above`; else `undefined`, and the newest devspace image decides (newestImageRecord). A
+   * Docker failure only means that the container gives no record.
    */
   private async containerImageRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | undefined> {
     const container = await this.deps.docker.findContainer(env.id, env.containerName).catch(() => undefined);
     if (container?.imageId === undefined) return undefined;
     const record = containerBuildRecord(container.labels, env);
     if (record === undefined || record.buildNumber <= above) return undefined;
-    const id = await this.deps.docker.imageId(container.imageId).catch(() => undefined);
-    if (id === undefined) return undefined;
+    // A tag that is gone or that names another image (removed or built again elsewhere) gives no record of the tag.
+    const id = await this.deps.docker.imageId(record.devspaceImage).catch(() => undefined);
+    if (id === undefined || id.toLowerCase() !== container.imageId.toLowerCase()) return undefined;
     return { record: { ...record, imageId: id }, tag: record.devspaceImage };
   }
 
@@ -2846,7 +2846,7 @@ export class DevspaceService extends OperationBase {
     }
     let result: DevcontainerResult;
     try {
-      result = await this.runUp(ctx, imageName, loaded.config, container !== undefined, true, loaded.compose, builtRecord);
+      result = await this.runUp(ctx, imageName, loaded.config, container !== undefined, true, loaded.compose, { ...builtRecord, imageId: builtImageId });
     } catch (error) {
       if (error instanceof AnalysisFailedError) {
         // The check of the new image failed (for example a worker that ran out of time on a busy computer): no refusal

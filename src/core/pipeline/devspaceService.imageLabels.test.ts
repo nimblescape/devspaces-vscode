@@ -438,6 +438,17 @@ describe('the build record on the dev container', () => {
     expect(h.helper.builds).toHaveLength(1);
   });
 
+  it('does not take the record of a container whose tag names another image now, and takes the record of the newest image', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3));
+    // The tag of build 3 was built again elsewhere: it names another image than the container's.
+    h.docker.imageIds.set(IMAGE_3, `sha256:${'7'.repeat(64)}`);
+    addImage(IMAGE_2, labelsOf(recordOf(IMAGE_2, 2)));
+    await h.service.open(TARGET, options());
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).not.toBe(IMAGE_3);
+  });
+
   it('takes a newer record from the container when the image of the own record is gone', async () => {
     await seedDevspace(h, { record: { configHash: 'sha256:old', images: { [BASE_IMAGE]: DIGEST_OLD } }, image: false, container: null });
     addImage(IMAGE_3, {});

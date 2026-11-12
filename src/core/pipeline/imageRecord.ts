@@ -20,19 +20,17 @@ import { isBuildRecord } from '../storage/registry';
 import type { BuildRecord, Devspace, RefusedUpdate } from '../types';
 import { hasOnlyKeys, isRecord } from '../valueChecks';
 
-/** The largest build record (as JSON) that the label takes: MAX_BUILD_RECORD_LABEL_LENGTH. */
-export const MAX_RECORD_LABEL_LENGTH = MAX_BUILD_RECORD_LABEL_LENGTH;
-
 /**
  * The value of LABEL_BUILD_RECORD for the build record `record`, without its pinned image ID (the labels of an image
- * change its ID): its JSON, or empty when that is longer than MAX_RECORD_LABEL_LENGTH or holds `${`, which the Dev
- * Container CLI would substitute in the override configuration of `up`. The same value on the devspace image
- * (imageRecordLabels) and on the dev container that `up` creates from it (devspaceContainerLabels).
+ * change its ID): its JSON, or empty when that is longer than MAX_BUILD_RECORD_LABEL_LENGTH. The same value on the
+ * devspace image (imageRecordLabels) and on the dev container that `up` creates from it (devspaceContainerLabels, which
+ * leaves out a value with `${`: the Dev Container CLI would substitute it in the override configuration, and the
+ * container then keeps the same value from its image).
  */
 export function buildRecordLabel(record: BuildRecord): string {
   const { imageId: _pinned, ...stored } = record;
   const json = JSON.stringify(stored);
-  return json.length <= MAX_RECORD_LABEL_LENGTH && !json.includes('${') ? json : '';
+  return json.length <= MAX_BUILD_RECORD_LABEL_LENGTH ? json : '';
 }
 
 /**
@@ -63,7 +61,7 @@ export function imageBuildRecord(
 ): BuildRecord | undefined {
   if (labels[LABEL_DEVSPACE_ID] !== env.id || labels[LABEL_REPOSITORY] !== env.repository || labels[LABEL_OWNER_ID] !== env.owner.id) return undefined;
   const text = labels[LABEL_BUILD_RECORD];
-  if (text === undefined || text.length > MAX_RECORD_LABEL_LENGTH) return undefined;
+  if (text === undefined || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -83,7 +81,7 @@ export function imageBuildRecord(
  */
 export function containerBuildRecord(labels: Readonly<Record<string, string>>, env: Pick<Devspace, 'id' | 'repository' | 'owner'>): BuildRecord | undefined {
   const text = labels[LABEL_BUILD_RECORD];
-  if (text === undefined || text === '' || text.length > MAX_RECORD_LABEL_LENGTH) return undefined;
+  if (text === undefined || text === '' || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
   let value: unknown;
   try {
     value = JSON.parse(text);
@@ -186,7 +184,7 @@ function sameDigests(a: Record<string, string>, b: Record<string, string>): bool
 
 /** The PreparedImageLabel of the label text `text`; `undefined` when it is missing, too long, or not of that shape. */
 function preparedImageLabel(text: string | undefined): PreparedImageLabel | undefined {
-  if (text === undefined || text === '' || text.length > MAX_RECORD_LABEL_LENGTH) return undefined;
+  if (text === undefined || text === '' || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
   let value: unknown;
   try {
     value = JSON.parse(text);

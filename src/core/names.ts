@@ -6,6 +6,7 @@
 import * as crypto from 'crypto';
 import { namePair, trailingPair } from './namePairs';
 import { LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER, LABEL_MONITOR } from './remoteMonitor/protocol';
+import { isStorageId } from './storage/paths';
 
 /**
  * Labels of the helper channel. Here, not in src/core/helperChannel/protocol.ts, so that the script of the remote
@@ -205,7 +206,7 @@ export function isOwnDevspaceLabel(value: string): boolean {
     case LABEL_REPOSITORY:
       return /^[^/\s=]+\/[^/\s=]+$/.test(text);
     case LABEL_OWNER_ID:
-      return /^[A-Za-z0-9_-]{1,128}$/.test(text);
+      return isStorageId(text);
     case LABEL_BUILD_RECORD:
       return text.length <= MAX_BUILD_RECORD_LABEL_LENGTH;
     default:

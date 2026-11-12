@@ -4,9 +4,9 @@
 
 // The labels of a devspace image, with its build record, and the record that another computer takes over from them.
 import { describe, expect, it } from 'vitest';
-import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_OWNER_ID, LABEL_PREPARED, LABEL_REPOSITORY, composeProjectName, devspaceImageName } from '../names';
+import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_OWNER_ID, LABEL_PREPARED, LABEL_REPOSITORY, MAX_BUILD_RECORD_LABEL_LENGTH, composeProjectName, devspaceImageName } from '../names';
 import type { BuildRecord } from '../types';
-import { MAX_RECORD_LABEL_LENGTH, buildRecordLabel, containerBuildRecord, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
+import { buildRecordLabel, containerBuildRecord, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
 
 const ENV = { id: '3f2a9c1e-0000-4000-8000-000000000000', repository: 'acme/api', owner: { id: '1001', login: 'alice' } };
 const TAG = devspaceImageName(ENV.repository, ENV.id, 3);
@@ -56,10 +56,10 @@ describe('imageRecordLabels', () => {
     expect(imageRecordLabels(ENV, value)[LABEL_BUILD_RECORD]).toBe(JSON.stringify(value));
   });
 
-  it('writes an empty record when it is longer than MAX_RECORD_LABEL_LENGTH, and keeps the other labels', () => {
+  it('writes an empty record when it is longer than MAX_BUILD_RECORD_LABEL_LENGTH, and keeps the other labels', () => {
     const images = Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`registry.example.com/image-${i}:1`, `sha256:${'f'.repeat(64)}`]));
     const big = record({ images });
-    expect(JSON.stringify(stored(big)).length).toBeGreaterThan(MAX_RECORD_LABEL_LENGTH);
+    expect(JSON.stringify(stored(big)).length).toBeGreaterThan(MAX_BUILD_RECORD_LABEL_LENGTH);
     // The label is always set (empty), so that no such label of the base image stays.
     expect(imageRecordLabels(ENV, big)).toEqual({
       [LABEL_DEVSPACE_ID]: ENV.id,
@@ -71,23 +71,23 @@ describe('imageRecordLabels', () => {
     expect(imageBuildRecord(imageRecordLabels(ENV, big), ENV, TAG, 3)).toBeUndefined();
   });
 
-  it('keeps a record of exactly MAX_RECORD_LABEL_LENGTH characters', () => {
+  it('keeps a record of exactly MAX_BUILD_RECORD_LABEL_LENGTH characters', () => {
     const base = JSON.stringify(stored(record({ configHash: '' }))).length;
-    const exact = record({ configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH - base) });
-    expect(JSON.stringify(stored(exact)).length).toBe(MAX_RECORD_LABEL_LENGTH);
+    const exact = record({ configHash: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH - base) });
+    expect(JSON.stringify(stored(exact)).length).toBe(MAX_BUILD_RECORD_LABEL_LENGTH);
     expect(imageRecordLabels(ENV, exact)).toHaveProperty([LABEL_BUILD_RECORD]);
   });
 
   // The boundary itself is pinned (the label is always set, so the test above cannot tell the two sides apart): exactly
-  // MAX_RECORD_LABEL_LENGTH characters keep the record as JSON, one more give ''; and the limit stays 8 KiB (the
+  // MAX_BUILD_RECORD_LABEL_LENGTH characters keep the record as JSON, one more give ''; and the limit stays 8 KiB (the
   // command line of `docker build` on Windows).
-  it('keeps the JSON of a record of exactly MAX_RECORD_LABEL_LENGTH characters and empties one of a character more', () => {
-    expect(MAX_RECORD_LABEL_LENGTH).toBe(8192);
+  it('keeps the JSON of a record of exactly MAX_BUILD_RECORD_LABEL_LENGTH characters and empties one of a character more', () => {
+    expect(MAX_BUILD_RECORD_LABEL_LENGTH).toBe(8192);
     const base = JSON.stringify(stored(record({ configHash: '' }))).length;
-    const exact = record({ configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH - base) });
-    const longer = record({ configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH - base + 1) });
-    expect(JSON.stringify(stored(exact)).length).toBe(MAX_RECORD_LABEL_LENGTH);
-    expect(JSON.stringify(stored(longer)).length).toBe(MAX_RECORD_LABEL_LENGTH + 1);
+    const exact = record({ configHash: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH - base) });
+    const longer = record({ configHash: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH - base + 1) });
+    expect(JSON.stringify(stored(exact)).length).toBe(MAX_BUILD_RECORD_LABEL_LENGTH);
+    expect(JSON.stringify(stored(longer)).length).toBe(MAX_BUILD_RECORD_LABEL_LENGTH + 1);
     expect(imageRecordLabels(ENV, exact)[LABEL_BUILD_RECORD]).toBe(JSON.stringify(stored(exact)));
     expect(imageRecordLabels(ENV, longer)[LABEL_BUILD_RECORD]).toBe('');
   });
@@ -177,8 +177,8 @@ describe('imageBuildRecord', () => {
     expect(imageBuildRecord(labels(record(), text), ENV, TAG, 3)).toBeUndefined();
   });
 
-  it('refuses a record longer than MAX_RECORD_LABEL_LENGTH', () => {
-    const text = JSON.stringify({ ...stored(record()), configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH) });
+  it('refuses a record longer than MAX_BUILD_RECORD_LABEL_LENGTH', () => {
+    const text = JSON.stringify({ ...stored(record()), configHash: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH) });
     expect(imageBuildRecord(labels(record(), text), ENV, TAG, 3)).toBeUndefined();
   });
 });
@@ -190,10 +190,9 @@ describe('buildRecordLabel', () => {
     expect(buildRecordLabel(value)).toBe(imageRecordLabels(ENV, value)[LABEL_BUILD_RECORD]);
   });
 
-  it('gives an empty value for a record with a variable of the Dev Container CLI', () => {
-    expect(buildRecordLabel(record({ configHash: 'a${localEnv:HOME}' }))).toBe('');
-    // A single `$` is no variable.
-    expect(buildRecordLabel(record({ configHash: 'a$b' }))).not.toBe('');
+  it('keeps a record with `${` on the image (labelImage sets the label as it is; only the container leaves it out)', () => {
+    const value = record({ images: { 'registry.example.com/${name}:1': `sha256:${'e'.repeat(64)}` } });
+    expect(buildRecordLabel(value)).toBe(JSON.stringify(stored(value)));
   });
 });
 
@@ -230,8 +229,8 @@ describe('containerBuildRecord', () => {
     expect(containerBuildRecord(containerLabels(buildRecordLabel(record())), { ...ENV, id: '11111111-2222-4333-8444-555555555555' })).toBeUndefined();
   });
 
-  it('refuses a record longer than MAX_RECORD_LABEL_LENGTH', () => {
-    const text = JSON.stringify({ ...stored(record()), configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH) });
+  it('refuses a record longer than MAX_BUILD_RECORD_LABEL_LENGTH', () => {
+    const text = JSON.stringify({ ...stored(record()), configHash: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH) });
     expect(containerBuildRecord(containerLabels(text), ENV)).toBeUndefined();
   });
 });
@@ -282,8 +281,8 @@ describe('preparedImageMismatch', () => {
     expect(preparedImageMismatch(prepared(label), ENV, KEY, HELPER)).toBeDefined();
   });
 
-  it('refuses a prepare label longer than MAX_RECORD_LABEL_LENGTH', () => {
-    const long: PrepareKey = { ...KEY, configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH) };
+  it('refuses a prepare label longer than MAX_BUILD_RECORD_LABEL_LENGTH', () => {
+    const long: PrepareKey = { ...KEY, configHash: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH) };
     expect(preparedImageMismatch(prepared({ key: long, helperImage: HELPER }), ENV, long, HELPER)).toBe('it has no valid prepare label');
   });
 });
