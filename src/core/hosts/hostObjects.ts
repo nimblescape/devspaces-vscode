@@ -493,7 +493,8 @@ export function earlierHelperBuildName(id: string): string {
 /**
  * True for an image with the label of the helper image whose tags are at most monitor tags `devspaces-monitor:<hash>`:
  * an earlier build of the helper image (earlierHelperBuildName). An image with any other tag keeps its tag as its name,
- * also an image that the user built from the helper image (it has the label of the helper image too).
+ * also a tagged image that the user built from the helper image (it has the label of the helper image too); such an
+ * image without a tag cannot be told from an earlier build.
  */
 export function isEarlierHelperBuild(object: Pick<HostObject, 'kind' | 'purpose' | 'tags'>): boolean {
   return object.kind === 'image' && object.purpose === 'helperImage' && (object.tags ?? []).every(isMonitorImageTag);
@@ -559,7 +560,10 @@ export interface InventoryInput {
   known: readonly KnownDevspace[];
   /** baseImageReferences of the devspaces of the host. */
   baseImages: ReadonlySet<string>;
-  /** helperBaseImageReferences: the base image of the helper image (a base image of a devspace too counts as that). */
+  /**
+   * helperBaseImageReferences: the base image of the current helper image. An image that is also in `baseImages` counts as
+   * a base image of a devspace.
+   */
   helperBaseImages: ReadonlySet<string>;
   /** The output of `docker network ls --no-trunc --format '{{json .}}'`, parsed (one entry per network). */
   networks?: readonly unknown[];
