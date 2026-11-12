@@ -34,7 +34,7 @@ afterEach(() => {
 const requestFile = () => path.join(stateDir, RUN_NOW_FILE);
 
 /** A schedule with the default setting (no DEVSPACE_IMAGE_SCHEDULE) in Vienna, a clock of the test, and a counted pass. */
-function scheduleAt(start: number, lastEndAt?: number, pass?: () => Promise<void>, paused?: () => boolean) {
+function scheduleAt(start: number, lastEndAt?: number, pass?: () => Promise<void>, paused?: () => boolean, holding?: () => boolean) {
   let now = start;
   let passes = 0;
   const lines: string[] = [];
@@ -56,6 +56,7 @@ function scheduleAt(start: number, lastEndAt?: number, pass?: () => Promise<void
     },
     runRequest: runRequestStore(stateDir, log),
     ...(paused !== undefined ? { paused } : {}),
+    ...(holding !== undefined ? { holding } : {}),
   });
   return {
     schedule,
@@ -127,6 +128,23 @@ describe('the request of "Update All Images Now" in the schedule', () => {
     paused = false;
     await t.schedule.check();
     expect(t.passes()).toBe(1);
+  });
+
+  // While the monitor moves to its successor (SelfUpgrade.ending), no run starts in it, also no requested one: the
+  // request stays in the volume, and the successor runs it.
+  it('no run starts while the monitor moves to its successor; the request stays for the successor', async () => {
+    let holding = true;
+    const s = scheduleAt(SIX_SEVEN + HOUR, SIX_SEVEN - DAY + 10 * MINUTE, undefined, undefined, () => holding);
+    expect(await main(['run-now'], { env: {}, stateDir, now: () => SIX_SEVEN + HOUR })).toBe(0);
+    expect(await s.minutes(5 * MINUTE)).toBe(0);
+    await s.schedule.run();
+    expect(s.passes()).toBe(0);
+    expect(fs.existsSync(requestFile())).toBe(true);
+    expect(s.lines).toEqual([]);
+    holding = false;
+    await s.schedule.check();
+    expect(s.passes()).toBe(1);
+    expect(fs.existsSync(requestFile())).toBe(false);
   });
 
   it('a request during a run waits for the check after it, then runs once more; many requests are one', async () => {

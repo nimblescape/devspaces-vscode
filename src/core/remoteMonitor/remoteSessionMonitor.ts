@@ -99,9 +99,33 @@ export const MONITOR_VSCODE_STORE_ENV = 'DEVSPACE_VSCODE_STORE';
  * container by it, and tells a new container from a restart of the same one (LAST_USE_FILE).
  */
 export const MONITOR_CREATE_ID_ENV = 'DEVSPACE_MONITOR_CREATE_ID';
+/**
+ * The environment variable that tells a monitor that it is the successor of a monitor that moved to the current build
+ * of its helper image (`1`; src/remoteMonitor/selfUpgrade.ts): its start is no use of the engine (recordStart of
+ * src/remoteMonitor/main.ts).
+ */
+export const MONITOR_SUCCESSOR_ENV = 'DEVSPACE_MONITOR_SUCCESSOR';
+/** The variables that runSpec sets itself (the successor of a monitor takes the others of its predecessor). */
+export const MONITOR_SPEC_ENV: readonly string[] = [
+  MONITOR_CREATE_ID_ENV,
+  'DEVSPACE_IMAGE_SCHEDULE',
+  'DEVSPACE_IMAGE_TZ',
+  MONITOR_PERMANENT_ENV,
+  MONITOR_VM_ENV,
+  MONITOR_VSCODE_STORE_ENV,
+  VERSION_ENV,
+];
+/** The labels that runSpec sets itself (the successor of a monitor takes the others of its predecessor). */
+export const MONITOR_SPEC_LABELS: readonly string[] = [LABEL_MONITOR, LABEL_MONITOR_CREATE, LABEL_MONITOR_OWNER];
 
 /** What ensure found or did. `failed`: logged as a warning (ensureOrThrow rejects instead). */
 export type EnsureOutcome = 'running' | 'started' | 'created' | 'failed';
+
+/**
+ * What the create of the successor of a monitor did (createSuccessor): `created` (its ready line came), or `taken` (a
+ * container of the name exists: a window created the monitor meanwhile).
+ */
+export type SuccessorOutcome = 'created' | 'taken';
 
 type Inspected = MonitorInspected;
 
@@ -166,6 +190,9 @@ export class RemoteSessionMonitor {
    *   another or no stored script (storedScript `other`) → `docker rm -f`, then create; a check that fails is followed
    *   by checkAgain (an inspect by the same ID: restarting, exited with LOADER_EXIT_CODE or a grown RestartCount →
    *   replaced), and without evidence it keeps the container (logged);
+   * - the matching label and exited from another image than `imageId` (an earlier build of the helper tag: the tag was
+   *   built again since its create; docs/requirements.md R-DS-009) → `docker rm -f <ID>`, then create from the current
+   *   build (a running one moves itself to it when nothing runs, src/remoteMonitor/selfUpgrade.ts);
    * - the matching label and exited with an exit code other than LOADER_EXIT_CODE → `docker start <ID>` (the loader
    *   resumes from the stored script); then the stored script is checked as for a restarted one: `same` → started;
    *   definite evidence of another or no stored script (`other`: a first run killed before its script was stored exits
@@ -257,7 +284,7 @@ export class RemoteSessionMonitor {
     // between its create and its start: look again for a while before anything is decided.
     if (current.exists && current.status === 'created') current = await this.waitWhileCreated(current, signal);
     if (current.exists) {
-      const decided = await this.decide(current, accepted, script, signal);
+      const decided = await this.decide(current, accepted, script, signal, imageId);
       if (decided !== 'replace') return decided;
       // By its ID only, so never a container that another window created meanwhile.
       await this.options.engine.remove(this.idOf(current), signal);
@@ -299,11 +326,55 @@ export class RemoteSessionMonitor {
   }
 
   /**
+   * The successor of a monitor that moves to the current build of its helper image (src/remoteMonitor/selfUpgrade.ts;
+   * docs/requirements.md R-DS-009): the container of the name, created as ensure creates it (the same script, label,
+   * mode, store, schedule, variables and mounts; the attached create with its ready line), but never in place of another
+   * container: a container of the name (a window created the monitor meanwhile, while the name was free) is not ours and
+   * stays → `taken`. On a name conflict it looks again: a container of the name → `taken`; the name free again → one
+   * more create. `helperImage` and `imageId` as for ensure: the monitor tag of the current build, and its ID. Rejects
+   * with the cause otherwise; the container of this create is removed then (by its nonce). Logs nothing: the caller
+   * says what happened.
+   */
+  async createSuccessor(helperTag: string, socketPath: string, helperImage: string, imageId: string): Promise<SuccessorOutcome> {
+    const script = await this.options.script();
+    const { line: scriptLine, length, tooLong } = bundleLine(script);
+    if (tooLong) throw new Error(`The script of the Monitor is too long (${length} characters as JSON).`);
+    const images = this.options.imageMaintenance?.();
+    const label = monitorLabel(script, helperTag, monitorModeOf(images), this.options.vscodeStoreVolume);
+    const createId = randomUUID();
+    const spec = this.runSpec(helperImage, socketPath, label, script, images, createId, imageId);
+    if ((await this.inspect(undefined)).exists) return 'taken';
+    let created = await this.create(spec, scriptLine, undefined);
+    let triedAgain = false;
+    while (created.kind === 'exited' && created.conflict) {
+      // As in ensure: a container with the nonce of this create means that it made one (no conflict), and a list that
+      // fails is no evidence.
+      const own = await this.listOwn(createId, undefined);
+      if (own === undefined || own.length > 0) break;
+      if ((await this.inspect(undefined)).exists) return 'taken';
+      if (triedAgain) break;
+      triedAgain = true;
+      created = await this.create(spec, scriptLine, undefined);
+    }
+    if (created.kind === 'ready') return 'created';
+    await this.removeBestEffort(createId);
+    if (created.kind === 'timeout') throw new Error(`the monitor did not report its start within ${REMOTE_MONITOR_DOCKER_TIMEOUT_MS / 1000} seconds.`);
+    if (created.kind === 'aborted') throw abortError();
+    throw new Error(`docker run failed: ${created.detail}`);
+  }
+
+  /**
    * What ensure does with the existing container `current` (see ensure): `running` or `started` (kept), or `replace`
    * (removed by its ID, then created). Throws when it is kept but ensure fails (a `created` one that may still be
-   * starting, an ID that cannot be read).
+   * starting, an ID that cannot be read). `imageId`: the image of the current build of the helper tag, when ensure has it.
    */
-  private async decide(current: Inspected & { exists: true }, accepted: AcceptedLabels, script: string, signal: AbortSignal | undefined): Promise<'running' | 'started' | 'replace'> {
+  private async decide(
+    current: Inspected & { exists: true },
+    accepted: AcceptedLabels,
+    script: string,
+    signal: AbortSignal | undefined,
+    imageId: string | undefined,
+  ): Promise<'running' | 'started' | 'replace'> {
     const { logger } = this.options;
     if (current.status === 'created') {
       // Still `created` after the waits. Removed only when it is certainly abandoned.
@@ -350,6 +421,12 @@ export class RemoteSessionMonitor {
       }
       this.idOf(current);
       logger.info(`The Monitor on the Docker host was restarted without its script; it is replaced (${this.containerName}).`);
+      return 'replace';
+    }
+    if (current.status === 'exited' && imageId !== undefined && current.image !== undefined && current.image !== imageId) {
+      // Created from an earlier build of the helper tag: replaced from the current build at once, not started again.
+      this.idOf(current);
+      logger.info(`The Monitor on the Docker host does not run and was created from an earlier build of the helper image; it is replaced (${this.containerName}).`);
       return 'replace';
     }
     if (current.status === 'exited' && current.exitCode !== LOADER_EXIT_CODE) {

@@ -75,6 +75,7 @@ const INSPECT_PATHS: Record<EngineObjectKind, (reference: string) => string> = {
   image: (reference) => `/images/${encodeURIComponent(reference)}/json`,
   volume: (reference) => `/volumes/${encodeURIComponent(reference)}`,
   network: (reference) => `/networks/${encodeURIComponent(reference)}`,
+  exec: (reference) => `/exec/${encodeURIComponent(reference)}/json`,
 };
 
 /** The query of the filters of a list request. */

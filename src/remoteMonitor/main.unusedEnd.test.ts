@@ -104,6 +104,16 @@ describe('the use of the engine', () => {
     expect(lastUse()).toEqual({ at: T0, createId: CREATE });
   });
 
+  it('the successor of a monitor that moved to the current build of its helper image is no use', async () => {
+    writeLastUse({ at: T0 - 20 * DAY, createId: CREATE });
+    await recordStart(stateDir, { DEVSPACE_MONITOR_CREATE_ID: NEWER, DEVSPACE_MONITOR_SUCCESSOR: '1' }, T0);
+    expect(lastUse()).toEqual({ at: T0 - 20 * DAY, createId: NEWER });
+    // Without a valid file: a use now.
+    fs.rmSync(path.join(stateDir, LAST_USE_FILE));
+    await recordStart(stateDir, { DEVSPACE_MONITOR_CREATE_ID: CREATE, DEVSPACE_MONITOR_SUCCESSOR: '1' }, T0);
+    expect(lastUse()).toEqual({ at: T0, createId: CREATE });
+  });
+
   it('a new monitor container is a use; a restart of the same container is none', async () => {
     await recordStart(stateDir, { DEVSPACE_MONITOR_CREATE_ID: CREATE }, T0);
     expect(lastUse()).toEqual({ at: T0, createId: CREATE });

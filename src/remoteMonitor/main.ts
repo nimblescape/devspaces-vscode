@@ -75,6 +75,7 @@ import {
   parseImagesInUseFileName,
   parseImagesInUseRecord,
   REMOTE_MONITOR_READY_TEXT,
+  REMOTE_MONITOR_SCRIPT_PATH,
   REMOTE_MONITOR_STATE_DIR,
   SEQ_ORDER_WINDOW_MS,
   forgetIfUnchangedCommand,
@@ -95,11 +96,12 @@ import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, 
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
 import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from './backgroundRules';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
-import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
+import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_SUCCESSOR_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
 import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
 import { ownHelperImage, refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
 import { EngineCleanup } from './engineCleanup';
+import { SelfUpgrade, upgradeCheckFromEnv } from './selfUpgrade';
 import { CLEANUP_FILE, HELPER_USE_OBSERVE_MS } from './cleanupRules';
 import { VERSION_ENV, takeUserAgentVersion, type HttpTransport } from '../core/http';
 import { proxiedHttpsTransport } from '../core/proxyTransport';
@@ -667,14 +669,17 @@ export async function recordUse(stateDir: string, env: NodeJS.ProcessEnv, now: n
 /**
  * At the start of `run`: a new monitor container (a nonce of its create other than the stored one, or no valid file)
  * counts as a use at `now`, with its nonce; a restart of the same container (Docker starts it again after a restart of
- * the engine) keeps the stored time. As recordUse, it never moves the stored time earlier. Never throws.
+ * the engine) keeps the stored time. The successor of a monitor that moved to the current build of its helper image
+ * (MONITOR_SUCCESSOR_ENV; selfUpgrade.ts) is no use either: it keeps the stored time with its own nonce (no valid file:
+ * a use now). As recordUse, it never moves the stored time earlier. Never throws.
  */
 export async function recordStart(stateDir: string, env: NodeJS.ProcessEnv, now: number): Promise<void> {
   try {
     const stored = await readLastUse(stateDir);
     const createId = createIdOf(env);
     if (stored !== undefined && (createId === undefined || stored.createId === createId)) return;
-    await writeLastUse(stateDir, stored === undefined ? now : Math.max(now, stored.at), createId);
+    const successor = env[MONITOR_SUCCESSOR_ENV] === '1';
+    await writeLastUse(stateDir, stored === undefined ? now : successor ? stored.at : Math.max(now, stored.at), createId);
   } catch {
     // Then the first check of UnusedEnd counts a use now.
   }
@@ -892,6 +897,11 @@ export interface MainDeps {
   prepareWorker?: () => PrepareWorker | { reason: string };
   /** The Dockerfile and the build of the part "the workspace helper image" (refreshHelperImage); the tests give their own. */
   helperRefresh?: Pick<HelperRefreshDeps, 'dockerfile' | 'build'>;
+  /**
+   * The script of this monitor for the create of its successor (SelfUpgrade; default: its stored file,
+   * REMOTE_MONITOR_SCRIPT_PATH); the tests give their own.
+   */
+  monitorScript?: () => Promise<string>;
   /** The monotonic clock of the idle time, and the wait between two ticks (the tests). */
   monotonic?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -1227,6 +1237,11 @@ export class CacheSchedule {
        * requested run still runs. Never paused when it is left out.
        */
       paused?: () => boolean;
+      /**
+       * True while the monitor moves to its successor (SelfUpgrade.ending): no run starts, also no requested one (its
+       * request stays in the volume for the successor). Never holding when it is left out.
+       */
+      holding?: () => boolean;
     },
   ) {}
 
@@ -1242,6 +1257,7 @@ export class CacheSchedule {
   }
 
   private async checkOnce(): Promise<void> {
+    if (this.deps.holding?.() === true) return;
     await this.deps.settings.refresh();
     if (!this.loaded) {
       this.loaded = true;
@@ -1264,7 +1280,7 @@ export class CacheSchedule {
       this.lastEndAt = time;
       await this.deps.state.update({ lastEndAt: time }).catch(() => undefined);
     }
-    if (this.running) return;
+    if (this.running || this.deps.holding?.() === true) return;
     // A request is taken (removed) only here, while no run runs, so one that came during a run is kept for this check
     // after it.
     const requested = (await this.deps.runRequest?.take()) === true;
@@ -1321,6 +1337,8 @@ export class CacheSchedule {
 
   /** One run now, unless one runs; then its end is kept (in the volume too). Never throws. */
   run(): Promise<void> {
+    // While the monitor moves to its successor, which runs it.
+    if (this.deps.holding?.() === true) return Promise.resolve();
     if (this.running) {
       this.deps.log('A background run is still running; this time of the schedule is left out.');
       return Promise.resolve();
@@ -1586,8 +1604,32 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
       const permanent = permanentFromEnv(deps.env);
       const unusedMs = unusedEndFromEnv(deps.env);
       const unused = new UnusedEnd({ stateDir, env: deps.env, engine, now, monotonic, log, unusedMs });
-      // After the time without use was found, a run that is only due does not start (UnusedEnd.paused).
-      const schedule = new CacheSchedule({ now, log, settings, pass: () => background.run(), observe: () => images.observe(), state, runRequest, paused: () => unused.paused });
+      // The move to the current build of the helper image (R-DS-009). `schedule` is set below, before the loop asks.
+      let schedule: CacheSchedule | undefined;
+      const upgrade = new SelfUpgrade({
+        engine,
+        env: deps.env,
+        log,
+        monotonic,
+        script: deps.monitorScript ?? (() => fs.promises.readFile(REMOTE_MONITOR_SCRIPT_PATH, 'utf8')),
+        helperTag: async () => (await ownHelperImage(deps.helperRefresh?.dockerfile))?.tag,
+        busy: () => schedule?.busy === true,
+        removals: () => loop.removals,
+        checkMs: upgradeCheckFromEnv(deps.env),
+      });
+      // After the time without use was found, a run that is only due does not start (UnusedEnd.paused); while the
+      // monitor moves to its successor, none starts (SelfUpgrade.ending).
+      schedule = new CacheSchedule({
+        now,
+        log,
+        settings,
+        pass: () => background.run(),
+        observe: () => images.observe(),
+        state,
+        runRequest,
+        paused: () => unused.paused,
+        holding: () => upgrade.ending,
+      });
       const { firstMs, intervalMs } = imageTimesFromEnv(deps.env);
       log(
         `Background run (the images in use, the VS Code server${vscode === undefined ? ' left out: no store' : ''}, the cleanup): ` +
@@ -1628,6 +1670,10 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
           log(`No window used Devspaces on this Docker engine for ${spanText(unusedMs)}; the Monitor ends itself. Its restart policy is now "no". The next open starts a new one.`);
           return 0;
         }
+        // The move to the current build of the helper image (SelfUpgrade): between two ticks as the ends here, at most
+        // once a minute, never during a background run or while the end after the time without use waits, and after
+        // the removals of the records. It ends this monitor once its successor runs.
+        if (!schedule.busy && !unused.paused && upgrade.due() && (await upgrade.check())) return 0;
         // Only here, between two ticks, so never while it holds a lock or stops a container; the removals of the
         // records (each under the lock of the records) end first. The records stay in the volume. A permanent monitor
         // (a remote host, with stopMonitorWhenIdle off) never exits when idle; one that ends when idle

@@ -24,11 +24,16 @@
 import { spawn } from 'child_process';
 import * as crypto from 'crypto';
 import * as esbuild from 'esbuild';
+import * as fs from 'fs';
+import * as path from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { sharedBundleOptions, workerBundleOptions } from '../../scripts/bundleOptions.mjs';
 // The Docker CLI of the extension (BootstrapDocker).
 import { BootstrapDocker } from '../../src/core/docker/bootstrapDocker';
 import { helperDockerSocket } from '../../src/core/helper/helperImages';
+import { helperImageTag } from '../../src/core/helper/helperImageBuild';
+import { monitorImageTag } from '../../src/core/helper/helperState';
+import { HELPER_DOCKERFILE_COPY } from '../../src/remoteMonitor/helperRefresh';
 import { LABEL_DEVSPACE_ID } from '../../src/core/names';
 import { NodeProcessRunner } from '../../src/core/process';
 import { LOADER_EXIT_CODE, PIPE_LOADER, bundleHash } from '../../src/core/loader/pipeLoader';
@@ -790,5 +795,98 @@ describe('the Monitor container: the devspace lock of its stops and its exit whe
     expect(cli.container(containerName)!.RestartCount).toBe(0);
     expect(await idle.ensure(helperTag, socket)).toBe('started');
     expect(running(containerName)).toBe(true);
+  });
+});
+
+// The move of the Monitor to the current build of its helper image (docs/requirements.md R-DS-009), on the engine of
+// the runner: a helper tag of this run (built on the helper image of the tests, with a copy of a Dockerfile of this run
+// at HELPER_DOCKERFILE_COPY, so the Monitor reads this tag as its own) is built again; the Monitor creates its successor
+// of its name from the current build and ends, and the successor removes the container and the image of the earlier
+// build. The shared helper tag of the tests is never moved. The checks of the move are shortened with
+// DEVSPACE_MONITOR_UPGRADE_CHECK_MS (read only by main.ts).
+describe('the Monitor container: its move to the current build of its helper image', () => {
+  const { run, env, cli, log } = dockerTestContext('remoteMonitor');
+  const docker = new BootstrapDocker(new NodeProcessRunner(), run.dockerPath, env, log);
+  const containerName = `devspaces-test-monitor-upgrade-${run.runId}`;
+  const socket = helperDockerSocket(env, process.platform, run.dockerHost);
+  const context = path.join(run.runDir, 'monitor-upgrade-context');
+  const runLabel = `${TEST_RUN_LABEL}=${run.runId}`;
+  let script = '';
+  let ownTag = '';
+  let volumeName = '';
+
+  /** Builds the helper tag of this run again, with the label `build`; the ID of its image. */
+  const build = (number: number): string => {
+    cli.ok(['build', '-q', '--label', runLabel, '--label', `devspaces-test.build=${number}`, '-t', ownTag, context]);
+    return cli.ok(['image', 'inspect', '-f', '{{.Id}}', ownTag]);
+  };
+  const exists = (image: string): boolean => cli.run(['image', 'inspect', image]).code === 0;
+
+  beforeAll(async () => {
+    script = await bundleScript();
+    const helperTag = (await testHelperImage(docker, log, env)).tag;
+    volumeName = testStateVolume({ run, cli }, 'remoteMonitor-upgrade');
+    const copy = `FROM ${TEST_BASE_IMAGE}\n# The helper Dockerfile of the run ${run.runId}\n`;
+    ownTag = helperImageTag(copy);
+    fs.mkdirSync(context, { recursive: true });
+    fs.writeFileSync(path.join(context, 'helper.Dockerfile'), copy);
+    fs.writeFileSync(path.join(context, 'Dockerfile'), `FROM ${helperTag}\nCOPY helper.Dockerfile ${HELPER_DOCKERFILE_COPY}\n`);
+  });
+
+  afterAll(() => {
+    log.output(`docker logs ${containerName}:\n${cli.run(['logs', containerName]).out}\n`);
+    // The successor and the images of this run (also the tag of this run and its monitor tag on them).
+    removeRunObjects(cli, run.runId);
+    expect(cli.container(containerName)).toBeUndefined();
+  });
+
+  it('creates its successor from the current build and ends; the successor removes the earlier container and build', async () => {
+    const first = build(1);
+    const monitorTag = monitorImageTag(ownTag)!;
+    const monitor = new RemoteSessionMonitor({
+      engine: engineMonitor(dockerEngine(engineApi(helperDockerSocket(env, process.platform)), engineHijack(helperDockerSocket(env, process.platform)))),
+      logger: log,
+      script: async () => script,
+      containerName,
+      volumeName,
+      labels: { [TEST_RUN_LABEL]: run.runId },
+      // No background run during the test; a check of the move every second.
+      containerEnv: { DEVSPACE_MONITOR_TICK_MS: String(TICK_MS), DEVSPACE_IMAGE_FIRST_MS: '86400000', DEVSPACE_MONITOR_UPGRADE_CHECK_MS: '1000' },
+    });
+    expect(await monitor.ensureOrThrow(ownTag, socket, undefined, ownTag, first)).toBe('created');
+    const before = cli.container(containerName) as unknown as { Id: string; Image: string; Config: { Labels: Record<string, string> } };
+    expect(before.Image).toBe(first);
+    const earlierName = `${containerName}-earlier-${before.Id.slice(0, 12)}`;
+    // Nothing moves while the tag is on its image.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    expect(cli.container(containerName)?.Id).toBe(before.Id);
+
+    // The tag is built again (by the Monitor or a window): the Monitor moves to the new build.
+    const second = build(2);
+    expect(second).not.toBe(first);
+    await waitUntil(() => (cli.container(containerName) as unknown as { Image?: string } | undefined)?.Image === second, 'the successor from the current build', 60_000);
+    const after = cli.container(containerName) as unknown as {
+      Id: string;
+      Config: { Image: string; Labels: Record<string, string>; Env: string[] };
+      HostConfig: { RestartPolicy: { Name: string } };
+      State: { Running: boolean };
+    };
+    expect(after.Id).not.toBe(before.Id);
+    expect(after.State.Running).toBe(true);
+    // The same label (a window takes it as current), the label of the run, its monitor tag, the policy of its mode, and
+    // the variables of the test; its start is no use of the engine.
+    expect(after.Config.Labels[LABEL_MONITOR]).toBe(before.Config.Labels[LABEL_MONITOR]);
+    expect(after.Config.Labels[TEST_RUN_LABEL]).toBe(run.runId);
+    expect(after.Config.Labels['devspaces-test.build']).toBe('2');
+    expect(after.Config.Image).toBe(monitorTag);
+    expect(after.HostConfig.RestartPolicy.Name).toBe('on-failure');
+    expect(after.Config.Env).toEqual(expect.arrayContaining(['DEVSPACE_MONITOR_SUCCESSOR=1', 'DEVSPACE_MONITOR_UPGRADE_CHECK_MS=1000', `DEVSPACE_MONITOR_TICK_MS=${TICK_MS}`]));
+
+    // The earlier Monitor ended, and the successor removes its container and the earlier build (the image store of
+    // containerd removes that image already when its tag moves, even while a container runs from it).
+    await waitUntil(() => cli.container(earlierName) === undefined && !exists(first), 'the removal of the earlier container and build', 60_000);
+    expect(cli.run(['logs', containerName]).out).toContain(`Removed the Monitor ${earlierName} of an earlier build of the helper image.`);
+    // An ensure of a window takes the successor as current.
+    expect(await monitor.ensure(ownTag, socket, undefined, monitorTag, second)).toBe('running');
   });
 });

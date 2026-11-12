@@ -709,11 +709,21 @@ describe('the port of the engine over the Engine API', () => {
       const containerJson = (id: string) => ({ Id: id, Name: `/${id}`, State: { Status: 'running', Running: true }, Config: { Labels: {}, Image: 'img' }, Mounts: [] });
 
       it('the paths of the inspects and the encoded filters', async () => {
-        const { engine, requests } = fake((request) => (request.path.endsWith('/json') && request.path.startsWith('/images/') ? ok({ Id: 'sha256:1' }) : request.path.startsWith('/networks/') ? ok({ Name: 'n' }) : ok([])));
+        const { engine, requests } = fake((request) =>
+          request.path.endsWith('/json') && request.path.startsWith('/images/')
+            ? ok({ Id: 'sha256:1' })
+            : request.path.startsWith('/networks/')
+              ? ok({ Name: 'n' })
+              : request.path.startsWith('/exec/')
+                ? ok({ ID: 'e1', Running: true })
+                : ok([]),
+        );
         expect(await engine.inspect('image', 'x:1')).toEqual({ Id: 'sha256:1' });
         expect(await engine.inspect('network', 'n')).toEqual({ Name: 'n' });
+        // A process of `docker exec` (the move of the Monitor waits while one of a window runs).
+        expect(await engine.inspect('exec', 'e1')).toEqual({ ID: 'e1', Running: true });
         await engine.containerIds({ label: ['a=b'] });
-        expect(requests.map((request) => request.path)).toEqual(['/images/x%3A1/json', '/networks/n', `/containers/json?all=true&filters=%7B%22label%22%3A%5B%22a%3Db%22%5D%7D`]);
+        expect(requests.map((request) => request.path)).toEqual(['/images/x%3A1/json', '/networks/n', '/exec/e1/json', `/containers/json?all=true&filters=%7B%22label%22%3A%5B%22a%3Db%22%5D%7D`]);
       });
 
       it('a container gone after the list is left out, the ones after it are not; an invalid inspect fails', async () => {

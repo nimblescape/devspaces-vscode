@@ -19,9 +19,10 @@
 //   4. The record of the check in the volume (helperCheck.ts): `checkedAt` with the digest when the image is current
 //      after the run, `attemptedAt` when the registry gave no digest or the build failed (the windows then check and
 //      build it as before). The windows read it through the answers of their heartbeats.
-// The previous image is not removed here: the Monitor still runs from it (its monitor tag), and the cleanup of the
-// Monitor removes it when no container uses it anymore (engineCleanup.ts, docs/requirements.md R-DS-007). The output of the build stays out of the log of the Monitor,
-// except the last lines of a failed build. Never throws. No `vscode`.
+// The previous image is not removed here: the Monitor still runs from it (its monitor tag) until it moves to the new
+// build at its next check (selfUpgrade.ts, docs/requirements.md R-DS-009), and its successor or the cleanup of the
+// Monitor removes it when no container uses it anymore (engineCleanup.ts, R-DS-007). The output of the build stays out
+// of the log of the Monitor, except the last lines of a failed build. Never throws. No `vscode`.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';

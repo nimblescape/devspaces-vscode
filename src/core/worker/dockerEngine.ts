@@ -74,8 +74,11 @@ export interface EngineContainerSummary {
   labels: Record<string, string>;
 }
 
-/** The kinds of objects whose inspect JSON the port reads. */
-export type EngineObjectKind = 'container' | 'image' | 'volume' | 'network';
+/**
+ * The kinds of objects whose inspect JSON the port reads; `exec`: a process that `docker exec` created in a container
+ * (`GET /exec/<id>/json`, its `Running`).
+ */
+export type EngineObjectKind = 'container' | 'image' | 'volume' | 'network' | 'exec';
 
 /** The filters of a list request of the Engine API (`label`, `reference`, `dangling`, …). */
 export type EngineFilters = Readonly<Record<string, readonly string[]>>;

@@ -57,10 +57,33 @@ export type SelfEngine = Pick<DockerEngine, 'containerIds' | 'updateRestartPolic
 export type CleanupEngine = Pick<DockerEngine, 'images' | 'inspect' | 'containerIds' | 'removeImage' | 'pruneContainers' | 'pruneBuildCache'>;
 
 /**
- * The engine of `run`: the loop's, the image maintenance's, the VS Code part's, the prepares' and the cleanup's of the
- * background run, and the one of its own end after 30 days without use.
+ * What the move asks of the engine: its own container (by the nonce of its create) and its inspect, the inspect of
+ * images and of the commands of windows (`exec`), the restart policy and the name of its container, the monitor tag,
+ * the list and removal of the containers of earlier builds and of their images, and the create of the successor
+ * (engineMonitor; selfUpgrade.ts).
  */
-export type MonitorEngineParts = LoopEngine & ImageEngine & VscodeEngine & PrepareEngine & CleanupEngine & SelfEngine;
+export type UpgradeEngine = Pick<
+  DockerEngine,
+  | 'containerIds'
+  | 'containerSummaries'
+  | 'inspect'
+  | 'updateRestartPolicy'
+  | 'renameContainer'
+  | 'tagImage'
+  | 'removeContainer'
+  | 'removeImage'
+  | 'systemTime'
+  | 'start'
+  | 'containerFile'
+  | 'createAttached'
+>;
+
+/**
+ * The engine of `run`: the loop's, the image maintenance's, the VS Code part's, the prepares' and the cleanup's of the
+ * background run, the one of its own end after 30 days without use, and the one of its move to the current build of its
+ * helper image.
+ */
+export type MonitorEngineParts = LoopEngine & ImageEngine & VscodeEngine & PrepareEngine & CleanupEngine & SelfEngine & UpgradeEngine;
 
 /** The engine of the socket of the monitor container (the one of its engine, as the worker's). */
 export function socketEngine(): MonitorEngineParts {
