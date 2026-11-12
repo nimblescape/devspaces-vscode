@@ -8,12 +8,13 @@
 // of the host (isShellCall). The sections "Facts of Docker", "Mounts", "Used by" and "Containers" of its report. No
 // `vscode`.
 import { COMPOSE_PROJECT_LABEL, COMPOSE_SERVICE_LABEL } from '../names';
+import { MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV } from '../remoteMonitor/cacheSettings';
 import { CommandError } from '../errors';
 import { isRecord } from '../valueChecks';
 import { commandText, parseJsonLines, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
-import type { HostObject, HostObjectKind } from './hostObjects';
-import { cell, chip, countText, dockerTimeText, fact, shortDigest, sizeText, type ReportClock, type ReportFact, type ReportSection } from './reportModel';
+import { onlyMissingContainers, type HostObject, type HostObjectKind } from './hostObjects';
+import { cell, chip, countText, dockerTimeText, fact, optional, shortDigest, sizeText, type ReportClock, type ReportFact, type ReportSection } from './reportModel';
 
 /** The label of Docker Compose on a volume: its name in the Compose file. */
 export const COMPOSE_VOLUME_LABEL = 'com.docker.compose.volume';
@@ -26,6 +27,11 @@ const OCI_SOURCE = 'org.opencontainers.image.source';
 export const MAX_VOLUME_USERS = 20;
 /** At most this many rows of mounts, ports, networks or containers. */
 const MAX_LIST = 50;
+/**
+ * The only environment variables of a container that its details keep: the schedule of the Monitor and its time zone.
+ * The others can hold secrets, and no report needs them.
+ */
+const KEPT_ENV: readonly string[] = [MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV];
 
 /** A mount of a container. */
 export interface MountDetail {
@@ -47,6 +53,8 @@ export interface ContainerDetails {
   finishedAt?: string;
   exitCode?: number;
   restartPolicy?: string;
+  /** Its environment variables of KEPT_ENV. */
+  env: Map<string, string>;
   mounts: MountDetail[];
   /** `HOST_PORT → CONTAINER_PORT/PROTOCOL`, or `CONTAINER_PORT/PROTOCOL` when it is not published. */
   ports: string[];
@@ -121,6 +129,17 @@ function texts(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string' && entry !== '') : [];
 }
 
+/** The variables of KEPT_ENV of `Config.Env` (`NAME=VALUE`). */
+function keptEnv(value: unknown): Map<string, string> {
+  const env = new Map<string, string>();
+  for (const entry of texts(value)) {
+    const equals = entry.indexOf('=');
+    const name = equals > 0 ? entry.slice(0, equals) : '';
+    if (KEPT_ENV.includes(name)) env.set(name, entry.slice(equals + 1));
+  }
+  return env;
+}
+
 function parseMounts(value: unknown): MountDetail[] {
   if (!Array.isArray(value)) return [];
   const mounts: MountDetail[] = [];
@@ -166,6 +185,7 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
         ...optional('finishedAt', text(state.FinishedAt)),
         ...optional('exitCode', exitCode),
         ...optional('restartPolicy', restart),
+        env: keptEnv(config.Env),
         mounts: parseMounts(value.Mounts),
         ports: parsePorts(network.Ports),
         networks: isRecord(network.Networks) ? Object.keys(network.Networks).sort() : [],
@@ -221,9 +241,11 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
  */
 export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, object: Pick<HostObject, 'kind' | 'id'>, signal?: AbortSignal): Promise<ObjectDetails> {
   const options = { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) };
-  const run = async (args: string[]): Promise<unknown[]> => {
+  // `containers`: an inspect of several containers gives those that are there, also when others are gone (it prints the
+  // found ones and ends with exit code 1, onlyMissingContainers).
+  const run = async (args: string[], containers = false): Promise<unknown[]> => {
     const result = await docker.run(args, options);
-    if (result.exitCode !== 0 || result.timedOut) throw new CommandError(commandText(args), result.exitCode, result.stdout, result.stderr, result.timedOut);
+    if ((result.exitCode !== 0 && !(containers && onlyMissingContainers(result.stderr))) || result.timedOut) throw new CommandError(commandText(args), result.exitCode, result.stdout, result.stderr, result.timedOut);
     return parseJsonLines(result.stdout);
   };
   const args = inspectArgs(object.kind, [object.id]);
@@ -237,8 +259,9 @@ export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, ob
   });
   const shown = users.slice(0, MAX_VOLUME_USERS);
   if (shown.length > 0) {
-    // The place and the mode of the mount; a container that went meanwhile keeps its row without them.
-    const inspected = await run(inspectArgs('container', shown.map((user) => user.id))).catch(() => []);
+    // The place and the mode of the mount; a container that went meanwhile keeps its row without them, and the others
+    // keep theirs.
+    const inspected = await run(inspectArgs('container', shown.map((user) => user.id)), true).catch(() => []);
     for (const entry of inspected) {
       if (!isRecord(entry)) continue;
       const user = shown.find((candidate) => candidate.id === entry.Id);
@@ -249,10 +272,6 @@ export async function readObjectDetails(docker: Pick<BootstrapDocker, 'run'>, ob
     }
   }
   return { ...details, users: shown, moreUsers: users.length > shown.length };
-}
-
-function optional<K extends string, T>(key: K, value: T | undefined): Partial<Record<K, T>> {
-  return value === undefined ? {} : ({ [key]: value } as Record<K, T>);
 }
 
 /** The project of Docker Compose of the labels, with the service or the volume of its Compose file. */

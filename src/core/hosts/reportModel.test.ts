@@ -15,12 +15,17 @@ describe('the texts of a report', () => {
     expect(timeText(NOW + 15 * HOUR, CLOCK)).toBe('tomorrow 00:00');
     expect(timeText(NOW - 3 * DAY, CLOCK)).toBe('2026-11-09 09:00');
     expect(timeText(NOW, { now: NOW, timeZone: 'UTC' })).toBe('today 08:00');
+    // A record can hold a safe integer that is no time of a Date.
+    expect(timeText(9_000_000_000_000_000, CLOCK)).toBe('an invalid time');
   });
 
   it('reads the times of Docker, and takes year 1 as never', () => {
     expect(dockerTime('2026-11-12T08:00:00.123456789Z')).toBe(NOW + 123);
     expect(dockerTime('0001-01-01T00:00:00Z')).toBeUndefined();
     expect(dockerTime('soon')).toBeUndefined();
+    // The form of the lists of the Docker CLI.
+    expect(dockerTime('2026-11-12 09:00:00 +0100 CET')).toBe(NOW);
+    expect(dockerTime('2026-11-12 08:00:00.5 +0000 UTC')).toBe(NOW + 500);
     expect(dockerTimeText(undefined, CLOCK)).toBeUndefined();
     expect(dockerTimeText('2026-11-12T08:00:00Z', CLOCK)).toBe('today 09:00');
   });

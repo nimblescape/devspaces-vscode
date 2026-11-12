@@ -102,6 +102,20 @@ describe('the report of the volume of the Monitor', () => {
     expect(facts(body(monitorVolumeReport(retrying, COMPUTER, CLOCK).sections, 'Background run'))['Next run']).toEqual({ text: 'a retry today 09:10', chip: { text: 'the last 2 runs did not reach the network', tone: 'warn' } });
   });
 
+  it('names the schedule of the container when no window has sent one, and a run that is due at once', () => {
+    const unsent = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
+    const background = facts(body(monitorVolumeReport(unsent, COMPUTER, CLOCK).sections, 'Background run'));
+    expect([background.Schedule?.text, background['Next run']?.text]).toEqual([
+      'the one of the container of the Monitor: no window has sent one since its start',
+      'at the next time of the schedule of the container of the Monitor (its report gives it)',
+    ]);
+    const textless = monitorRecords({ cut: false, textsDropped: true, files: [{ path: 'cache-run.json', bytes: 10, omitted: 'output' }] });
+    const unknown = facts(body(monitorVolumeReport(textless, COMPUTER, CLOCK).sections, 'Background run'));
+    expect([unknown['Last run ended']?.text, unknown['Next run']]).toEqual(['not known: the reader left out the text of cache-run.json', undefined]);
+    const none = monitorRecords({ cut: false, textsDropped: false, files: [] });
+    expect(facts(body(monitorVolumeReport(none, COMPUTER, CLOCK).sections, 'Background run'))['Next run']?.text).toBe('at the next check of the Monitor: no run is known');
+  });
+
   it('gives the windows of this computer and of others', () => {
     expect(rows(body(report.sections, 'Devspaces with a window')).map((row) => [...row.map((entry) => entry.text), row[3].chip?.text])).toEqual([
       ['majikmate/module-ts', 'this computer', '20 s ago', 'stops after 10 minutes without a sign', undefined],
@@ -137,7 +151,7 @@ describe('the report of the volume of the Monitor', () => {
 });
 
 describe('the report of the container of the Monitor', () => {
-  const details: ContainerDetails = { kind: 'container', labels: new Map([[LABEL_MONITOR_VERSION, '0.4.1']]), restartPolicy: 'on-failure', mounts: [], ports: [], networks: [] };
+  const details: ContainerDetails = { kind: 'container', labels: new Map([[LABEL_MONITOR_VERSION, '0.4.1']]), restartPolicy: 'on-failure', env: new Map(), mounts: [], ports: [], networks: [] };
 
   it('gives its mode and version, and what its last runs did', () => {
     const report = monitorContainerReport(details, records, COMPUTER, CLOCK);
@@ -159,6 +173,17 @@ describe('the report of the container of the Monitor', () => {
     expect(runs[1][0].chip).toEqual({ text: 'did not reach the network (3 tries)', tone: 'warn' });
     expect(report.summary).toEqual([{ text: '1 failure in the last run', tone: 'warn' }]);
     expect(report.monitorLog).toBe(true);
+  });
+
+  it('takes the schedule of its container until a window sends one, as the Monitor does', () => {
+    const unsent = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('cache-run.json', { lastEndAt: LAST_END })] });
+    const schedule = (env: Map<string, string>): [string | undefined, string | undefined] => {
+      const monitor = facts(body(monitorContainerReport({ ...details, env }, unsent, COMPUTER, CLOCK).sections, 'The Monitor'));
+      return [monitor.Schedule?.text, monitor['Next run']?.text];
+    };
+    expect(schedule(new Map([['DEVSPACE_IMAGE_SCHEDULE', '360'], ['DEVSPACE_IMAGE_TZ', 'UTC']]))).toEqual(['every 360 minutes after the end of the last run · of its container: no window has sent one since its start', 'today 12:19']);
+    // Without its variables (or with invalid ones): daily at 06:07 in Europe/Vienna.
+    expect(schedule(new Map([['DEVSPACE_IMAGE_TZ', 'Not/AZone']]))).toEqual(['daily at 06:07 · Europe/Vienna · of its container: no window has sent one since its start', 'tomorrow 06:07']);
   });
 
   it('names a Monitor that keeps running, one of another version, and one of an earlier extension', () => {

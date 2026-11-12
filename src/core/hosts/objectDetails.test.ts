@@ -45,7 +45,7 @@ const CONTAINER_INSPECT = {
   Id: 'c1',
   Created: '2026-11-09T08:00:00Z',
   Image: 'sha256:abc',
-  Config: { Image: 'nginx:1.27', Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' } },
+  Config: { Image: 'nginx:1.27', Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' }, Env: ['API_TOKEN=secret', 'DEVSPACE_IMAGE_TZ=Europe/Vienna', 'DEVSPACE_IMAGE_SCHEDULE=7 6 * * *', 'NOVALUE'] },
   State: { Status: 'running', StartedAt: '2026-11-12T07:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 },
   HostConfig: { RestartPolicy: { Name: 'unless-stopped' } },
   NetworkSettings: { Ports: { '80/tcp': [{ HostIp: '0.0.0.0', HostPort: '8080' }, { HostIp: '::', HostPort: '8080' }], '443/tcp': null }, Networks: { shop_default: {} } },
@@ -78,6 +78,11 @@ describe('the facts of Docker about an object', () => {
       finishedAt: '0001-01-01T00:00:00Z',
       exitCode: 0,
       restartPolicy: 'unless-stopped',
+      // Only the schedule of the Monitor and its time zone: other variables can hold secrets.
+      env: new Map([
+        ['DEVSPACE_IMAGE_TZ', 'Europe/Vienna'],
+        ['DEVSPACE_IMAGE_SCHEDULE', '7 6 * * *'],
+      ]),
       mounts: [
         { type: 'volume', source: 'shop_static', destination: '/usr/share/nginx/html', readOnly: true },
         { type: 'bind', source: '/srv/conf', destination: '/etc/nginx/conf.d', readOnly: false },
@@ -109,7 +114,8 @@ describe('the facts of Docker about an object', () => {
     const docker = fakeDocker({
       'volume inspect': result({ stdout: `${JSON.stringify({ Name: 'devspaces-vscode', Driver: 'local', Scope: 'local', CreatedAt: '2026-11-01T10:00:00Z', Labels: {} })}\n` }),
       'container ls': result({ stdout: `${JSON.stringify({ ID: 'w1', Names: 'devspaces-x-worker1', State: 'running' })}\n${JSON.stringify({ ID: 'gone', Names: 'old', State: 'exited' })}\n` }),
-      'container inspect': result({ stdout: `${JSON.stringify({ Id: 'w1', Mounts: [{ Type: 'volume', Name: 'devspaces-vscode', Destination: '/vscode', RW: true }] })}\n` }),
+      // The container `gone` went after the list: Docker prints the one that is there and ends with exit code 1.
+      'container inspect': result({ exitCode: 1, stdout: `${JSON.stringify({ Id: 'w1', Mounts: [{ Type: 'volume', Name: 'devspaces-vscode', Destination: '/vscode', RW: true }] })}\n`, stderr: 'Error response from daemon: No such container: gone\n' }),
     });
     const details = await readObjectDetails(docker, { kind: 'volume', id: 'devspaces-vscode' });
     expect(details).toMatchObject({
@@ -129,7 +135,7 @@ describe('the facts of Docker about an object', () => {
     const docker = fakeDocker({
       'volume inspect': result({ stdout: JSON.stringify({ Name: 'v' }) }),
       'container ls': result({ stdout: users }),
-      'container inspect': result({ exitCode: 1, stderr: 'No such container: id3' }),
+      'container inspect': result({ exitCode: 1, stdout: JSON.stringify({ Id: 'id0', Mounts: [{ Type: 'volume', Name: 'v', Destination: '/v' }] }), stderr: 'permission denied' }),
     });
     const details = await readObjectDetails(docker, { kind: 'volume', id: 'v' });
     expect(details.kind === 'volume' ? [details.users.length, details.moreUsers, details.users[0]] : undefined).toEqual([MAX_VOLUME_USERS, true, { id: 'id0', name: 'c0' }]);
@@ -197,6 +203,8 @@ describe('the sections of the facts of Docker', () => {
     expect(facts(sections)).toEqual({ 'Docker Compose': 'volume pgdata of the project shop', Driver: 'local', Created: '2026-10-02 12:00', Size: '1.2 GB', 'Used by': '1 container' });
     expect(table(sections, 'Used by')).toEqual([['shop-db-1', 'running', '/var/lib/postgresql/data', 'read-write']]);
     expect(dockerFactsSections(volume, undefined, CLOCK).map((section) => section.title)).toEqual(['Facts of Docker']);
+    // Without its inspect, the time of the inventory (the form of the lists of the Docker CLI).
+    expect(facts(dockerFactsSections({ ...volume, createdAt: '2026-10-02 12:00:00 +0200 CEST' }, undefined, CLOCK)).Created).toBe('2026-10-02 12:00');
   });
 
   it('gives a network with its containers, and one that Docker creates itself', () => {

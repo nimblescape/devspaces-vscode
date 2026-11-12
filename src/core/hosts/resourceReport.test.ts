@@ -39,7 +39,7 @@ describe('the report of a resource', () => {
   });
 
   it('puts the sections of Devspaces before the facts of Docker', () => {
-    const titles = (object: HostObject): string[] => resourceReport({ object, volumes: { kind: 'read', reading, image: 'devspaces-worker:0123456789ab' }, computer: COMPUTER, clock: CLOCK }).sections.map((section) => section.title);
+    const titles = (object: HostObject): string[] => resourceReport({ object, volumes: { kind: 'read', reading, image: 'devspaces-worker:0123456789ab' }, platform: 'linux-x64', computer: COMPUTER, clock: CLOCK }).sections.map((section) => section.title);
     expect(titles(shared('devspaces-vscode'))).toEqual(['VS Code Server', 'Downloads that failed', 'Extensions', 'Cleanup and downloads', 'Facts of Docker']);
     expect(titles(shared('devspaces-monitor'))[0]).toBe('Background run');
     expect(titles(shared('devspaces-worker-cache'))).toEqual(['The volume', 'Top level', 'Facts of Docker']);
@@ -64,5 +64,6 @@ describe('the report of a resource', () => {
       '2 folders could not be read: some sizes are incomplete.',
       'Docker could not give the facts of this object: No such volume',
     ]);
+    expect(notices({ kind: 'read', reading: { ...reading, monitor: { cut: true, textsDropped: false, files: [] } }, image: 'x' })).toEqual(['The volume devspaces-monitor holds more files than the reader lists: some records are missing.']);
   });
 });

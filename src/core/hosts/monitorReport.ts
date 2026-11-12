@@ -7,8 +7,8 @@
 // the check of the helper image, the extension lists, the older image versions, the other records) and of its container
 // devspaces-monitor (its mode and version, and what its last runs did). From the records of the Monitor
 // (monitorRecords.ts) and the facts of Docker of its container (objectDetails.ts). Pure; no I/O.
-import { IMAGES_IN_USE_MAX_AGE_MS, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, UNUSED_END_MS } from '../remoteMonitor/protocol';
-import { IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, parseCacheSchedule } from '../remoteMonitor/cacheSettings';
+import { CACHE_RUN_FILE, IMAGES_IN_USE_MAX_AGE_MS, LABEL_MONITOR_OWNER, LABEL_MONITOR_VERSION, UNUSED_END_MS } from '../remoteMonitor/protocol';
+import { IDLE_MONITOR_RESTART_POLICY, PERMANENT_MONITOR_RESTART_POLICY, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
 import { nextCronTime } from '../remoteMonitor/cron';
 import { registryReferenceKey } from '../remoteMonitor/registryAnswers';
 import { RUN_FAILURE_EVENTS, type RunEvent, type RunReport } from '../remoteMonitor/runReport';
@@ -37,24 +37,43 @@ export function scheduleText(schedule: string | undefined, timeZone: string | un
   return daily !== null ? `daily at ${daily[2].padStart(2, '0')}:${daily[1].padStart(2, '0')}${zone}` : `cron ${parsed.text}${zone}`;
 }
 
-/** The facts of the background run: its schedule, the last end, the next run, a retry that waits, the last cleanup. */
-function backgroundFacts(records: MonitorRecords, clock: ReportClock): ReportFact[] {
-  const facts: ReportFact[] = [];
+/**
+ * The schedule that the Monitor runs with, as it takes it (CurrentCacheSettings of the Monitor): the settings that the
+ * last start of a window stored in its volume, else those of its container (cacheScheduleFromEnv: its variables, else
+ * the defaults). Undefined without the settings and without the variables of its container (the report of its volume).
+ */
+function activeSchedule(records: MonitorRecords, containerEnv: ReadonlyMap<string, string> | undefined): { schedule: CacheSchedule; timeZone: string; from: string } | undefined {
   const settings = records.settings;
-  facts.push(fact('Schedule', settings !== undefined ? `${scheduleText(settings.schedule, settings.timeZone)} · sent by the last start of a window` : 'not sent yet: the next start of a window sends it'));
+  const stored = settings !== undefined ? parseCacheSchedule(settings.schedule) : undefined;
+  if (settings !== undefined && stored !== undefined) return { schedule: stored, timeZone: settings.timeZone, from: 'sent by the last start of a window' };
+  if (containerEnv === undefined) return undefined;
+  return { ...cacheScheduleFromEnv(Object.fromEntries(containerEnv)), from: 'of its container: no window has sent one since its start' };
+}
+
+/**
+ * The facts of the background run: its schedule, the last end, the next run, a retry that waits, the last cleanup.
+ * `containerEnv`: the variables of the container of the Monitor (its schedule), when the report knows them.
+ */
+function backgroundFacts(records: MonitorRecords, clock: ReportClock, containerEnv?: ReadonlyMap<string, string>): ReportFact[] {
+  const facts: ReportFact[] = [];
+  const active = activeSchedule(records, containerEnv);
+  facts.push(fact('Schedule', active !== undefined ? `${scheduleText(active.schedule.text, active.timeZone)} · ${active.from}` : 'the one of the container of the Monitor: no window has sent one since its start'));
+  if (records.textless.includes(CACHE_RUN_FILE)) {
+    facts.push(fact('Last run ended', 'not known: the reader left out the text of cache-run.json', chip('too large for one read', 'warn')));
+    return facts;
+  }
   const state = records.cacheRun ?? {};
   facts.push(fact('Last run ended', state.lastEndAt !== undefined ? timeText(state.lastEndAt, clock) : 'no run ended yet'));
   if (state.retryAt !== undefined) {
     facts.push(fact('Next run', `a retry ${timeText(state.retryAt, clock)}`, chip(`the last ${countText(state.retries ?? 1, 'run')} did not reach the network`, 'warn')));
+  } else if (state.lastEndAt === undefined) {
+    facts.push(fact('Next run', 'at the next check of the Monitor: no run is known'));
+  } else if (active === undefined) {
+    facts.push(fact('Next run', 'at the next time of the schedule of the container of the Monitor (its report gives it)'));
   } else {
-    const schedule = parseCacheSchedule(settings?.schedule);
-    const next =
-      state.lastEndAt === undefined || schedule === undefined
-        ? undefined
-        : schedule.kind === 'interval'
-          ? state.lastEndAt + schedule.minutes * 60_000
-          : nextCronTime(state.lastEndAt, schedule.cron, settings?.timeZone ?? 'UTC');
-    facts.push(fact('Next run', next === undefined ? 'at the next check of the Monitor' : next <= clock.now ? 'now: a time of the schedule has passed, it runs at its next check' : timeText(next, clock)));
+    const { schedule, timeZone } = active;
+    const next = schedule.kind === 'interval' ? state.lastEndAt + schedule.minutes * 60_000 : nextCronTime(state.lastEndAt, schedule.cron, timeZone);
+    facts.push(fact('Next run', next === undefined ? 'none: the schedule has no time' : next <= clock.now ? 'now: a time of the schedule has passed, it runs at its next check' : timeText(next, clock)));
   }
   if (state.lastCleanupAt !== undefined) facts.push(fact('Last cleanup of the store', timeText(state.lastCleanupAt, clock)));
   return facts;
@@ -286,9 +305,9 @@ export function monitorContainerReport(details: ContainerDetails | undefined, re
           : fact('Version of Devspaces', version, chip('another version: it moves to the script of a newer one that a window stored', 'info')),
     );
   }
-  if (records !== undefined) facts.push(...backgroundFacts(records, clock));
+  if (records !== undefined) facts.push(...backgroundFacts(records, clock, details?.env));
   if (records?.lastUse !== undefined) facts.push(fact('Last use by a window', ageText(records.lastUse.at, clock.now)));
-  const sections: ReportSection[] = [{ title: 'The Monitor', body: { kind: 'facts', facts }, from: 'From the labels and the restart policy of the container (docker container inspect), and image-settings.json, cache-run.json and last-use.json in devspaces-monitor.' }];
+  const sections: ReportSection[] = [{ title: 'The Monitor', body: { kind: 'facts', facts }, from: 'From the labels, the restart policy and the schedule of the container (docker container inspect), and image-settings.json, cache-run.json and last-use.json in devspaces-monitor.' }];
   const summary: ReportChip[] = [];
   if (records !== undefined) {
     sections.push({

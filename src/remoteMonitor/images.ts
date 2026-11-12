@@ -28,7 +28,7 @@ import { parseImageReference as parseRegistryReference } from '../core/imageChec
 import type { HttpTransport } from '../core/http';
 import { abortError } from '../core/ports';
 import { parseImageReference, type ImageReferenceParts } from '../core/remoteMonitor/protocol';
-import { MAX_REPLACED_PER_REPOSITORY, type ReplacedImages } from '../core/remoteMonitor/replacedImages';
+import { IMAGE_ID, MAX_REPLACED_PER_REPOSITORY, type ReplacedImages } from '../core/remoteMonitor/replacedImages';
 import { referenceText, type RegistryAnswer as TagAnswer } from '../core/remoteMonitor/registryAnswers';
 import type { EngineImage } from '../core/worker/dockerEngine';
 import { errorMessage } from '../core/errors';
@@ -252,9 +252,6 @@ function trimReplaced(ids: string[], tagged: ReadonlySet<string>): string[] {
   }
   return result;
 }
-
-/** An image ID as the engine and the records name it. */
-const IMAGE_ID = /^[A-Za-z0-9:]{1,100}$/;
 
 /**
  * The stored IDs without the repositories that keep none. A new record; the given one is not changed. Every other

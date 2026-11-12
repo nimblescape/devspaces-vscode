@@ -25,7 +25,8 @@ export type ReplacedImages = Record<string, string[]>;
  */
 export const MAX_REPLACED_PER_REPOSITORY = 200;
 
-const IMAGE_ID = /^[A-Za-z0-9:]{1,100}$/;
+/** An image ID as the engine and the records name it. */
+export const IMAGE_ID = /^[A-Za-z0-9:]{1,100}$/;
 
 /** The stored replaced IDs; an empty record for anything invalid. */
 export function parseReplacedImages(text: string): ReplacedImages {

@@ -692,8 +692,20 @@ export function runningUsesArgs(ids: readonly string[]): string[] {
   return ['container', 'inspect', '--format', RUNNING_USES_FORMAT, ...ids];
 }
 
-/** Each line of the standard error of a failed `docker container inspect` says that a container is gone. */
+/** A line of the standard error of `docker container inspect` that says that a container is gone. */
 const MISSING_CONTAINER_LINE = /^Error(?: response from daemon)?: No such container/i;
+
+/**
+ * Each line of the standard error of a failed `docker container inspect` of several containers says that a container is
+ * gone (and there is at least one): its output still holds the containers that are there.
+ */
+export function onlyMissingContainers(stderr: string): boolean {
+  const errors = stderr
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return errors.length > 0 && errors.every((line) => MISSING_CONTAINER_LINE.test(line));
+}
 
 /**
  * Reads what the running containers `ids` use (runningUsesArgs), in batches of RUNNING_USES_BATCH. A container that is
@@ -705,11 +717,7 @@ async function readRunningUses(docker: Pick<BootstrapDocker, 'run'>, ids: readon
   for (let start = 0; start < ids.length; start += RUNNING_USES_BATCH) {
     const result = await docker.run(runningUsesArgs(ids.slice(start, start + RUNNING_USES_BATCH)), { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
     if (result.timedOut) return undefined;
-    const errors = result.stderr
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    if (result.exitCode !== 0 && !(errors.length > 0 && errors.every((line) => MISSING_CONTAINER_LINE.test(line)))) return undefined;
+    if (result.exitCode !== 0 && !onlyMissingContainers(result.stderr)) return undefined;
     uses.push(...parseJsonLines(result.stdout));
   }
   return uses;

@@ -49,6 +49,8 @@ describe('the records of the Monitor', () => {
     expect(records.extensionLists).toEqual([{ devspaceId: DEVSPACE, record: { at: 1_700_000_000_000, configuration: [{ id: 'dbaeumer.vscode-eslint' }], defaults: [] } }]);
     expect(records.workerScripts).toEqual([{ hash: HASH, scriptBytes: 123_456, modifiedAt: 1_700_000_400_000, record: { version: '0.4.1', helperTag: 'devspaces-worker:0123456789ab' } }]);
     expect(records.unreadable).toEqual([]);
+    expect(records.textless).toEqual([]);
+    expect(records.cut).toBe(false);
     expect(records.others).toEqual([]);
   });
 
@@ -68,17 +70,45 @@ describe('the records of the Monitor', () => {
         monitorFile(`worker-scripts/${HASH}.js.0123456789ab.tmp`, ''),
       ],
     });
-    // An invalid state of the background run counts as an empty one, as the Monitor reads it.
-    expect(records.cacheRun).toEqual({});
+    // A state of the background run without its text is not known.
+    expect(records.cacheRun).toBeUndefined();
     expect(records.runs).toEqual([]);
     expect(records.heartbeats).toEqual([{ source: SOURCE, devspaceId: DEVSPACE }]);
     expect(records.extensionLists).toEqual([{ devspaceId: DEVSPACE }]);
     expect(records.unreadable).toEqual(['runs.json', 'cache-run.json', 'helper-image.json', `heartbeats/${SOURCE}.${DEVSPACE}.json`, `extensions/wanted/${DEVSPACE}.json`]);
+    expect(records.textless).toEqual(['runs.json', 'cache-run.json']);
     expect(records.others.map((file) => file.path)).toEqual(['cleanup.json', 'runs.json.12.3.tmp', 'heartbeats/stray.json', `worker-scripts/${HASH}.js.0123456789ab.tmp`]);
   });
 
-  it('takes an empty list of runs as no run, and a file without one valid run as unreadable', () => {
-    expect(monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('runs.json', { runs: [] })] }).unreadable).toEqual([]);
-    expect(monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('runs.json', { runs: [{ startedAt: 1 }] })] }).unreadable).toEqual(['runs.json']);
+  it('gives a record that the Monitor reads leniently the value of the Monitor, and names it unreadable when it is no JSON object', () => {
+    const records = monitorRecords({
+      cut: true,
+      textsDropped: false,
+      files: [
+        monitorFile('cache-run.json', 'not json'),
+        monitorFile('replaced-images.json', [1]),
+        monitorFile('pulled-over-images.json', { 'ghcr.io/a/b': 'no list' }),
+        monitorFile('extensions/failures.json', 'not json'),
+        monitorFile('extensions/chosen.json', null),
+        monitorFile('extensions/dependencies.json', { 'ms-python.python': 'no list' }),
+      ],
+    });
+    // An invalid state counts as an empty one, as the Monitor reads it; a valid object with invalid entries is no unreadable record.
+    expect(records.cacheRun).toEqual({});
+    expect([records.replaced, records.pulledOver, records.extensionFailures.size, records.extensionChoices.size, records.extensionDependencies.size]).toEqual([{}, {}, 0, 0, 0]);
+    expect(records.unreadable).toEqual(['cache-run.json', 'replaced-images.json', 'extensions/failures.json', 'extensions/chosen.json']);
+    expect(records.textless).toEqual([]);
+    expect(records.cut).toBe(true);
+  });
+
+  it('leaves out a run that is not valid, as the Monitor reads the file, and names a file without the list of runs unreadable', () => {
+    const runs = (value: unknown): [number, string[]] => {
+      const records = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile('runs.json', value)] });
+      return [records.runs.length, records.unreadable];
+    };
+    expect(runs({ runs: [] })).toEqual([0, []]);
+    expect(runs({ runs: [{ startedAt: 1 }] })).toEqual([0, []]);
+    expect(runs({ runs: 'none' })).toEqual([0, ['runs.json']]);
+    expect(runs('not json')).toEqual([0, ['runs.json']]);
   });
 });

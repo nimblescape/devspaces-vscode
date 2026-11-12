@@ -79,8 +79,12 @@ function dateAndTime(at: number, timeZone: string): { date: string; time: string
   return { date: `${part('year')}-${part('month')}-${part('day')}`, time: `${part('hour')}:${part('minute')}` };
 }
 
-/** A time as `today 06:07`, `yesterday 06:07`, `tomorrow 06:07`, else `2026-11-10 06:07`, in the time zone of the clock. */
+/**
+ * A time as `today 06:07`, `yesterday 06:07`, `tomorrow 06:07`, else `2026-11-10 06:07`, in the time zone of the clock;
+ * `an invalid time` for a number that is no time of a Date (a record can hold one).
+ */
 export function timeText(at: number, clock: ReportClock): string {
+  if (Number.isNaN(new Date(at).getTime())) return 'an invalid time';
   const { date, time } = dateAndTime(at, clock.timeZone);
   const day = (offset: number): string => dateAndTime(clock.now + offset * DAY_MS, clock.timeZone).date;
   if (date === day(0)) return `today ${time}`;
@@ -89,16 +93,23 @@ export function timeText(at: number, clock: ReportClock): string {
   return `${date} ${time}`;
 }
 
-/** A time of Docker (ISO 8601) as timeText; undefined for none, for one that does not parse, and for year 1 (never). */
+/** A time of Docker as timeText (dockerTime); undefined for none, for one that does not parse, and for year 1 (never). */
 export function dockerTimeText(value: string | undefined, clock: ReportClock): string | undefined {
   const at = dockerTime(value);
   return at === undefined ? undefined : timeText(at, clock);
 }
 
-/** A time of Docker (ISO 8601) in milliseconds; undefined for none, for one that does not parse, and for year 1. */
+/** The form of a time in the lists of the Docker CLI (`2026-11-10 06:07:08 +0100 CET`). */
+const CLI_TIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?) ([+-]\d{2})(\d{2})(?: \S+)?$/;
+
+/**
+ * A time of Docker in milliseconds: ISO 8601 (of an inspect) or the form of the lists of the Docker CLI; undefined for
+ * none, for one that does not parse, and for year 1.
+ */
 export function dockerTime(value: string | undefined): number | undefined {
   if (value === undefined || value.startsWith('0001-')) return undefined;
-  const at = Date.parse(value);
+  const cli = CLI_TIME.exec(value);
+  const at = Date.parse(cli !== null ? `${cli[1]}T${cli[2]}${cli[3]}:${cli[4]}` : value);
   return Number.isNaN(at) ? undefined : at;
 }
 
@@ -137,4 +148,9 @@ export function shortDigest(value: string): string {
 export function itemsText(items: readonly string[], max = 3): string {
   if (items.length <= max) return items.join(', ');
   return `${items.slice(0, max).join(', ')} and ${items.length - max} more`;
+}
+
+/** `{ [key]: value }`, or no field when `value` is undefined (for optional fields under exactOptionalPropertyTypes). */
+export function optional<K extends string, T>(key: K, value: T | undefined): Partial<Record<K, T>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, T>);
 }

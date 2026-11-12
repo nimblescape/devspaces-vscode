@@ -96,7 +96,7 @@ import {
 import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, type SelfEngine, type VscodeEngine } from './engine';
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
 import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from '../core/remoteMonitor/backgroundRules';
-import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
+import { cacheRunDue, cacheScheduleFromEnv, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_SUCCESSOR_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
 import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
@@ -120,7 +120,7 @@ import {
   type RemoteRecord,
   type RemoteTiming,
 } from './rules';
-import { DEFAULT_IMAGE_TIME_ZONE, isTimeZone, nextCronTime } from '../core/remoteMonitor/cron';
+import { nextCronTime } from '../core/remoteMonitor/cron';
 import {
   ImageMaintenance,
   REMOTE_IMAGE_FIRST_PASS_MS,
@@ -1057,19 +1057,6 @@ export async function removeStaleStateTemporaryFiles(stateDir: string, now: numb
 export function imageTimesFromEnv(env: NodeJS.ProcessEnv): { firstMs: number; intervalMs?: number } {
   const read = (text: string | undefined) => (text !== undefined && /^\d{3,8}$/.test(text) && Number(text) >= 100 ? Number(text) : undefined);
   return { firstMs: read(env.DEVSPACE_IMAGE_FIRST_MS) ?? REMOTE_IMAGE_FIRST_PASS_MS, intervalMs: read(env.DEVSPACE_IMAGE_INTERVAL_MS) };
-}
-
-/**
- * The schedule of the whole background run: DEVSPACE_IMAGE_SCHEDULE (the setting cacheUpdateSchedule,
- * parseCacheSchedule: a cron expression of five fields or an interval in minutes) in DEVSPACE_IMAGE_TZ (the time zone
- * of the computer that created the monitor). Invalid or missing: DEFAULT_CACHE_UPDATE_SCHEDULE (daily at 06:07) and
- * DEFAULT_IMAGE_TIME_ZONE (Europe/Vienna).
- */
-export function cacheScheduleFromEnv(env: NodeJS.ProcessEnv): { schedule: ParsedCacheSchedule; timeZone: string } {
-  return {
-    schedule: parseCacheSchedule(env.DEVSPACE_IMAGE_SCHEDULE) ?? parseCacheSchedule(DEFAULT_CACHE_UPDATE_SCHEDULE)!,
-    timeZone: isTimeZone(env.DEVSPACE_IMAGE_TZ) ? env.DEVSPACE_IMAGE_TZ : DEFAULT_IMAGE_TIME_ZONE,
-  };
 }
 
 /** The monitor runs permanently (DEVSPACE_MONITOR_PERMANENT `1`, part of its label). */

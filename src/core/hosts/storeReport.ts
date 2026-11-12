@@ -7,7 +7,8 @@
 // of the Monitor that keeps or removes it) and the cache of the workers (devspaces-worker-cache: its top level). From
 // what the reader of the shared volumes read (volumeReader.ts) and the records of the Monitor (monitorRecords.ts); the
 // rules are those of the Monitor (backgroundRules.ts, vscodeExtensions.ts). Pure; no I/O.
-import { FETCH_RETRY_MS, KEPT_SERVER_VERSIONS, SERVER_UNUSED_MS, STORE_CLEANUP_INTERVAL_MS, serversToRemove } from '../remoteMonitor/backgroundRules';
+import type { VscodePlatform } from '../helperChannel/protocol';
+import { FETCH_RETRY_MS, KEPT_SERVER_VERSIONS, SERVER_UNUSED_MS, SERVER_VERSION_NAME, STORE_CLEANUP_INTERVAL_MS, serversToRemove } from '../remoteMonitor/backgroundRules';
 import {
   EXTENSION_FOLDERS,
   EXTENSION_RETRY_MS,
@@ -20,8 +21,9 @@ import {
   wantedExtensions,
   type ExtensionFolder,
 } from '../vscodeExtensions';
+import { EXTENSION_CHOICES_FILE, EXTENSION_DEPENDENCIES_FILE, EXTENSION_WANTED_FOLDER, STATE_EXTENSION_FOLDER } from '../worker/vscodeExtensionStore';
 import type { MonitorRecords } from './monitorRecords';
-import { ageText, cell, chip, countText, fact, shortDigest, sizeText, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportSection } from './reportModel';
+import { ageText, cell, chip, countText, fact, sizeText, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportSection } from './reportModel';
 import type { StoredServer, VscodeStoreReading, WorkerCacheReading } from './volumeReader';
 
 /** At most this many rows of extension files (the others are counted under the table). */
@@ -41,12 +43,14 @@ function newerFirst(a: StoredServer, b: StoredServer): number {
 }
 
 /**
- * The rule of the cleanup of the Monitor for each server version (serversToRemove): the KEPT_SERVER_VERSIONS newest of
- * its quality and platform stay, and every version that an open used within SERVER_UNUSED_MS (without a marker: the
- * time of its folder, as the Monitor counts it); the others go at its next cleanup, unless a running container runs
- * them. The Monitor orders the versions by the releases of the update service; this report by their version numbers.
+ * The rule of the cleanup of the Monitor for each server version (serversToRemove): of the platform of the engine
+ * (`platform`; the Monitor leaves the versions of other platforms alone), the KEPT_SERVER_VERSIONS newest of its quality
+ * stay, and every version that an open used within SERVER_UNUSED_MS (without a marker: the time of its folder, as the
+ * Monitor counts it); the others go at its next cleanup, unless a running container runs them. The Monitor orders the
+ * versions by the releases of the update service; this report by their version numbers. `complete`: the reader listed
+ * the whole store (else a marker that it did not list can keep a version, so a removal is not certain).
  */
-function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string, number>, clock: ReportClock): Map<StoredServer, ReportChip> {
+function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string, number>, platform: VscodePlatform | undefined, complete: boolean, clock: ReportClock): Map<StoredServer, ReportChip> {
   const rules = new Map<StoredServer, ReportChip>();
   const groups = new Map<string, StoredServer[]>();
   for (const server of servers) {
@@ -60,8 +64,12 @@ function serverRules(servers: readonly StoredServer[], used: ReadonlyMap<string,
     ordered.forEach((server, index) => {
       const at = usedAt(server);
       if (!server.node || !server.script) rules.set(server, chip('incomplete: no window uses it', 'warn'));
-      else if (removed.has(server.commit)) rules.set(server, chip('removed at the next cleanup, unless a running container runs it', 'remove'));
-      else if (index < KEPT_SERVER_VERSIONS) rules.set(server, chip(index === 0 ? 'kept: newest' : `kept: one of the ${KEPT_SERVER_VERSIONS} newest`, 'keep'));
+      else if (platform !== undefined && server.platform !== platform) rules.set(server, chip(`kept: the Monitor cleans only the versions for ${platform}, the platform of this engine`, 'info'));
+      else if (removed.has(server.commit)) {
+        if (platform === undefined) rules.set(server, chip('not known: the platform of the engine is not known, and the Monitor cleans only the versions for it', 'warn'));
+        else if (!complete) rules.set(server, chip('not known: the list of the store is incomplete', 'warn'));
+        else rules.set(server, chip('removed at the next cleanup, unless a running container runs it', 'remove'));
+      } else if (index < KEPT_SERVER_VERSIONS) rules.set(server, chip(index === 0 ? 'kept: newest' : `kept: one of the ${KEPT_SERVER_VERSIONS} newest`, 'keep'));
       else rules.set(server, chip(`kept: used ${at !== undefined ? ageText(at, clock.now) : 'recently'}`, 'keep'));
     });
   }
@@ -76,12 +84,14 @@ function nextTry(failedAt: number, waitMs: number, clock: ReportClock): ReportCe
 
 /**
  * The report of the store of VS Code (devspaces-vscode). `records`: those of the volume of the Monitor, when it could be
- * read (the failed downloads, the time of the last cleanup, and the rule of each extension file need them).
+ * read (the failed downloads, the time of the last cleanup, and the rule of each extension file need them). `platform`:
+ * the platform of the engine (serverPlatform of its architecture), when it is known: the Monitor cleans only its server
+ * versions.
  */
-export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRecords | undefined, clock: ReportClock): ReportContent {
+export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRecords | undefined, clock: ReportClock, platform?: VscodePlatform): ReportContent {
   const sections: ReportSection[] = [];
   const used = new Map(store.used.flatMap((marker) => (marker.at !== undefined ? [[marker.name, marker.at] as const] : [])));
-  const rules = serverRules(store.servers, used, clock);
+  const rules = serverRules(store.servers, used, platform, !store.cut, clock);
   const servers = [...store.servers].sort((a, b) => a.quality.localeCompare(b.quality) || a.platform.localeCompare(b.platform) || newerFirst(a, b));
   sections.push({
     title: 'VS Code Server',
@@ -102,12 +112,12 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
       }),
       empty: 'No server version is stored.',
     },
-    from: `From the folders server/QUALITY/PLATFORM/COMMIT and their product.json, and the markers used/QUALITY-PLATFORM-COMMIT that a window writes when it starts a version. Rule of the cleanup of the Monitor: a version goes when no window started it for ${spanText(SERVER_UNUSED_MS)} (a version without a marker counts from its download), it is not one of the ${KEPT_SERVER_VERSIONS} newest of its quality and platform, and no running container runs it. The Monitor orders the versions by the releases of VS Code; this report orders them by their version numbers.`,
+    from: `From the folders server/QUALITY/PLATFORM/COMMIT and their product.json, and the markers used/QUALITY-PLATFORM-COMMIT that a window writes when it starts a version. Rule of the cleanup of the Monitor, for the platform of the engine only: a version goes when no window started it for ${spanText(SERVER_UNUSED_MS)} (a version without a marker counts from its download), it is not one of the ${KEPT_SERVER_VERSIONS} newest of its quality, and no running container runs it. The Monitor orders the versions by the releases of VS Code; this report orders them by their version numbers.`,
   });
   // The failed downloads: of server versions (cache-run.json) and of extensions (extensions/failures.json).
   const failures: ReportCell[][] = [];
   for (const [version, at] of Object.entries(records?.cacheRun?.failedFetches ?? {}).sort(([, a], [, b]) => b - a)) {
-    const match = /^(stable|insider)-(linux-x64|linux-arm64)-([0-9a-f]{40})$/.exec(version);
+    const match = SERVER_VERSION_NAME.exec(version);
     failures.push([cell(match !== null ? `VS Code Server ${match[3].slice(0, 7)} (${match[1]}, ${match[2]})` : version), cell(timeText(at, clock)), nextTry(at, FETCH_RETRY_MS, clock)]);
   }
   for (const [entry, at] of [...(records?.extensionFailures ?? new Map<string, number>())].sort(([, a], [, b]) => b - a)) {
@@ -138,11 +148,23 @@ export function vscodeStoreReport(store: VscodeStoreReading, records: MonitorRec
   const notices: string[] = [];
   if (store.cut) notices.push('The store holds more entries than the reader lists: some lists are incomplete.');
   if (records === undefined) notices.push('The volume devspaces-monitor could not be read: the failed downloads, the last cleanup and the rules of the extension files are missing.');
+  else if (!extensions.known) notices.push('Some records of the Monitor that the rules of the extension files need could not be read whole: these rules are missing.');
+  if (platform === undefined && store.servers.length > 0) notices.push('The platform of the engine is not known: the server versions that the next cleanup removes are not known.');
   return { summary, sections, notices, monitorLog: false };
 }
 
-/** The rows of the extension files with the rule of the cleanup of the Monitor (cleanupExtensions of the Monitor). */
-function extensionRows(store: VscodeStoreReading, records: MonitorRecords | undefined, clock: ReportClock): { section: ReportSection; removed: number } {
+/** The records of the Monitor that the rules of the extension files need: the lists, the choices and the dependencies. */
+function isExtensionRuleRecord(path: string): boolean {
+  return path.startsWith(`${STATE_EXTENSION_FOLDER}/${EXTENSION_WANTED_FOLDER}/`) || path === `${STATE_EXTENSION_FOLDER}/${EXTENSION_CHOICES_FILE}` || path === `${STATE_EXTENSION_FOLDER}/${EXTENSION_DEPENDENCIES_FILE}`;
+}
+
+/**
+ * The rows of the extension files with the rule of the cleanup of the Monitor (cleanupExtensions of the Monitor).
+ * `known`: the rules are known (the records of the Monitor were read, their list is complete, and the reader left out
+ * none of the texts that the rules need).
+ */
+function extensionRows(store: VscodeStoreReading, records: MonitorRecords | undefined, clock: ReportClock): { section: ReportSection; removed: number; known: boolean } {
+  const known = records !== undefined && !records.cut && !records.textless.some(isExtensionRuleRecord);
   const lists = (records?.extensionLists ?? []).flatMap((list) => (list.record !== undefined ? [list.record] : []));
   const wanted = wantedExtensions(lists, clock.now);
   const pinned = new Set(wanted.filter((ref) => ref.version !== undefined).map(extensionEntryText));
@@ -154,7 +176,7 @@ function extensionRows(store: VscodeStoreReading, records: MonitorRecords | unde
   const newest = new Map<string, string>();
   for (const folder of EXTENSION_FOLDERS) {
     const names = store.extensions.filter((file) => file.folder === folder).map((file) => file.name);
-    if (records !== undefined) for (const name of extensionFilesToRemove(folder, names, pinned, { ...(named !== undefined ? { named } : {}), chosen })) removedNames.add(`${folder}/${name}`);
+    if (known) for (const name of extensionFilesToRemove(folder, names, pinned, { ...(named !== undefined ? { named } : {}), chosen })) removedNames.add(`${folder}/${name}`);
     for (const name of names) {
       const parsed = parseCachedExtension(name, folder);
       if (parsed === undefined) continue;
@@ -169,7 +191,7 @@ function extensionRows(store: VscodeStoreReading, records: MonitorRecords | unde
   const ruleOf = (file: (typeof rows)[number]): ReportChip | undefined => {
     const key = `${file.file.folder}/${file.file.name}`;
     if (file.parsed === undefined) return chip('no file of the Monitor: left alone', 'info');
-    if (records === undefined) return undefined;
+    if (!known) return undefined;
     if (removedNames.has(key)) return chip(named !== undefined && !named.has(file.parsed.id) ? 'removed at the next cleanup: no list of the last 14 days names it' : 'removed at the next cleanup: an older version', 'remove');
     if (chosen.has(key)) return chip('kept: the version that the runs chose', 'keep');
     if (pinned.has(`${file.parsed.id}@${file.parsed.version}`)) return chip(`kept: a list pins @${file.parsed.version}`, 'info');
@@ -178,6 +200,7 @@ function extensionRows(store: VscodeStoreReading, records: MonitorRecords | unde
   };
   return {
     removed: removedNames.size,
+    known,
     section: {
       title: 'Extensions',
       body: {
@@ -225,9 +248,4 @@ export function workerCacheReport(cache: WorkerCacheReading, clock: ReportClock)
     notices: [],
     monitorLog: false,
   };
-}
-
-/** The short form of an image ID or digest for a table (`sha256:` and 12 hex digits). */
-export function digestCell(value: string): ReportCell {
-  return cell(`sha256:${shortDigest(value)}…`);
 }

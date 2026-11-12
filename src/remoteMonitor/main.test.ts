@@ -21,7 +21,6 @@ import {
   idleExitFromEnv,
   RemoteMonitorLoop,
   heartbeatDir,
-  cacheScheduleFromEnv,
   imageTimesFromEnv,
   CurrentCacheSettings,
   CacheSchedule,
@@ -37,6 +36,7 @@ import {
   type ExecFile,
   timingFromEnv,
 } from './main';
+import { cacheScheduleFromEnv } from '../core/remoteMonitor/cacheSettings';
 import type { EngineAnswer, EngineApi, EngineRequest } from '../helperChannel/engineApi';
 import { dockerEngine } from '../helperChannel/engineClient';
 import type { LoopEngine } from './engine';

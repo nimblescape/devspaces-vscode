@@ -6,7 +6,7 @@
 // devspaces.cacheUpdateSchedule (a cron schedule of five fields or an interval in minutes), when a run is due, and
 // whether the monitor of an engine runs permanently (its restart policy). The default is daily at 06:07 in the
 // computer's time zone. Pure functions; no I/O, no `vscode`.
-import { nextCronTime, parseCronSchedule, shortestCronGapMinutes, type CronSchedule } from './cron';
+import { DEFAULT_IMAGE_TIME_ZONE, isTimeZone, nextCronTime, parseCronSchedule, shortestCronGapMinutes, type CronSchedule } from './cron';
 
 /**
  * The default of devspaces.cacheUpdateSchedule: daily at 06:07 in the time zone of the computer (DEVSPACE_IMAGE_TZ of
@@ -63,6 +63,25 @@ const CRON_CHECK_FROM = Date.UTC(2027, 0, 1);
 /** The setting as the monitor gets it: the text of parseCacheSchedule, or the default. */
 export function normalizeCacheSchedule(value: unknown): string {
   return parseCacheSchedule(value)?.text ?? DEFAULT_CACHE_UPDATE_SCHEDULE;
+}
+
+/** The environment variables of the container of the Monitor with the schedule of its background run and its time zone. */
+export const MONITOR_SCHEDULE_ENV = 'DEVSPACE_IMAGE_SCHEDULE';
+export const MONITOR_TIME_ZONE_ENV = 'DEVSPACE_IMAGE_TZ';
+
+/**
+ * The schedule of the whole background run that the Monitor takes from its container, until a window stores newer
+ * settings in its volume: DEVSPACE_IMAGE_SCHEDULE (the setting cacheUpdateSchedule, parseCacheSchedule: a cron
+ * expression of five fields or an interval in minutes) in DEVSPACE_IMAGE_TZ (the time zone of the computer that created
+ * the monitor). Invalid or missing: DEFAULT_CACHE_UPDATE_SCHEDULE (daily at 06:07) and DEFAULT_IMAGE_TIME_ZONE
+ * (Europe/Vienna).
+ */
+export function cacheScheduleFromEnv(env: Readonly<Record<string, string | undefined>>): { schedule: CacheSchedule; timeZone: string } {
+  const timeZone = env[MONITOR_TIME_ZONE_ENV];
+  return {
+    schedule: parseCacheSchedule(env[MONITOR_SCHEDULE_ENV]) ?? parseCacheSchedule(DEFAULT_CACHE_UPDATE_SCHEDULE)!,
+    timeZone: isTimeZone(timeZone) ? timeZone : DEFAULT_IMAGE_TIME_ZONE,
+  };
 }
 
 /**

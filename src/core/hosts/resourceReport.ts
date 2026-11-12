@@ -8,6 +8,7 @@
 // container of the Monitor reports its mode and its last runs (from the records in its volume), and every object
 // reports the facts of Docker (objectDetails.ts); an object that is not of Devspaces reports only those, and Devspaces
 // never reads the content of its volume. Pure; no I/O.
+import type { VscodePlatform } from '../helperChannel/protocol';
 import { HELPER_CACHE_VOLUME, VSCODE_STORE_VOLUME } from '../names';
 import { REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import type { HostObject } from './hostObjects';
@@ -45,6 +46,8 @@ export interface ResourceReportInput {
   detailsProblem?: string;
   /** The outcome of the reader for the volumes of reportVolumes; undefined when the report needs none. */
   volumes?: VolumeReadOutcome;
+  /** The platform of the engine (serverPlatform of its architecture), when it is known: for the rules of the store of VS Code. */
+  platform?: VscodePlatform;
   computer: ReportComputer;
   clock: ReportClock;
 }
@@ -68,6 +71,7 @@ function readingNotices(reading: VolumeReading): string[] {
   const notices: string[] = [];
   if (reading.tooLong) notices.push('The volumes hold too much for one read: their content is left out.');
   if (reading.monitor?.textsDropped === true) notices.push('The records of the Monitor are too large for one read: their texts are left out.');
+  if (reading.monitor?.cut === true) notices.push('The volume devspaces-monitor holds more files than the reader lists: some records are missing.');
   if (reading.stopped) notices.push('The reader reached its limit of time or of entries: some sizes and lists are incomplete.');
   if (reading.unreadable > 0) notices.push(`${countText(reading.unreadable, 'folder')} could not be read: some sizes are incomplete.`);
   return notices;
@@ -83,7 +87,7 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
   if (object.kind === 'container' && object.purpose === 'monitor') {
     own = monitorContainerReport(details?.kind === 'container' ? details : undefined, records, computer, clock);
   } else if (volumes.vscode !== undefined) {
-    if (reading?.vscode !== undefined) own = vscodeStoreReport(reading.vscode, records, clock);
+    if (reading?.vscode !== undefined) own = vscodeStoreReport(reading.vscode, records, clock, input.platform);
   } else if (volumes.monitor !== undefined) {
     if (records !== undefined) own = monitorVolumeReport(records, computer, clock);
   } else if (volumes['worker-cache'] !== undefined) {

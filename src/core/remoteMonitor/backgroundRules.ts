@@ -90,8 +90,8 @@ export function runRetryDue(retryAt: number, now: number): boolean {
 export const FETCH_RETRY_MS = 24 * 60 * 60_000;
 /** The most failed fetches that the state keeps (the newest of each quality and platform). */
 export const MAX_FAILED_FETCHES = 16;
-/** A server version as serverVersionName writes it. */
-const SERVER_VERSION = /^(stable|insider)-(linux-x64|linux-arm64)-[0-9a-f]{40}$/;
+/** A server version as serverVersionName writes it (also the name of its marker of use): its quality, platform and commit. */
+export const SERVER_VERSION_NAME = /^(stable|insider)-(linux-x64|linux-arm64)-([0-9a-f]{40})$/;
 
 /** The stored state; an empty one for anything invalid (a field that is no time is left out). */
 export function parseCacheRunState(text: string): CacheRunState {
@@ -123,7 +123,7 @@ export function parseCacheRunState(text: string): CacheRunState {
   // Only names of server versions with a time, at most MAX_FAILED_FETCHES; else none.
   if (typeof failedFetches === 'object' && failedFetches !== null && !Array.isArray(failedFetches)) {
     const entries = Object.entries(failedFetches as Record<string, unknown>);
-    if (entries.length <= MAX_FAILED_FETCHES && entries.every(([version, at]) => SERVER_VERSION.test(version) && time(at) !== undefined)) {
+    if (entries.length <= MAX_FAILED_FETCHES && entries.every(([version, at]) => SERVER_VERSION_NAME.test(version) && time(at) !== undefined)) {
       state.failedFetches = Object.fromEntries(entries) as Record<string, number>;
     }
   }

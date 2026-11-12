@@ -75,7 +75,7 @@ function facts(body: ReportBody): Record<string, string> {
 
 describe('the report of the store of VS Code', () => {
   it('gives each server version, newest first, with the rule of the cleanup of the Monitor', () => {
-    const report = vscodeStoreReport(store(), records, CLOCK);
+    const report = vscodeStoreReport(store(), records, CLOCK, 'linux-x64');
     const servers = rows(section(report.sections, 'VS Code Server'));
     expect(servers.map((row) => [row[0].text, row[3].text, row[5].text, row[6].chip])).toEqual([
       ['1.141.0', 'aaaaaaa', '1 hour ago', { text: 'kept: newest', tone: 'keep' }],
@@ -89,7 +89,7 @@ describe('the report of the store of VS Code', () => {
   });
 
   it('gives each extension file with the rule of the cleanup of the Monitor', () => {
-    const report = vscodeStoreReport(store(), records, CLOCK);
+    const report = vscodeStoreReport(store(), records, CLOCK, 'linux-x64');
     expect(rows(section(report.sections, 'Extensions')).map((row) => [row[0].text, row[1].text, row[2].text, row[5].chip?.text])).toEqual([
       ['dbaeumer.vscode-eslint', '3.0.16', 'universal', 'kept: the version that the runs chose'],
       ['dbaeumer.vscode-eslint', '3.0.10', 'universal', 'removed at the next cleanup: an older version'],
@@ -106,18 +106,43 @@ describe('the report of the store of VS Code', () => {
     ]);
   });
 
+  it('leaves the server versions of another platform to their engine, and claims no removal it cannot know', () => {
+    const other = store({ servers: [server(A, '1.141.0'), server(B, '1.140.2'), server(C, '1.139.1'), server(E, '1.120.0', { platform: 'linux-arm64' })] });
+    const rule = (report: ReturnType<typeof vscodeStoreReport>, version: string) => rows(section(report.sections, 'VS Code Server')).find((row) => row[0].text === version)?.[6].chip;
+    const report = vscodeStoreReport(other, records, CLOCK, 'linux-x64');
+    expect(rule(report, '1.120.0')).toEqual({ text: 'kept: the Monitor cleans only the versions for linux-x64, the platform of this engine', tone: 'info' });
+    expect(rule(report, '1.139.1')?.tone).toBe('remove');
+    // Without the platform of the engine, or with a list of the store that stopped at a limit: no removal is certain.
+    const noPlatform = vscodeStoreReport(other, records, CLOCK);
+    expect([rule(noPlatform, '1.139.1')?.tone, rule(noPlatform, '1.120.0')?.tone]).toEqual(['warn', 'keep']);
+    expect(noPlatform.notices).toEqual([expect.stringContaining('platform of the engine is not known')]);
+    expect(rule(vscodeStoreReport({ ...other, cut: true }, records, CLOCK, 'linux-x64'), '1.139.1')).toEqual({ text: 'not known: the list of the store is incomplete', tone: 'warn' });
+  });
+
+  it('gives no rule of an extension file while a record that the rules need is not read whole', () => {
+    const textless = monitorRecords({ cut: false, textsDropped: false, files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['golang.go'], defaults: [] }), { path: 'extensions/chosen.json', bytes: 2_000_000, omitted: 'size' }] });
+    const cut = monitorRecords({ cut: true, textsDropped: false, files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['golang.go'], defaults: [] })] });
+    for (const partial of [textless, cut]) {
+      const report = vscodeStoreReport(store(), partial, CLOCK, 'linux-x64');
+      const extensions = rows(section(report.sections, 'Extensions'));
+      expect(extensions.map((row) => row[5].chip?.text)).toEqual([undefined, undefined, undefined, undefined, 'no file of the Monitor: left alone', undefined]);
+      expect(report.summary).toContainEqual({ text: '1 removed at the next cleanup', tone: 'remove' });
+      expect(report.notices).toEqual([expect.stringContaining('the rules of the extension files need could not be read whole')]);
+    }
+  });
+
   it('keeps the files of the extensions that no list names while a list cannot be read, as the Monitor does', () => {
     const unreadable = monitorRecords({
       cut: false,
       textsDropped: false,
       files: [monitorFile(`extensions/wanted/${DEVSPACE}.json`, { at: NOW - DAY, configuration: ['dbaeumer.vscode-eslint'], defaults: [] }), monitorFile(`extensions/wanted/${OTHER_DEVSPACE}.json`, 'no json')],
     });
-    const extensions = rows(section(vscodeStoreReport(store(), unreadable, CLOCK).sections, 'Extensions'));
+    const extensions = rows(section(vscodeStoreReport(store(), unreadable, CLOCK, 'linux-x64').sections, 'Extensions'));
     expect(extensions.find((row) => row[0].text === 'some.unlisted')?.[5].chip?.text).toBe('kept: newest');
   });
 
   it('gives the failed downloads with their next try, and the cleanup', () => {
-    const report = vscodeStoreReport(store(), records, CLOCK);
+    const report = vscodeStoreReport(store(), records, CLOCK, 'linux-x64');
     expect(rows(section(report.sections, 'Downloads that failed')).map((row) => row.map((entry) => entry.text))).toEqual([
       ['VS Code Server eeeeeee (stable, linux-x64)', 'yesterday 03:00', 'with the next run'],
       ['Extension ms-python.python', 'today 07:00', 'with the first run after tomorrow 07:00'],
@@ -131,7 +156,7 @@ describe('the report of the store of VS Code', () => {
   });
 
   it('says what it misses without the records of the Monitor, and when a list is incomplete', () => {
-    const report = vscodeStoreReport(store({ cut: true }), undefined, CLOCK);
+    const report = vscodeStoreReport(store({ cut: true }), undefined, CLOCK, 'linux-x64');
     expect(report.sections.map((entry) => entry.title)).toEqual(['VS Code Server', 'Extensions', 'Cleanup and downloads']);
     expect(rows(section(report.sections, 'Extensions'))[1][5].chip).toBeUndefined();
     expect(report.notices).toEqual([expect.stringContaining('more entries than the reader lists'), expect.stringContaining('devspaces-monitor could not be read')]);
@@ -139,7 +164,7 @@ describe('the report of the store of VS Code', () => {
 
   it('shows at most MAX_EXTENSION_ROWS extension files and counts the others', () => {
     const many = Array.from({ length: MAX_EXTENSION_ROWS + 2 }, (_, index) => ({ folder: 'universal', name: `pub.ext${index}-1.0.0`, bytes: 1 }));
-    const body = section(vscodeStoreReport(store({ extensions: many }), records, CLOCK).sections, 'Extensions');
+    const body = section(vscodeStoreReport(store({ extensions: many }), records, CLOCK, 'linux-x64').sections, 'Extensions');
     expect(rows(body)).toHaveLength(MAX_EXTENSION_ROWS);
     expect(body.kind === 'table' ? body.more : undefined).toBe('2 more files, sorted by extension');
   });
