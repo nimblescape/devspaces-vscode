@@ -113,13 +113,31 @@ export interface RemoteShellOptions {
 /** The command that runs now: its markers, its output so far, and how it ends. */
 interface Running {
   marker: string;
+  /** The output so far: the start of `room`. */
   stdout: Buffer;
+  /** The memory of `stdout`, which doubles when it is full, so that a long output is not copied again at each chunk. */
+  room: Buffer;
   stderr: string;
   exitCode?: number;
   /** Where the marker of the exit code starts in `stdout`, once it came without the end of its line. */
   endAt?: number;
   stderrDone: boolean;
   finish(result: RunResult): void;
+}
+
+/** The smallest memory of the output of a command that has output. */
+const MIN_OUTPUT_ROOM = 64 * 1024;
+
+/** Adds `chunk` to the output of `running` (Running.room: in linear time also for an output of many chunks). */
+function appendOutput(running: Running, chunk: Buffer): void {
+  const length = running.stdout.length + chunk.length;
+  if (length > running.room.length) {
+    const room = Buffer.allocUnsafe(Math.max(length, 2 * running.room.length, MIN_OUTPUT_ROOM));
+    running.stdout.copy(room);
+    running.room = room;
+  }
+  chunk.copy(running.room, running.stdout.length);
+  running.stdout = running.room.subarray(0, length);
 }
 
 /** One shell before the relay. Create it with RemoteShell.open. */
@@ -307,7 +325,8 @@ export class RemoteShell {
         if ('result' in outcome) resolve(outcome.result);
         else reject(outcome.error);
       };
-      const running: Running = { marker, stdout: Buffer.alloc(0), stderr: '', stderrDone: false, finish: (result) => done({ result }) };
+      const room = Buffer.alloc(0);
+      const running: Running = { marker, stdout: room, room, stderr: '', stderrDone: false, finish: (result) => done({ result }) };
       const onAbort = () => {
         done({ error: abortError() });
         this.end();
@@ -410,7 +429,7 @@ export class RemoteShell {
     const end = Buffer.from(`\n${running.marker} `, 'utf8');
     // The marker may start in the output before this chunk, or was found there without the end of its line.
     const from = running.endAt ?? Math.max(0, running.stdout.length - end.length);
-    running.stdout = Buffer.concat([running.stdout, chunk]);
+    appendOutput(running, chunk);
     const at = running.stdout.indexOf(end, from);
     if (at < 0) {
       if (running.stdout.length > MAX_SHELL_COMMAND_OUTPUT + end.length) this.tooMuch(running);

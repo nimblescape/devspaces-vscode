@@ -81,6 +81,7 @@ describe('the reader of the shared volumes on a real engine', () => {
     expect(outcome.image).toBe(image.tag);
     const { reading } = outcome;
     expect(reading.stopped).toBe(false);
+    expect(reading.unreadable).toBe(0);
     expect(reading.monitor?.files.map(({ path, text }) => ({ path, text }))).toEqual([
       { path: 'runs.json', text: '{"runs":[]}' },
       { path: 'heartbeats/a.b.json', text: '{}' },

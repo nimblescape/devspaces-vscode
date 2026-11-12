@@ -13,6 +13,7 @@
 import { randomBytes } from 'crypto';
 import type { BootstrapDocker } from '../docker/bootstrapDocker';
 import { errorMessage } from '../errors';
+import { readableStderr } from '../loader/pipeLoader';
 import { isHelperImageTag, isMonitorImageTag } from '../helper/helperState';
 import { isAbortError } from '../ports';
 import { isRecord } from '../valueChecks';
@@ -27,17 +28,24 @@ export type ReaderVolume = (typeof READER_VOLUMES)[number];
 /** The names of the volumes to mount (only those that exist on the host: a mount would create a missing one). */
 export type ReaderVolumeNames = Partial<Record<ReaderVolume, string>>;
 
-/** The time limit of one run of the reader (its script stops its walks after READER_WALK_MS). */
+/** The time limit of one run of the reader (its script stops visiting entries after READER_TIME_MS). */
 export const READER_TIMEOUT_MS = 2 * 60_000;
-/** The time after which the script stops its walks through the folders (the counts are then marked as incomplete). */
-export const READER_WALK_MS = 20_000;
+/**
+ * The time after which the script visits no more entries (the sizes and lists are then marked as incomplete): short,
+ * because the run waits on the shared shell of the host, where the other calls of the view and the takeover of the shell
+ * by a connection of the relay wait behind it.
+ */
+export const READER_TIME_MS = 10_000;
 /** The most entries that the script visits. */
 export const READER_MAX_ENTRIES = 400_000;
 /** The largest file whose text the script prints. */
 export const READER_MAX_FILE = 1024 * 1024;
 /** The most text of files that the script prints. */
 export const READER_MAX_TEXTS = 6 * 1024 * 1024;
-/** The longest output of the script; a longer one is printed without the texts of the files. */
+/**
+ * The most bytes of the output of the script; a longer one is printed without the texts of the files (the shared shell
+ * takes at most MAX_SHELL_COMMAND_OUTPUT, 16 MiB).
+ */
 export const READER_MAX_OUTPUT = 12 * 1024 * 1024;
 /** The most rows of each list (servers, markers, extension files, files of the Monitor). */
 export const READER_MAX_ROWS = 5000;
@@ -52,35 +60,39 @@ export const READER_PROTOCOL = 1;
  * double quotes and no template literal, so that VOLUME_READER_CODE can join it to one line (a line of the shared shell
  * carries no line break). It reads each folder of READER_VOLUMES under its root that exists, in this order: the Monitor
  * (small, and the most important), the store of VS Code, the cache of the workers:
- * - the Monitor: every file `*.json` at the top, in heartbeats/, extensions/ and extensions/wanted/ with its text, and
+ * - the Monitor: every file `*.json` at the top, in extensions/, heartbeats/ and extensions/wanted/ with its text, and
  *   every file of worker-scripts/ (the texts of its records `*.json` only);
  * - the store of VS Code: each server folder server/QUALITY/PLATFORM/COMMIT with the version of its product.json,
  *   whether `node` and the script of its quality are there and its size; the markers used/VERSION with their time; the
  *   files extensions/FOLDER/NAME; the sizes of tmp/ and extensions/tmp/ and the number of the locks;
  * - the cache of the workers: each entry of its top level with its kind, its time and its size.
- * It never follows a link: lstat, and the texts are opened with O_NOFOLLOW (and O_NONBLOCK, so that a FIFO cannot hold
- * it). A size is the sum of the sizes of the files (as Docker counts the size of a volume); `cut` says that a walk
- * stopped at a limit, so the numbers are at least those. `stopped` says that a limit was reached.
+ * It never follows a link: lstat, a folder is listed only when it is no link, and the texts are opened with O_NOFOLLOW
+ * (and O_NONBLOCK, so that a FIFO cannot hold it). A size is the sum of the sizes of the files (as Docker counts the size
+ * of a volume); `cut` says that a walk stopped at a limit or found a folder that it could not list, so the numbers are
+ * at least those. Each entry that it visits counts against READER_MAX_ENTRIES and READER_TIME_MS; `stopped` says that
+ * one of them was reached. `unreadable` counts the folders that could not be listed.
  */
 export const VOLUME_READER_SCRIPT = String.raw`
 "use strict";
 const fs = require("fs");
 const path = require("path");
 const root = process.argv[1];
-const LIMITS = { entries: ${READER_MAX_ENTRIES}, ms: ${READER_WALK_MS}, file: ${READER_MAX_FILE}, texts: ${READER_MAX_TEXTS}, output: ${READER_MAX_OUTPUT}, rows: ${READER_MAX_ROWS}, top: ${READER_MAX_TOP} };
+const LIMITS = { entries: ${READER_MAX_ENTRIES}, ms: ${READER_TIME_MS}, file: ${READER_MAX_FILE}, texts: ${READER_MAX_TEXTS}, output: ${READER_MAX_OUTPUT}, rows: ${READER_MAX_ROWS}, top: ${READER_MAX_TOP} };
 const started = Date.now();
 let entries = 0;
 let texts = 0;
+let unreadable = 0;
 let stopped = false;
 function lstat(file) { try { return fs.lstatSync(file); } catch { return undefined; } }
 // The names in a folder, sorted; none when it is no folder (also a link to one: no walk follows a link).
-function list(dir) { const stat = lstat(dir); if (stat === undefined || !stat.isDirectory()) { return []; } try { return fs.readdirSync(dir).sort(); } catch { return []; } }
+function list(dir) { const stat = lstat(dir); if (stat === undefined || !stat.isDirectory()) { return []; } try { return fs.readdirSync(dir).sort(); } catch { unreadable++; return []; } }
 function isFolder(file) { const stat = lstat(file); return stat !== undefined && stat.isDirectory(); }
 function isFile(file) { const stat = lstat(file); return stat !== undefined && stat.isFile(); }
-// One more entry of a walk; false once a limit is reached (the time is read every 1000 entries).
-function spend() { entries++; if (entries > LIMITS.entries || (entries % 1000 === 0 && Date.now() - started > LIMITS.ms)) { stopped = true; } return !stopped; }
+// One more entry; false once a limit is reached (the time is read every 1000 entries).
+function spend() { if (stopped) { return false; } entries++; if (entries > LIMITS.entries || (entries % 1000 === 0 && Date.now() - started > LIMITS.ms)) { stopped = true; } return !stopped; }
 function usage(dir) {
   const result = { bytes: 0, files: 0, cut: false };
+  const before = unreadable;
   const stack = [dir];
   while (stack.length > 0) {
     const current = stack.pop();
@@ -92,6 +104,7 @@ function usage(dir) {
       if (stat.isDirectory()) { stack.push(file); } else { result.bytes += stat.size; result.files++; }
     }
   }
+  if (unreadable > before) { result.cut = true; }
   return result;
 }
 // The text of a regular file of at most LIMITS.file bytes; counted against LIMITS.texts when "counted".
@@ -112,7 +125,7 @@ function monitor(dir) {
   const files = [];
   let cut = false;
   function add(relative, read) {
-    if (files.length >= LIMITS.rows) { cut = true; return; }
+    if (files.length >= LIMITS.rows || !spend()) { cut = true; return; }
     const stat = lstat(path.join(dir, relative));
     if (stat === undefined || !stat.isFile()) { return; }
     const entry = { path: relative, bytes: stat.size, modifiedAt: stat.mtimeMs };
@@ -131,7 +144,7 @@ function vscode(dir) {
   for (const quality of list(serverRoot)) {
     for (const platform of list(path.join(serverRoot, quality))) {
       for (const commit of list(path.join(serverRoot, quality, platform))) {
-        if (servers.length >= LIMITS.rows) { cut = true; break; }
+        if (servers.length >= LIMITS.rows || !spend()) { cut = true; break; }
         const folder = path.join(serverRoot, quality, platform, commit);
         const stat = lstat(folder);
         if (stat === undefined || !stat.isDirectory()) { continue; }
@@ -144,14 +157,14 @@ function vscode(dir) {
   }
   const used = [];
   for (const name of list(path.join(dir, "used"))) {
-    if (used.length >= LIMITS.rows) { cut = true; break; }
+    if (used.length >= LIMITS.rows || !spend()) { cut = true; break; }
     const stat = lstat(path.join(dir, "used", name));
     if (stat !== undefined && stat.isFile()) { used.push({ name, at: stat.mtimeMs }); }
   }
   const extensions = [];
   for (const folder of ["universal", "linux-x64", "linux-arm64"]) {
     for (const name of list(path.join(dir, "extensions", folder))) {
-      if (extensions.length >= LIMITS.rows) { cut = true; break; }
+      if (extensions.length >= LIMITS.rows || !spend()) { cut = true; break; }
       const stat = lstat(path.join(dir, "extensions", folder, name));
       if (stat !== undefined && stat.isFile()) { extensions.push({ folder, name, bytes: stat.size, modifiedAt: stat.mtimeMs }); }
     }
@@ -161,22 +174,27 @@ function vscode(dir) {
 function cache(dir) {
   const names = list(dir);
   const entries = [];
-  for (const name of names.slice(0, LIMITS.top)) {
+  let more = Math.max(0, names.length - LIMITS.top);
+  for (let i = 0; i < Math.min(names.length, LIMITS.top); i++) {
+    if (!spend()) { more = names.length - i; break; }
+    const name = names[i];
     const file = path.join(dir, name);
     const stat = lstat(file);
     if (stat === undefined) { continue; }
     const kind = stat.isDirectory() ? "folder" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "link" : "other";
     entries.push({ name, kind, modifiedAt: stat.mtimeMs, usage: kind === "folder" ? usage(file) : { bytes: stat.size, files: 1, cut: false } });
   }
-  return { entries, more: Math.max(0, names.length - LIMITS.top) };
+  return { entries, more };
 }
 const out = { reader: ${READER_PROTOCOL} };
 if (isFolder(path.join(root, "monitor"))) { out.monitor = monitor(path.join(root, "monitor")); }
 if (isFolder(path.join(root, "vscode"))) { out.vscode = vscode(path.join(root, "vscode")); }
 if (isFolder(path.join(root, "worker-cache"))) { out.workerCache = cache(path.join(root, "worker-cache")); }
 out.stopped = stopped;
+out.unreadable = unreadable;
 let json = JSON.stringify(out);
-if (json.length > LIMITS.output && out.monitor !== undefined) { for (const file of out.monitor.files) { delete file.text; } out.monitor.textsDropped = true; json = JSON.stringify(out); }
+if (Buffer.byteLength(json) > LIMITS.output && out.monitor !== undefined) { for (const file of out.monitor.files) { delete file.text; } out.monitor.textsDropped = true; json = JSON.stringify(out); }
+if (Buffer.byteLength(json) > LIMITS.output) { json = JSON.stringify({ reader: out.reader, stopped: true, unreadable, tooLong: true }); }
 process.stdout.write(json);
 `;
 
@@ -241,6 +259,9 @@ export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name
   ];
 }
 
+/** The value of a `--mount` of volumeReaderArgs: the volume, and its folder under READER_ROOT. */
+const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${READER_ROOT.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&')}/([a-z-]+),readonly$`);
+
 /**
  * Whether `args` are a call of volumeReaderArgs, exactly: the shared shell of a host runs it (isSharedShellCall), as
  * the other calls of the view Docker Hosts, because it needs nothing of this computer (no file, no input).
@@ -252,7 +273,7 @@ export function isVolumeReaderCall(args: readonly string[]): boolean {
   const volumes: ReaderVolumeNames = {};
   for (let i = 0; i < args.length - 1; i++) {
     if (args[i] !== '--mount') continue;
-    const match = /^type=volume,source=([^,]*),target=\/devspaces\/([a-z-]+),readonly$/.exec(args[i + 1]);
+    const match = MOUNT_ARGUMENT.exec(args[i + 1]);
     const volume = READER_VOLUMES.find((candidate) => candidate === match?.[2]);
     if (match === null || volume === undefined || volumes[volume] !== undefined) return false;
     volumes[volume] = match[1];
@@ -350,8 +371,12 @@ export interface VolumeReading {
   monitor?: MonitorStateReading;
   vscode?: VscodeStoreReading;
   workerCache?: WorkerCacheReading;
-  /** A limit of the walks was reached: some sizes are incomplete. */
+  /** A limit of the entries or of the time was reached: some sizes and lists are incomplete. */
   stopped: boolean;
+  /** The number of the folders that could not be listed. */
+  unreadable: number;
+  /** The output would have been too long even without the texts: it holds nothing of the volumes. */
+  tooLong: boolean;
 }
 
 /** The longest name or path that the parse keeps. */
@@ -476,18 +501,33 @@ export function parseVolumeReading(text: string): VolumeReading | undefined {
   const monitor = parseMonitor(value.monitor);
   const vscode = parseVscode(value.vscode);
   const workerCache = parseWorkerCache(value.workerCache);
-  return { ...(monitor !== undefined ? { monitor } : {}), ...(vscode !== undefined ? { vscode } : {}), ...(workerCache !== undefined ? { workerCache } : {}), stopped: value.stopped === true };
+  return {
+    ...(monitor !== undefined ? { monitor } : {}),
+    ...(vscode !== undefined ? { vscode } : {}),
+    ...(workerCache !== undefined ? { workerCache } : {}),
+    stopped: value.stopped === true,
+    unreadable: countOf(value.unreadable) ?? 0,
+    tooLong: value.tooLong === true,
+  };
 }
 
 /**
  * The images that may run the reader on a host, best first: `current` (the helper tag of this version of Devspaces)
  * when the host has it, then the other tags of helper images and of images of the Monitor there (each an image of the
- * Dockerfile of the helper, so with Node.js), at most 3 in all. `tags` are the tags of the images of the host.
+ * Dockerfile of the helper, so with Node.js), one tag of each image (the tags of one hash), at most 3 in all. `tags` are
+ * the tags of the images of the host.
  */
 export function readerImages(tags: readonly string[], current: string | undefined): string[] {
   const usable = tags.filter((tag) => isHelperImageTag(tag) || isMonitorImageTag(tag));
   const ordered = current !== undefined && usable.includes(current) ? [current, ...usable.filter((tag) => tag !== current)] : usable;
-  return [...new Set(ordered)].slice(0, 3);
+  // The tags of one hash name one image (the Monitor runs from the helper image under a tag of its own).
+  const hashes = new Set<string>();
+  return ordered.filter((tag) => {
+    const hash = tag.slice(tag.indexOf(':') + 1);
+    if (hashes.has(hash)) return false;
+    hashes.add(hash);
+    return true;
+  }).slice(0, 3);
 }
 
 /** The outcome of readSharedVolumes. */
@@ -512,6 +552,9 @@ export interface VolumeReadInput {
 /** The end of an error output that a failure keeps. */
 const DETAIL_LENGTH = 2000;
 
+/** The failure of a Docker CLI before 20.10 on the host, which has no `--pull` (the reader never pulls). */
+export const OLD_CLI_DETAIL = 'The Docker CLI on the host is older than 20.10: it has no option --pull, which the reader needs so that it never pulls an image.';
+
 /**
  * One read of the shared volumes on the host of the current operation (within an operation on that host, as the other
  * calls of the view Docker Hosts): the reader with the first image of `images` that the host has. An image that went
@@ -529,7 +572,8 @@ export async function readSharedVolumes(docker: Pick<BootstrapDocker, 'run'>, in
       return reading !== undefined ? { kind: 'read', reading, image } : { kind: 'failed', detail: 'The output of the reader could not be read.' };
     }
     if (/no such image/i.test(result.stderr)) continue;
-    const detail = result.stderr.trim().slice(-DETAIL_LENGTH);
+    if (/unknown flag: --pull/.test(result.stderr)) return { kind: 'failed', detail: OLD_CLI_DETAIL };
+    const detail = readableStderr(result.stderr.slice(-DETAIL_LENGTH), DETAIL_LENGTH);
     return { kind: 'failed', detail: detail !== '' ? detail : `The reader ended with exit code ${String(result.exitCode)}.` };
   }
   return { kind: 'noImage' };

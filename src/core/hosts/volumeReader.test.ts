@@ -14,8 +14,10 @@ import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunOptions, RunResult } from '../ports';
 import {
+  OLD_CLI_DETAIL,
   READER_MAX_FILE,
   READER_ROOT,
+  VOLUME_READER_SCRIPT,
   VOLUME_READER_CODE,
   isVolumeReaderCall,
   newReaderName,
@@ -156,7 +158,7 @@ describe('the script of the reader', () => {
   });
 
   it('gives only the volumes that are mounted', () => {
-    expect(runReader()).toEqual({ stopped: false });
+    expect(runReader()).toEqual({ stopped: false, unreadable: 0, tooLong: false });
     write('monitor/runs.json', '{}');
     const reading = runReader();
     expect(reading.monitor?.files.map((file) => file.path)).toEqual(['runs.json']);
@@ -191,6 +193,52 @@ describe('the script of the reader', () => {
     }
   });
 
+  it.skipIf(process.getuid?.() === 0)('marks a size as incomplete and counts the folder that it could not list', () => {
+    write('vscode/tmp/open/file', 'x'.repeat(10));
+    write('vscode/tmp/closed/file', 'x'.repeat(10));
+    fs.chmodSync(path.join(root, 'vscode', 'tmp', 'closed'), 0o000);
+    try {
+      const reading = runReader();
+      expect(reading.unreadable).toBe(1);
+      expect(reading.vscode?.temporary).toEqual({ bytes: 10, files: 1, cut: true });
+      expect(reading.vscode?.extensionTemporary.cut).toBe(false);
+    } finally {
+      fs.chmodSync(path.join(root, 'vscode', 'tmp', 'closed'), 0o755);
+    }
+  });
+
+  it('stops at its limit of entries: the sizes and lists are then incomplete', () => {
+    for (let i = 0; i < 30; i++) write(`vscode/extensions/universal/a.b${i}-1.0.0`, 'x');
+    write('worker-cache/one/file', 'x');
+    const code = VOLUME_READER_CODE.replace(/entries: \d+,/, 'entries: 10,');
+    expect(code).not.toBe(VOLUME_READER_CODE);
+    const reading = parseVolumeReading(execFileSync(process.execPath, ['-e', code, root], { encoding: 'utf8' }));
+    expect(reading?.stopped).toBe(true);
+    expect(reading?.vscode?.cut).toBe(true);
+    expect(reading?.vscode?.extensions.length).toBeLessThan(30);
+    expect(reading?.workerCache).toEqual({ entries: [], more: 1 });
+  });
+
+  it('leaves out the texts when the output would be longer than its limit in bytes, also with characters of several bytes', () => {
+    // 340,000 characters of 3 bytes: about 1 MB of output, over a limit of 1,000,000 bytes that a count of the
+    // characters would not reach.
+    write('monitor/runs.json', '€'.repeat(340_000));
+    write('monitor/cleanup.json', '{}');
+    const code = VOLUME_READER_CODE.replace(/output: \d+,/, 'output: 1000000,');
+    const output = execFileSync(process.execPath, ['-e', code, root], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+    expect(Buffer.byteLength(output)).toBeLessThanOrEqual(1_000_000);
+    const reading = parseVolumeReading(output);
+    expect(reading?.monitor?.textsDropped).toBe(true);
+    expect(reading?.monitor?.files.map((file) => [file.path, file.text])).toEqual([
+      ['cleanup.json', undefined],
+      ['runs.json', undefined],
+    ]);
+  });
+
+  it('keeps its limits in the code that it sends', () => {
+    expect(VOLUME_READER_SCRIPT).toContain(`file: ${READER_MAX_FILE},`);
+  });
+
   it('prints no text of a file larger than its limit, but names the file with its size', () => {
     write('monitor/registry-digests.json', 'x'.repeat(READER_MAX_FILE + 1));
     write('monitor/runs.json', '{}');
@@ -205,7 +253,7 @@ describe('the output of the reader', () => {
     expect(parseVolumeReading('')).toBeUndefined();
     expect(parseVolumeReading('[]')).toBeUndefined();
     expect(parseVolumeReading('{"reader":2}')).toBeUndefined();
-    expect(parseVolumeReading('{"reader":1}')).toEqual({ stopped: false });
+    expect(parseVolumeReading('{"reader":1}')).toEqual({ stopped: false, unreadable: 0, tooLong: false });
   });
 
   it('leaves out each entry that does not fit, and marks a size that it cannot trust as incomplete', () => {
@@ -213,6 +261,7 @@ describe('the output of the reader', () => {
       JSON.stringify({
         reader: 1,
         stopped: true,
+        unreadable: 2,
         monitor: {
           files: [
             { path: 'runs.json', bytes: 2, modifiedAt: 5, text: '{}' },
@@ -235,6 +284,8 @@ describe('the output of the reader', () => {
     );
     expect(reading).toEqual({
       stopped: true,
+      unreadable: 2,
+      tooLong: false,
       monitor: { files: [{ path: 'runs.json', bytes: 2, modifiedAt: 5, text: '{}' }], cut: true, textsDropped: false },
       vscode: {
         servers: [{ quality: 'stable', platform: 'linux-x64', commit: COMMIT, node: false, script: true, usage: { bytes: 0, files: 1, cut: true } }],
@@ -314,10 +365,11 @@ describe('the call of the reader', () => {
 });
 
 describe('the images of the reader', () => {
-  it('takes the helper tag of this version first, then other helper and Monitor images of the host, at most 3', () => {
-    const tags = ['nginx:1.27', 'devspaces-worker:111111111111', 'devspaces-monitor:0123456789ab', HELPER, 'devspaces-worker:222222222222'];
-    expect(readerImages(tags, HELPER)).toEqual([HELPER, 'devspaces-worker:111111111111', 'devspaces-monitor:0123456789ab']);
-    expect(readerImages(tags, 'devspaces-worker:999999999999')).toEqual(['devspaces-worker:111111111111', 'devspaces-monitor:0123456789ab', HELPER]);
+  it('takes the helper tag of this version first, then other helper and Monitor images of the host, one tag per image, at most 3', () => {
+    const tags = ['nginx:1.27', 'devspaces-worker:111111111111', 'devspaces-monitor:0123456789ab', HELPER, 'devspaces-monitor:333333333333', 'devspaces-worker:222222222222'];
+    // devspaces-monitor:0123456789ab is the image of HELPER under the tag of the Monitor.
+    expect(readerImages(tags, HELPER)).toEqual([HELPER, 'devspaces-worker:111111111111', 'devspaces-monitor:333333333333']);
+    expect(readerImages(tags, 'devspaces-worker:999999999999')).toEqual(['devspaces-worker:111111111111', 'devspaces-monitor:0123456789ab', 'devspaces-monitor:333333333333']);
     expect(readerImages(['nginx:1.27'], HELPER)).toEqual([]);
   });
 });
@@ -343,7 +395,7 @@ describe('a read of the shared volumes', () => {
 
   it('reads with the first image, through the call that the shared shell carries', async () => {
     const docker = fakeDocker([result({ stdout: output })]);
-    expect(await readSharedVolumes(docker, input)).toEqual({ kind: 'read', image: HELPER, reading: { stopped: false, monitor: { files: [{ path: 'runs.json', bytes: 2, text: '{}' }], cut: false, textsDropped: false } } });
+    expect(await readSharedVolumes(docker, input)).toEqual({ kind: 'read', image: HELPER, reading: { stopped: false, unreadable: 0, tooLong: false, monitor: { files: [{ path: 'runs.json', bytes: 2, text: '{}' }], cut: false, textsDropped: false } } });
     expect(docker.calls).toHaveLength(1);
     expect(isVolumeReaderCall(docker.calls[0].args)).toBe(true);
     expect(docker.calls[0].options?.timeoutMs).toBeGreaterThan(0);
@@ -364,7 +416,11 @@ describe('a read of the shared volumes', () => {
   });
 
   it('says why it failed: the error of Docker, the exit code, the time limit, or an output that it cannot read', async () => {
-    expect(await readSharedVolumes(fakeDocker([result({ exitCode: 125, stderr: 'unknown flag: --pull\n' })]), input)).toEqual({ kind: 'failed', detail: 'unknown flag: --pull' });
+    expect(await readSharedVolumes(fakeDocker([result({ exitCode: 125, stderr: 'unknown flag: --pull\nSee docker run --help.\n' })]), input)).toEqual({ kind: 'failed', detail: OLD_CLI_DETAIL });
+    expect(await readSharedVolumes(fakeDocker([result({ exitCode: 125, stderr: 'docker: Error response from daemon: invalid mount config.\n' })]), input)).toEqual({
+      kind: 'failed',
+      detail: 'docker: Error response from daemon: invalid mount config.',
+    });
     expect(await readSharedVolumes(fakeDocker([result({ exitCode: 1 })]), input)).toEqual({ kind: 'failed', detail: 'The reader ended with exit code 1.' });
     expect(await readSharedVolumes(fakeDocker([result({ exitCode: null, timedOut: true })]), input)).toMatchObject({ kind: 'failed', detail: expect.stringContaining('did not end') });
     expect(await readSharedVolumes(fakeDocker([result({ stdout: 'garbage' })]), input)).toEqual({ kind: 'failed', detail: 'The output of the reader could not be read.' });

@@ -89,6 +89,16 @@ describeUnix('RemoteShell', () => {
     shell.close();
   });
 
+  it('reads a long output whole and exactly, and the output of the next command alone', async () => {
+    const shell = await RemoteShell.open(login(), { logger: silentLogger, name: 'box' });
+    const long = await shell.run(`head -c 3000000 /dev/zero | tr '\\0' x; printf 'end'`);
+    expect(long.exitCode).toBe(0);
+    expect(long.stdout).toHaveLength(3_000_003);
+    expect(long.stdout).toBe(`${'x'.repeat(3_000_000)}end`);
+    await expect(shell.run(`printf 'short'`)).resolves.toEqual({ exitCode: 0, stdout: 'short', stderr: '', timedOut: false });
+    shell.close();
+  });
+
   it('stops the shell after the time limit of a command, and takes no command after it', async () => {
     const shell = await RemoteShell.open(login(), { logger: silentLogger, name: 'box' });
     await expect(shell.run(`printf 'started\\n'; sleep 30`, { timeoutMs: 300 })).resolves.toEqual({ exitCode: null, stdout: 'started\n', stderr: '', timedOut: true });
