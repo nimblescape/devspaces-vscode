@@ -30,7 +30,7 @@ import { readHelperState } from './helperState';
 import type { HelperCheck } from '../remoteMonitor/helperCheck';
 
 /** The part of BootstrapDocker that the helper image uses. */
-export type HelperImageDocker = Pick<BootstrapDocker, 'imageExists' | 'imageId' | 'buildImage' | 'listImagesByLabel' | 'removeImage'>;
+export type HelperImageDocker = Pick<BootstrapDocker, 'imageExists' | 'imageId' | 'buildImage'>;
 
 /** The deps of HelperImages. */
 export interface HelperImagesDeps {
@@ -67,7 +67,7 @@ export interface HelperImagesDeps {
   onImageBuilt?: (kind: HelperBuildKind) => void;
   /**
    * Whether the maintenance of the maintaining ensure may change the engine of the operation now (the rebuild that a
-   * check asked for, the cleanup; EnsureHelperImageOptions.mayChangeEngine). Default: always.
+   * check asked for; EnsureHelperImageOptions.mayChangeEngine). Default: always.
    */
   mayChangeEngine?: () => boolean;
 }
@@ -121,8 +121,8 @@ export interface HelperMaintenance {
 
 /**
  * The maintaining ensure (ensureImageUse, prebuildImage) reuses its result for this long. After that, it runs
- * ensureHelperImageUse again, so that a window that stays open for days still checks the base image and cleans up when that
- * is due (at the next preparation of a worker for an open in that window).
+ * ensureHelperImageUse again, so that a window that stays open for days still checks the base image when that is due (at
+ * the next preparation of a worker for an open in that window).
  */
 export const HELPER_IMAGE_RECHECK_MS = 60 * 60 * 1000;
 
@@ -188,7 +188,7 @@ export class HelperImages {
   /**
    * ensureHelperImageUse, shared by concurrent callers (cached promise; retried after a failure). With `statePath`, it
    * also does the maintenance that is due: a rebuild that a check asked for, the check of the base image (in the
-   * background), the cleanup of old helper images. The preparation of the worker for an operation `open` calls it
+   * background). It removes no image: the cleanup of the Monitor does that (docs/requirements.md R-DS-007). The preparation of the worker for an operation `open` calls it
    * (heartbeatHelperImage, with HelperMaintenance), before the worker of the open starts, and the background prebuild
    * (as prebuildImage). A result older than HELPER_IMAGE_RECHECK_MS, or one of a call without the maintenance, is not
    * reused. A failed build throws UserFacingError('helperFailed', Messages.helperFailed, detail); AbortError and other
@@ -203,10 +203,10 @@ export class HelperImages {
   /**
    * The helper image for the worker of an operation or a heartbeat (HelperChannelsOptions.prepare), on the engine of
    * the operation, local or remote alike. It only builds a missing tag: no check of the base image, no rebuild of an
-   * existing tag, no cleanup, so nothing long runs before the lock. A cached result whose image is gone (a prune, or
+   * existing tag, so nothing long runs before the lock. A cached result whose image is gone (a prune, or
    * another window moved the tag) is not trusted: the cache is reset and the tag ensured again. It does not join a
-   * pending maintaining ensure (a `--pull --no-cache` rebuild, the cleanup: that of the preparation of the worker for
-   * an open, or of the background prebuild), which the caller could not cancel: when the tag exists, its image is used
+   * pending maintaining ensure (a `--pull --no-cache` rebuild: that of the preparation of the worker for an open, or of
+   * the background prebuild), which the caller could not cancel: when the tag exists, its image is used
    * at once (the worker started from it keeps it; a rebuild that moves the tag later cannot remove an image that a
    * container uses). Only a missing tag, or a tag that cannot be checked, joins it. Throws like ensureImageUse.
    * `onBuild` is called when the call starts or joins a build (a failure before it, such as an engine that does not
@@ -286,7 +286,7 @@ export class HelperImages {
    * The background prebuild (no previous helper image; HelperPrebuild): makes sure that the helper tag exists on the
    * engine of the operation, and builds it when it is missing. With the maintenance of ensureImageUse
    * (`checkBaseImage`: the setting updateImagesOnConnect): the rebuild that a check asked for (so the next open does
-   * not wait for it), the weekly check of the base image, the daily cleanup, when they are due. It shares the cached
+   * not wait for it), the weekly check of the base image, when they are due. It shares the cached
    * promise of this instance with the preparation of a worker (ensureImagePresent; ensureImageUse before an open), so a
    * preparation that needs the missing tag meanwhile waits for this build instead of building a second time (one before
    * an open also for the rebuild, with its progress); when `signal` aborts, the build is cancelled, and a preparation
@@ -302,7 +302,7 @@ export class HelperImages {
    * Whether the refresh of the current tag is due on the engine of the operation, by its state file alone
    * (helperRefreshDue: no Docker call): with `checkBaseImage` (the setting updateImagesOnConnect), the rebuild that a
    * check asked for, or the weekly check of the base image (with a lookup of its digest; a week also after an attempt
-   * that the registry did not answer). Never for the daily cleanup alone.
+   * that the registry did not answer).
    * `false` without a state file. The background prebuild asks Docker only then, or when the state file has no record
    * of the current tag.
    */
@@ -323,7 +323,7 @@ export class HelperImages {
    * maintenance; a result older than HELPER_IMAGE_RECHECK_MS, or one without the maintenance, is not reused. The other
    * calls (`recheck` false: ensureImagePresent, runImage) reuse any result and only record the use (at most once per
    * hour); without a result (a new window), they run ensureHelperImageUse without the maintenance, which only builds a
-   * missing tag. So no check of the base image, no rebuild, and no cleanup delays another operation or a heartbeat.
+   * missing tag. So no check of the base image and no rebuild delays another operation or a heartbeat.
    */
   private async image(options: EnsureImageOptions, recheck: boolean): Promise<HelperImageUse> {
     const engine = await this.currentEngine();

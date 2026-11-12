@@ -121,6 +121,18 @@ describe('the ensure of the Monitor in the worker', () => {
     expect(idle.specs[0].env).not.toHaveProperty('DEVSPACE_MONITOR_PERMANENT');
   });
 
+  // On the VM of Devspaces (MonitorSettings.vm), the Monitor gets DEVSPACE_MONITOR_VM, so that its cleanup prunes the
+  // build cache (docs/requirements.md R-DS-007); the label has no part for it.
+  it('a monitor on the VM of Devspaces gets the variable of the VM; elsewhere it has none', async () => {
+    const { engine, specs } = engineWith({});
+    await monitorEnsureOperation(() => engine, async () => OWN, () => SCRIPT)({ images: { ...IMAGES, permanent: false, vm: true } }, contextOf().context);
+    expect(specs[0].env.DEVSPACE_MONITOR_VM).toBe('1');
+    expect(specs[0].labels[LABEL_MONITOR]).toBe(remoteMonitorLabelValue(SCRIPT, OWN.image.tag, []));
+    const other = engineWith({});
+    await monitorEnsureOperation(() => other.engine, async () => OWN, () => SCRIPT)({ images: { ...IMAGES, permanent: false } }, contextOf().context);
+    expect(other.specs[0].env).not.toHaveProperty('DEVSPACE_MONITOR_VM');
+  });
+
   // The computer of the settings owns a permanent monitor that it creates.
   it('a permanent monitor names the computer of the settings as its owner; one that ends when idle has none', async () => {
     const computer = 'c'.repeat(32);

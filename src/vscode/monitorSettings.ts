@@ -6,10 +6,11 @@
 // the repair of the heartbeats and "Update All Images Now" (by the Docker target): the schedule of its background run
 // (cacheUpdateSchedule), the time zone of this computer, and its mode (R-DS-003, monitorRunsPermanently): permanent on
 // a remote host unless stopMonitorWhenIdle is on; on the WSL distribution or VM of Devspaces and on the Docker of the
-// computer it always ends when idle. A permanent one names this computer as its owner (its computer ID). No image
-// patterns. Pure apart from the getters it is given; no `vscode`.
+// computer it always ends when idle. A permanent one names this computer as its owner (its computer ID). On the VM of
+// Devspaces, the settings say so, and the Monitor prunes the build cache in its cleanup. No image patterns. Pure apart
+// from the getters it is given; no `vscode`.
 import type { DockerTarget } from '../core/docker/dockerHost';
-import { hostAccessOf } from '../core/docker/dockerHost';
+import { hostAccessOf, isVmHost } from '../core/docker/dockerHost';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, monitorRunsPermanently } from '../core/remoteMonitor/cacheSettings';
 import type { MonitorSettings } from '../core/remoteMonitor/protocol';
 import type { ExtensionSettings } from '../core/types';
@@ -35,6 +36,8 @@ export function monitorSettingsFor(deps: MonitorSettingsDeps, host: string): Mon
     // This computer: the owner of a permanent monitor that it creates (LABEL_MONITOR_OWNER), and how an ensure tells
     // its own permanent monitor from one that another computer keeps.
     ...computerOf(deps),
+    // The VM of Devspaces: the cleanup of the monitor prunes the build cache too (R-DS-007).
+    ...(isVmHost(host) ? { vm: true } : {}),
   };
 }
 

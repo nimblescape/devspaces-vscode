@@ -2,7 +2,7 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The identity and the prune of the port over the Engine API (engineClient.ts) in detail.
+// The identity and the prunes of the port over the Engine API (engineClient.ts) in detail.
 import * as os from 'os';
 import * as path from 'path';
 import { describe, expect, it } from 'vitest';
@@ -31,5 +31,39 @@ describe('identity and pruneContainers in detail', () => {
       const engine = fake({ status, body: JSON.stringify({ ContainersDeleted: ['a'.repeat(64)] }), truncated: false });
       await expect(engine.pruneContainers(SWEEP_FILTERS), String(status)).rejects.toMatchObject({ name: 'EngineError', status });
     }
+  });
+});
+
+describe('pruneBuildCache', () => {
+  /** A fake API that records the requests and answers `answer`. */
+  function recording(answer: EngineAnswer) {
+    const requests: Array<{ method: string; path: string }> = [];
+    const api: EngineApi = async (request) => {
+      requests.push({ method: request.method, path: request.path });
+      return answer;
+    };
+    return { requests, engine: dockerEngine(api, engineHijack(path.join(os.tmpdir(), 'devspaces-no-socket'))) };
+  }
+
+  it('posts /build/prune with all=1 and the filters, and answers the count of the removed records and the bytes', async () => {
+    const { requests, engine } = recording({ status: 200, body: JSON.stringify({ CachesDeleted: ['a', 'b'], SpaceReclaimed: 1234 }), truncated: false });
+    expect(await engine.pruneBuildCache({ until: ['168h'] })).toEqual({ records: 2, bytes: 1234 });
+    expect(requests).toEqual([{ method: 'POST', path: `/build/prune?all=1&filters=${encodeURIComponent(JSON.stringify({ until: ['168h'] }))}` }]);
+  });
+
+  it('CachesDeleted is null when nothing was removed', async () => {
+    const { engine } = recording({ status: 200, body: JSON.stringify({ CachesDeleted: null, SpaceReclaimed: 0 }), truncated: false });
+    expect(await engine.pruneBuildCache({ until: ['168h'] })).toEqual({ records: 0, bytes: 0 });
+  });
+
+  it('refuses an invalid answer, a truncated one and a status other than 200', async () => {
+    for (const body of ['not json', '[]', 'null', JSON.stringify({ CachesDeleted: 'a' }), JSON.stringify({ SpaceReclaimed: -1 }), JSON.stringify({ SpaceReclaimed: '1' })]) {
+      const { engine } = recording({ status: 200, body, truncated: false });
+      await expect(engine.pruneBuildCache({}), body).rejects.toThrow(new EngineError('The engine answered the prune of the build cache with an invalid value.', 200));
+    }
+    const truncated = recording({ status: 200, body: '{"CachesDeleted":[', truncated: true });
+    await expect(truncated.engine.pruneBuildCache({})).rejects.toThrow(new EngineError('The engine answered the prune of the build cache with more than can be read.', 200));
+    const failed = recording({ status: 500, body: JSON.stringify({ message: 'no builder' }), truncated: false });
+    await expect(failed.engine.pruneBuildCache({})).rejects.toMatchObject({ name: 'EngineError', status: 500 });
   });
 });

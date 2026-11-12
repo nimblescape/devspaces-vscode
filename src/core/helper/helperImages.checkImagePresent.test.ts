@@ -30,8 +30,6 @@ describe('HelperImages.checkImagePresent', () => {
         return ID;
       },
       buildImage: async () => ID,
-      listImagesByLabel: async () => [],
-      removeImage: async () => false,
     };
     const helper = new HelperImages({ docker, logger: silentLogger, dockerfilePath: path.join(dir, 'Dockerfile') });
     expect(helperImageTag(DOCKERFILE)).toBeTruthy();

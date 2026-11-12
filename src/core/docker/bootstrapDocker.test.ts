@@ -919,7 +919,6 @@ describe('BootstrapDocker: every call runs directly', () => {
       'pullBaseImages',
       'removePulledName',
       'buildxImage',
-      'removeOlderBuildxImages',
       'removeBuildContainer',
       'run',
     ]);

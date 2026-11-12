@@ -212,6 +212,32 @@ describe('the background run of the Monitor', () => {
     expect(h.log).toContain('The Monitor mounts no shared VS Code server store; the background run leaves the VS Code server out.');
   });
 
+  // The cleanup of the engine (docs/requirements.md R-DS-007) runs right after the helper image, before the VS Code
+  // server; a failure there stops no other part.
+  it('runs the cleanup of the engine after the helper image, and its failure stops no other part', async () => {
+    const order: string[] = [];
+    const log: string[] = [];
+    const run = new BackgroundRun({
+      log: (message) => log.push(message),
+      now: () => NOW,
+      images: async () => void order.push('images'),
+      helperImage: async () => {
+        order.push('helper image');
+        return 'reached';
+      },
+      cleanup: async () => {
+        order.push('cleanup');
+        throw new Error('the engine broke');
+      },
+      vscode: () => void order.push('vscode'),
+      state: { read: async () => ({}), update: async () => {} },
+    });
+    await run.run();
+    expect(order).toEqual(['images', 'helper image', 'cleanup', 'vscode']);
+    expect(log).toContain('The background run could not do the cleanup of the engine: the engine broke');
+    expect(log.at(-1)).toBe('The background run ended.');
+  });
+
   // The HTTPS of the VS Code part reads the proxy of the daemon once; a failed read must not hold every later run.
   it('makes the VS Code part afresh for each run', async () => {
     let made = 0;

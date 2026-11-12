@@ -8,7 +8,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { silentLogger } from '../ports';
 import { helperImageTag } from './helperImage';
 import { HelperImages, type HelperImageDocker } from './helperImages';
@@ -31,12 +30,6 @@ class BuildingDocker implements HelperImageDocker {
     options.onOutput?.('Step 1/1 : FROM node\n');
     this.images.add(options.tag);
     return ID;
-  }
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    return [...this.images].map((tag) => ({ id: ID, tags: [tag], createdAt: '' }));
-  }
-  async removeImage(): Promise<boolean> {
-    throw new Error('a helper run removes no image');
   }
 }
 

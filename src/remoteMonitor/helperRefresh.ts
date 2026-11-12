@@ -19,8 +19,8 @@
 //   4. The record of the check in the volume (helperCheck.ts): `checkedAt` with the digest when the image is current
 //      after the run, `attemptedAt` when the registry gave no digest or the build failed (the windows then check and
 //      build it as before). The windows read it through the answers of their heartbeats.
-// The previous image is not removed here: the Monitor still runs from it (its monitor tag), and the daily cleanup of
-// the windows removes it when nothing uses it anymore. The output of the build stays out of the log of the Monitor,
+// The previous image is not removed here: the Monitor still runs from it (its monitor tag), and the cleanup of the
+// Monitor removes it when no container uses it anymore (engineCleanup.ts, docs/requirements.md R-DS-007). The output of the build stays out of the log of the Monitor,
 // except the last lines of a failed build. Never throws. No `vscode`.
 import * as fs from 'fs';
 import * as os from 'os';
@@ -161,6 +161,16 @@ export async function refreshHelperImage(deps: HelperRefreshDeps): Promise<Netwo
   log(`The workspace helper image ${tag} was built again from the current base image ${baseImage} in ${Math.round((ended - started) / 1000)} s.`);
   await write({ ...base, baseDigest: digest, checkedAt: builtAt, builtAt });
   return 'reached';
+}
+
+/**
+ * The helper tag of the Monitor and the base image of its helper image, from the copy of the Dockerfile in the image of
+ * the Monitor (`dockerfile`, default HELPER_DOCKERFILE_COPY); undefined when the image holds no such Dockerfile. The
+ * base image is undefined when the Dockerfile names none. Never throws.
+ */
+export async function ownHelperImage(dockerfile: string = HELPER_DOCKERFILE_COPY): Promise<{ tag: string; baseImage: string | undefined } | undefined> {
+  const content = await readDockerfile(dockerfile);
+  return content === undefined ? undefined : { tag: helperImageTag(content), baseImage: firstBaseImage(content) };
 }
 
 /** The image of the helper tag: its ID and the digest of the base image that its build pulled (its label). */

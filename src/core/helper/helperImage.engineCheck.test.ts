@@ -148,7 +148,7 @@ describe('recordEngineHelperCheck', () => {
     const dockerfile = path.join(dir, 'Dockerfile');
     fs.writeFileSync(dockerfile, DOCKERFILE);
     const file = path.join(dir, 'helper.json');
-    fs.writeFileSync(file, JSON.stringify({ version: 1, images: { [TAG]: { baseImage: BASE, baseDigest: DIGEST_A, latestBaseDigest: DIGEST_B, checkedAt: iso(-8 * DAY) } }, lastCleanupAt: iso(0) }));
+    fs.writeFileSync(file, JSON.stringify({ version: 1, images: { [TAG]: { baseImage: BASE, baseDigest: DIGEST_A, latestBaseDigest: DIGEST_B, checkedAt: iso(-8 * DAY) } } }));
     await recordEngineHelperCheck(file, check(), { clock });
     const builds: unknown[] = [];
     const lookups: string[] = [];
@@ -156,8 +156,6 @@ describe('recordEngineHelperCheck', () => {
       imageExists: async () => true,
       imageId: async () => `sha256:${'1'.repeat(64)}`,
       buildImage: async (options) => (builds.push(options), undefined),
-      listImagesByLabel: async () => [],
-      removeImage: async () => false,
     };
     const use = await ensureHelperImageUse(docker, dockerfile, { statePath: file, clock, baseDigest: async (reference) => (lookups.push(reference), DIGEST_B) });
     expect(use.tag).toBe(TAG);

@@ -235,6 +235,12 @@ export interface DockerEngine {
    * --filter …`; a running container is never removed), and answers the IDs of the removed ones.
    */
   pruneContainers(filters: EngineFilters, signal?: AbortSignal): Promise<string[]>;
+  /**
+   * Removes the records of the build cache that match `filters` and that no build uses now (`POST /build/prune?all=1`,
+   * as `docker builder prune --all --force --filter …`), and answers how many records it removed and the bytes that
+   * Docker counts for them (records that share their data with an image free no space).
+   */
+  pruneBuildCache(filters: EngineFilters, signal?: AbortSignal): Promise<{ records: number; bytes: number }>;
   /** The inspect JSON of an object (the same as `docker inspect`), or undefined when it does not exist. */
   inspect(kind: EngineObjectKind, reference: string, signal?: AbortSignal): Promise<unknown>;
   /** The full IDs of the containers that match `filters`, stopped ones included. */

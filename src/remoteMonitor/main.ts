@@ -38,10 +38,14 @@
 // It uses Node.js built-ins, small pure modules of src/core, and the worker's client of the Engine API (engine.ts:
 // src/helperChannel/engineClient.ts over engineApi.ts): it talks to its engine over that socket, never through a Docker
 // CLI. Every argument and every file it reads is checked (protocol.ts); it never acts on a container without the label
-// nimblescape.devspaces.id, except the restart policy of its own container before it ends itself (UnusedEnd), and it
-// removes nothing but its own files (records, leftover temporary files of
-// the volume) and, with image maintenance, the images of the repositories it manages that no rule keeps (those of the
-// image references in use); and, in the shared VS Code server store that it mounts at /vscode, the server versions and
+// nimblescape.devspaces.id, except the restart policy of its own container before it ends itself (UnusedEnd) and the
+// stopped helper containers that its cleanup removes, and it removes nothing but its own files (records, leftover
+// temporary files of the volume) and, with image maintenance, the images of the repositories it manages that no rule
+// keeps (those of the image references in use); the images of Devspaces that no container uses, by its cleanup of the
+// engine (engineCleanup.ts, docs/requirements.md R-DS-007: earlier builds of the helper image, helper tags that no
+// running container used for 7 days, older versions of the build image and of the base image of the helper image,
+// and on the VM of Devspaces the build cache that no build used for 7 days; never a devspace container, a volume or a
+// network); and, in the shared VS Code server store that it mounts at /vscode, the server versions and
 // the temporary folders that its cleanup names (background.ts); and the prepared images of devspaces without a
 // volume, and the worker scripts of other versions in its volume (prepares.ts). Its background run prepares the next
 // devspace image of each devspace of the engine by the worker's own script, run as a child process in its
@@ -91,10 +95,12 @@ import { engineFailure, socketEngine, type LoopEngine, type MonitorEngineParts, 
 import { BACKGROUND_ENGINE_TIMEOUT_MS, BackgroundRun, type CacheRunStore, type VscodeBackgroundDeps } from './background';
 import { CLOCK_RESET_MS, IDLE_RETRY_MAX_WAIT_MS, parseCacheRunState, runRetryDelay, runRetryDue, type CacheRunState } from './backgroundRules';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, cacheRunDue, parseCacheSchedule, type CacheSchedule as ParsedCacheSchedule } from '../core/remoteMonitor/cacheSettings';
-import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
+import { MONITOR_CREATE_ID_ENV, MONITOR_PERMANENT_ENV, MONITOR_VM_ENV, MONITOR_VSCODE_STORE_ENV } from '../core/remoteMonitor/remoteSessionMonitor';
 import { REGISTRY_ANSWERS_FILE, registryAnswersText } from '../core/remoteMonitor/registryAnswers';
 import { HELPER_CHECK_FILE } from '../core/remoteMonitor/helperCheck';
-import { refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
+import { ownHelperImage, refreshHelperImage, type HelperRefreshDeps } from './helperRefresh';
+import { EngineCleanup, type EngineCleanupDeps } from './engineCleanup';
+import { CLEANUP_FILE, HELPER_USE_OBSERVE_MS } from './cleanupRules';
 import { VERSION_ENV, takeUserAgentVersion, type HttpTransport } from '../core/http';
 import { proxiedHttpsTransport } from '../core/proxyTransport';
 import { storeLock, storeTryLock, unpackServer } from '../core/worker/vscodeServerStore';
@@ -886,6 +892,8 @@ export interface MainDeps {
   prepareWorker?: () => PrepareWorker | { reason: string };
   /** The Dockerfile and the build of the part "the workspace helper image" (refreshHelperImage); the tests give their own. */
   helperRefresh?: Pick<HelperRefreshDeps, 'dockerfile' | 'build'>;
+  /** The pin of the build image of the cleanup of the engine (EngineCleanup; default its own); the tests give their own. */
+  engineCleanup?: Pick<EngineCleanupDeps, 'buildx'>;
   /** The monotonic clock of the idle time, and the wait between two ticks (the tests). */
   monotonic?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -991,10 +999,10 @@ export async function readImagesInUse(stateDir: string, now: number): Promise<Re
  * The temporary files of writeStateFile (`<name>.<pid>.<count>.tmp`) that a killed write left behind: of
  * image-settings.json, replaced-images.json, pulled-over-images.json, cache-run.json (written at the end of every
  * background run), registry-digests.json (REGISTRY_ANSWERS_FILE), last-use.json (LAST_USE_FILE), helper-image.json
- * (HELPER_CHECK_FILE) and the files of the images in use (`images-in-use.<source>.json`). images.json is not written by
- * this monitor; the leftovers of an older monitor are removed too.
+ * (HELPER_CHECK_FILE), cleanup.json (CLEANUP_FILE) and the files of the images in use (`images-in-use.<source>.json`).
+ * images.json is not written by this monitor; the leftovers of an older monitor are removed too.
  */
-export const STATE_TEMPORARY_FILE = /^(images|image-settings|replaced-images|pulled-over-images|cache-run|registry-digests|last-use|helper-image|images-in-use\.[0-9a-f]{32})\.json\.\d+\.\d+\.tmp$/;
+export const STATE_TEMPORARY_FILE = /^(images|image-settings|replaced-images|pulled-over-images|cache-run|registry-digests|last-use|helper-image|cleanup|images-in-use\.[0-9a-f]{32})\.json\.\d+\.\d+\.tmp$/;
 /**
  * Such a file whose modification time is more than this from now is removed at the start of `run` (only then: a younger
  * one stays until the next start).
@@ -1050,6 +1058,11 @@ export function cacheScheduleFromEnv(env: NodeJS.ProcessEnv): { schedule: Parsed
 /** The monitor runs permanently (DEVSPACE_MONITOR_PERMANENT `1`, part of its label). */
 export function permanentFromEnv(env: NodeJS.ProcessEnv): boolean {
   return env[MONITOR_PERMANENT_ENV] === '1';
+}
+
+/** The monitor runs on the VM of Devspaces (DEVSPACE_MONITOR_VM `1`): its cleanup prunes the build cache too. */
+export function vmFromEnv(env: NodeJS.ProcessEnv): boolean {
+  return env[MONITOR_VM_ENV] === '1';
 }
 
 /** The IDs of images that pulls replaced, in the volume. */
@@ -1555,7 +1568,22 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
           },
           ...deps.helperRefresh,
         });
-      const background = new BackgroundRun({ log, now, images: () => images.pass(), helperImage, vscode: vscodeOf, state, prepares });
+      // The cleanup of the engine, after the helper image: the objects of Devspaces that no container uses, with its
+      // record in the volume (which helper tags running containers used, and the base images of the helper images).
+      const cleanup = new EngineCleanup({
+        engine,
+        log,
+        now,
+        record: {
+          read: () => fs.promises.readFile(path.join(stateDir, CLEANUP_FILE), 'utf8').catch(() => undefined),
+          write: (text) => writeStateFile(stateDir, CLEANUP_FILE, text),
+        },
+        ownHelper: () => ownHelperImage(deps.helperRefresh?.dockerfile),
+        referencesInUse: () => readImagesInUse(stateDir, now()),
+        vm: vmFromEnv(deps.env),
+        ...deps.engineCleanup,
+      });
+      const background = new BackgroundRun({ log, now, images: () => images.pass(), helperImage, cleanup: () => cleanup.pass(), vscode: vscodeOf, state, prepares });
       // With the request of "Update All Images Now" (`run-now`).
       const runRequest = runRequestStore(stateDir, log);
       const permanent = permanentFromEnv(deps.env);
@@ -1571,6 +1599,9 @@ export async function main(argv: readonly string[], deps: MainDeps): Promise<num
       );
       // Unreferenced: the loop below keeps the process; a monitor that exits when idle does not wait for them.
       setTimeout(() => {
+        // Which helper tags running containers use, for the cleanup (HELPER_USE_OBSERVE_MS).
+        void cleanup.observe();
+        setInterval(() => void cleanup.observe(), HELPER_USE_OBSERVE_MS).unref?.();
         // The Docker tests: a fixed interval (DEVSPACE_IMAGE_INTERVAL_MS) of runs instead of the schedule.
         if (intervalMs !== undefined) {
           void schedule.run();

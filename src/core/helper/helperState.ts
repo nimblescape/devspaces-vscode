@@ -4,8 +4,8 @@
 
 // State of the workspace helper images: `helper.json` in the global storage folder. Per helper tag, it records the
 // digest of the base image of the last build and when the tag was built, checked, and last used, so that the base image
-// is checked once a week and helper images that no window uses are removed; for tags of other installations and removed
-// tags, the marks of the cleanup; the ID of the image that this installation built for a tag and its helper generation
+// is checked once a week; for tags of other installations and removed tags, the marks of the cleanup of older versions
+// (the windows remove no image now: the cleanup of the Monitor does that, docs/requirements.md R-DS-007); the ID of the image that this installation built for a tag and its helper generation
 // (for diagnosis only). It keeps no previous helper image.
 // The state is advisory: two windows may read and write it at the same time. Each write is atomic, and each update
 // reads the file again right before it writes, so a lost update costs at most a second check or a second build.
@@ -44,11 +44,11 @@ export interface HelperImageRecord {
   latestBaseDigest?: string;
   lastUsedAt?: string;
   /**
-   * The cleanup first saw this tag, and it never was the tag of this installation: a helper of another extension version,
+   * The cleanup of an older version first saw this tag, and it never was the tag of this installation: a helper of another extension version,
    * possibly of another installation of VS Code (for example Insiders, with its own helper.json).
    */
   foreignSince?: string;
-  /** The cleanup removed the tag (a tombstone): if the tag comes back, another installation uses it, and it stays. */
+  /** The cleanup of an older version removed the tag (a tombstone); a use or a build by this installation clears it. */
   removedAt?: string;
 }
 
@@ -56,7 +56,7 @@ export interface HelperState {
   version: 1;
   /** Helper tag (`devspaces-worker:<12 hex characters>`) → record. */
   images: Record<string, HelperImageRecord>;
-  /** Last cleanup of other helper images. */
+  /** Last cleanup of other helper images by an older version (kept, not used). */
   lastCleanupAt?: string;
 }
 
@@ -66,7 +66,7 @@ const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
 
 /**
  * True for a tag that `helperImageTag` returns: `devspaces-worker:<12 hex characters>`. The state keeps only such keys (so a
- * key is never `__proto__`), and the cleanup removes only such tags.
+ * key is never `__proto__`), and the cleanup of the Monitor removes only such tags.
  */
 export function isHelperImageTag(tag: string): boolean {
   return HELPER_TAG.test(tag);
@@ -83,7 +83,7 @@ export function monitorImageTag(helperTag: string): string | undefined {
   return isHelperImageTag(helperTag) ? `devspaces-monitor:${helperTag.slice('devspaces-worker:'.length)}` : undefined;
 }
 
-/** True for a tag that `monitorImageTag` returns; the helper cleanup removes such tags with their helper tag. */
+/** True for a tag that `monitorImageTag` returns; the cleanup of the Monitor removes such a tag with its helper tag. */
 export function isMonitorImageTag(tag: string): boolean {
   return MONITOR_TAG.test(tag);
 }

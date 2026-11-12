@@ -53,6 +53,15 @@ describe('the monitor settings of extension.ts', () => {
     }
   });
 
+  // The cleanup of the Monitor prunes the build cache only on the VM of Devspaces (docs/requirements.md R-DS-007).
+  it('says `vm` only for the WSL distribution or VM of Devspaces', async () => {
+    const settings = monitorSettingsOf(deps({}));
+    for (const host of [WSL_HOST, LIMA_HOST]) expect((await settings.forOpen(host)).vm, host).toBe(true);
+    for (const host of ['', 'build-box']) expect(await settings.forOpen(host), host).not.toHaveProperty('vm');
+    expect((await settings.forTarget({ kind: 'remote', host: WSL_HOST })).vm).toBe(true);
+    expect(await settings.forTarget({ kind: 'local', host: '' })).not.toHaveProperty('vm');
+  });
+
   it('a computer ID that cannot be read is left out, and the open goes on', async () => {
     const settings = monitorSettingsOf({
       ...deps({}),

@@ -31,7 +31,7 @@ import { CommandError, errorMessage, UserFacingError } from '../errors';
 import { Messages, dockerHostReason } from '../messages';
 import { HELPER_DOCKER_SOCKET, LABEL_BUILD_ID } from '../names';
 import { abortError, isAbortError, sleep, systemClock, type Clock, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
-import { BUILD_CONTAINER_PREFIX, BUILDX_IMAGE_LS_ARGS, BUILDX_PIN, DOCKER_RUN_FAILED_EXIT_CODE, buildxImageTag, buildxImageTags, buildxPulledReference, buildxRunArgs, isOlderBuildxTag } from './buildxImage';
+import { BUILD_CONTAINER_PREFIX, BUILDX_PIN, DOCKER_RUN_FAILED_EXIT_CODE, buildxImageTag, buildxPulledReference, buildxRunArgs } from './buildxImage';
 import { contextTar } from './contextTar';
 import { deleteEnv, dockerCommandWords, dockerProcessEnv, isReadOnlyDockerCall } from './dockerCli';
 import { hostEndpoint, isVmHost, isSshClosedBeforeLogin, type DockerTarget } from './dockerHost';
@@ -1026,7 +1026,8 @@ export class BootstrapDocker {
    * The tag of the build image on the engine of the operation (buildxImageTag, `devspaces-buildx:<version>`). When it is
    * missing: the pinned image by its digest (buildxPulledReference), pulled when no image of that digest is there, gets
    * the tag; the name of that pull is removed again (only an image that was not there before the pull, so no name of
-   * the user goes), so that the tag is its only name, and the tags of older versions are removed (removeOlderBuildxImages).
+   * the user goes), so that the tag is its only name. The cleanup of the Monitor removes the tags of older versions
+   * (src/remoteMonitor/engineCleanup.ts).
    * Undefined (logged) when it cannot be prepared, for example without a connection to Docker Hub. Rejects only with an
    * AbortError when `signal` aborts.
    */
@@ -1048,7 +1049,6 @@ export class BootstrapDocker {
       }
       await this.runChecked(['tag', pinned, tag], { signal, timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
       if (pulled) await this.removePulledName(pinned);
-      await this.removeOlderBuildxImages();
       return tag;
     } catch (error) {
       // The name of a pull of its own goes also after a failure, so that no image without a tag of Devspaces stays.
@@ -1068,28 +1068,6 @@ export class BootstrapDocker {
   private async removePulledName(pinned: string): Promise<void> {
     const removed = await this.run(['image', 'rm', pinned], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS }).catch((error: unknown) => ({ exitCode: 1, stdout: '', stderr: errorMessage(error), timedOut: false }));
     if (removed.exitCode !== 0 && !this.isMissing(removed)) this.logger.warn(`The name ${pinned} of the pull of the build image stays: ${removed.stderr.trim()}`);
-  }
-
-  /**
-   * `docker image rm` (never with force) of each tag of the build image of an older version than the pin
-   * (isOlderBuildxTag); a tag that a container uses stays. Failures are logged, and the other tags are still removed.
-   */
-  private async removeOlderBuildxImages(): Promise<void> {
-    let stdout: string;
-    try {
-      stdout = await this.runChecked([...BUILDX_IMAGE_LS_ARGS], { timeoutMs: DOCKER_QUERY_TIMEOUT_MS });
-    } catch (error) {
-      this.logger.warn(`The older build images could not be listed: ${errorMessage(error)}`);
-      return;
-    }
-    for (const { tag } of buildxImageTags(parseJsonLines(stdout))) {
-      if (!isOlderBuildxTag(tag)) continue;
-      try {
-        await this.removeImage(tag);
-      } catch (error) {
-        this.logger.warn(`The older build image ${tag} could not be removed: ${errorMessage(error)}`);
-      }
-    }
   }
 
   /**

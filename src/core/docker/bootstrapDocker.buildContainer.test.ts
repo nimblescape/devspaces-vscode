@@ -169,17 +169,12 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     expect(calls.find(isRun)?.args).toContain('type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock');
   });
 
-  it('pulls a missing build image by its digest, gives it its tag, removes the name of the pull and the older versions', async () => {
+  it('pulls a missing build image by its digest, gives it its tag, and removes the name of the pull (the Monitor removes the older versions)', async () => {
     const { runner, calls } = runnerOf((call) => {
       if (call.args[0] === 'image' && call.args[1] === 'inspect') return missing(call.args[4]);
       if (call.args[0] === 'pull') {
         call.options.onStdout?.(`Status: Downloaded newer image for ${PINNED}\n`);
         return ok();
-      }
-      if (call.args[0] === 'image' && call.args.includes(`reference=devspaces-buildx`)) {
-        return ok(
-          ['0.30.0', '0.38.0', BUILDX_PIN.version, '99.0.0', 'latest'].map((tag) => JSON.stringify({ ID: 'sha256:1', Repository: 'devspaces-buildx', Tag: tag })).join('\n'),
-        );
       }
       return undefined;
     });
@@ -187,20 +182,17 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     const outputs: string[] = [];
     const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, { ...logger, output: (text) => outputs.push(text) }, 'linux', {});
     await runWithDockerTarget(SSH, () => docker.buildImage(buildOptions()));
-    expect(calls.map((call) => call.args).slice(0, 8)).toEqual([
+    expect(calls.map((call) => call.args).slice(0, 5)).toEqual([
       ['image', 'inspect', '--format', '{{json .Id}}', TAG],
       ['image', 'inspect', '--format', '{{json .Id}}', PINNED],
       ['pull', PINNED],
       ['tag', PINNED, TAG],
       ['image', 'rm', PINNED],
-      ['image', 'ls', '--filter', 'reference=devspaces-buildx', '--format', '{{json .}}'],
-      // Only the older versions; a newer one (of a newer Devspaces on the same engine) and another tag stay.
-      ['image', 'rm', 'devspaces-buildx:0.30.0'],
-      ['image', 'rm', 'devspaces-buildx:0.38.0'],
     ]);
-    expect(calls[8].args).toEqual(['pull', 'debian:trixie-slim']);
-    expect(calls[9].args[0]).toBe('run');
-    expect(calls[9].args).toContain(TAG);
+    // No list and no removal of other build images: the cleanup of the Monitor removes the older versions.
+    expect(calls[5].args).toEqual(['pull', 'debian:trixie-slim']);
+    expect(calls[6].args[0]).toBe('run');
+    expect(calls[6].args).toContain(TAG);
     expect(calls[2].options.timeoutMs).toBe(BUILDX_PULL_TIMEOUT_MS);
     expect(infos).toContain(`Pulling the build image ${PINNED} (buildx ${BUILDX_PIN.version}).`);
     expect(outputs).toContain(`Status: Downloaded newer image for ${PINNED}\n`);
@@ -214,7 +206,6 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
       ['image', 'inspect'],
       ['image', 'inspect'],
       ['tag', PINNED],
-      ['image', 'ls'],
       ['pull', 'debian:trixie-slim'],
       ['run', '--rm'],
       ['image', 'ls'],
@@ -321,24 +312,6 @@ describe('BootstrapDocker.buildImage in a container of the build image', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('removes the other older build images when the removal of one fails', async () => {
-    const { runner, calls } = runnerOf((call) => {
-      if (call.args[0] === 'image' && call.args[1] === 'inspect') return missing(call.args[4]);
-      if (call.args[0] === 'image' && call.args.includes('reference=devspaces-buildx')) {
-        return ok(['0.30.0', '0.31.0'].map((tag) => JSON.stringify({ ID: `sha256:${tag}`, Repository: 'devspaces-buildx', Tag: tag })).join('\n'));
-      }
-      if (call.args[0] === 'image' && call.args[1] === 'rm' && call.args[2] === 'devspaces-buildx:0.30.0') return { exitCode: 1, stdout: '', stderr: '', timedOut: true };
-      return undefined;
-    });
-    const { logger, warnings } = recordingLogger();
-    const docker = new BootstrapDocker(runner, '/usr/bin/docker', { PATH: '/usr/bin' }, logger, 'linux', {});
-    await docker.buildImage(buildOptions());
-    expect(calls.filter((call) => call.args[0] === 'image' && call.args[1] === 'rm').map((call) => call.args[2])).toEqual([PINNED, 'devspaces-buildx:0.30.0', 'devspaces-buildx:0.31.0']);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/^The older build image devspaces-buildx:0\.30\.0 could not be removed: /);
-    expect(calls.find(isRun)?.args).toContain(TAG);
   });
 
   it('fails with the error of the pull of a base image, without a build', async () => {

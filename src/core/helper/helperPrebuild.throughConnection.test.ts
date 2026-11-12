@@ -6,7 +6,7 @@
 // R-ENG-002): the prebuild waits for the connection of the relay of this window to the host (HelperPrebuildDeps
 // .connection), asks nothing before it, and runs as an operation without a login; the build of a missing image that a
 // refresh asks for runs only while that connection is open (dockerEngineAnswers with `connected`). The maintenance that
-// changes the engine (the rebuild that a check asked for, the cleanup) is put off while it may not change the engine
+// changes the engine (the rebuild that a check asked for) is put off while it may not change the engine
 // (mayChangeEngine: on an SSH host, before that connection). A rebuild of the existing tag reports `refresh`, so that
 // the open connection stays usable for new workers.
 import * as fs from 'fs';
@@ -14,7 +14,6 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_DOCKER_TARGET, remoteDockerTarget } from '../docker/dockerHost';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { operationDockerTarget, operationWithoutLogin } from '../docker/dockerTargets';
 import { abortError, type Logger } from '../ports';
 import { HELPER_PREBUILD_TIMEOUT_MS, HelperPrebuild, dockerEngineAnswers, type HelperPrebuildDeps } from './helperPrebuild';
@@ -29,7 +28,6 @@ const OLD = '2026-09-01T12:00:00.000Z';
 const TODAY = '2026-10-09T06:00:00.000Z';
 const ID1 = `sha256:${'1'.repeat(64)}`;
 const ID2 = `sha256:${'2'.repeat(64)}`;
-const OLD_ID = `sha256:${'9'.repeat(64)}`;
 const DIGEST_A = `sha256:${'a'.repeat(64)}`;
 const DIGEST_B = `sha256:${'b'.repeat(64)}`;
 const SSH_HOST = remoteDockerTarget('build-box');
@@ -46,7 +44,6 @@ class FakeDocker implements HelperImageDocker {
   readonly calls: Array<{ call: string; withoutLogin: boolean }> = [];
   buildHandler: (options: BuildOptions) => Promise<void> = async () => undefined;
   nextId = ID2;
-  readonly removals: string[] = [];
 
   private record(call: string): void {
     this.calls.push({ call, withoutLogin: operationWithoutLogin() !== undefined });
@@ -68,17 +65,6 @@ class FakeDocker implements HelperImageDocker {
     await this.buildHandler(options);
     this.tags.set(options.tag, this.nextId);
     return this.nextId;
-  }
-
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    this.record('list');
-    return [...this.tags].map(([tag, id]) => ({ id, tags: [tag], createdAt: '' }));
-  }
-
-  async removeImage(reference: string): Promise<boolean> {
-    this.record('remove');
-    this.removals.push(reference);
-    return true;
   }
 }
 
@@ -160,10 +146,9 @@ afterEach(() => {
 });
 
 describe('ensureHelperImageUse: mayChangeEngine', () => {
-  it('puts off the rebuild that a check asked for and the cleanup while the engine may not be changed, and runs them when it may', async () => {
+  it('puts off the rebuild that a check asked for while the engine may not be changed, and runs it when it may', async () => {
     docker.tags.set(TAG, ID1);
-    docker.tags.set('devspaces-worker:0123456789ab', OLD_ID);
-    writeState({ images: { [TAG]: REBUILD_ASKED, 'devspaces-worker:0123456789ab': { lastUsedAt: OLD } }, lastCleanupAt: OLD });
+    writeState({ images: { [TAG]: REBUILD_ASKED } });
     const dockerfile = path.join(dir, 'Dockerfile');
     let may = false;
     const options = { statePath: statePath(), clock: { now: () => NOW }, logger, mayChangeEngine: () => may };
@@ -173,13 +158,11 @@ describe('ensureHelperImageUse: mayChangeEngine', () => {
     expect(docker.calls.map((c) => c.call)).toEqual(['imageId']);
     const state = await readHelperState(statePath());
     expect(state.images[TAG]?.latestBaseDigest).toBe(DIGEST_B);
-    expect(state.lastCleanupAt).toBe(OLD);
     expect(logger.lines).toContain(`info The workspace helper image ${TAG} is built again later, through the connection of this window to the Docker host. The existing image is used.`);
     may = true;
     const rebuilt = await ensureHelperImageUse(docker, dockerfile, options);
     expect(rebuilt).toEqual({ tag: TAG, id: ID2 });
     expect(docker.builds.map((b) => [b.pull, b.noCache])).toEqual([[true, true]]);
-    expect(docker.removals).toContain('devspaces-worker:0123456789ab');
     expect((await readHelperState(statePath())).images[TAG]?.latestBaseDigest).toBeUndefined();
   });
 });

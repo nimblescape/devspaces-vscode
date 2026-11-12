@@ -50,10 +50,17 @@ export type PrepareEngine = Pick<DockerEngine, 'volumeNames' | 'inspect' | 'imag
 export type SelfEngine = Pick<DockerEngine, 'containerIds' | 'updateRestartPolicy'>;
 
 /**
- * The engine of `run`: the loop's, the image maintenance's, the VS Code part's and the prepares' of the background run,
- * and the one of its own end after 30 days without use.
+ * What the cleanup of the engine asks of it (engineCleanup.ts): the list of the images and the inspect of one (their
+ * layers), the running containers of an image, the removal of an image without force, the prune of the stopped helper
+ * containers, and the prune of the build cache (on the VM of Devspaces only).
  */
-export type MonitorEngineParts = LoopEngine & ImageEngine & VscodeEngine & PrepareEngine & SelfEngine;
+export type CleanupEngine = Pick<DockerEngine, 'images' | 'inspect' | 'containerIds' | 'removeImage' | 'pruneContainers' | 'pruneBuildCache'>;
+
+/**
+ * The engine of `run`: the loop's, the image maintenance's, the VS Code part's, the prepares' and the cleanup's of the
+ * background run, and the one of its own end after 30 days without use.
+ */
+export type MonitorEngineParts = LoopEngine & ImageEngine & VscodeEngine & PrepareEngine & CleanupEngine & SelfEngine;
 
 /** The engine of the socket of the monitor container (the one of its engine, as the worker's). */
 export function socketEngine(): MonitorEngineParts {
