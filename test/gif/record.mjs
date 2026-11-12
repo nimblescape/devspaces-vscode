@@ -32,6 +32,8 @@ const PORT = 9222;
 const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
 /** The longest wait for the window of the devspace: the build of its image, the container, and the VS Code Server. */
 const OPEN_TIMEOUT_MS = 8 * 60_000;
+/** The longest wait for the first background run of the Monitor and its move to the new build of its helper image. */
+const MONITOR_TIMEOUT_MS = 6 * 60_000;
 
 /** The captions of the band, one for each scene. */
 const CAPTIONS = [
@@ -310,6 +312,52 @@ async function widenSideBar(ui) {
   await wait(1000);
 }
 
+/** `docker` on the engine of the runner, which is the engine of the host school-server: its output, trimmed. */
+function docker(...args) {
+  return execFileSync('docker', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+}
+
+/** The containers of the engine, for the log. */
+function containers() {
+  try {
+    return docker('ps', '-a', '--format', '{{.Names}} {{.State}}').split('\n').join(', ');
+  } catch (error) {
+    return `(docker ps failed: ${error.message})`;
+  }
+}
+
+/**
+ * Waits (in the cut part of the take) until the first background run of the Monitor ended and the Monitor runs from the
+ * current build of its helper image, without a container of an earlier build. The run can build the helper image again
+ * from a new base image, and the Monitor then moves to a new container of that build (src/remoteMonitor/selfUpgrade.ts):
+ * without the wait, the rows of Docker Hosts would change during the later scenes, and the report of the Monitor would
+ * list no run.
+ */
+async function monitorSettled() {
+  const deadline = Date.now() + MONITOR_TIMEOUT_MS;
+  let last = '';
+  for (;;) {
+    let state;
+    try {
+      const runs = JSON.parse(docker('exec', 'devspaces-monitor', 'cat', '/state/runs.json')).runs ?? [];
+      const image = docker('inspect', '--format', '{{.Config.Image}} {{.Image}}', 'devspaces-monitor').split(' ');
+      const current = docker('image', 'inspect', '--format', '{{.Id}}', image[0].replace(/^devspaces-monitor:/, 'devspaces-worker:'));
+      const earlier = docker('ps', '-a', '--format', '{{.Names}}').split('\n').filter((name) => name.startsWith('devspaces-monitor-earlier-'));
+      state = `${runs.length} runs, ${image[1] === current ? 'current build' : 'earlier build'}, ${earlier.length} earlier containers`;
+      if (runs.length > 0 && image[1] === current && earlier.length === 0) {
+        log(`The Monitor settled: ${state}. Containers: ${containers()}`);
+        return;
+      }
+    } catch (error) {
+      state = `not ready (${error.message.split('\n')[0]})`;
+    }
+    if (state !== last) log(`The Monitor: ${state}`);
+    last = state;
+    if (Date.now() > deadline) throw new Error(`The Monitor did not settle within ${MONITOR_TIMEOUT_MS / 60_000} minutes: ${state}. Containers: ${containers()}`);
+    await wait(2000);
+  }
+}
+
 /** The view container `title` in the side bar: a click on its item of the activity bar, unless it shows already. */
 async function showContainer(ui, title) {
   const shown = await ui.evaluate(() => document.querySelector('.part.sidebar .title-label h2')?.textContent?.trim() ?? '');
@@ -376,6 +424,7 @@ async function take(ui, video) {
     screenshot(file);
     shots.push(file);
     log(`Rows: ${JSON.stringify(await ui.rows().catch(() => []))}`);
+    log(`Containers: ${containers()}`);
   };
   try {
     await wait(500);
@@ -399,6 +448,7 @@ async function take(ui, video) {
     const cut = { from: Date.now() - recording.started };
     await shot('2-opening');
     await openedDevspace(ui);
+    await monitorSettled();
     await wait(4000);
     await widenSideBar(ui);
     await paletteCommand('Notifications: Clear All Notifications');
