@@ -10,7 +10,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ImageInfo } from '../docker/dockerObjects';
 import type { Logger } from '../ports';
 import { ensureHelperImageUse, helperImageTag, type HelperImageDocker } from './helperImage';
 
@@ -35,12 +34,6 @@ class FakeDocker implements HelperImageDocker {
     this.builds.push(options);
     return ID;
   }
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    return [{ id: ID, tags: [TAG], createdAt: '' }];
-  }
-  async removeImage(): Promise<boolean> {
-    return false;
-  }
 }
 
 const dirs: string[] = [];
@@ -56,7 +49,7 @@ describe('the log of a check of the base image', () => {
     fs.writeFileSync(file, DOCKERFILE);
     const statePath = path.join(dir, 'storage', 'helper.json');
     fs.mkdirSync(path.dirname(statePath), { recursive: true });
-    // Built without --pull, never checked: the weekly check is due; the cleanup ran today.
+    // Built without --pull, never checked: the weekly check is due.
     const record = { baseImage: BASE, builtAt: OLD, builtWithoutPull: OLD, lastUsedAt: OLD };
     fs.writeFileSync(statePath, JSON.stringify({ version: 1, images: { [TAG]: record }, lastCleanupAt: new Date(NOW).toISOString() }));
     const lines: string[] = [];

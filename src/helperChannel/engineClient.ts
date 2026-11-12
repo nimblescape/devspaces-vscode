@@ -269,6 +269,20 @@ export function dockerEngine(
       if (deleted !== null && !Array.isArray(deleted)) throw new EngineError('The engine answered the prune of the containers with an invalid value.', answer.status);
       return texts(deleted).filter((id) => id !== '');
     },
+    pruneBuildCache: async (filters, signal) => {
+      const answer = await api({ method: 'POST', path: `/build/prune?all=1&${filtersQuery(filters)}`, signal });
+      if (answer.status !== 200) fail(answer);
+      if (answer.truncated) throw new EngineError('The engine answered the prune of the build cache with more than can be read.', answer.status);
+      const value = json(answer.body);
+      const { CachesDeleted: deleted, SpaceReclaimed: bytes } = (typeof value === 'object' && value !== null ? value : {}) as Record<string, unknown>;
+      // `CachesDeleted` is null when nothing was removed.
+      const validDeleted = deleted === null || deleted === undefined || Array.isArray(deleted);
+      const validBytes = bytes === undefined || (typeof bytes === 'number' && Number.isFinite(bytes) && bytes >= 0);
+      if (typeof value !== 'object' || value === null || Array.isArray(value) || !validDeleted || !validBytes) {
+        throw new EngineError('The engine answered the prune of the build cache with an invalid value.', answer.status);
+      }
+      return { records: texts(deleted).length, bytes: typeof bytes === 'number' ? bytes : 0 };
+    },
     inspect,
     containerIds,
     images: async (filters, signal) => {

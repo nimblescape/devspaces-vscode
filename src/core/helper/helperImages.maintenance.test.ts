@@ -4,15 +4,14 @@
 
 // The helper image maintenance runs in the extension's preparation of the worker for an operation `open`
 // (heartbeatHelperImage with HelperMaintenance: HelperImages.ensureImageUse) and in the background prebuild
-// (HelperPrebuild: HelperImages.prebuildImage, due for a tag without a record or by helperRefreshDue, never for the
-// daily cleanup alone). The rules of the maintenance itself are tested in helperImage.test.ts and
+// (HelperPrebuild: HelperImages.prebuildImage, due for a tag without a record or by helperRefreshDue). The windows
+// remove no helper image (the cleanup of the Monitor does). The rules of the maintenance itself are tested in helperImage.test.ts and
 // helperImages.rules.test.ts; here: what is due, where it runs, with which setting, and what an open shows and keeps.
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DockerTarget } from '../docker/dockerHost';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { CommandError } from '../errors';
 import { abortError, type Logger } from '../ports';
 import { HELPER_PREBUILD_TIMEOUT_MS, HelperPrebuild, type HelperPrebuildDeps, type HelperPrebuildOutcome } from './helperPrebuild';
@@ -47,8 +46,6 @@ class FakeDocker implements HelperImageDocker {
   buildHandler: (options: BuildOptions) => Promise<void> = async () => undefined;
   nextId = ID2;
   imageIdCalls = 0;
-  listCalls = 0;
-  readonly removals: string[] = [];
 
   async imageExists(reference: string): Promise<boolean> {
     return this.tags.has(reference);
@@ -65,16 +62,6 @@ class FakeDocker implements HelperImageDocker {
     await this.buildHandler(options);
     this.tags.set(options.tag, this.nextId);
     return this.nextId;
-  }
-
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    this.listCalls++;
-    return [...this.tags].map(([tag, id]) => ({ id, tags: [tag], createdAt: '' }));
-  }
-
-  async removeImage(reference: string): Promise<boolean> {
-    this.removals.push(reference);
-    return false;
   }
 }
 
@@ -130,11 +117,12 @@ afterEach(() => {
 });
 
 describe('helperRefreshDue', () => {
-  // The states here record no cleanup: the daily cleanup is due in each of them, and never makes the refresh due.
+  // A `lastCleanupAt` of an older version of the extension (which removed helper images itself) never makes the
+  // refresh due.
   const due = (state: Omit<HelperState, 'version'>, checkBaseImage: boolean, baseDigest = true, content = DOCKERFILE): boolean =>
     helperRefreshDue({ version: 1, ...state }, content, { now: NOW, checkBaseImage, baseDigest });
 
-  it('the daily cleanup alone is no refresh: not due, with the setting on or off', () => {
+  it('an old lastCleanupAt is no refresh: not due, with the setting on or off', () => {
     const checked = { [TAG]: { checkedAt: TODAY } };
     expect(due({ images: checked }, false)).toBe(false);
     expect(due({ images: checked }, true)).toBe(false);
@@ -175,7 +163,7 @@ describe('HelperImages.refreshDue', () => {
     const lookup: BaseDigestLookup = async () => DIGEST_A;
     // helper.json of the local Docker: the weekly check is due there.
     writeState({ images: { [TAG]: { checkedAt: OLD } } });
-    // The remote host: checked today, so no refresh is due (only its daily cleanup, which is none).
+    // The remote host: checked today, so no refresh is due.
     writeState({ images: { [TAG]: { checkedAt: TODAY } } }, 'build-box');
     const remote = images({ engine: async () => ({ key: 'build-box' }), baseDigest: lookup });
     expect(await remote.refreshDue({ checkBaseImage: true })).toBe(false);
@@ -190,7 +178,7 @@ describe('HelperImages.refreshDue', () => {
   });
 });
 
-describe('HelperPrebuild: due for a refresh, never for the cleanup alone, and then runs the maintenance that is due', () => {
+describe('HelperPrebuild: due for a refresh, and then runs the maintenance that is due', () => {
   function prebuild(helper: HelperImages, overrides: Partial<HelperPrebuildDeps> = {}): HelperPrebuild {
     return new HelperPrebuild({
       helper,
@@ -233,9 +221,9 @@ describe('HelperPrebuild: due for a refresh, never for the cleanup alone, and th
     expect(docker.builds).toEqual([]);
   });
 
-  it('the daily cleanup alone does not make it due: Docker is not asked, with the setting on or off', async () => {
+  it('an old lastCleanupAt does not make it due: Docker is not asked, with the setting on or off', async () => {
     docker.tags.set(TAG, ID1);
-    // Checked today, no rebuild asked, and no cleanup for weeks.
+    // Checked today, no rebuild asked, and the last cleanup of an older version weeks ago.
     writeState({ images: { [TAG]: { baseImage: 'node:22-bookworm-slim', baseDigest: DIGEST_A, builtAt: OLD, checkedAt: TODAY } }, lastCleanupAt: OLD });
     const lookup: BaseDigestLookup = async () => DIGEST_A;
     for (const setting of [true, false]) {
@@ -244,7 +232,6 @@ describe('HelperPrebuild: due for a refresh, never for the cleanup alone, and th
       expect(running).not.toHaveBeenCalled();
     }
     expect(docker.imageIdCalls).toBe(0);
-    expect(docker.listCalls).toBe(0);
     expect((await readState()).lastCleanupAt).toBe(OLD);
   });
 
@@ -318,16 +305,15 @@ describe('HelperPrebuild: due for a refresh, never for the cleanup alone, and th
     expect(docker.builds).toHaveLength(1);
   });
 
-  it('a prebuild that is due for a rebuild also runs the cleanup that is due', async () => {
+  it('a prebuild that is due for a rebuild removes no helper image: the cleanup of the Monitor does', async () => {
     docker.tags.set(TAG, ID1);
     writeState({ images: { [TAG]: rebuildAsked }, lastCleanupAt: OLD });
     expect(await prebuild(images()).start()).toBe('present');
     expect(docker.builds).toHaveLength(1);
     expect(docker.builds[0]).toMatchObject({ tag: TAG, pull: true, noCache: true });
-    // The removal of the previous image after the rebuild lists the images, and so does the cleanup.
-    expect(docker.listCalls).toBe(2);
+    // FakeDocker has no list and no removal of images: a call of one would fail the prebuild.
     const state = await readState();
-    expect(state.lastCleanupAt).toBe(new Date(NOW).toISOString());
+    expect(state.lastCleanupAt).toBe(OLD);
     expect(state.images[TAG]?.latestBaseDigest).toBeUndefined();
   });
 
@@ -402,14 +388,13 @@ describe('the preparation of the worker for an open runs the maintaining ensure'
     on.preparation.dispose();
   });
 
-  it('runs the cleanup that is due, also with the setting off', async () => {
+  it('runs no cleanup of helper images, also when the cleanup of an older version was due', async () => {
     docker.tags.set(TAG, ID1);
     writeState({ images: { [TAG]: { baseImage: 'node:22-bookworm-slim', baseDigest: DIGEST_A, builtAt: OLD, checkedAt: TODAY } }, lastCleanupAt: OLD });
     const { preparation, image, maintenance } = preparationOf(images());
     await image.prepareWorker(LOCAL, undefined, maintenance(false));
     expect(docker.builds).toEqual([]);
-    expect(docker.listCalls).toBe(1);
-    expect((await readState()).lastCleanupAt).toBe(new Date(NOW).toISOString());
+    expect((await readState()).lastCleanupAt).toBe(OLD);
     preparation.dispose();
   });
 

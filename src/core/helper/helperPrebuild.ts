@@ -11,8 +11,8 @@
 // no usable helper image and cannot build one fails with helperFailed. It runs on the Docker engine of the current
 // Docker host, local or remote alike. With the setting
 // updateImagesOnConnect on, it also runs when the refresh of the helper image is due (the rebuild that a check asked
-// for, the weekly check of the base image), and its maintaining ensure then also runs the daily cleanup when that is due;
-// the cleanup alone never makes it run. On an SSH host it waits for the connection of the relay of this window to the host,
+// for, the weekly check of the base image). It removes no image: the cleanup of the Monitor does that
+// (docs/requirements.md R-DS-007). On an SSH host it waits for the connection of the relay of this window to the host,
 // and runs only through it, without a login of its own (docs/requirements.md R-ENG-002).
 import * as fs from 'fs';
 import { LOCAL_DOCKER_TARGET, describeDockerHost, hostAccessOf, transportWords, unsupportedTargetReason, type DockerTarget } from '../docker/dockerHost';
@@ -50,9 +50,7 @@ export interface HelperPrebuildDeps {
   helper: Pick<HelperImages, 'engineKey' | 'prebuildImage' | 'refreshDue'>;
   /**
    * The setting updateImagesOnConnect, read when the prebuild runs. With it on, the
-   * rebuild that a check asked for and the weekly check of the base image make the prebuild due and run. The daily
-   * cleanup never makes it due; it runs, with the setting on or off, whenever the prebuild runs and it is due too (the
-   * setting governs the check and the rebuild, not the cleanup).
+   * rebuild that a check asked for and the weekly check of the base image make the prebuild due and run.
    */
   checkBaseImage: () => boolean;
   /**
@@ -170,14 +168,13 @@ interface PrebuildRun {
  * is ended), and `stop` the one on the engine of a removal of Devspaces.
  *
  * It runs when the helper state file of the engine has no record of the current helper tag (after an update that
- * changed the tag, a first installation, or a tag that the cleanup removed), or, with the setting
+ * changed the tag, a first installation, or a tag that the cleanup of the Monitor removed), or, with the setting
  * updateImagesOnConnect on, when the refresh of that tag is due by the state file (HelperImages.refreshDue: the rebuild
  * that a check asked for, the weekly check of the base image, which an attempt that the registry did not answer puts
- * off by a week here). The daily cleanup alone never makes it due: it is housekeeping, and runs when the prebuild runs
- * anyway and in the preparation of the worker for an open. The state file alone decides, so a window that starts after
+ * off by a week here). The state file alone decides, so a window that starts after
  * the prebuild of another one finds the record (and no refresh due) and does nothing. It asks Docker nothing when it
- * is not due, so an activation does not wake Docker Desktop from its Resource Saver mode, nor connect to a remote host,
- * for housekeeping. It runs on the Docker engine of the target that `start` gets, local or remote alike (it runs as an
+ * is not due, so an activation does not wake Docker Desktop from its Resource Saver mode, nor connect to a remote host.
+ * It runs on the Docker engine of the target that `start` gets, local or remote alike (it runs as an
  * operation on it, so the engine key, the state file and every Docker call are those of an open on that engine), and
  * only when that engine answers (Docker is never started for this; a WSL distribution only while its Monitor runs
  * permanently). On an SSH host (with HelperPrebuildDeps.connection), it waits, when it is due, for the connection of the
@@ -185,12 +182,11 @@ interface PrebuildRun {
  * (docs/requirements.md R-ENG-002). A missing tag is then built by the next open, before its connection (the container
  * of the connection runs the helper image), and the prebuild finds the record afterwards. The ensure is the
  * maintaining one of HelperImages.prebuildImage (it builds a missing tag, runs the
- * rebuild itself so that the next open does not wait for it, starts the check, and runs the cleanup when that is due
- * too), shared with the preparation of a worker in the same window, so one that needs the missing tag meanwhile never
+ * rebuild itself so that the next open does not wait for it, and starts the check), shared with the preparation of a worker in the same window, so one that needs the missing tag meanwhile never
  * builds a second time, and one before an open joins the rebuild. There is no lock across windows (a lock left behind by a window that closed during the prebuild would block
  * the prebuild of every window). Windows that start at the same time
  * may each build the tag, or run the rebuild, once (BuildKit shares the layer cache; the extra images stay dangling
- * until the daily cleanup removes them); windows that start later find the record and no refresh due, and do nothing.
+ * until the cleanup of the Monitor removes them, R-DS-007); windows that start later find the record and no refresh due, and do nothing.
  */
 export class HelperPrebuild {
   /** Ends every prebuild (dispose). */
@@ -327,7 +323,7 @@ export class HelperPrebuild {
 
   /**
    * The state file of the engine has no record of the current tag (or only a removal mark), or the refresh of the tag
-   * is due by that file (HelperImages.refreshDue, with the setting updateImagesOnConnect; never the cleanup alone).
+   * is due by that file (HelperImages.refreshDue, with the setting updateImagesOnConnect).
    * The state file of the engine of the operation (helperStatePathFor with the engine key of an open),
    * read after the tag, so a dispose while the Dockerfile is read does not even read the engine. The engine key comes
    * from the target of the operation; Docker is not asked.

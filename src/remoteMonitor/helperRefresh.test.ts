@@ -12,7 +12,7 @@ import type { HttpRequest, HttpResponse, HttpTransport } from '../core/http';
 import type { ProcessRunner, RunOptions, RunResult } from '../core/ports';
 import { engineHelperRecordText, parseEngineHelperRecordText, type EngineHelperRecord } from '../core/remoteMonitor/helperCheck';
 import { BackgroundRun } from './background';
-import { cliHelperBuild, refreshHelperImage, type HelperBuild, type HelperRefreshDeps } from './helperRefresh';
+import { cliHelperBuild, ownHelperImage, refreshHelperImage, type HelperBuild, type HelperRefreshDeps } from './helperRefresh';
 
 const BASE = 'ghcr.io/acme/base:1';
 const DOCKERFILE = `ARG BASE_IMAGE=${BASE}\nFROM \${BASE_IMAGE}\nCOPY Dockerfile /usr/local/share/devspaces/helper/Dockerfile\n`;
@@ -255,5 +255,18 @@ describe('the background run with the part of the helper image', () => {
     expect(await run.run()).toBe(true);
     expect(log).toContain('The background run could not do the workspace helper image: boom');
     expect(log.at(-1)).toBe('The background run ended.');
+  });
+});
+
+// What the cleanup of the engine keeps of the Monitor's own helper image (engineCleanup.ts, R-DS-007).
+describe('ownHelperImage', () => {
+  it('gives the helper tag and the base image of the copy of the Dockerfile', async () => {
+    expect(await ownHelperImage(dockerfile())).toEqual({ tag: TAG, baseImage: BASE });
+  });
+
+  it('gives no base image for a Dockerfile without one, and nothing without a Dockerfile', async () => {
+    const content = 'FROM scratch AS x\n';
+    expect((await ownHelperImage(dockerfile(content)))?.tag).toBe(helperImageTag(content));
+    expect(await ownHelperImage(path.join(os.tmpdir(), 'devspaces-no-such-dir', 'Dockerfile'))).toBeUndefined();
   });
 });

@@ -68,7 +68,7 @@ export default async function setup(project: TestProject): Promise<() => void> {
   console.log(`Docker tests: run ${runId}, engine ${info.out}, logs in ${runDir}`);
 
   const helperDockerfile = fs.readFileSync(HELPER_DOCKERFILE, 'utf8');
-  // The build of the helper image tags the build image of Devspaces and removes the tags of its older versions.
+  // The build of the helper image tags the build image of Devspaces (the cleanup of the Monitor removes older versions).
   const allowedTags = [helperImageTag(helperDockerfile), buildxImageTag(), ...extractBaseImages(helperDockerfile), TEST_BASE_IMAGE, OLD_GIT_BASE_IMAGE];
 
   return () => {

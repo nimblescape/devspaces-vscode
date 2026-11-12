@@ -142,7 +142,7 @@ export const DockerHostsTexts = {
   purposeTooltip: (purpose: HostObjectPurpose): string => PURPOSE_TOOLTIPS[purpose],
   /** The tooltip line of an earlier build of the helper image (isEarlierHelperBuild). */
   earlierHelperBuild:
-    'A helper image without its tag devspaces-worker:<hash>: usually an earlier build, whose tag a newer build took. Docker keeps no record of the tag that an image had. Docker does not remove an image while a container that was created from it exists, also a stopped one.',
+    'A helper image without its tag devspaces-worker:<hash>: usually an earlier build, whose tag a newer build took. Docker keeps no record of the tag that an image had. Docker does not remove an image while a container that was created from it exists, also a stopped one. The Monitor removes it in its next background run when no container uses it.',
   /** Why the row has its color: the view shows an inactive object dimmed. */
   activeTooltip: (object: HostObject): string =>
     object.kind === 'container'

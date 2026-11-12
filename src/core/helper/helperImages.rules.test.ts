@@ -15,7 +15,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from '../docker/dockerHost';
 import { operationDockerTarget } from '../docker/dockerTargets';
 import { REMOTE_INFO_TIMEOUT_MS, WSL_INFO_TIMEOUT_MS } from '../docker/remoteDocker';
@@ -59,9 +58,6 @@ class FakeDocker implements HelperImageDocker {
 
   /** Calls of imageId: each one is a run of ensureHelperImageUse with a state file. */
   imageIdCalls = 0;
-  /** Calls of listImagesByLabel: the cleanup, or the removal of the previous image after a rebuild. */
-  listCalls = 0;
-  readonly removals: string[] = [];
 
   async imageExists(reference: string): Promise<boolean> {
     return this.images.has(reference);
@@ -82,16 +78,6 @@ class FakeDocker implements HelperImageDocker {
     await this.buildHandler(options);
     this.images.add(options.tag);
     return this.idOf(options.tag);
-  }
-
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    this.listCalls++;
-    return [...this.images].map((tag) => ({ id: this.idOf(tag), tags: [tag], createdAt: '' }));
-  }
-
-  async removeImage(reference: string): Promise<boolean> {
-    this.removals.push(reference);
-    return this.images.delete(reference);
   }
 }
 
@@ -1044,7 +1030,7 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
     expect(asked).toBe(true);
     expect(running).not.toHaveBeenCalled();
     expect(docker.imageIdCalls).toBe(0);
-    // A tag that the cleanup removed is not known.
+    // A tag with only a tombstone of an earlier cleanup is not known.
     fs.writeFileSync(statePath(), JSON.stringify({ version: 1, images: { [TAG]: { removedAt: '2026-09-20T12:00:00.000Z' } } }));
     expect(await prebuild(helper, { dockerRunning: running }).start()).toBe('built');
   });
@@ -1236,10 +1222,10 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
     });
   });
 
-  // prebuildImage is the maintaining ensure: when it runs, it runs the maintenance that is due, the rebuild that a
-  // check asked for only with the setting updateImagesOnConnect on, the cleanup also with it off (what makes
-  // HelperPrebuild run is helperImages.maintenance.test.ts).
-  it('prebuildImage runs the maintenance that is due: the rebuild that a check asked for only with the setting on, the cleanup also with it off', async () => {
+  // prebuildImage is the maintaining ensure: when it runs, it runs the rebuild that a check asked for, only with the
+  // setting updateImagesOnConnect on (what makes HelperPrebuild run is helperImages.maintenance.test.ts). It removes no
+  // image: the cleanup of the Monitor does that (R-DS-007).
+  it('prebuildImage runs the rebuild that a check asked for only with the setting on', async () => {
     docker.images.add(TAG);
     fs.mkdirSync(path.dirname(statePath()), { recursive: true });
     const old = '2026-09-01T12:00:00.000Z';
@@ -1253,17 +1239,14 @@ describe('HelperImages.prebuildImage and HelperPrebuild (background prebuild)', 
     };
     const state = JSON.stringify({ version: 1, images: { [TAG]: record }, lastCleanupAt: old });
     fs.writeFileSync(statePath(), state);
-    // The setting off: no rebuild, but the cleanup.
+    // The setting off: no rebuild.
     expect(await stateHelper().prebuildImage({ signal: new AbortController().signal, checkBaseImage: false })).toEqual({ tag: TAG, id: fakeImageId(TAG) });
     expect(docker.builds).toEqual([]);
-    expect(docker.listCalls).toBe(1);
-    // The setting on (another window, the same state): the rebuild with --pull --no-cache, and the cleanup.
+    // The setting on (another window, the same state): the rebuild with --pull --no-cache.
     fs.writeFileSync(statePath(), state);
     expect(await stateHelper().prebuildImage({ signal: new AbortController().signal, checkBaseImage: true })).toEqual({ tag: TAG, id: fakeImageId(TAG) });
     expect(docker.builds).toHaveLength(1);
     expect(docker.builds[0]).toMatchObject({ tag: TAG, pull: true, noCache: true });
-    expect(docker.listCalls).toBe(2);
-    expect(docker.removals).toEqual([]);
   });
 
   describe('a caller that joins the shared build can cancel its wait and gets the progress', () => {
@@ -1520,7 +1503,7 @@ describe('HelperImages: the helper runs in a new window', () => {
       },
       state: () => JSON.parse(fs.readFileSync(statePath, 'utf8')) as HelperState,
       settled: () => Promise.all(checks.splice(0)),
-      /** The helper exists, its weekly check and the cleanup are 8 days overdue, and its base image changed. */
+      /** The helper exists, its weekly check is 8 days overdue, and its base image changed. */
       overdue: () => {
         docker.images.add(TAG);
         fs.mkdirSync(path.dirname(statePath), { recursive: true });
@@ -1531,7 +1514,7 @@ describe('HelperImages: the helper runs in a new window', () => {
     };
   }
 
-  it('never checks, rebuilds, or cleans up in the first helper run (a stop, a delete)', async () => {
+  it('never checks or rebuilds in the first helper run (a stop, a delete)', async () => {
     // The helper run is runImage and gets the existing image.
     const w = newWindow();
     w.overdue();
@@ -1539,17 +1522,14 @@ describe('HelperImages: the helper runs in a new window', () => {
     await w.settled();
     expect(w.lookups).toEqual([]);
     expect(docker.builds).toEqual([]);
-    expect(docker.listCalls).toBe(0);
-    expect(docker.removals).toEqual([]);
     expect(w.state().images[TAG].lastUsedAt).toBe(w.iso());
     expect(w.state().images[TAG].checkedAt).toBe(w.iso(-8 * 24 * 60 * 60 * 1000));
 
-    // The open pipeline (ensureImageUse) in the same window does the maintenance: the check (in the background) and the
-    // cleanup. The rebuild that the check asks for comes with the next ensureImageUse.
+    // The open pipeline (ensureImageUse) in the same window does the maintenance: the check (in the background). The
+    // rebuild that the check asks for comes with the next ensureImageUse.
     await w.helper.ensureImageUse();
     await w.settled();
     expect(w.lookups).toHaveLength(1);
-    expect(docker.listCalls).toBe(1);
     expect(w.state().images[TAG].latestBaseDigest).toBe(DIGEST_B);
     w.advance(HELPER_IMAGE_RECHECK_MS);
     await w.helper.ensureImageUse();
@@ -1570,8 +1550,7 @@ describe('HelperImages: the helper runs in a new window', () => {
     expect((await ensured).tag).toBe(TAG);
     expect(docker.builds).toHaveLength(1);
     expect(docker.builds[0]).toMatchObject({ pull: true });
-    // ensureImageUse ran ensureHelperImageUse again, with the maintenance: the cleanup is due in a new state file.
-    expect(docker.listCalls).toBe(1);
+    // ensureImageUse ran ensureHelperImageUse again, with the maintenance, and joined the build of the helper run.
   });
 });
 
@@ -1621,7 +1600,7 @@ describe('HelperImages.ensureImagePresent', () => {
   it.each([
     ['the local Docker', { key: '' }],
     ['a remote engine', REMOTE],
-  ])('on %s, a recorded new base digest rebuilds nothing, checks nothing, and cleans up nothing', async (_name, engine) => {
+  ])('on %s, a recorded new base digest rebuilds nothing and checks nothing', async (_name, engine) => {
     docker.images.add(TAG);
     const file = helperStatePathFor(statePath(), engine.key);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1644,8 +1623,6 @@ describe('HelperImages.ensureImagePresent', () => {
     expect(await helper.ensureImagePresent()).toEqual({ tag: TAG, id: fakeImageId(TAG) });
     expect(docker.builds).toEqual([]);
     expect(lookup).not.toHaveBeenCalled();
-    expect(docker.listCalls).toBe(0);
-    expect(docker.removals).toEqual([]);
   });
 
   it.each([
@@ -1784,7 +1761,7 @@ describe('HelperImages.ensureImagePresent', () => {
     expect(docker.builds).toEqual([]);
   });
 
-  // A pending maintaining ensure of an open in the same window (a `--pull --no-cache` rebuild, the cleanup) is not
+  // A pending maintaining ensure of an open in the same window (a `--pull --no-cache` rebuild) is not
   // joined when the tag exists: the Stop could not cancel that wait.
   const NEW_ID = `sha256:${'e'.repeat(64)}`;
 

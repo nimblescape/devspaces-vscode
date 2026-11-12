@@ -9,7 +9,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { silentLogger } from '../ports';
 import { helperImageTag } from './helperImage';
 import type { HelperState } from './helperState';
@@ -40,12 +39,6 @@ class Engine implements HelperImageDocker {
     this.builds += 1;
     this.images.add(options.tag);
     return ID;
-  }
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    return [];
-  }
-  async removeImage(): Promise<boolean> {
-    return false;
   }
 }
 
@@ -94,7 +87,7 @@ describe('HelperImages: the socket, the report of a build, and the record of the
     engine.images.add(TAG);
     const helper = images({ docker: engine, statePath, clock: { now: () => now } });
     const state = (): HelperState => JSON.parse(fs.readFileSync(statePath, 'utf8')) as HelperState;
-    /** Another window's cleanup marks the tag as foreign (a write of this instance clears the mark). */
+    /** The cleanup of an older version marked the tag as foreign (a write of this instance clears the mark). */
     const markForeign = (): void => {
       const saved = state();
       saved.images[TAG] = { ...saved.images[TAG], foreignSince: new Date(now).toISOString() };

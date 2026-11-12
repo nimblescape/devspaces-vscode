@@ -4,7 +4,7 @@
 
 // The settings of the Monitor that an open and `monitorEnsure` carry (MonitorSettings: the image settings with
 // the schedule of the whole background run, a cron schedule or an interval in minutes, and whether the monitor runs
-// permanently), checked strictly on both sides; `settings -` gets them without the mode. They carry no prefixes.
+// permanently, and whether its engine is the VM of Devspaces), checked strictly on both sides; `settings -` gets them without the mode. They carry no prefixes.
 import { describe, expect, it } from 'vitest';
 import { imageSettingsOf, parseImageSettingsInput, parseMonitorSettings } from '../remoteMonitor/protocol';
 import { parseMonitorEnsureParams, parseOpenParams } from './protocol';
@@ -46,6 +46,15 @@ describe('the monitor settings of an open and of monitorEnsure', () => {
     }
     expect(parseMonitorEnsureParams({ images: { ...IMAGES, permanent: true, computer } })).toEqual({ images: { ...IMAGES, permanent: true, computer } });
     expect(imageSettingsOf({ ...IMAGES, permanent: true, computer } as typeof IMAGES)).toEqual(IMAGES);
+  });
+
+  // `vm`: the engine is the VM of Devspaces (the Monitor prunes the build cache there, docs/requirements.md R-DS-007).
+  it('takes `vm` as a boolean, or none, and leaves it out of `settings -`', () => {
+    expect(parseMonitorSettings({ ...IMAGES, vm: true })).toEqual({ ...IMAGES, vm: true });
+    expect(parseMonitorSettings({ ...IMAGES, permanent: false, vm: false })).toEqual({ ...IMAGES, permanent: false, vm: false });
+    for (const vm of ['true', 1, null, {}]) expect(parseMonitorSettings({ ...IMAGES, vm }), JSON.stringify(vm)).toBeUndefined();
+    expect(parseMonitorEnsureParams({ images: { ...IMAGES, vm: true } })).toEqual({ images: { ...IMAGES, vm: true } });
+    expect(imageSettingsOf({ ...IMAGES, vm: true } as typeof IMAGES)).toEqual(IMAGES);
   });
 
   it('carries the mode in monitorEnsure and in the open', () => {

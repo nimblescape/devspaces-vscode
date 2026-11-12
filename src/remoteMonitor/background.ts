@@ -7,7 +7,8 @@
 // CacheSchedule of main.ts). Its parts run one after the other, each logged, and each failing on its own (a failure
 // never stops the monitor or the next part):
 //   a. the image checks and pulls of the images in use (ImageMaintenance), then the check of the workspace helper image
-//      of the Monitor and its rebuild when its base image changed (helperRefresh.ts);
+//      of the Monitor and its rebuild when its base image changed (helperRefresh.ts), then the cleanup of the engine:
+//      the objects of Devspaces that no container uses (engineCleanup.ts);
 //   b. the newest released VS Code server: for each quality (stable always, insider while an open used an insider
 //      version within 14 days) and the platform of the engine, the newest commit of the update service, made present
 //      by ensureServer of the open (the same lock of the version, so an open that needs it waits, and nothing is
@@ -128,6 +129,8 @@ export interface BackgroundRunDeps {
    * the network; none in the tests that leave it out.
    */
   helperImage?: () => Promise<NetworkContact | void>;
+  /** After the helper image, the cleanup of the engine (EngineCleanup.pass); none in the tests that leave it out. */
+  cleanup?: () => Promise<void>;
   /**
    * Parts b to d, made afresh for each run (its HTTPS reads the proxy of the daemon once, so a failed read or a changed
    * proxy counts only for that run); undefined when the monitor mounts no store (the run then leaves them out, logged).
@@ -160,9 +163,10 @@ export class BackgroundRun {
   constructor(private readonly deps: BackgroundRunDeps) {}
 
   /**
-   * Parts a to d, each on its own, then the prepares. Never throws. Resolves false when the run did not reach the
-   * network: a part failed for the network (isNetworkError: the image pass, the update service, the fetch of a server or
-   * an extension) and no server answered any part (RunNetwork), so the schedule tries the run again (CacheSchedule).
+   * Parts a to d, each on its own (the cleanup of the engine after part a), then the prepares. Never throws. Resolves
+   * false when the run did not reach the network: a part failed for the network (isNetworkError: the image pass, the
+   * update service, the fetch of a server or an extension) and no server answered any part (RunNetwork), so the schedule
+   * tries the run again (CacheSchedule).
    */
   async run(): Promise<boolean> {
     const { log } = this.deps;
@@ -182,6 +186,8 @@ export class BackgroundRun {
         else if (contact === 'offline' && !this.reached) this.offline = true;
       }, true);
     }
+    const cleanup = this.deps.cleanup;
+    if (cleanup !== undefined) await this.part('the cleanup of the engine', cleanup);
     const vscode = this.deps.vscode();
     if (vscode === undefined) {
       log('The Monitor mounts no shared VS Code server store; the background run leaves the VS Code server out.');

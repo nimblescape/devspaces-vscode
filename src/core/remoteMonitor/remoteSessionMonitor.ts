@@ -84,10 +84,14 @@ export interface ImageMaintenanceSettings {
   permanent?: MonitorSettings['permanent'];
   /** The ID of this computer (MonitorSettings.computer): the owner of a permanent monitor that it creates. */
   computer?: MonitorSettings['computer'];
+  /** The engine is the VM of Devspaces (MonitorSettings.vm): the cleanup of the monitor prunes the build cache too. */
+  vm?: MonitorSettings['vm'];
 }
 
 /** The environment variable that tells the monitor that it runs permanently (`1`). */
 export const MONITOR_PERMANENT_ENV = 'DEVSPACE_MONITOR_PERMANENT';
+/** The environment variable that tells the monitor that it runs on the VM of Devspaces (`1`). */
+export const MONITOR_VM_ENV = 'DEVSPACE_MONITOR_VM';
 /** The environment variable with the name of the VS Code server store that the monitor mounts. */
 export const MONITOR_VSCODE_STORE_ENV = 'DEVSPACE_VSCODE_STORE';
 /**
@@ -567,6 +571,8 @@ export class RemoteSessionMonitor {
     }
     // The mode, fixed for the life of the container (it is part of its label).
     if (permanent) env[MONITOR_PERMANENT_ENV] = '1';
+    // The VM of Devspaces (not part of the label: an engine never changes between a VM and a remote host).
+    if (images?.vm === true) env[MONITOR_VM_ENV] = '1';
     const store = this.options.vscodeStoreVolume;
     if (store !== undefined) env[MONITOR_VSCODE_STORE_ENV] = store;
     // The version of Devspaces that this program got at its start (the worker: from the extension), for the header

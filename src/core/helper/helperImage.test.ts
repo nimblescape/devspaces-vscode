@@ -7,7 +7,6 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { devcontainerCliVersion } from '../../../scripts/cliVersion.mjs';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { CommandError } from '../errors';
 import type { HttpTransport } from '../http';
 import { RegistryClient, type DigestResult, IMAGE_CHECK_TIMEOUT_MS } from '../imageCheck/registryClient';
@@ -16,12 +15,9 @@ import { abortError, type Logger } from '../ports';
 import {
   DEVCONTAINER_CLI_VERSION,
   HELPER_CHECK_INTERVAL_MS,
-  HELPER_CLEANUP_INTERVAL_MS,
   HELPER_GENERATION,
   HELPER_LAST_USED_INTERVAL_MS,
   HELPER_RETRY_INTERVAL_MS,
-  HELPER_TOMBSTONE_MS,
-  HELPER_UNUSED_LIMIT_MS,
   ensureHelperImageUse,
   helperImageTag,
   recordHelperImageUse,
@@ -60,15 +56,7 @@ interface FakeImage {
 class FakeDocker implements HelperImageDocker {
   readonly images = new Map<string, FakeImage>();
   readonly builds: BuildOptions[] = [];
-  /** References passed to removeImage, in order. */
-  readonly removals: string[] = [];
-  readonly labelQueries: string[] = [];
-  /** References that Docker refuses to remove, because a container uses the image. */
-  readonly inUse = new Set<string>();
-  /** References whose removal fails with another error. */
-  readonly failingRemovals = new Set<string>();
   buildHandler: (options: BuildOptions) => Promise<void> = async () => undefined;
-  listError: Error | undefined;
   imageIdError: Error | undefined;
   /**
    * The build returns the ID of its image, as BootstrapDocker.buildImage finds it by its build label; with this flag it
@@ -109,34 +97,6 @@ class FakeDocker implements HelperImageDocker {
     const id = this.addImage([options.tag], { helper: options.labels?.['nimblescape.devspaces.worker'] === 'true' });
     this.afterBuild();
     return this.builtIdMissing ? undefined : id;
-  }
-
-  async listImagesByLabel(label: string): Promise<ImageInfo[]> {
-    this.labelQueries.push(label);
-    if (this.listError) throw this.listError;
-    return [...this.images.values()]
-      .filter((image) => label === 'nimblescape.devspaces.worker=true' && image.helper)
-      .map((image) => ({ id: image.id, tags: [...image.tags], createdAt: '2026-09-01 10:00:00 +0200 CEST' }));
-  }
-
-  /** Like `docker image rm` without force: a tag is untagged (the image goes with its last tag). */
-  async removeImage(reference: string): Promise<boolean> {
-    this.removals.push(reference);
-    const id = this.idOf(reference);
-    if (id === undefined) return false;
-    if (this.failingRemovals.has(reference)) throw new CommandError(`docker image rm ${reference}`, 1, '', 'Cannot connect to the Docker daemon');
-    const image = this.images.get(id)!;
-    // Like Docker, an image in use refuses only the removal of its last reference (its ID, or its only tag); another
-    // tag is untagged.
-    if ((this.inUse.has(reference) || this.inUse.has(id)) && (reference === id || image.tags.length <= 1)) return false;
-    if (reference === id) {
-      if (image.tags.length > 1) throw new CommandError(`docker image rm ${id}`, 1, '', 'conflict: unable to delete (must be forced)');
-      this.images.delete(id);
-    } else {
-      image.tags = image.tags.filter((tag) => tag !== reference);
-      if (image.tags.length === 0) this.images.delete(id);
-    }
-    return true;
   }
 }
 
@@ -269,8 +229,6 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const OLD_TAG = 'devspaces-worker:0123456789ab';
 const OTHER_TAG = 'devspaces-worker:abcdef012345';
-/** A time relative to START, as Harness.iso gives it before a harness exists. */
-const h0iso = (offsetMs: number): string => new Date(START + offsetMs).toISOString();
 
 type LookupAnswer = string | 'unreachable' | undefined;
 
@@ -358,7 +316,6 @@ describe('ensureHelperImageUse with a state file: new helper image', () => {
           generation: HELPER_GENERATION,
         },
       },
-      lastCleanupAt: h.iso(),
     });
   });
 
@@ -625,8 +582,6 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
           imageId: oldId,
         },
       },
-      // The cleanup ran today: these tests see the refresh alone.
-      lastCleanupAt: h.iso(),
     });
     return { h, oldId };
   }
@@ -703,7 +658,7 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     expect(h.state().images[h.tag]).toMatchObject({ checkedAt: h.iso(-8 * DAY), attemptedAt: h.iso() });
   });
 
-  it('asks the next ensure to rebuild the same tag with --pull --no-cache when the base image changed, and removes the previous image', async () => {
+  it('asks the next ensure to rebuild the same tag with --pull --no-cache when the base image changed, and keeps the previous image for the cleanup of the Monitor', async () => {
     const { h, oldId } = await changed();
     // The check itself builds nothing: the ensure that started it did not wait for it.
     expect(h.docker.builds).toHaveLength(0);
@@ -727,8 +682,8 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     const newId = h.docker.idOf(h.tag);
     expect(newId).toBeDefined();
     expect(newId).not.toBe(oldId);
-    expect(h.docker.removals).toEqual([oldId]);
-    expect(h.docker.images.has(oldId)).toBe(false);
+    // The windows remove no helper image: the previous image stays without a tag, for the cleanup of the Monitor.
+    expect(h.docker.images.get(oldId)?.tags).toEqual([]);
     // The ID of the image that this build made, found by its build label (for diagnosis). The rebuild records the
     // helper generation.
     expect(h.state().images[h.tag]).toEqual({
@@ -800,7 +755,7 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     expect(use).toEqual({ tag: fresh.tag, id: fresh.docker.idOf(fresh.tag) });
   });
 
-  it('runs the rebuilt image by the ID of its tag and removes the previous image when the rebuild gave no ID', async () => {
+  it('runs the rebuilt image by the ID of its tag when the rebuild gave no ID', async () => {
     const { h, oldId } = await changed();
     h.docker.builtIdMissing = true;
     const use = await ensureHelperImageUse(h.docker, h.file, { statePath: h.statePath, baseDigest: h.baseDigest, clock: h.clock, logger: h.logger });
@@ -809,10 +764,8 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     // The open runs the image by its ID, so a rebuild by another window cannot change it mid-open.
     expect(use).toEqual({ tag: h.tag, id: h.docker.idOf(h.tag) });
     expect(use.id).not.toBe(oldId);
-    // The ID read back by the tag is not recorded, but the previous image without a tag is removed.
+    // The ID read back by the tag is not recorded.
     expect(h.state().images[h.tag]?.imageId).toBeUndefined();
-    expect(h.docker.removals).toEqual([oldId]);
-    expect(h.docker.images.has(oldId)).toBe(false);
   });
 
   it('keeps the previous image when it still has another tag', async () => {
@@ -820,68 +773,7 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     h.docker.images.get(oldId)!.tags.push('mine:backup');
     await h.ensure();
     expect(h.docker.builds).toHaveLength(1);
-    expect(h.docker.removals).toEqual([]);
     expect(h.docker.images.get(oldId)?.tags).toEqual(['mine:backup']);
-  });
-
-  it('a rebuild removes the previous image whose only tag left is its monitor tag', async () => {
-    const { h, oldId } = existing(8 * DAY);
-    const monitorTag = h.tag.replace('devspaces-worker:', 'devspaces-monitor:');
-    h.docker.images.get(oldId)!.tags.push(monitorTag);
-    h.answer = async () => DIGEST_B;
-    await h.ensure();
-    await h.settled();
-    // The check asks the next ensure to rebuild.
-    await h.ensure();
-    expect(h.docker.builds).toHaveLength(1);
-    expect(h.docker.removals).toEqual([monitorTag]);
-    expect(h.docker.images.has(oldId)).toBe(false);
-  });
-
-  it('keeps a previous image with its monitor tag while the monitor runs, and removes it at a later cleanup', async () => {
-    const { h, oldId } = existing(8 * DAY);
-    const monitorTag = h.tag.replace('devspaces-worker:', 'devspaces-monitor:');
-    h.docker.images.get(oldId)!.tags.push(monitorTag);
-    h.docker.inUse.add(oldId);
-    h.answer = async () => DIGEST_B;
-    await h.ensure();
-    await h.settled();
-    // The check asks the next ensure to rebuild.
-    await h.ensure();
-    expect(h.docker.removals).toEqual([monitorTag]);
-    expect(h.docker.images.get(oldId)?.tags).toEqual([monitorTag]);
-    h.docker.inUse.clear();
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    expect(h.docker.images.has(oldId)).toBe(false);
-    // Never a tag of the current image.
-    expect(h.docker.images.get(h.docker.idOf(h.tag)!)?.tags).toEqual([h.tag]);
-  });
-
-  it('a previous image with a monitor tag and another tag keeps both', async () => {
-    const { h, oldId } = existing(8 * DAY);
-    h.docker.images.get(oldId)!.tags.push('devspaces-monitor:fedcba987654', 'mine:backup');
-    h.answer = async () => DIGEST_B;
-    await h.ensure();
-    await h.settled();
-    // The check asks the next ensure to rebuild.
-    await h.ensure();
-    expect(h.docker.removals).toEqual([]);
-    expect(h.docker.images.get(oldId)?.tags).toEqual(['devspaces-monitor:fedcba987654', 'mine:backup']);
-  });
-
-  it('keeps a previous image that a running helper uses, and removes it at the next cleanup', async () => {
-    const { h, oldId } = await changed();
-    h.docker.inUse.add(oldId);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([oldId]);
-    expect(h.docker.images.get(oldId)?.tags).toEqual([]);
-
-    h.docker.inUse.clear();
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    expect(h.docker.images.has(oldId)).toBe(false);
-    expect(h.docker.idOf(h.tag)).toBeDefined();
   });
 
   it('keeps the existing image when the rebuild fails, and checks again in a week', async () => {
@@ -892,7 +784,6 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     expect(await h.ensure()).toBe(h.tag);
     expect(h.docker.builds).toHaveLength(1);
     expect(h.docker.idOf(h.tag)).toBe(oldId);
-    expect(h.docker.removals).toEqual([]);
     expect(h.warnings().join('\n')).toMatch(/could not be built again\. The existing image is used: .*Temporary failure/);
     // The record keeps the ID of the image of the earlier build of this installation (for diagnosis).
     expect(h.state().images[h.tag]).toEqual({
@@ -1030,21 +921,17 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     expect(pending.h.docker.builds).toHaveLength(1);
   });
 
-  it('leaves the check, the rebuild, and the cleanup to the next ensure with maintenance when `maintain` is false', async () => {
+  it('leaves the check and the rebuild to the next ensure with maintenance when `maintain` is false', async () => {
     const { h } = await changed();
-    h.writeState({ ...h.state(), lastCleanupAt: h.iso(-2 * DAY) });
     h.advance(HELPER_CHECK_INTERVAL_MS);
-    h.docker.addImage([]);
     await h.ensure({ maintain: false });
     await h.settled();
     expect(h.lookups).toHaveLength(1);
     expect(h.docker.builds).toHaveLength(0);
-    expect(h.docker.labelQueries).toEqual([]);
     expect(h.state().images[h.tag].lastUsedAt).toBe(h.iso());
 
     await h.ensure();
     expect(h.docker.builds).toHaveLength(1);
-    expect(h.docker.labelQueries.length).toBeGreaterThan(0);
   });
 
   it('builds a missing tag also when `maintain` is false', async () => {
@@ -1052,7 +939,6 @@ describe('ensureHelperImageUse with a state file: weekly check of the base image
     await h.ensure({ maintain: false });
     expect(h.docker.builds).toHaveLength(1);
     expect(h.docker.builds[0]).toMatchObject({ pull: true });
-    expect(h.docker.labelQueries).toEqual([]);
   });
 });
 
@@ -1063,7 +949,6 @@ describe('ensureHelperImageUse with a state file: lastUsedAt and the state file'
     h.writeState({
       version: 1,
       images: { [h.tag]: { baseImage: BASE, baseDigest: DIGEST_A, checkedAt: h.iso(), lastUsedAt: h.iso(-2 * HOUR) } },
-      lastCleanupAt: h.iso(),
     });
     await h.ensure();
     expect(h.state().images[h.tag].lastUsedAt).toBe(h.iso());
@@ -1120,371 +1005,6 @@ describe('ensureHelperImageUse with a state file: lastUsedAt and the state file'
   });
 });
 
-describe('ensureHelperImageUse with a state file: cleanup of other helper images', () => {
-  /** The current helper image exists and was checked today; only the cleanup has work. */
-  function current(records: Record<string, HelperState['images'][string]> = {}, lastCleanupAt?: string) {
-    const h = new Harness();
-    const currentId = h.docker.addImage([h.tag]);
-    const state: HelperState = {
-      version: 1,
-      images: { [h.tag]: { baseImage: BASE, baseDigest: DIGEST_A, checkedAt: h.iso(), lastUsedAt: h.iso() }, ...records },
-    };
-    if (lastCleanupAt) state.lastCleanupAt = lastCleanupAt;
-    h.writeState(state);
-    return { h, currentId };
-  }
-
-  it('removes dangling helper images and helper tags unused for 7 days, and nothing else', async () => {
-    const { h, currentId } = current();
-    const oldId = h.docker.addImage([OLD_TAG]);
-    const recentId = h.docker.addImage([OTHER_TAG]);
-    const danglingId = h.docker.addImage([]);
-    const unlabeledId = h.docker.addImage(['devspaces-worker:fedcba987654'], { helper: false });
-    const unlabeledDanglingId = h.docker.addImage([], { helper: false });
-    // An image of another repository that inherited the label (built FROM a helper image).
-    const derivedId = h.docker.addImage(['mine:1']);
-    h.writeState({
-      ...h.state(),
-      images: {
-        ...h.state().images,
-        [OLD_TAG]: { lastUsedAt: h.iso(-HELPER_UNUSED_LIMIT_MS) },
-        [OTHER_TAG]: { lastUsedAt: h.iso(-HELPER_UNUSED_LIMIT_MS + HOUR) },
-      },
-    });
-
-    expect(await h.ensure()).toBe(h.tag);
-    expect(h.docker.labelQueries).toEqual(['nimblescape.devspaces.worker=true']);
-    expect([...h.docker.removals].sort()).toEqual([OLD_TAG, danglingId].sort());
-    expect(h.docker.images.has(oldId)).toBe(false);
-    expect(h.docker.images.has(danglingId)).toBe(false);
-    for (const id of [currentId, recentId, unlabeledId, unlabeledDanglingId, derivedId]) expect(h.docker.images.has(id)).toBe(true);
-    const state = h.state();
-    expect(Object.keys(state.images).sort()).toEqual([OLD_TAG, OTHER_TAG, h.tag].sort());
-    // A tombstone: if the tag comes back, another installation uses it.
-    expect(state.images[OLD_TAG]).toEqual({ removedAt: h.iso() });
-    expect(state.lastCleanupAt).toBe(h.iso());
-
-    // Tags of other repositories are never removed, however long ago they were used.
-    h.advance(30 * DAY);
-    await h.ensure();
-    expect(h.docker.images.has(derivedId)).toBe(true);
-    expect(h.docker.removals).not.toContain('mine:1');
-  });
-
-  it('never removes the image of the current tag, also when it has another expired helper tag', async () => {
-    const { h, currentId } = current({ [OLD_TAG]: { lastUsedAt: '2026-01-01T00:00:00.000Z' } });
-    h.docker.images.get(currentId)!.tags.push(OLD_TAG);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([]);
-    expect(h.docker.images.get(currentId)?.tags).toEqual([h.tag, OLD_TAG]);
-  });
-
-  it('removes the monitor tag with its helper tag, and a monitor tag without its helper tag; keeps the others', async () => {
-    const { h, currentId } = current({ [OLD_TAG]: { lastUsedAt: h0iso(-HELPER_UNUSED_LIMIT_MS) }, [OTHER_TAG]: { lastUsedAt: h0iso(-HOUR) } });
-    const oldMonitor = OLD_TAG.replace('devspaces-worker:', 'devspaces-monitor:');
-    const otherMonitor = OTHER_TAG.replace('devspaces-worker:', 'devspaces-monitor:');
-    const oldId = h.docker.addImage([OLD_TAG, oldMonitor]);
-    const otherId = h.docker.addImage([OTHER_TAG, otherMonitor]);
-    const orphanId = h.docker.addImage(['devspaces-monitor:fedcba987654', 'mine:keep']);
-    h.docker.images.get(currentId)!.tags.push(h.tag.replace('devspaces-worker:', 'devspaces-monitor:'));
-    await h.ensure();
-    // The monitor tag first, then its helper tag.
-    expect(h.docker.removals).toEqual([oldMonitor, OLD_TAG, 'devspaces-monitor:fedcba987654']);
-    expect(h.docker.images.has(oldId)).toBe(false);
-    expect(h.docker.images.get(otherId)?.tags).toEqual([OTHER_TAG, otherMonitor]);
-    expect(h.docker.images.get(orphanId)?.tags).toEqual(['mine:keep']);
-    expect(h.docker.images.get(currentId)?.tags).toEqual([h.tag, h.tag.replace('devspaces-worker:', 'devspaces-monitor:')]);
-    expect(h.state().images[OLD_TAG]).toEqual({ removedAt: h.iso() });
-    // Monitor tags are no records of the state.
-    expect(Object.keys(h.state().images).some((tag) => tag.startsWith('devspaces-monitor:'))).toBe(false);
-  });
-
-  it('a helper tag whose removal fails stays, without its monitor tag (only a name)', async () => {
-    const { h } = current({ [OLD_TAG]: { lastUsedAt: h0iso(-HELPER_UNUSED_LIMIT_MS) } });
-    const oldMonitor = OLD_TAG.replace('devspaces-worker:', 'devspaces-monitor:');
-    const oldId = h.docker.addImage([OLD_TAG, oldMonitor]);
-    h.docker.failingRemovals.add(OLD_TAG);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([oldMonitor, OLD_TAG]);
-    expect(h.docker.images.get(oldId)?.tags).toEqual([OLD_TAG]);
-    expect(h.state().images[OLD_TAG]?.removedAt).toBeUndefined();
-  });
-
-  it('removes the monitor tag but keeps its helper tag while a container uses its image', async () => {
-    const { h } = current({ [OLD_TAG]: { lastUsedAt: h0iso(-HELPER_UNUSED_LIMIT_MS) } });
-    const oldMonitor = OLD_TAG.replace('devspaces-worker:', 'devspaces-monitor:');
-    const oldId = h.docker.addImage([OLD_TAG, oldMonitor]);
-    h.docker.inUse.add(oldId);
-    await h.ensure();
-    // Docker untags the monitor tag (not the last reference) and refuses the helper tag (the last one).
-    expect(h.docker.removals).toEqual([oldMonitor, OLD_TAG]);
-    expect(h.docker.images.get(oldId)?.tags).toEqual([OLD_TAG]);
-    // Not removed: no tombstone; a later cleanup tries again.
-    expect(h.state().images[OLD_TAG]?.removedAt).toBeUndefined();
-    h.docker.inUse.clear();
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    expect(h.docker.images.has(oldId)).toBe(false);
-  });
-
-  it('a monitor tag whose removal fails keeps its helper tag, without a tombstone, until a later cleanup', async () => {
-    const { h } = current({ [OLD_TAG]: { lastUsedAt: h0iso(-HELPER_UNUSED_LIMIT_MS) } });
-    const oldMonitor = OLD_TAG.replace('devspaces-worker:', 'devspaces-monitor:');
-    const oldId = h.docker.addImage([OLD_TAG, oldMonitor]);
-    h.docker.inUse.add(oldId);
-    h.docker.failingRemovals.add(oldMonitor);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([oldMonitor]);
-    expect(h.docker.images.get(oldId)?.tags).toEqual([OLD_TAG, oldMonitor]);
-    expect(h.state().images[OLD_TAG]?.removedAt).toBeUndefined();
-    h.docker.failingRemovals.clear();
-    h.docker.inUse.clear();
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    expect(h.docker.images.has(oldId)).toBe(false);
-    expect(h.state().images[OLD_TAG]).toEqual({ removedAt: h.iso() });
-  });
-
-  it('an orphan monitor tag that is the only tag of an image in use stays, and goes at a later cleanup', async () => {
-    const { h } = current();
-    const orphanId = h.docker.addImage(['devspaces-monitor:fedcba987654']);
-    h.docker.inUse.add(orphanId);
-    await h.ensure();
-    expect(h.docker.removals).toEqual(['devspaces-monitor:fedcba987654']);
-    expect(h.docker.images.get(orphanId)?.tags).toEqual(['devspaces-monitor:fedcba987654']);
-    h.docker.inUse.clear();
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    expect(h.docker.images.has(orphanId)).toBe(false);
-  });
-
-  it('gives an unknown helper tag a grace period of 7 days, then removes it', async () => {
-    const { h } = current();
-    const otherId = h.docker.addImage([OTHER_TAG]);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([]);
-    expect(h.state().images[OTHER_TAG]).toEqual({ foreignSince: h.iso(), lastUsedAt: h.iso() });
-
-    h.advance(HELPER_UNUSED_LIMIT_MS - HOUR);
-    await h.ensure();
-    expect(h.docker.images.has(otherId)).toBe(true);
-
-    // The next daily cleanup, after the 7 days.
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([OTHER_TAG]);
-    expect(h.docker.images.has(otherId)).toBe(false);
-    expect(h.state().images[OTHER_TAG]).toEqual({ removedAt: h.iso() });
-  });
-
-  it('keeps a helper tag that another window used within 7 days', async () => {
-    const { h } = current();
-    const otherId = h.docker.addImage([OTHER_TAG]);
-    await h.ensure();
-    // Another window with that extension version uses its helper.
-    h.advance(5 * DAY);
-    await recordHelperImageUse(h.statePath, OTHER_TAG, { clock: h.clock });
-    h.advance(5 * DAY);
-    await h.ensure();
-    expect(h.docker.images.has(otherId)).toBe(true);
-    expect(h.docker.removals).toEqual([]);
-  });
-
-  it('gives a helper tag with a lastUsedAt in the future (the clock was set back) a new grace period', async () => {
-    const { h } = current({ [OTHER_TAG]: { lastUsedAt: '2027-01-01T00:00:00.000Z' } });
-    h.docker.addImage([OTHER_TAG]);
-    await h.ensure();
-    expect(h.state().images[OTHER_TAG].lastUsedAt).toBe(h.iso());
-  });
-
-  it('runs at most once per day', async () => {
-    const { h } = current();
-    await h.ensure();
-    expect(h.docker.labelQueries).toHaveLength(1);
-    h.advance(HELPER_CLEANUP_INTERVAL_MS - HOUR);
-    await h.ensure();
-    expect(h.docker.labelQueries).toHaveLength(1);
-    h.advance(HOUR);
-    await h.ensure();
-    expect(h.docker.labelQueries).toHaveLength(2);
-  });
-
-  it('logs removals that fail, keeps their records, and tries again at the next cleanup', async () => {
-    const { h } = current({ [OLD_TAG]: { lastUsedAt: h0(-8 * DAY) }, [OTHER_TAG]: { lastUsedAt: h0(-8 * DAY) } });
-    const oldId = h.docker.addImage([OLD_TAG]);
-    const otherId = h.docker.addImage([OTHER_TAG]);
-    const danglingId = h.docker.addImage([]);
-    h.docker.inUse.add(OLD_TAG);
-    h.docker.failingRemovals.add(OTHER_TAG);
-    h.docker.failingRemovals.add(danglingId);
-    expect(await h.ensure()).toBe(h.tag);
-    expect([...h.docker.removals].sort()).toEqual([OLD_TAG, OTHER_TAG, danglingId].sort());
-    expect(h.warnings().join('\n')).toContain(`${OTHER_TAG} could not be removed`);
-    expect(Object.keys(h.state().images).sort()).toEqual([OLD_TAG, OTHER_TAG, h.tag].sort());
-
-    h.docker.inUse.clear();
-    h.docker.failingRemovals.clear();
-    h.advance(HELPER_CLEANUP_INTERVAL_MS);
-    await h.ensure();
-    for (const id of [oldId, otherId, danglingId]) expect(h.docker.images.has(id)).toBe(false);
-    expect(h.state().images).toEqual({
-      [h.tag]: expect.objectContaining({ baseDigest: DIGEST_A }),
-      [OLD_TAG]: { removedAt: h.iso() },
-      [OTHER_TAG]: { removedAt: h.iso() },
-    });
-  });
-
-  it('skips the cleanup when the images cannot be listed, and tries again at the next job', async () => {
-    const { h } = current();
-    h.docker.addImage([]);
-    h.docker.listError = new CommandError('docker image ls', 1, '', 'Cannot connect to the Docker daemon');
-    expect(await h.ensure()).toBe(h.tag);
-    expect(h.docker.removals).toEqual([]);
-    expect(h.state().lastCleanupAt).toBeUndefined();
-
-    h.docker.listError = undefined;
-    h.advance(HOUR);
-    await h.ensure();
-    expect(h.docker.labelQueries).toHaveLength(2);
-    expect(h.docker.removals).toHaveLength(1);
-  });
-
-  it('removes nothing when the ID of the current image cannot be read after a build', async () => {
-    const h = new Harness();
-    const danglingId = h.docker.addImage([]);
-    // The ID comes from the build (its build label); it is unavailable here too.
-    h.docker.builtIdMissing = true;
-    h.docker.buildHandler = async () => {
-      h.docker.imageIdError = new CommandError('docker image inspect', 1, '', 'Cannot connect to the Docker daemon');
-    };
-    expect(await h.ensure()).toBe(h.tag);
-    expect(h.docker.labelQueries).toEqual([]);
-    expect(h.docker.images.has(danglingId)).toBe(true);
-  });
-
-  it('forgets old records of tags that do not exist anymore', async () => {
-    const { h } = current({
-      [OLD_TAG]: { builtAt: h0(-30 * DAY), lastUsedAt: h0(-8 * DAY) },
-      [OTHER_TAG]: { lastUsedAt: h0(-DAY) },
-    });
-    await h.ensure();
-    expect(h.docker.removals).toEqual([]);
-    expect(Object.keys(h.state().images).sort()).toEqual([OTHER_TAG, h.tag].sort());
-  });
-});
-
-describe('ensureHelperImageUse with a state file: two installations on one Docker engine', () => {
-  // VS Code and VS Code Insiders have their own global storage folder (so their own helper.json) and share one Docker
-  // engine. With different extension versions, each one's helper tag is foreign to the other.
-  const DOCKERFILE_A = `${HELPER_DOCKERFILE}RUN echo a\n`;
-  const DOCKERFILE_B = `${HELPER_DOCKERFILE}RUN echo b\n`;
-
-  function installations() {
-    const h = new Harness();
-    const install = (name: string, content: string) => {
-      const file = path.join(path.dirname(h.file), name, 'Dockerfile');
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, content);
-      const statePath = path.join(path.dirname(h.file), name, 'storage', 'helper.json');
-      return {
-        tag: helperImageTag(content),
-        statePath,
-        ensure: async () => {
-          const checks: Array<Promise<void>> = [];
-          const options = { statePath, baseDigest: h.baseDigest, clock: h.clock, logger: h.logger };
-          await ensureHelperImageUse(h.docker, file, { ...options, onBaseImageCheck: (check) => checks.push(check) });
-          await Promise.all(checks);
-        },
-        state: () => JSON.parse(fs.readFileSync(statePath, 'utf8')) as HelperState,
-      };
-    };
-    return { h, stable: install('stable', DOCKERFILE_A), insiders: install('insiders', DOCKERFILE_B) };
-  }
-
-  it('removes the helper of the other installation at most once, and keeps it when it comes back', async () => {
-    const { h, stable, insiders } = installations();
-    expect(stable.tag).not.toBe(insiders.tag);
-    for (let day = 0; day < 40; day++) {
-      await stable.ensure();
-      h.advance(2 * HOUR);
-      await insiders.ensure();
-      h.advance(DAY - 2 * HOUR);
-    }
-    const removals = (tag: string) => h.docker.removals.filter((reference) => reference === tag).length;
-    expect(removals(insiders.tag)).toBe(1);
-    expect(removals(stable.tag)).toBe(1);
-    // Each one built its helper twice: at the first open, and once after the other one removed it.
-    expect(h.docker.builds.filter((build) => build.tag === stable.tag)).toHaveLength(2);
-    expect(h.docker.builds.filter((build) => build.tag === insiders.tag)).toHaveLength(2);
-    expect(h.docker.idOf(stable.tag)).toBeDefined();
-    expect(h.docker.idOf(insiders.tag)).toBeDefined();
-    expect(stable.state().images[insiders.tag]?.removedAt).toBeDefined();
-    expect(h.logger.lines.join('\n')).toContain(`${insiders.tag} was built again after its removal: another installation uses it. It is kept.`);
-  });
-});
-
-describe('ensureHelperImageUse with a state file: tombstones of removed helper tags', () => {
-  function current(records: Record<string, HelperState['images'][string]> = {}) {
-    const h = new Harness();
-    h.docker.addImage([h.tag]);
-    h.writeState({
-      version: 1,
-      images: { [h.tag]: { baseImage: BASE, baseDigest: DIGEST_A, checkedAt: h.iso(), lastUsedAt: h.iso() }, ...records },
-    });
-    return h;
-  }
-
-  it('still removes an old tag of this installation after 7 days without use, and keeps it when it comes back', async () => {
-    const h = current({ [OLD_TAG]: { baseImage: BASE, builtAt: h0(-30 * DAY), lastUsedAt: h0(-HELPER_UNUSED_LIMIT_MS) } });
-    h.docker.addImage([OLD_TAG]);
-    await h.ensure();
-    expect(h.docker.removals).toEqual([OLD_TAG]);
-    expect(h.state().images[OLD_TAG]).toEqual({ removedAt: h.iso() });
-
-    // Another installation with that extension version builds it again: it stays.
-    h.docker.addImage([OLD_TAG]);
-    for (let day = 0; day < 20; day++) {
-      h.advance(DAY);
-      await h.ensure();
-    }
-    expect(h.docker.removals).toEqual([OLD_TAG]);
-    expect(h.docker.idOf(OLD_TAG)).toBeDefined();
-  });
-
-  it('keeps a tombstone through the pruning of old records, and drops it when it expires', async () => {
-    const h = current({ [OLD_TAG]: { removedAt: h0(-30 * DAY) }, [OTHER_TAG]: { removedAt: h0(-HELPER_TOMBSTONE_MS) } });
-    await h.ensure();
-    expect(h.state().images[OLD_TAG]).toEqual({ removedAt: h0(-30 * DAY) });
-    expect(h.state().images[OTHER_TAG]).toBeUndefined();
-  });
-
-  it('gives a tag whose tombstone expired a new grace period', async () => {
-    const h = current({ [OTHER_TAG]: { removedAt: h0(-HELPER_TOMBSTONE_MS) } });
-    const otherId = h.docker.addImage([OTHER_TAG]);
-    await h.ensure();
-    expect(h.docker.images.has(otherId)).toBe(true);
-    expect(h.state().images[OTHER_TAG]).toEqual({ foreignSince: h.iso(), lastUsedAt: h.iso() });
-  });
-
-  it('drops the marks of the cleanup when the tag becomes the tag of this installation', async () => {
-    const h = new Harness();
-    h.docker.addImage([h.tag]);
-    h.writeState({ version: 1, images: { [h.tag]: { foreignSince: h.iso(-DAY), lastUsedAt: h.iso(-DAY + HOUR) } }, lastCleanupAt: h.iso() });
-    await h.ensure();
-    await h.settled();
-    expect(h.state().images[h.tag].foreignSince).toBeUndefined();
-
-    h.writeState({ version: 1, images: { [OTHER_TAG]: { removedAt: h.iso(-DAY) } } });
-    await recordHelperImageUse(h.statePath, OTHER_TAG, { clock: h.clock });
-    expect(h.state().images[OTHER_TAG]).toEqual({ lastUsedAt: h.iso() });
-  });
-});
-
-/** ISO time relative to START. */
-function h0(offsetMs: number): string {
-  return new Date(START + offsetMs).toISOString();
-}
-
 describe('ensureHelperImageUse with a state file: no previous helper image', () => {
   const offline = async (): Promise<void> => {
     throw new CommandError('docker build', 1, '', 'Temporary failure resolving deb.debian.org');
@@ -1513,41 +1033,37 @@ describe('ensureHelperImageUse with a state file: no previous helper image', () 
     ]);
     expect(h.warnings().join('\n')).not.toContain('previous helper');
     expect(h.state()).toEqual(before);
-    expect(h.docker.removals).toEqual([]);
 
-    // Online again: the next ensure builds the current tag, and the cleanup applies the usual rules.
+    // Online again: the next ensure builds the current tag. The older tags stay: the cleanup of the Monitor removes
+    // them when no container used them for 7 days.
     h.docker.buildHandler = async () => undefined;
     h.advance(HOUR);
     expect(await h.ensure()).toBe(h.tag);
     expect(h.docker.builds).toHaveLength(3);
     expect(h.state().images[h.tag]?.imageId).toBe(h.docker.idOf(h.tag));
-    // Unused for 10 days, OLD_TAG is removed, like OTHER_TAG (no use of a previous helper image keeps it).
-    expect(h.docker.idOf(OLD_TAG)).toBeUndefined();
-    expect(h.docker.removals).toContain(OLD_TAG);
-    expect(h.docker.idOf(OTHER_TAG)).toBeUndefined();
+    expect(h.docker.idOf(OLD_TAG)).toBeDefined();
+    expect(h.docker.idOf(OTHER_TAG)).toBeDefined();
   });
 
-  it('throws the error of the build or the abort, with and without a state file, and lists no other helper image', async () => {
+  it('throws the error of the build or the abort, with and without a state file', async () => {
     const h = new Harness();
     ownOlder(h, OLD_TAG, DAY);
     h.docker.buildHandler = offline;
-    // There is no previous helper image: no warning about one, and no helper image is listed to find one.
+    // There is no previous helper image: no warning about one.
     await expect(h.ensure()).rejects.toBeInstanceOf(CommandError);
     expect(h.warnings().join('\n')).not.toContain('there is no previous helper image');
-    expect(h.docker.labelQueries).toEqual([]);
     await expect(ensureHelperImageUse(h.docker, h.file, { logger: h.logger })).rejects.toBeInstanceOf(CommandError);
 
     h.docker.buildHandler = async () => {
       throw abortError();
     };
     await expect(h.ensure()).rejects.toMatchObject({ name: 'AbortError' });
-    expect(h.docker.labelQueries).toEqual([]);
   });
 
   it('records no image ID for a current tag whose record is of another installation', async () => {
     const h = new Harness();
     h.docker.addImage([h.tag]);
-    h.writeState({ version: 1, images: { [h.tag]: { builtAt: h.iso(-DAY), foreignSince: h.iso(-DAY), lastUsedAt: h.iso(-DAY) } }, lastCleanupAt: h.iso() });
+    h.writeState({ version: 1, images: { [h.tag]: { builtAt: h.iso(-DAY), foreignSince: h.iso(-DAY), lastUsedAt: h.iso(-DAY) } } });
     await h.ensure({ baseDigest: undefined });
     expect(h.state().images[h.tag]).toEqual({ builtAt: h.iso(-DAY), lastUsedAt: h.iso() });
   });
@@ -1555,14 +1071,14 @@ describe('ensureHelperImageUse with a state file: no previous helper image', () 
   it('gives an older record without an image ID none', async () => {
     const h = new Harness();
     h.docker.addImage([h.tag]);
-    h.writeState({ version: 1, images: { [h.tag]: { builtAt: h.iso(-DAY), lastUsedAt: h.iso(-10 * HOUR) } }, lastCleanupAt: h.iso() });
+    h.writeState({ version: 1, images: { [h.tag]: { builtAt: h.iso(-DAY), lastUsedAt: h.iso(-10 * HOUR) } } });
     await h.ensure({ baseDigest: undefined });
     // Another installation may have built the image of the tag, so the record gets no ID.
     expect(h.state().images[h.tag]).toEqual({ builtAt: h.iso(-DAY), lastUsedAt: h.iso() });
 
     const other = new Harness();
     other.docker.addImage([other.tag]);
-    other.writeState({ version: 1, images: { [other.tag]: { lastUsedAt: other.iso(-10 * HOUR) } }, lastCleanupAt: other.iso() });
+    other.writeState({ version: 1, images: { [other.tag]: { lastUsedAt: other.iso(-10 * HOUR) } } });
     await other.ensure({ baseDigest: undefined });
     expect(other.state().images[other.tag]).toEqual({ lastUsedAt: other.iso() });
   });
@@ -1618,7 +1134,6 @@ describe('ensureHelperImageUse: the tag and the ID of the image', () => {
           generation: HELPER_GENERATION,
         },
       },
-      lastCleanupAt: h.iso(),
     });
     h.docker.buildHandler = offline;
     expect(await use(h)).toEqual({ tag: h.tag, id: oldId });

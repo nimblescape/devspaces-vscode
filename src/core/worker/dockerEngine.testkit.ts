@@ -27,6 +27,8 @@ export function unusedEngine(): DockerEngine {
     // The identity of the engine and the prune of the probe and the sweep.
     identity: unused('identity'),
     pruneContainers: unused('pruneContainers'),
+    // The prune of the build cache of the cleanup of the Monitor.
+    pruneBuildCache: unused('pruneBuildCache'),
     inspect: unused('inspect'),
     containerIds: unused('containerIds'),
     images: unused('images'),

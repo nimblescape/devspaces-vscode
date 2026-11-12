@@ -560,6 +560,8 @@ export interface ImageSettings {
 export interface MonitorSettings extends ImageSettings {
   permanent?: boolean;
   computer?: string;
+  /** The engine is the VM of Devspaces (a WSL distribution or the Lima VM): the cleanup of the monitor prunes the build cache too. */
+  vm?: boolean;
 }
 
 /** The image settings of MonitorSettings, as `settings -` takes them (without the mode). */
@@ -576,18 +578,24 @@ function scheduleSettingsOf(value: Record<string, unknown>): ImageSettings | und
 
 /**
  * The strict check of MonitorSettings (both sides of `open` and `monitorEnsure`): an object with the keys `schedule`
- * and `timeZone` (as parseImageSettingsInput) and optionally `permanent` (a boolean) and `computer` (isSourceId).
- * Undefined for anything else. No `prefixes` (the extension and its worker are of one version).
+ * and `timeZone` (as parseImageSettingsInput) and optionally `permanent` and `vm` (booleans) and `computer`
+ * (isSourceId). Undefined for anything else. No `prefixes` (the extension and its worker are of one version).
  */
 export function parseMonitorSettings(value: unknown): MonitorSettings | undefined {
   if (!isRecord(value)) return undefined;
-  const { permanent, computer } = value;
-  if (!hasOnlyKeys(value, ['schedule', 'timeZone'], ['permanent', 'computer'])) return undefined;
+  const { permanent, computer, vm } = value;
+  if (!hasOnlyKeys(value, ['schedule', 'timeZone'], ['permanent', 'computer', 'vm'])) return undefined;
   if ('permanent' in value && typeof permanent !== 'boolean') return undefined;
   if ('computer' in value && !isSourceId(computer)) return undefined;
+  if ('vm' in value && typeof vm !== 'boolean') return undefined;
   const images = scheduleSettingsOf(value);
   if (images === undefined) return undefined;
-  return { ...images, ...(typeof permanent === 'boolean' ? { permanent } : {}), ...(isSourceId(computer) ? { computer } : {}) };
+  return {
+    ...images,
+    ...(typeof permanent === 'boolean' ? { permanent } : {}),
+    ...(isSourceId(computer) ? { computer } : {}),
+    ...(typeof vm === 'boolean' ? { vm } : {}),
+  };
 }
 
 /**

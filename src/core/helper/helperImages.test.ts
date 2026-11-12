@@ -9,7 +9,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { isUserFacingError } from '../errors';
 import { silentLogger } from '../ports';
 import { helperImageTag } from './helperImage';
@@ -32,12 +31,6 @@ class FakeDocker implements HelperImageDocker {
     this.builds.push(options.tag);
     this.images.add(options.tag);
     return ID;
-  }
-  async listImagesByLabel(): Promise<ImageInfo[]> {
-    return [...this.images].map((tag) => ({ id: ID, tags: [tag], createdAt: '' }));
-  }
-  async removeImage(): Promise<boolean> {
-    return false;
   }
 }
 

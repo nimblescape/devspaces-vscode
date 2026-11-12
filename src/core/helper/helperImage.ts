@@ -5,13 +5,13 @@
 // Image of the workspace helper (docs/architecture.md "The helper image"): built locally from
 // resources/helper/Dockerfile. With a state file, the base image is checked once a week in the background (a changed
 // base image rebuilds the same tag at the next maintaining ensure: the preparation of a worker for an open and the
-// background prebuild), and helper images that no window uses anymore are removed once a day. There is no previous
-// helper image. When the current tag is missing and cannot be built, the ensure fails (the open then fails with
-// helperFailed); the background prebuild after an extension update (HelperPrebuild) builds the new tag early.
+// background prebuild). The windows remove no helper image: the cleanup of the Monitor removes the earlier builds and
+// the helper tags that no container uses (src/remoteMonitor/engineCleanup.ts, docs/requirements.md R-DS-007). There is
+// no previous helper image. When the current tag is missing and cannot be built, the ensure fails (the open then fails
+// with helperFailed); the background prebuild after an extension update (HelperPrebuild) builds the new tag early.
 import * as fs from 'fs';
 import * as path from 'path';
 import type { BootstrapDocker } from '../docker/bootstrapDocker';
-import type { ImageInfo } from '../docker/dockerObjects';
 import { errorMessage } from '../errors';
 import { extractBaseImages } from '../imageCheck/dockerfile';
 import { IMAGE_CHECK_TIMEOUT_MS } from '../imageCheck/registryClient';
@@ -21,7 +21,7 @@ import { LABEL_HELPER, LABEL_HELPER_BASE_DIGEST } from '../names';
 import { abortError, isAbortError, isoTime, silentLogger, systemClock, type Clock, type Logger } from '../ports';
 import type { HelperCheck } from '../remoteMonitor/helperCheck';
 import { DEVCONTAINER_CLI_VERSION, HELPER_GENERATION, HELPER_REBUILD_TIMEOUT_MS, helperImageTag } from './helperImageBuild';
-import { isHelperImageTag, isMonitorImageTag, monitorImageTag, readHelperState, updateHelperState, type HelperImageRecord, type HelperState } from './helperState';
+import { readHelperState, updateHelperState, type HelperImageRecord, type HelperState } from './helperState';
 
 // The tag and the inputs of a build of the helper image, which the Monitor shares (helperImageBuild.ts).
 export { DEVCONTAINER_CLI_VERSION, HELPER_GENERATION, HELPER_IMAGE_REPOSITORY, HELPER_REBUILD_TIMEOUT_MS, helperImageTag } from './helperImageBuild';
@@ -31,20 +31,10 @@ const DAY_MS = 24 * HOUR_MS;
 
 /** The digest of the base image of a helper tag is checked at most this often. */
 export const HELPER_CHECK_INTERVAL_MS = 7 * DAY_MS;
-/** Another helper image that no window used for this long is removed. */
-export const HELPER_UNUSED_LIMIT_MS = 7 * DAY_MS;
-/** The cleanup of other helper images runs at most this often. */
-export const HELPER_CLEANUP_INTERVAL_MS = DAY_MS;
 /** `lastUsedAt` of a helper tag is written at most this often. */
 export const HELPER_LAST_USED_INTERVAL_MS = HOUR_MS;
 /** A check of the base image that got no answer from the registry is tried again after this time. */
 export const HELPER_RETRY_INTERVAL_MS = DAY_MS;
-/**
- * A helper tag that the cleanup removed and that comes back (another installation of VS Code built it again) stays for
- * this long after the removal. Then the tombstone expires: the tag gets a new grace period, and an unlisted tag is forgotten.
- */
-export const HELPER_TOMBSTONE_MS = 90 * DAY_MS;
-
 
 /**
  * The abort reason of a time limit of a caller (the background prebuild), a TimeoutError as AbortSignal.timeout gives
@@ -63,10 +53,7 @@ function endedByTimeLimit(signal: AbortSignal | undefined): boolean {
 }
 
 /** The part of BootstrapDocker that the helper image needs. */
-export type HelperImageDocker = Pick<
-  BootstrapDocker,
-  'imageExists' | 'imageId' | 'buildImage' | 'listImagesByLabel' | 'removeImage'
->;
+export type HelperImageDocker = Pick<BootstrapDocker, 'imageExists' | 'imageId' | 'buildImage'>;
 
 /**
  * Current registry digest of an image reference. `'unreachable'`: the registry did not answer (no connection, time
@@ -147,7 +134,7 @@ export interface EnsureHelperImageOptions {
   /**
    * `false` for the calls without the maintenance (ensureImagePresent, the preparation of a worker for any operation
    * but an open and for a heartbeat; default `true`): only a missing tag is built and the use is recorded; the check of
-   * the base image, a rebuild that a check asked for, and the cleanup are left to the maintaining ensure of
+   * the base image and a rebuild that a check asked for are left to the maintaining ensure of
    * HelperImages (ensureImageUse, prebuildImage), which the extension calls in the extension's preparation of the
    * worker for an operation `open` and in the background prebuild.
    */
@@ -160,13 +147,13 @@ export interface EnsureHelperImageOptions {
   /** Called right before a build of the helper image. */
   onBuild?: (kind: HelperBuildKind) => void;
   /**
-   * Whether the maintenance may change the engine now (default true): the rebuild that a check asked for, and the
-   * cleanup. Asked right before each of them. On an SSH host they run only through the connection of the relay of this
-   * window to the host (docs/requirements.md R-ENG-002): before that connection is open, they are put off (the record
-   * keeps the rebuild that was asked, and the cleanup stays due), and the background prebuild runs them through it.
+   * Whether the maintenance may change the engine now (default true): the rebuild that a check asked for. Asked right
+   * before it. On an SSH host it runs only through the connection of the relay of this window to the host
+   * (docs/requirements.md R-ENG-002): before that connection is open, it is put off (the record keeps the rebuild that
+   * was asked), and the background prebuild runs it through it.
    */
   mayChangeEngine?: () => boolean;
-  /** Called when mayChangeEngine put off the rebuild that a check asked for, or the cleanup that was due. */
+  /** Called when mayChangeEngine put off the rebuild that a check asked for. */
   onPutOff?: () => void;
   /**
    * Called with the check of the base image when it starts. It runs in the background, after this function returned; the
@@ -211,17 +198,16 @@ interface Maintenance {
  *   local base image and the build cache may still build it, and the next check that reaches the registry asks for a
  *   rebuild from the current base image.
  * - `maintain` (not for the helper runs): a rebuild that an earlier check asked for runs now, with `--pull --no-cache`
- *   (unless `mayChangeEngine` puts it off); the previous image is then removed if it has no tag anymore. A failed
- *   rebuild keeps the existing image (so does one
+ *   (unless `mayChangeEngine` puts it off); the cleanup of the Monitor removes the previous image later, when no
+ *   container uses it. A failed rebuild keeps the existing image (so does one
  *   that takes longer than HELPER_REBUILD_TIMEOUT_MS, or that a time limit of the caller ends; a cancel of the caller
  *   is an abort). When the check of the base image is due (7 days after the last answer of the registry, a day after an
  *   attempt without an answer), it starts in the background, under its own time limit: this function does not wait for
  *   it. It compares the registry digest of the base image with the recorded one; a change asks the next ensure for a
  *   rebuild.
- * - `lastUsedAt` of the tag is written (at most once per hour); with `maintain`, the cleanup runs (at most once per day;
- *   not while `mayChangeEngine` puts it off).
+ * - `lastUsedAt` of the tag is written (at most once per hour).
  * - When the missing tag cannot be built, the error of the build is thrown; no other helper image is used in its place.
- * Problems of the check, the state file, and the cleanup are logged and never make this function fail.
+ * Problems of the check and the state file are logged and never make this function fail.
  */
 export async function ensureHelperImageUse(
   docker: HelperImageDocker,
@@ -395,11 +381,6 @@ function isBaseCheckTime(record: HelperImageRecord | undefined, now: number): bo
   return isDue(record?.checkedAt, now, HELPER_CHECK_INTERVAL_MS) && isDue(record?.attemptedAt, now, HELPER_RETRY_INTERVAL_MS);
 }
 
-/** The daily cleanup of other helper images is due. */
-function isCleanupDue(state: HelperState, now: number): boolean {
-  return isDue(state.lastCleanupAt, now, HELPER_CLEANUP_INTERVAL_MS);
-}
-
 /**
  * Whether the refresh of the helper tag of `dockerfileContent` is due, by the state file alone (no Docker call): with
  * `checkBaseImage` (the setting updateImagesOnConnect) and a base image in the Dockerfile, the rebuild that a check
@@ -407,9 +388,8 @@ function isCleanupDue(state: HelperState, now: number): boolean {
  * ensureWithState, but for one: an attempt of the check that the registry did not answer puts the next one off by a
  * week here, not by a day as in ensureWithState (isBaseCheckTime), so that a registry that does not answer does not
  * make the prebuild contact Docker every day for a check that needs no Docker; the preparation of the worker for an
- * open still tries it again after a day. The daily cleanup is not part of it (isCleanupDue): the background prebuild
- * asks Docker only when this, or the build of a tag without a record, is due (HelperPrebuild), never for the cleanup
- * alone, which then runs with it when it is due too.
+ * open still tries it again after a day. The background prebuild asks Docker only when this, or the build of a tag
+ * without a record, is due (HelperPrebuild).
  */
 export function helperRefreshDue(
   state: HelperState,
@@ -422,12 +402,15 @@ export function helperRefreshDue(
   return isRebuildAsked(record) || (options.baseDigest && checkDue);
 }
 
-/** True if the record marks the tag as one of another installation, or as removed. */
+/**
+ * True if the record marks the tag as one of another installation, or as removed (the marks of the cleanup of an older
+ * version of the extension, which removed helper images itself).
+ */
 function isForeign(record: HelperImageRecord | undefined): boolean {
   return record?.foreignSince !== undefined || record?.removedAt !== undefined;
 }
 
-/** The record of a tag that this installation uses: without the marks of the cleanup for foreign and removed tags. */
+/** The record of a tag that this installation uses: without the marks of an older cleanup for foreign and removed tags. */
 function owned(record: HelperImageRecord | undefined): HelperImageRecord {
   const { foreignSince: _foreign, removedAt: _removed, ...rest } = record ?? {};
   return rest;
@@ -445,8 +428,8 @@ async function ensureWithState(m: Maintenance): Promise<HelperImageUse> {
     // A tag that cannot be built fails the ensure (there is no previous helper image).
     const created = await create(m, checkBaseImage);
     // helper.json records the ID of the image that this build made (by its build label), never one read back by the
-    // tag, which another build may have moved meanwhile. The tag is read only for the cleanup (which keeps the current
-    // image) and the ID of the open, when the build gave no ID.
+    // tag, which another build may have moved meanwhile. The tag is read only for the ID of the open, when the build
+    // gave no ID.
     const builtId = created.id;
     currentId = builtId ?? (await imageIdQuietly(m));
     change = builtId === undefined ? created.change : (record) => ({ ...created.change(record), imageId: builtId });
@@ -473,11 +456,6 @@ async function ensureWithState(m: Maintenance): Promise<HelperImageUse> {
       const fresh = state.images[tag];
       state.images[tag] = { ...owned(change ? change(fresh) : fresh), lastUsedAt: isoTime(m.clock) };
     });
-  }
-  // Without the ID of the current image, nothing is removed.
-  if (maintain && currentId !== undefined) {
-    if (mayChangeEngine(m)) await cleanUpIfDue(m, currentId);
-    else if (isCleanupDue(await readHelperState(m.statePath), m.clock.now())) options.onPutOff?.();
   }
   if (check && m.baseImage !== undefined) {
     const baseImage = m.baseImage;
@@ -548,8 +526,8 @@ async function buildMissing(m: Maintenance, pull: boolean, baseDigest: string | 
 }
 
 /**
- * The rebuild that a check asked for: the same tag with `--pull --no-cache`, then the removal of the previous image if
- * it has no tag anymore. A failed rebuild keeps the existing image, and the next check is in a week. So does a rebuild
+ * The rebuild that a check asked for: the same tag with `--pull --no-cache`; the cleanup of the Monitor removes the
+ * previous image when no container uses it. A failed rebuild keeps the existing image, and the next check is in a week. So does a rebuild
  * that takes longer than HELPER_REBUILD_TIMEOUT_MS, or that a time limit of the caller ends (helperTimeLimit: the
  * background prebuild); its `docker build` is ended. A cancel of the caller passes through as an abort and changes
  * nothing, so the next ensure builds again.
@@ -603,7 +581,6 @@ async function rebuild(
   // The ID of the rebuilt image comes from the build (its build label); the tag is read only when the build gave none,
   // and such an ID is not recorded.
   const newId = builtId ?? (await imageIdQuietly(m));
-  if (newId !== undefined && newId !== currentId) await removePreviousImage(m, currentId, newId);
   return {
     change: (record) => {
       const { latestBaseDigest: _latest, builtWithoutPull: _unpulled, attemptedAt: _attempted, imageId: _id, ...rest } = record ?? {};
@@ -720,139 +697,4 @@ async function writeState(m: Maintenance, update: (state: HelperState) => void):
   } catch (error) {
     m.logger.warn(`The state of the workspace helper image could not be written: ${errorMessage(error)}`);
   }
-}
-
-async function listHelperImages(m: Maintenance): Promise<ImageInfo[] | undefined> {
-  try {
-    return await m.docker.listImagesByLabel(`${LABEL_HELPER}=true`);
-  } catch (error) {
-    m.logger.warn(`The workspace helper images could not be listed: ${errorMessage(error)}`);
-    return undefined;
-  }
-}
-
-/**
- * Removes the image of the previous build after a rebuild, if it has no tag anymore. A running helper of another window
- * may still use it: then Docker refuses, and the cleanup removes it later. An open that pinned it and waits between its
- * helper runs (in this window or another) does not keep it: its next helper run fails with helperFailed (accepted).
- */
-async function removePreviousImage(m: Maintenance, previousId: string, currentId: string): Promise<void> {
-  const images = await listHelperImages(m);
-  const previous = images?.find((image) => image.id === previousId);
-  if (previous === undefined) return;
-  // The monitor tag of the rebuilt tag can stay on the previous image (the monitor runs from it); it does not keep the
-  // image. Its removal removes the image with its last tag (Docker refuses while the monitor runs).
-  if (previous.tags.length > 0 && previous.tags.every(isMonitorImageTag)) {
-    for (const tag of previous.tags) await removeHelperImage(m, previous, tag, currentId);
-    return;
-  }
-  if (previous.tags.length === 0) await removeHelperImage(m, previous, previous.id, currentId);
-}
-
-/**
- * `docker image rm` (never with force) of an image of the helper listing, by its ID or one of its tags. Never the
- * image that the current tag points to. Failures are logged. Returns true if the image or tag was removed.
- */
-async function removeHelperImage(m: Maintenance, image: ImageInfo, reference: string, currentId: string): Promise<boolean> {
-  if (image.id === currentId || reference === m.tag || reference === currentId) return false;
-  try {
-    return await m.docker.removeImage(reference);
-  } catch (error) {
-    m.logger.warn(`The workspace helper image ${reference} could not be removed: ${errorMessage(error)}`);
-    return false;
-  }
-}
-
-/**
- * At most once per day: of the images with the label nimblescape.devspaces.worker=true, except the image of the current
- * tag, it removes dangling images, and helper tags that no window of this installation used for 7 days. A helper tag
- * that the state does not know is foreign (another extension version, possibly of another installation of VS Code with
- * its own helper.json, which never writes `lastUsedAt` here): it gets a grace period of 7 days, so old windows during
- * an update keep their helper. A removed tag gets a tombstone: when it comes back, another installation built it again
- * and uses it, so it stays (for HELPER_TOMBSTONE_MS), and two installations do not remove each other's helper in a
- * loop. Tags of other repositories are never removed.
- */
-async function cleanUpIfDue(m: Maintenance, currentId: string): Promise<void> {
-  const nowMs = m.clock.now();
-  const state = await readHelperState(m.statePath);
-  if (!isCleanupDue(state, nowMs)) return;
-  const images = await listHelperImages(m);
-  if (!images) return;
-
-  const now = isoTime(m.clock);
-  const listed = new Set<string>();
-  const graced: string[] = [];
-  const removed: string[] = [];
-  for (const image of images) {
-    for (const tag of image.tags) listed.add(tag);
-    if (image.id === currentId) continue;
-    if (image.tags.length === 0) {
-      await removeHelperImage(m, image, image.id, currentId);
-      continue;
-    }
-    for (const tag of image.tags.filter(isHelperImageTag)) {
-      if (tag === m.tag) continue;
-      const record = state.images[tag];
-      if (hasTombstone(record, nowMs)) {
-        m.logger.info(`The workspace helper image ${tag} was built again after its removal: another installation uses it. It is kept.`);
-        continue;
-      }
-      const age = ageMs(record?.lastUsedAt, nowMs);
-      if (record === undefined || record.removedAt !== undefined || age === undefined || age < 0) {
-        graced.push(tag);
-      } else if (age >= HELPER_UNUSED_LIMIT_MS) {
-        m.logger.info(`The workspace helper image ${tag} was not used for ${Math.floor(age / DAY_MS)} days. It is removed.`);
-        // Its monitor tag goes with it, first: Docker refuses only the removal of the last reference of an image that a
-        // container uses, so the helper tag, removed last, stays while a helper or a monitor runs from its image; the
-        // monitor tag is only its name, and the next ensure tags it again. A monitor tag whose removal failed keeps its
-        // helper tag for a later cleanup (with both tags, the helper tag would not be the last reference).
-        const monitorTag = monitorImageTag(tag);
-        if (monitorTag !== undefined && image.tags.includes(monitorTag) && !(await removeHelperImage(m, image, monitorTag, currentId))) continue;
-        if (await removeHelperImage(m, image, tag, currentId)) removed.push(tag);
-      }
-    }
-    // A monitor tag whose helper tag is not on its image (removed, or moved by a rebuild) is removed.
-    for (const tag of image.tags.filter(isMonitorImageTag)) {
-      const helperTag = `devspaces-worker:${tag.slice('devspaces-monitor:'.length)}`;
-      if (image.tags.includes(helperTag)) continue;
-      m.logger.info(`The tag ${tag} of the Monitor is no longer on its workspace helper image. It is removed.`);
-      await removeHelperImage(m, image, tag, currentId);
-    }
-  }
-
-  await writeState(m, (fresh) => {
-    fresh.lastCleanupAt = now;
-    for (const tag of graced) {
-      const record = fresh.images[tag];
-      if (hasTombstone(record, nowMs)) continue;
-      if (record === undefined || record.removedAt !== undefined) {
-        fresh.images[tag] = { foreignSince: now, lastUsedAt: now };
-      } else {
-        const age = ageMs(record.lastUsedAt, nowMs);
-        if (age === undefined || age < 0) fresh.images[tag] = { ...record, lastUsedAt: now };
-      }
-    }
-    for (const tag of removed) fresh.images[tag] = { removedAt: now };
-    // Records of tags that do not exist anymore (for example removed by the user) are dropped when they are old; a
-    // tombstone when it expires.
-    for (const [tag, record] of Object.entries(fresh.images)) {
-      if (tag === m.tag || listed.has(tag)) continue;
-      if (record.removedAt !== undefined) {
-        if (!hasTombstone(record, nowMs)) delete fresh.images[tag];
-      } else if (!isRecent(record.lastUsedAt, nowMs) && !isRecent(record.builtAt, nowMs)) {
-        delete fresh.images[tag];
-      }
-    }
-  });
-}
-
-/** True if the cleanup removed the tag less than HELPER_TOMBSTONE_MS ago. */
-function hasTombstone(record: HelperImageRecord | undefined, now: number): boolean {
-  const age = ageMs(record?.removedAt, now);
-  return age !== undefined && age >= 0 && age < HELPER_TOMBSTONE_MS;
-}
-
-function isRecent(time: string | undefined, now: number): boolean {
-  const age = ageMs(time, now);
-  return age !== undefined && age < HELPER_UNUSED_LIMIT_MS;
 }

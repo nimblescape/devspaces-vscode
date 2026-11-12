@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CACHE_RUN_FILE } from '../core/remoteMonitor/protocol';
 import type { EngineContainerSummary } from '../core/worker/dockerEngine';
 import { unusedEngine } from '../core/worker/dockerEngine.testkit';
-import { CacheSchedule, CurrentCacheSettings, STATE_TEMPORARY_FILE, cacheRunStore, main, removeStaleStateTemporaryFiles, vscodeBackgroundDeps } from './main';
+import { CacheSchedule, CurrentCacheSettings, STATE_TEMPORARY_FILE, cacheRunStore, main, removeStaleStateTemporaryFiles, vmFromEnv, vscodeBackgroundDeps } from './main';
 
 const T0 = Date.parse('2026-10-09T10:00:00Z');
 let stateDir: string;
@@ -138,5 +138,18 @@ describe('the leftover temporary files of the state of the background run', () =
     fs.utimesSync(path.join(stateDir, stale), old, old);
     expect(STATE_TEMPORARY_FILE.test(stale)).toBe(true);
     expect(await removeStaleStateTemporaryFiles(stateDir, T0)).toEqual([stale]);
+  });
+
+  // The record of the cleanup of the engine (cleanup.json, docs/requirements.md R-DS-007) is one of them.
+  it('include those of the record of the cleanup of the engine', () => {
+    expect(STATE_TEMPORARY_FILE.test('cleanup.json.123.4.tmp')).toBe(true);
+    expect(STATE_TEMPORARY_FILE.test('cleanup.json')).toBe(false);
+  });
+});
+
+describe('the Monitor on the VM of Devspaces', () => {
+  it('knows it by DEVSPACE_MONITOR_VM `1` only', () => {
+    expect(vmFromEnv({ DEVSPACE_MONITOR_VM: '1' })).toBe(true);
+    for (const value of [undefined, '0', 'true', '']) expect(vmFromEnv({ DEVSPACE_MONITOR_VM: value }), String(value)).toBe(false);
   });
 });
