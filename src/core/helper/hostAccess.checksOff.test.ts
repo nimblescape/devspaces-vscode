@@ -629,6 +629,50 @@ describe('the label nimblescape.devspaces.config-path', () => {
   });
 });
 
+describe('the labels of the devspace on the dev container', () => {
+  const RECORD = JSON.stringify({ builtAt: '2026-11-12T08:00:00.000Z', devspaceImage: `${OWN}:3`, buildNumber: 3, configPath: '.devcontainer/devcontainer.json', configHash: 'sha256:1', images: {}, features: {} });
+  const devspace = { repository: 'acme/api', ownerId: DEVSPACE.ownerId, buildRecord: RECORD };
+
+  it('allows the labels of the override configuration: repository, owner, and build record', () => {
+    const runArgs = buildOverrideConfig({ devspaceImage: 'img', volumeName: OWN, repositoryName: 'api', containerName: OWN, devspace }).runArgs as string[];
+    expect(runArgs).toEqual(
+      expect.arrayContaining(['--label', 'nimblescape.devspaces.repository=acme/api', '--label', `nimblescape.devspaces.owner-id=${DEVSPACE.ownerId}`, '--label', `nimblescape.devspaces.build-record=${RECORD}`]),
+    );
+    expect(hostAccessProblems({ config: { runArgs }, ownVolume: OWN, overrideConfiguration: true })).toEqual([]);
+    // Also in the merged configuration of an existing container, which holds the runArgs of the override configuration.
+    expect(hostAccessProblems({ config: {}, merged: { runArgs }, ownVolume: OWN })).toEqual([]);
+  });
+
+  it('refuses the labels in the runArgs of the repository', () => {
+    for (const [key, value] of [
+      ['nimblescape.devspaces.repository', 'acme/api'],
+      ['nimblescape.devspaces.owner-id', DEVSPACE.ownerId],
+      ['nimblescape.devspaces.build-record', RECORD],
+    ]) {
+      expect(hostAccessProblems(input(run('--label', `${key}=${value}`)))).toEqual([`label ${key}`]);
+    }
+  });
+
+  it.each([
+    ['a repository that is no owner/name', 'nimblescape.devspaces.repository=api'],
+    ['an owner that is no ID', 'nimblescape.devspaces.owner-id=10 01'],
+    ['a build record that is too long', `nimblescape.devspaces.build-record=${'x'.repeat(8 * 1024 + 1)}`],
+    ['the devspace ID', `nimblescape.devspaces.id=${DEVSPACE.id}`],
+  ])('refuses in the override configuration %s', (_name, label) => {
+    const key = label.slice(0, label.indexOf('='));
+    expect(hostAccessProblems({ config: { runArgs: ['--label', label] }, ownVolume: OWN, overrideConfiguration: true })).toEqual([`label ${key}`]);
+  });
+
+  it.each(['nimblescape.devspaces.repository=acme/${localEnv:HOME}', 'nimblescape.devspaces.build-record={"a":"${localEnv:HOME}"}'])(
+    'refuses in the override configuration the label %j with a variable, which `up` would substitute',
+    (label) => {
+      expect(hostAccessProblems({ config: { runArgs: ['--label', label] }, ownVolume: OWN, overrideConfiguration: true })).toEqual([
+        `runArgs ${JSON.stringify(label)} uses \${localEnv:HOME}, which cannot be checked`,
+      ]);
+    },
+  );
+});
+
 describe('variables as BuildKit reads them, the values of build.args, frontends, and configuration paths', () => {
   // The Dockerfile is no part of the input of the policy.
   const dockerfile = (_text: string, buildMore: Record<string, unknown> = {}): HostAccessInput =>

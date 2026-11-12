@@ -8,12 +8,18 @@ import { describe, expect, it } from 'vitest';
 import { namePair } from './namePairs';
 import {
   EXTENSION_LABEL_KEYS,
+  LABEL_BUILD_RECORD,
+  LABEL_OWNER_ID,
   LABEL_PREFIX,
+  LABEL_REPOSITORY,
+  MAX_BUILD_RECORD_LABEL_LENGTH,
   composeProjectName,
+  devspaceContainerLabels,
   devspaceImageName,
   devspaceImageRepository,
   freeWorkerNumber,
   isDevspaceResourceName,
+  isOwnDevspaceLabel,
   resourceName,
   workerNameStart,
 } from './names';
@@ -447,5 +453,55 @@ describe('the names derived from resourceName', () => {
   it('the devspace image is <resourceName>:<build number>', () => {
     expect(devspaceImageName('acme/api', ID, 3)).toBe(`${resourceName('acme/api', ID)}:3`);
     expect(devspaceImageName('acme/api', ID, 1)).toBe('devspaces-acme-api-tidy-berners:1');
+  });
+});
+
+describe('devspaceContainerLabels', () => {
+  it('gives the repository, the owner, and the build record when it is known', () => {
+    expect(devspaceContainerLabels({ repository: 'acme/api', ownerId: '1001', buildRecord: '{"buildNumber":3}' })).toEqual([
+      `${LABEL_REPOSITORY}=acme/api`,
+      `${LABEL_OWNER_ID}=1001`,
+      `${LABEL_BUILD_RECORD}={"buildNumber":3}`,
+    ]);
+    expect(devspaceContainerLabels({ repository: 'acme/api', ownerId: '1001' })).toEqual([`${LABEL_REPOSITORY}=acme/api`, `${LABEL_OWNER_ID}=1001`]);
+    // An empty record (one that did not fit) is a label too, so that the label of the image does not stay.
+    expect(devspaceContainerLabels({ repository: 'acme/api', ownerId: '1001', buildRecord: '' })).toContain(`${LABEL_BUILD_RECORD}=`);
+  });
+
+  it('leaves out a value that the host access policy refuses', () => {
+    expect(devspaceContainerLabels({ repository: 'acme/${localEnv:HOME}', ownerId: '10 01', buildRecord: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH + 1) })).toEqual([]);
+  });
+});
+
+describe('isOwnDevspaceLabel', () => {
+  it.each([
+    `${LABEL_REPOSITORY}=acme/api`,
+    `${LABEL_REPOSITORY}=Acme-Org/my.repo_1`,
+    `${LABEL_OWNER_ID}=1001`,
+    `${LABEL_OWNER_ID}=abc_DEF-123`,
+    `${LABEL_BUILD_RECORD}=`,
+    `${LABEL_BUILD_RECORD}={"buildNumber":3}`,
+    `${LABEL_BUILD_RECORD}=${'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH)}`,
+  ])('takes %j', (value) => {
+    expect(isOwnDevspaceLabel(value)).toBe(true);
+  });
+
+  it.each([
+    LABEL_REPOSITORY,
+    `${LABEL_REPOSITORY}=`,
+    `${LABEL_REPOSITORY}=api`,
+    `${LABEL_REPOSITORY}=acme/api/x`,
+    `${LABEL_REPOSITORY}=acme/a pi`,
+    `${LABEL_REPOSITORY}=acme/\${localEnv:HOME}`,
+    `${LABEL_OWNER_ID}=`,
+    `${LABEL_OWNER_ID}=10.01`,
+    `${LABEL_OWNER_ID}=${'1'.repeat(129)}`,
+    `${LABEL_BUILD_RECORD}=${'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH + 1)}`,
+    `${LABEL_BUILD_RECORD}={"a":"\${containerEnv:PATH}"}`,
+    'nimblescape.devspaces.id=3f2a',
+    ` ${LABEL_REPOSITORY}=acme/api`,
+    'other=acme/api',
+  ])('refuses %j', (value) => {
+    expect(isOwnDevspaceLabel(value)).toBe(false);
   });
 });

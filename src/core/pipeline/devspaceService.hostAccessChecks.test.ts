@@ -39,6 +39,7 @@ import {
   CLEARED_COMPOSE_LABELS,
   TOKEN_TMPFS_ARGS,
   CONFIG_PATH_LABEL,
+  devspaceLabelArgs,
 } from './devspaceService.testkit';
 import { DEFAULT_CONFIG_PATH } from './recordRules';
 import { configHash } from './pipelineRules';
@@ -105,7 +106,7 @@ describe('host access checks off for the repository', () => {
     const name = devspace.containerName;
     // With the labels of Docker Compose set empty, the label nimblescape.devspaces.config-path, and the tmpfs of the
     // token at the end.
-    expect(runArgs).toEqual(['--label', 'nimblescape.devspaces.container-version=1', '--label', 'nimblescape.devspaces.host-access=unrestricted', ...CONFIG_PATH_LABEL, ...CLEARED_COMPOSE_LABELS, '--name', name, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
+    expect(runArgs).toEqual(['--label', 'nimblescape.devspaces.container-version=1', '--label', 'nimblescape.devspaces.host-access=unrestricted', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await h.registry.get(devspace.id))?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', name, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     // The labels of the override configuration pass the policy also with the checks on. Checked as the override
     // configuration (its labels of Docker Compose set empty).
     expect(hostAccessProblems({ config: { runArgs }, ownVolume: devspace.volumeName, overrideConfiguration: true })).toEqual([]);
@@ -134,6 +135,7 @@ describe('host access checks off for the repository', () => {
       'nimblescape.devspaces.host-access=unrestricted',
       // With the label nimblescape.devspaces.config-path.
       ...CONFIG_PATH_LABEL,
+      ...devspaceLabelArgs((await h.registry.get(ENV_ID))?.buildRecord),
       ...CLEARED_COMPOSE_LABELS,
       '--name',
       NAME,
@@ -160,7 +162,7 @@ describe('host access checks off for the repository', () => {
     const override = h.helper.ups[0].override;
     // With the labels of Docker Compose set empty, the label nimblescape.devspaces.config-path, and the tmpfs of the
     // token at the end.
-    expect(override.runArgs).toEqual(['-p', '8080:80', '-p0.0.0.0:9000:9000', '-P', '--label', 'nimblescape.devspaces.container-version=1', '--label', 'nimblescape.devspaces.host-access=unrestricted', ...CONFIG_PATH_LABEL, ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
+    expect(override.runArgs).toEqual(['-p', '8080:80', '-p0.0.0.0:9000:9000', '-P', '--label', 'nimblescape.devspaces.container-version=1', '--label', 'nimblescape.devspaces.host-access=unrestricted', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await h.registry.get(ENV_ID))?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     expect(override.appPort).toEqual([3000, '5000:5000', '0.0.0.0:6000:6000']);
   });
 
@@ -241,7 +243,7 @@ describe('host access checks on again (containerIsCurrent)', () => {
     expect(container.labels[LABEL_HOST_ACCESS]).toBeUndefined();
     // With the labels of Docker Compose set empty, the label nimblescape.devspaces.config-path, and the tmpfs of the
     // token at the end.
-    expect(h.helper.ups[0].override.runArgs).toEqual(['--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
+    expect(h.helper.ups[0].override.runArgs).toEqual(['--label', 'nimblescape.devspaces.container-version=1', ...CONFIG_PATH_LABEL, ...devspaceLabelArgs((await h.registry.get(ENV_ID))?.buildRecord), ...CLEARED_COMPOSE_LABELS, '--name', NAME, '--hostname', 'api', ...TOKEN_TMPFS_ARGS]);
     expect(h.progress.details).toEqual([Messages.containerHostAccessChecksOn]);
     expect(h.logger.infos.some((line) => line.includes('was created while the host access checks were off. They are on now'))).toBe(true);
     // The next open starts it as it is.

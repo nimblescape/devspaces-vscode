@@ -138,7 +138,7 @@ import {
 import { sameSource, sourceLabel, sourceOf, sourceOperationKey, sourceSegment } from '../devspaceSource';
 import { MAX_REFERENCE_LENGTH } from '../imageCheck/dockerfile';
 import { namePair } from '../namePairs';
-import { imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
+import { buildRecordLabel, containerBuildRecord, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
 import { ownerOf } from '../ownership';
 import { keepFlagsOf, keptWhenClosed } from '../session/sessionRules';
 import { BRANCH_EXEC_TIMEOUT_MS, readBranch, readGitSummary } from './refreshStates';
@@ -2604,9 +2604,19 @@ export class DevspaceService extends OperationBase {
    * from its labels (imageBuildRecord), with the ID of that image pinned; else why there is none (`reason`), and the
    * warning of the open when that is worth one (`warning`). A Docker failure only means that there is no record. Apart
    * from adoptImageRecord, for the prepare (the approved record). `above`: only an image with a higher build number
-   * counts (adoptNewerImageRecord); a newest image that is not higher is no image, without a warning.
+   * counts (adoptNewerImageRecord); a newest image that is not higher is no image, without a warning. The record on
+   * the dev container (containerImageRecord) is taken unless the newest image has a record with a higher build number:
+   * it is the record of the image that the container runs, also when that image carries no labels of the devspace.
    */
   private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
+    const fromContainer = await this.containerImageRecord(env, above);
+    const fromImage = await this.newestImageLabelRecord(env, above);
+    if (fromContainer === undefined) return fromImage;
+    return 'record' in fromImage && fromImage.record.buildNumber > fromContainer.record.buildNumber ? fromImage : fromContainer;
+  }
+
+  /** newestImageRecord without the dev container: the record in the labels of the newest devspace image of `env`. */
+  private async newestImageLabelRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string }> {
     const repository = devspaceImageRepository(env.repository, env.id);
     let tags: string[];
     try {
@@ -2637,6 +2647,22 @@ export class DevspaceService extends OperationBase {
       };
     }
     return { record: { ...found, imageId: id }, tag: newest.tag };
+  }
+
+  /**
+   * The build record in the labels of the dev container of `env` (containerBuildRecord), with the ID of the image that
+   * the container was created from pinned, when that image still exists and the build number of the record is higher
+   * than `above`; else `undefined`, and the newest devspace image decides (newestImageRecord). A Docker failure only
+   * means that the container gives no record.
+   */
+  private async containerImageRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | undefined> {
+    const container = await this.deps.docker.findContainer(env.id, env.containerName).catch(() => undefined);
+    if (container?.imageId === undefined) return undefined;
+    const record = containerBuildRecord(container.labels, env);
+    if (record === undefined || record.buildNumber <= above) return undefined;
+    const id = await this.deps.docker.imageId(container.imageId).catch(() => undefined);
+    if (id === undefined) return undefined;
+    return { record: { ...record, imageId: id }, tag: record.devspaceImage };
   }
 
   /**
@@ -2820,7 +2846,7 @@ export class DevspaceService extends OperationBase {
     }
     let result: DevcontainerResult;
     try {
-      result = await this.runUp(ctx, imageName, loaded.config, container !== undefined, true, loaded.compose);
+      result = await this.runUp(ctx, imageName, loaded.config, container !== undefined, true, loaded.compose, builtRecord);
     } catch (error) {
       if (error instanceof AnalysisFailedError) {
         // The check of the new image failed (for example a worker that ran out of time on a busy computer): no refusal
@@ -2976,7 +3002,7 @@ export class DevspaceService extends OperationBase {
       );
       await this.quietly(`remove the image ${imageName}`, () => this.deps.docker.removeImage(imageName));
       try {
-        result = await this.runUp(ctx, previousImage, loaded.config, !keep, !keep, loaded.compose);
+        result = await this.runUp(ctx, previousImage, loaded.config, !keep, !keep, loaded.compose, record);
       } catch (restoreError) {
         if (this.isCancellation(restoreError, ctx.signal) || isFilesMissing(restoreError) || isHostAccess(restoreError)) throw restoreError;
         // The helper image of the open is gone: helperFailed, not startFailed. When the restore's `up` returned, its
@@ -3654,7 +3680,7 @@ export class DevspaceService extends OperationBase {
       await this.requireNoOtherWindow(ctx, `To start the devspace, the container ${container.name} must be created again`);
     }
     try {
-      const result = await this.runUp(ctx, image, loaded?.config, outdated, container === undefined || outdated, loaded?.compose);
+      const result = await this.runUp(ctx, image, loaded?.config, outdated, container === undefined || outdated, loaded?.compose, record);
       return { result, created: container === undefined || outdated, container: outdated ? undefined : container };
     } catch (error) {
       // Another window uses the devspace; nothing was changed.
@@ -3967,7 +3993,7 @@ export class DevspaceService extends OperationBase {
     this.logger.info(`The container ${container.name} of ${env.repository} is created again from ${image}; the files in the volumes are kept.`);
     if (compose) ctx.recreateDevContainer = container;
     try {
-      const result = await this.runUp(ctx, image, loaded?.config, true, true, loaded?.compose);
+      const result = await this.runUp(ctx, image, loaded?.config, true, true, loaded?.compose, ctx.env.buildRecord);
       return { result, created: true };
     } catch (error) {
       if (this.isCancellation(error, ctx.signal) || isFilesMissing(error) || isHostAccess(error)) throw error;
@@ -4094,10 +4120,25 @@ export class DevspaceService extends OperationBase {
   }
 
   /**
+   * The label of the build record `record` for a container that `up` creates from `image` (buildRecordLabel), as
+   * `buildRecord`, only when the record describes that image: `image` is its tag, and the tag still names the image
+   * that it pins (when it pins one). Otherwise none, and the container keeps the label that its image gives it.
+   */
+  private async upRecordLabel(image: string, record: BuildRecord | undefined): Promise<{ buildRecord?: string }> {
+    if (record === undefined || record.devspaceImage !== image) return {};
+    if (record.imageId !== undefined) {
+      const id = await this.deps.docker.imageId(image).catch(() => undefined);
+      if (id === undefined || id.toLowerCase() !== record.imageId.toLowerCase()) return {};
+    }
+    return { buildRecord: buildRecordLabel(record) };
+  }
+
+  /**
    * `devcontainer up` with the override configuration. `createsContainer`: `up` creates a container from `image` (no
    * container, or `removeExistingContainer`); only then the image metadata is checked, because `up` starts an existing
    * container without the image, and that container passed the check when it was created. `compose`: a Docker Compose
-   * configuration (runComposeUp).
+   * configuration (runComposeUp). `record`: the build record that describes `image` (its tag and, when pinned, its
+   * ID), whose label the created container gets (upRecordLabel).
    */
   private async runUp(
     ctx: PipelineContext,
@@ -4105,7 +4146,8 @@ export class DevspaceService extends OperationBase {
     config: DevcontainerConfig | undefined,
     removeExistingContainer: boolean,
     createsContainer: boolean,
-    compose?: LoadedCompose,
+    compose: LoadedCompose | undefined,
+    record: BuildRecord | undefined,
   ): Promise<DevcontainerResult> {
     // Set only by this `up` (a restore after a failed update runs a second one).
     ctx.upWithdrawn = undefined;
@@ -4131,6 +4173,12 @@ export class DevspaceService extends OperationBase {
       hostAccessChecks: ctx.hostAccessChecks,
       // reconcileFromVolumes restores the configuration path from it.
       configPath: env.configPath,
+      // The repository, the owner, and the build record of the image on the container itself (containerBuildRecord).
+      devspace: {
+        repository: env.repository,
+        ownerId: env.owner.id,
+        ...(createsContainer ? await this.upRecordLabel(image, record) : {}),
+      },
       // The shared VS Code server store, read-only, for an open that carries a server (only a container that `up`
       // creates gets it; an existing one is started as it is).
       ...(this.deps.vscodeServer !== undefined ? { vscodeStoreVolume: this.vscodeStoreVolume() } : {}),

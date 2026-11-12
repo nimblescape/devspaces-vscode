@@ -250,6 +250,29 @@ describe('buildOverrideConfig', () => {
     });
   });
 
+  it('adds the labels of the devspace after the label of the configuration path and before the cleared labels of Docker Compose', () => {
+    const runArgs = buildOverrideConfig({ ...base, configPath: '.devcontainer/devcontainer.json', devspace: { repository: 'acme/api', ownerId: '1001', buildRecord: '{"buildNumber":2}' } })
+      .runArgs as string[];
+    expect(runArgs.slice(0, 12)).toEqual([
+      '--label',
+      'nimblescape.devspaces.container-version=1',
+      '--label',
+      'nimblescape.devspaces.config-path=.devcontainer/devcontainer.json',
+      '--label',
+      'nimblescape.devspaces.repository=acme/api',
+      '--label',
+      'nimblescape.devspaces.owner-id=1001',
+      '--label',
+      'nimblescape.devspaces.build-record={"buildNumber":2}',
+      '--label',
+      'com.docker.compose.project=',
+    ]);
+    // Without a build record, only the repository and the owner.
+    const withoutRecord = buildOverrideConfig({ ...base, devspace: { repository: 'acme/api', ownerId: '1001' } }).runArgs as string[];
+    expect(withoutRecord.filter((arg) => arg.startsWith('nimblescape.devspaces.build-record'))).toEqual([]);
+    expect(withoutRecord).toContain('nimblescape.devspaces.owner-id=1001');
+  });
+
   it('switches off the forwarding of the Dev Containers extension for this container, also with runArgs and ports', () => {
     for (const override of [buildOverrideConfig(base), buildOverrideConfig({ ...base, runArgs: ['--init'], appPort: [3000] })]) {
       expect(override.customizations).toEqual({

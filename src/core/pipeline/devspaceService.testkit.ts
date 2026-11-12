@@ -38,6 +38,7 @@ import {
   LABEL_VOLUME,
   TOKEN_TMPFS,
   VOLUME_KIND_ADDITIONAL,
+  devspaceContainerLabels,
   devspaceImageName,
   resourceName,
 } from '../names';
@@ -70,6 +71,7 @@ import { engineDevspaceStore } from '../worker/workerServices';
 import type { DockerStarter } from './operationBase';
 import { DEFAULT_CONFIG_PATH } from './recordRules';
 import { configHash } from './pipelineRules';
+import { buildRecordLabel } from './imageRecord';
 import { inProcessAnalyzer } from '../helper/configurationAnalysis.testkit';
 
 export const REPO = 'acme/api';
@@ -96,6 +98,14 @@ export const CLEARED_COMPOSE_LABELS: readonly string[] = ['--label', 'com.docker
  * The label nimblescape.devspaces.config-path of the override configuration, for the default configuration.
  */
 export const CONFIG_PATH_LABEL: readonly string[] = ['--label', 'nimblescape.devspaces.config-path=.devcontainer/devcontainer.json'];
+/**
+ * The labels of the devspace that the override configuration of a single container adds after the label
+ * nimblescape.devspaces.config-path (devspaceContainerLabels): the repository and the owner (REPO and ACCOUNT by
+ * default), and the label of the build record `record` of the image of `up` (buildRecordLabel) when it is given.
+ */
+export function devspaceLabelArgs(record?: BuildRecord, repository = REPO, ownerId = ACCOUNT.id): string[] {
+  return devspaceContainerLabels({ repository, ownerId, ...(record !== undefined ? { buildRecord: buildRecordLabel(record) } : {}) }).flatMap((label) => ['--label', label]);
+}
 /** The tmpfs of the token at the end of the runArgs of the override configuration. */
 export const TOKEN_TMPFS_ARGS: readonly string[] = ['--tmpfs', TOKEN_TMPFS];
 

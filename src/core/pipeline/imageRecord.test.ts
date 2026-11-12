@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_OWNER_ID, LABEL_PREPARED, LABEL_REPOSITORY, composeProjectName, devspaceImageName } from '../names';
 import type { BuildRecord } from '../types';
-import { MAX_RECORD_LABEL_LENGTH, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
+import { MAX_RECORD_LABEL_LENGTH, buildRecordLabel, containerBuildRecord, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
 
 const ENV = { id: '3f2a9c1e-0000-4000-8000-000000000000', repository: 'acme/api', owner: { id: '1001', login: 'alice' } };
 const TAG = devspaceImageName(ENV.repository, ENV.id, 3);
@@ -180,6 +180,59 @@ describe('imageBuildRecord', () => {
   it('refuses a record longer than MAX_RECORD_LABEL_LENGTH', () => {
     const text = JSON.stringify({ ...stored(record()), configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH) });
     expect(imageBuildRecord(labels(record(), text), ENV, TAG, 3)).toBeUndefined();
+  });
+});
+
+describe('buildRecordLabel', () => {
+  it('gives the JSON of the record without its image ID, as imageRecordLabels', () => {
+    const value = record();
+    expect(buildRecordLabel(value)).toBe(JSON.stringify(stored(value)));
+    expect(buildRecordLabel(value)).toBe(imageRecordLabels(ENV, value)[LABEL_BUILD_RECORD]);
+  });
+
+  it('gives an empty value for a record with a variable of the Dev Container CLI', () => {
+    expect(buildRecordLabel(record({ configHash: 'a${localEnv:HOME}' }))).toBe('');
+    // A single `$` is no variable.
+    expect(buildRecordLabel(record({ configHash: 'a$b' }))).not.toBe('');
+  });
+});
+
+describe('containerBuildRecord', () => {
+  /** The labels of a dev container: the ID label of `up`, and the labels of the devspace. */
+  function containerLabels(text: string): Record<string, string> {
+    return { [LABEL_DEVSPACE_ID]: ENV.id, [LABEL_REPOSITORY]: ENV.repository, [LABEL_OWNER_ID]: ENV.owner.id, [LABEL_BUILD_RECORD]: text };
+  }
+
+  it('takes the record of the image that the record names by its build number, without an image ID', () => {
+    const value = record();
+    expect(containerBuildRecord(containerLabels(buildRecordLabel(value)), ENV)).toEqual(stored(value));
+    const fifth = record({ buildNumber: 5, devspaceImage: devspaceImageName(ENV.repository, ENV.id, 5) });
+    expect(containerBuildRecord(containerLabels(buildRecordLabel(fifth)), ENV)).toEqual(stored(fifth));
+  });
+
+  it('never takes the image ID from the labels', () => {
+    const forged = JSON.stringify({ ...stored(record()), imageId: `sha256:${'0'.repeat(64)}` });
+    const result = containerBuildRecord(containerLabels(forged), ENV);
+    expect(result).toEqual(stored(record()));
+    expect(result).not.toHaveProperty('imageId');
+  });
+
+  it.each(['', 'not json', 'null', '[]', '{}', '{"buildNumber":0}', '{"buildNumber":1.5}', '{"buildNumber":"3"}'])('refuses the record %j', (text) => {
+    expect(containerBuildRecord(containerLabels(text), ENV)).toBeUndefined();
+  });
+
+  it('refuses labels without a record, a record of another devspace image, and labels of another devspace or owner', () => {
+    const { [LABEL_BUILD_RECORD]: _removed, ...without } = containerLabels(buildRecordLabel(record()));
+    expect(containerBuildRecord(without, ENV)).toBeUndefined();
+    const otherImage = record({ devspaceImage: devspaceImageName('acme/web', ENV.id, 3) });
+    expect(containerBuildRecord(containerLabels(buildRecordLabel(otherImage)), ENV)).toBeUndefined();
+    expect(containerBuildRecord(containerLabels(buildRecordLabel(record())), { ...ENV, owner: { id: '2002', login: 'bob' } })).toBeUndefined();
+    expect(containerBuildRecord(containerLabels(buildRecordLabel(record())), { ...ENV, id: '11111111-2222-4333-8444-555555555555' })).toBeUndefined();
+  });
+
+  it('refuses a record longer than MAX_RECORD_LABEL_LENGTH', () => {
+    const text = JSON.stringify({ ...stored(record()), configHash: 'x'.repeat(MAX_RECORD_LABEL_LENGTH) });
+    expect(containerBuildRecord(containerLabels(text), ENV)).toBeUndefined();
   });
 });
 

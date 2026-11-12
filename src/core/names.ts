@@ -165,11 +165,53 @@ export const LABEL_BUILD_ID = 'nimblescape.devspaces.build-id';
 /**
  * A label of the devspace image (EngineDocker.labelImage, after each build), with the build record of that image as
  * JSON, next to nimblescape.devspaces.id, nimblescape.devspaces.repository, and
- * nimblescape.devspaces.owner-id. The open of a devspace that another computer created, or of one restored after a
- * lost registry, takes the record from its newest image (imageBuildRecord), so its image check works as on the first
- * computer.
+ * nimblescape.devspaces.owner-id; also of the dev container that `up` creates from that image
+ * (devspaceContainerLabels). The open of a devspace that another computer created, or of one restored after a lost
+ * registry, takes the record from its dev container (containerBuildRecord), else from its newest image
+ * (imageBuildRecord), so its image check works as on the first computer.
  */
 export const LABEL_BUILD_RECORD = 'nimblescape.devspaces.build-record';
+/**
+ * The longest value of LABEL_BUILD_RECORD (the build record as JSON); a longer record is written as an empty label (the
+ * next computer builds). 8 KiB, so that the labels on the command line of `docker build` stay far below the 32,767
+ * characters of a command line on Windows.
+ */
+export const MAX_BUILD_RECORD_LABEL_LENGTH = 8 * 1024;
+/**
+ * The `--label` values of the override configuration of a single container that name its devspace on the dev
+ * container itself, not only through the labels that it inherits from its devspace image: its repository
+ * (LABEL_REPOSITORY), its owner (LABEL_OWNER_ID), and, when the open knows it, the build record of the devspace image
+ * that the container is created from (LABEL_BUILD_RECORD, its JSON or empty: buildRecordLabel in
+ * ./pipeline/imageRecord.ts). The host access policy accepts exactly these labels in the override configuration and
+ * in the merged configuration of an existing container (isOwnDevspaceLabel), never in the configuration of a
+ * repository.
+ */
+export function devspaceContainerLabels(p: { repository: string; ownerId: string; buildRecord?: string }): string[] {
+  const labels = [`${LABEL_REPOSITORY}=${p.repository}`, `${LABEL_OWNER_ID}=${p.ownerId}`, ...(p.buildRecord !== undefined ? [`${LABEL_BUILD_RECORD}=${p.buildRecord}`] : [])];
+  // A value that the policy would refuse is left out (the container then has only the label that it inherits).
+  return labels.filter(isOwnDevspaceLabel);
+}
+/**
+ * Whether `value` (a `--label` value, `key=value`) is one of devspaceContainerLabels: LABEL_REPOSITORY with an
+ * `owner/name`, LABEL_OWNER_ID with a storage ID, or LABEL_BUILD_RECORD with at most MAX_BUILD_RECORD_LABEL_LENGTH
+ * characters; never with a variable of the Dev Container CLI (`${`), which `up` would substitute.
+ */
+export function isOwnDevspaceLabel(value: string): boolean {
+  const index = value.indexOf('=');
+  if (index < 0) return false;
+  const text = value.slice(index + 1);
+  if (text.includes('${')) return false;
+  switch (value.slice(0, index)) {
+    case LABEL_REPOSITORY:
+      return /^[^/\s=]+\/[^/\s=]+$/.test(text);
+    case LABEL_OWNER_ID:
+      return /^[A-Za-z0-9_-]{1,128}$/.test(text);
+    case LABEL_BUILD_RECORD:
+      return text.length <= MAX_BUILD_RECORD_LABEL_LENGTH;
+    default:
+      return false;
+  }
+}
 /**
  * A label of the prepared devspace image (preparedImageName), which a background prepare builds before an open needs
  * it: as JSON its prepare key (the configuration and the digests of the update, as the open computes them: updateKey)

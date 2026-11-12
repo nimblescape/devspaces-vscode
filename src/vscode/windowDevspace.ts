@@ -150,8 +150,9 @@ const NO_SUCH_CONTAINER = /no such container/i;
 /**
  * The devspace of the container `containerName` by its labels, with one plain `docker container inspect` on the engine
  * of the call (no worker, nothing that changes). The dev container has the label nimblescape.devspaces.id (the id label
- * of the Dev Container CLI), and the devspace image gives it nimblescape.devspaces.repository and
- * nimblescape.devspaces.owner-id (imageRecordLabels); nimblescape.devspaces.config-path names its configuration. The
+ * of the Dev Container CLI), and nimblescape.devspaces.repository and nimblescape.devspaces.owner-id, from the
+ * override configuration of `up` (devspaceContainerLabels) and, for a container of an older version or of Docker
+ * Compose, from its devspace image (imageRecordLabels); nimblescape.devspaces.config-path names its configuration. The
  * entry is on the Docker host `host`, at `now`, with the owner of the label (its login is not known), named after the
  * container as a restored entry is (devspaceOfVolume). `none` for a container that the engine does not have, one
  * without the first label, and the other containers of a Compose devspace (nimblescape.devspaces.compose-service: no

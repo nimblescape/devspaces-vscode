@@ -20,6 +20,7 @@ import {
   VSCODE_STORE_VOLUME,
   WORKSPACES_ROOT,
   isConfigPathLabelValue,
+  isOwnDevspaceLabel,
   vscodeStoreMount,
 } from '../names';
 import { exposingLocalPortHostValues, LOCAL_PORT_HOST_SETTING } from '../devContainers';
@@ -846,7 +847,8 @@ function isOwnConfigPathLabel(value: string): boolean {
 /**
  * `cleared`: the labels of Docker Compose with empty values that the override configuration adds
  * (COMPOSE_CLEARED_LABELS) are allowed, exactly as written there, the label nimblescape.devspaces.config-path of the
- * override configuration, and its `--tmpfs TOKEN_TMPFS`. `storeMount`, the value of the `--mount` of the shared VS Code
+ * override configuration, its labels of the devspace (isOwnDevspaceLabel: repository, owner, build record), and its
+ * `--tmpfs TOKEN_TMPFS`. `storeMount`, the value of the `--mount` of the shared VS Code
  * server store that the override configuration adds (vscodeStoreMount), allowed exactly as written there (the caller
  * gives it only where it gives `cleared`: the override and the merged configuration).
  */
@@ -862,6 +864,9 @@ function runArgsFindings(runArgs: readonly unknown[], volumes: VolumeContext, cl
       continue;
     } else if (cleared && (flag.name === '--label' || flag.name === '-l') && flag.value !== undefined && isOwnConfigPathLabel(flag.value)) {
       // The label nimblescape.devspaces.config-path that the override configuration adds.
+      continue;
+    } else if (cleared && (flag.name === '--label' || flag.name === '-l') && flag.value !== undefined && isOwnDevspaceLabel(flag.value)) {
+      // The labels of the devspace that the override configuration adds (devspaceContainerLabels).
       continue;
     } else if (cleared && flag.name === '--tmpfs' && flag.value === TOKEN_TMPFS) {
       // The tmpfs of the token that the override configuration adds, exactly as written there.

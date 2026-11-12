@@ -354,6 +354,101 @@ describe('an entry whose image is gone takes the record over from a newer image 
   });
 });
 
+describe('the build record on the dev container', () => {
+  /** A stopped dev container of ENV_ID from the image `tag`, with the labels of the devspace and the record `record`. */
+  function addContainerWithRecord(tag: string, record: BuildRecord, changes: Record<string, string> = {}): void {
+    h.docker.addContainer({
+      devspaceId: ENV_ID,
+      name: NAME,
+      state: 'stopped',
+      image: tag,
+      labels: { [LABEL_CONTAINER_VERSION]: String(CONTAINER_VERSION), ...labelsOf(record, changes) },
+    });
+  }
+
+  it('gives the new container of a build the labels of the devspace and the record of its image', async () => {
+    labelsChangeTheId();
+    const result = await h.service.open(TARGET, options());
+    const env = (await h.registry.get(result.devspace.id))!;
+    const container = await h.docker.findContainer(env.id, env.containerName);
+    expect(container?.labels[LABEL_REPOSITORY]).toBe(REPO);
+    expect(container?.labels[LABEL_OWNER_ID]).toBe(ACCOUNT.id);
+    expect(JSON.parse(container!.labels[LABEL_BUILD_RECORD])).toEqual(stored(env.buildRecord));
+  });
+
+  it('takes the record of an entry without one from its dev container, also when the image has no labels of the devspace', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3));
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toEqual([]);
+    const env = await h.registry.get(ENV_ID);
+    expect(env?.buildRecord).toEqual({ ...recordOf(IMAGE_3, 3), imageId: `sha256:image-of-${IMAGE_3}` });
+    expect(env?.lastBuildNumber).toBe(3);
+    // No warning about the labels of the image: the container had the record.
+    expect(h.logger.warnings.some((line) => line.includes('its labels do not fit'))).toBe(false);
+  });
+
+  it('pins the ID of the image that the container was created from, never one of the labels', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    h.docker.imageIds.set(IMAGE_3, `sha256:${'8'.repeat(64)}`);
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, { ...recordOf(IMAGE_3, 3), imageId: `sha256:${'9'.repeat(64)}` });
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toEqual([]);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.imageId).toBe(`sha256:${'8'.repeat(64)}`);
+  });
+
+  it('takes the record of the newest image when its build number is higher than that of the container', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_2, {});
+    addContainerWithRecord(IMAGE_2, recordOf(IMAGE_2, 2));
+    addImage(IMAGE_3, labelsOf(recordOf(IMAGE_3, 3)));
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toEqual([]);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(IMAGE_3);
+  });
+
+  it('takes the record of the container when the newest image has a lower build number', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3));
+    addImage(IMAGE_2, labelsOf(recordOf(IMAGE_2, 2)));
+    await h.service.open(TARGET, options());
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(IMAGE_3);
+  });
+
+  it.each<[string, Record<string, string>]>([
+    ['another owner', { [LABEL_OWNER_ID]: OTHER_ACCOUNT.id }],
+    ['another repository', { [LABEL_REPOSITORY]: 'acme/web' }],
+  ])('does not take the record of a container with %s, and builds', async (_name, changes) => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3), changes);
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+  });
+
+  it('does not take the record of a container whose image is gone, and builds', async () => {
+    await seedDevspace(h, { record: null, container: null });
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3));
+    h.docker.images.delete(IMAGE_3);
+    await h.service.open(TARGET, options());
+    expect(h.helper.builds).toHaveLength(1);
+  });
+
+  it('takes a newer record from the container when the image of the own record is gone', async () => {
+    await seedDevspace(h, { record: { configHash: 'sha256:old', images: { [BASE_IMAGE]: DIGEST_OLD } }, image: false, container: null });
+    addImage(IMAGE_3, {});
+    addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3));
+    await h.service.open(TARGET, options());
+    expect(h.ui.prompts).toEqual([]);
+    expect(h.helper.builds).toEqual([]);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(IMAGE_3);
+  });
+});
+
 describe('reconcileFromVolumes and the names of the devspaces', () => {
   it('restores a volume with the name of its labels, with the container of the same name', async () => {
     h.docker.volumes.set(NAME, { [LABEL_DEVSPACE_ID]: ENV_ID, [LABEL_REPOSITORY]: REPO, [LABEL_OWNER_ID]: ACCOUNT.id });
