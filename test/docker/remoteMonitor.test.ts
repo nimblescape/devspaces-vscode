@@ -959,6 +959,9 @@ describe('the Monitor container: its move to the script of a newer version of De
     fs.mkdirSync(local, { recursive: true });
     const hash = storeWorkerScript(local, newScript, { version: '0.7.0', helperTag: newTag });
     cli.ok(['cp', path.join(local, WORKER_SCRIPT_FOLDER), `${containerName}:/state/`]);
+    // `docker cp` keeps the owner of the files of this test (on CI not root), and the Monitor runs as root without any
+    // capability, so it reads only the files of root, as the worker (root) writes them: given to root, as root.
+    cli.ok(['run', '--rm', '--network', 'none', '--label', runLabel, '-v', `${volumeName}:/state`, oldTag, 'chown', '-R', '0:0', `/state/${WORKER_SCRIPT_FOLDER}`]);
 
     await waitUntil(() => (cli.container(containerName) as unknown as { Config?: { Labels?: Record<string, string> } } | undefined)?.Config?.Labels?.[LABEL_MONITOR_VERSION] === '0.7.0', 'the successor of Devspaces 0.7.0', 60_000);
     const after = cli.container(containerName) as unknown as { Id: string; Image: string; Config: { Image: string; Labels: Record<string, string>; Env: string[] }; State: { Running: boolean } };
