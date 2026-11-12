@@ -19,13 +19,16 @@ import { cacheRunKnown, type HeartbeatFile, type MonitorRecords } from './monito
 import type { ContainerDetails } from './objectDetails';
 import { ageText, cell, chip, countText, dockerTimeText, fact, itemsText, shortDigest, spanText, timeText, type ReportCell, type ReportChip, type ReportClock, type ReportContent, type ReportFact, type ReportSection } from './reportModel';
 
-/** What the report knows of this computer: its ID (the source of its heartbeats) and the repositories of its devspaces. */
 /** The entry of a devspace in the registry of this computer, as far as the reports need it. */
 export type ReportDevspace = Pick<
   Devspace,
   'id' | 'repository' | 'configPath' | 'defaultImage' | 'createdAt' | 'lastUsedAt' | 'lastSeenInUseAt' | 'gitSummary' | 'buildRecord' | 'owner' | 'keepRunning' | 'keepRunningOnce' | 'additionalVolumes' | 'serviceVolumes'
 >;
 
+/**
+ * What the report knows of this computer: its ID (the source of its heartbeats), the repositories of its devspaces, and
+ * the entries of its devspaces on the host of the report.
+ */
 export interface ReportComputer {
   /** The ID of this computer (computer.id), the source of its records. */
   id: string;
