@@ -11,6 +11,7 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 
 import type * as vscode from 'vscode';
 import { LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
+import { CommandError } from '../core/errors';
 import type { HostInventory } from '../core/hosts/hostObjects';
 import { USAGE_NAMES_ARGS, USAGE_ROOT_ARGS, VM_USAGE_INTERVAL_MS, SSH_USAGE_INTERVAL_MS, type UsageTimers } from '../core/hosts/usageSampler';
 import { usageDockerScript } from '../core/hosts/usageScript';
@@ -894,37 +895,21 @@ describe('UsagePages', () => {
     expect(lastView(second).docker.note).toBe(UsagePageTexts.sizesFailed('docker system df failed'));
   });
 
-  it('reads the sizes by itself no more after a failed read until a click on Resume or a Refresh Sizes that worked', async () => {
+  it('tries a failed read in the background again after 10 minutes, and shows its error meanwhile', async () => {
     readSizes.mockRejectedValueOnce(new Error('permission denied'));
     const panel = await openRead(pages(), 'build-box');
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesFailed('permission denied'));
-    await timers.advance(SIZES_EVERY_MS * 2);
-    expect(readSizes).toHaveBeenCalledTimes(1);
-    // A show after the end of the samples (no click) does not read by itself again.
-    panel.setVisible(false);
-    await timers.advance(HIDDEN_STOP_MS + SIZES_FRESH_MS);
-    panel.setVisible(true);
-    await secondSample('build-box');
-    expect(lastView(panel).status.tone).toBe('live');
-    expect(readSizes).toHaveBeenCalledTimes(1);
-    // Resume, a click, reads again.
+    // A Resume within a minute of the failed read does not read again.
     panel.receive({ type: 'pause' });
     panel.receive({ type: 'resume' });
     await secondSample('build-box');
+    await timers.advance(SIZES_EVERY_MS - 3 * SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    await timers.advance(2 * SSH_USAGE_INTERVAL_MS);
     expect(readSizes).toHaveBeenCalledTimes(2);
-    readSizes.mockRejectedValueOnce(new Error('permission denied'));
-    await timers.advance(SIZES_EVERY_MS);
-    expect(readSizes).toHaveBeenCalledTimes(3);
-    // (Less than 30 minutes without a click since the Resume, so the page does not pause.)
-    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
-    expect(readSizes).toHaveBeenCalledTimes(3);
-    // Refresh Sizes that works turns the reads by itself on again.
-    panel.receive({ type: 'readSizes' });
-    await flush();
-    expect(readSizes).toHaveBeenCalledTimes(4);
-    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
-    expect(readSizes).toHaveBeenCalledTimes(5);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
   });
+
 
   it('reads no sizes in the background on a VM that does not run, and says nothing', async () => {
     shells.open.add(LIMA_HOST);
@@ -934,16 +919,32 @@ describe('UsagePages', () => {
     expect(lastView(panel).docker.note).toBe(UsagePageTexts.sizesNotRead);
   });
 
-  it('reads again at once after a click on Resume within a minute of a failed read in the background', async () => {
-    readSizes.mockRejectedValueOnce(new Error('permission denied'));
+  it('reads the sizes by itself no more after a read longer than its time limit, until a Refresh Sizes that worked', async () => {
+    const tooLong = () => new CommandError('docker system df -v', null, '', 'The command did not end within the time limit.');
+    readSizes.mockRejectedValueOnce(tooLong());
     const panel = await openRead(pages(), 'build-box');
+    expect(lastView(panel).docker.note).toMatch(/did not end within the time limit/);
+    await timers.advance(SIZES_EVERY_MS * 2);
     expect(readSizes).toHaveBeenCalledTimes(1);
+    // A Resume does not read by itself again either.
     panel.receive({ type: 'pause' });
     panel.receive({ type: 'resume' });
     await secondSample('build-box');
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    // A Refresh Sizes longer than its time limit keeps the reads by itself off; one that works turns them on again.
+    readSizes.mockRejectedValueOnce(tooLong());
+    panel.receive({ type: 'readSizes' });
+    await flush();
     expect(readSizes).toHaveBeenCalledTimes(2);
-    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    panel.receive({ type: 'readSizes' });
+    await flush();
+    expect(readSizes).toHaveBeenCalledTimes(3);
+    await timers.advance(SIZES_EVERY_MS + SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(4);
   });
+
 
   it('shows no error of a read in the background that ended because the VM went to sleep, and tries again after a minute', async () => {
     shells.open.add(LIMA_HOST);

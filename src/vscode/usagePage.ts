@@ -15,7 +15,7 @@
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { WSL_HOST } from '../core/docker/dockerHost';
-import { errorMessage } from '../core/errors';
+import { CommandError, errorMessage } from '../core/errors';
 import type { HostInventory } from '../core/hosts/hostObjects';
 import type { UsageHeader, UsageBlock } from '../core/hosts/usageSample';
 import { UsageHistory, type DiskValue, type HostUsage } from '../core/hosts/usageRates';
@@ -176,9 +176,9 @@ class UsagePage {
   /** When the last read of the sizes of this boot of the host ended (also a failed one). */
   private sizesReadAt: number | undefined;
   /**
-   * Whether the page reads the sizes by itself: off after a read in the background that failed (a host where Docker
-   * cannot be read, or a read longer than its time limit, which stops the shared shell) until a start from a click or a
-   * Refresh Sizes that worked.
+   * Whether the page reads the sizes by itself: off after a read longer than its time limit (it stops the shared shell,
+   * and with it the samples) until a Refresh Sizes that worked. After another failed read, the next read in the
+   * background comes 10 minutes later, as after one that worked.
    */
   private sizesAuto = true;
   /** Ends the Read Sizes that runs (vmClosing). */
@@ -295,12 +295,6 @@ class UsagePage {
     // Each start reads the sizes again after its first sample, unless they were read less than a minute ago (a quick
     // switch back to the page).
     if (this.sizesReadAt === undefined || this.timers.now() - this.sizesReadAt >= SIZES_FRESH_MS) this.sizesDueAt = undefined;
-    // After a failed read in the background, only a click (the open, Resume, Retry, Start the VM) reads by itself again,
-    // also within a minute of the failed read.
-    if (flow && !this.sizesAuto) {
-      this.sizesAuto = true;
-      this.sizesDueAt = undefined;
-    }
     const runAbort = new AbortController();
     this.runAbort = runAbort;
     // A window without the focus: the 2 minutes start now (the timer of the focus loss may have run out meanwhile).
@@ -669,9 +663,12 @@ class UsagePage {
       if (background && this.vm && (await this.vmStateNow()).kind !== 'running') return;
       ran = true;
       const detail = errorMessage(error);
-      this.deps.logger.warn(`The sizes of ${this.host} could not be read${background ? ' (the page reads them by itself again after a start from a click, such as Resume, or a Read Sizes that works)' : ''}: ${detail}`);
+      // A read longer than its time limit (no exit code) stopped the shared shell: only a Refresh Sizes tries it again.
+      const tooLong = error instanceof CommandError && error.exitCode === null;
+      if (tooLong) this.sizesAuto = false;
+      const next = !this.sizesAuto ? ' (the page reads them by itself again after a Refresh Sizes that works)' : background ? ' (the page tries again in 10 minutes)' : '';
+      this.deps.logger.warn(`The sizes of ${this.host} could not be read${next}: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
-      if (background) this.sizesAuto = false;
     } finally {
       this.sizesAbort = undefined;
       this.sizesReading = false;
