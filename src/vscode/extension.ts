@@ -49,6 +49,8 @@ import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
+import { readMonitorLog } from '../core/hosts/monitorLog';
+import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { OomWatch } from '../core/vm/oomKills';
@@ -74,7 +76,7 @@ import { HelperImages, helperDockerSocket } from '../core/helper/helperImages';
 import { HelperChannels, openHelperChannel } from '../core/helperChannel/helperChannels';
 import { HelperChannelError } from '../core/helperChannel/helperChannel';
 import { Messages } from '../core/messages';
-import { nodeHttpsTransport, takeUserAgentVersion } from '../core/http';
+import { nodeHttpsTransport, takeUserAgentVersion, userAgentVersion } from '../core/http';
 import { DockerCredentialStore } from '../core/imageCheck/credentials';
 import { RegistryClient } from '../core/imageCheck/registryClient';
 import { abortError, isoTime, systemClock, type RunResult, type StartedByteProcess } from '../core/ports';
@@ -114,6 +116,7 @@ import { DisconnectRequests } from './disconnectRequests';
 import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerHostsView } from './dockerHostsView';
+import { ReportPages } from './reportPage';
 import { UsagePages } from './usagePage';
 import { DOCKER_HOSTS_VIEW_ID } from './dockerHostsModel';
 import { DockerSetup, currentUserName, readOsRelease } from './dockerSetup';
@@ -1471,6 +1474,30 @@ async function activateExtension(
     ...(vmDiskFolder !== undefined ? { localDiskFree: () => freeSpace(vmDiskFolder) } : {}),
   });
   context.subscriptions.push(usagePages);
+  // The report pages of the objects of the view Docker Hosts (R-ENG-010): their reads run on the shared shell of the
+  // host, as the reads of the view, and never start the VM of Devspaces (the page reads its state first).
+  let currentHelperTag: Promise<string | undefined> | undefined;
+  const readCurrentHelperTag = (): Promise<string | undefined> =>
+    (currentHelperTag ??= fs.promises.readFile(helperDockerfile, 'utf8').then(helperImageTag, () => {
+      currentHelperTag = undefined;
+      return undefined;
+    }));
+  const reportPages = new ReportPages({
+    extensionUri: context.extensionUri,
+    logger,
+    vmHost,
+    vmState: readVmState,
+    startVm: () => vmCommands.start(),
+    read: async (target, clock) => {
+      const repositories = new Map((await registry.list()).map((devspace) => [devspace.id, devspace.repository] as const));
+      const helperTag = await readCurrentHelperTag();
+      const computer = { id: computerId(), repositories, version: userAgentVersion() ?? '0.0.0' };
+      return onHostShell(target.host, () => readResourceReport(docker, { object: target.object, ...(helperTag !== undefined ? { currentHelperTag: helperTag } : {}), computer, clock }));
+    },
+    readMonitorLog: (host) => onHostShell(host, () => readMonitorLog(docker)),
+    clock: () => ({ now: Date.now(), timeZone: usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) }),
+  });
+  context.subscriptions.push(reportPages);
   // Before a stop or a removal of the VM: its utilization page pauses, and the worker channel, the relay connection and
   // the shell (the shared shell of the view Docker Hosts and of the page) of this window to it end.
   const closeVmConnections = (): void => {
@@ -1545,6 +1572,7 @@ async function activateExtension(
       if (reread && vmHost !== undefined) dockerHosts.invalidate(vmHost);
       dockerHosts.changed();
       usagePages.vmChanged();
+      reportPages.vmChanged();
     },
   });
   const controller = new Controller({
@@ -1600,6 +1628,7 @@ async function activateExtension(
     wslAfterInstall,
     dockerHosts,
     usagePages,
+    reportPages,
     vm: vmCommands,
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.

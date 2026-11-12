@@ -38,6 +38,7 @@ import { hostEndpoint, isVmHost, isSshClosedBeforeLogin, type DockerTarget } fro
 import type { ImageInfo } from './dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeouts';
 import { extractBaseImages } from '../imageCheck/dockerfile';
+import { isMonitorLogCall } from '../hosts/monitorLog';
 import { isVolumeReaderCall } from '../hosts/volumeReader';
 import { operationDockerTarget, operationOnShell, operationOpenLoginOnly, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
@@ -286,15 +287,24 @@ const SHARED_SHELL_CHANGES: Readonly<Record<string, readonly string[]>> = {
 };
 
 /**
+ * The reads of the report page of the view Docker Hosts that are no plain read call: the reader of the shared volumes
+ * (isVolumeReaderCall: a container without network that only reads the volumes, with its script as an argument) and
+ * Show Log of the Monitor (isMonitorLogCall). Like every call of the view, they go through the Docker pipe of the
+ * extension while a connection of the relay to an SSH host is open (dockerPipeRules.ts lets both through).
+ */
+function isReportRead(args: readonly string[]): boolean {
+  return isVolumeReaderCall(args) || isMonitorLogCall(args);
+}
+
+/**
  * A call that may run on the shared shell of a host (runWithDockerTarget with `onShell`): one of isShellCall, one of
- * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES), or the reader of the shared volumes of its reports
- * (isVolumeReaderCall: a container without network that only reads the volumes, with its script as an argument). On the
+ * the actions of the view Docker Hosts (SHARED_SHELL_CHANGES), or a read of its report page (isReportRead). On the
  * VM of Devspaces (`vm`) also `docker builder prune` (Remove Unused Build Cache…): on another host, the Docker CLI there
  * could send it to a buildx builder that its user chose (`docker buildx use --global`) instead of the engine, so it
  * keeps the way of BootstrapDocker with BUILDX_BUILDER=default (REMOTE_BUILDX_BUILDER); the VM has no builder of a user.
  */
 export function isSharedShellCall(args: readonly string[], vm: boolean): boolean {
-  if (isShellCall(args) || isVolumeReaderCall(args)) return true;
+  if (isShellCall(args) || isReportRead(args)) return true;
   const [command, subcommand] = dockerCommandWords(args);
   if (!shellCarries(args) || command === undefined) return false;
   if (vm && command === 'builder' && subcommand === 'prune') return true;

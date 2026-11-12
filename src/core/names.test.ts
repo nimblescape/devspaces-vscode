@@ -171,6 +171,7 @@ const VSCODE_IDS: ReadonlySet<string> = new Set([
   'devspaces.status',
   'devspaces.repositoryGroupsEditor',
   'devspaces.utilization',
+  'devspaces.resourceReport',
   'devspaces.repositories.focus',
   'devspaces.dockerInstalled',
   'devspaces.dockerMissing',

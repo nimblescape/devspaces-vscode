@@ -84,7 +84,8 @@ const ALLOWED_MODULES: Record<string, readonly string[]> = {
     'recordRules.ts',
   ],
   'src/core/policy': ['hostAccessChecks.ts', 'report.ts'],
-  'src/core/worker': ['hostSide.ts', 'hostSideHandler.ts', 'openRequests.ts'],
+  // vscodeStoreLayout.ts: the names of the store of VS Code, for the report of its volume (R-ENG-010), without its downloads.
+  'src/core/worker': ['hostSide.ts', 'hostSideHandler.ts', 'openRequests.ts', 'vscodeStoreLayout.ts'],
 };
 
 /** Modules that the extension's bundle never holds: the workspace helper and its steps, the pipeline rules, policy. */

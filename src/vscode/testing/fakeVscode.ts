@@ -230,6 +230,8 @@ export const fakeVscode = {
     registerFileDecorationProvider: vi.fn(() => ({ dispose: () => undefined })),
     /** Each panel goes to `webviewPanels`. */
     createWebviewPanel: vi.fn(),
+    /** Resolves to an editor of the document. */
+    showTextDocument: vi.fn(),
     /** Fired by `fireWindowState`. */
     onDidChangeWindowState: vi.fn(),
     /** `window.state`: resetFakeVscode gives the window the focus. */
@@ -243,6 +245,14 @@ export const fakeVscode = {
     isTrusted: true,
     onDidChangeConfiguration: configurationChanges.event,
     onDidGrantWorkspaceTrust: trustGrants.event,
+    /** Each provider goes to `contentProviders` under its scheme. */
+    registerTextDocumentContentProvider: vi.fn(),
+    /** A document of a URI: its text from the provider of its scheme (`contentProviders`). */
+    openTextDocument: vi.fn(),
+  },
+  languages: {
+    /** Resolves to the document with its new language. */
+    setTextDocumentLanguage: vi.fn(),
   },
   authentication: {
     getSession: vi.fn(),
@@ -272,6 +282,8 @@ export const fakeVscode = {
   terminals: [] as FakeTerminal[],
   outputChannels: [] as FakeOutputChannel[],
   webviewPanels: [] as FakeWebviewPanel[],
+  /** The providers of `workspace.registerTextDocumentContentProvider` by scheme (removed at their dispose). */
+  contentProviders: new Map<string, { provideTextDocumentContent(uri: { toString(): string }): string | undefined }>(),
 };
 
 /** Restores the default behavior of every fake: messages are dismissed, quick picks cancelled. */
@@ -284,6 +296,7 @@ export function resetFakeVscode(): void {
   window.state.focused = true;
   fakeVscode.outputChannels.length = 0;
   fakeVscode.webviewPanels.length = 0;
+  fakeVscode.contentProviders.clear();
   // A listener of an earlier test never hears a later window state.
   windowStates.dispose();
   const { state: _state, ...windowMocks } = window;
@@ -295,9 +308,23 @@ export function resetFakeVscode(): void {
     fakeVscode.workspace.getConfiguration,
     fakeVscode.authentication.getSession,
     fakeVscode.authentication.getAccounts,
+    fakeVscode.workspace.registerTextDocumentContentProvider,
+    fakeVscode.workspace.openTextDocument,
+    fakeVscode.languages.setTextDocumentLanguage,
   ]) {
     mock.mockReset();
   }
+  fakeVscode.workspace.registerTextDocumentContentProvider.mockImplementation((scheme: string, provider: { provideTextDocumentContent(uri: { toString(): string }): string | undefined }) => {
+    fakeVscode.contentProviders.set(scheme, provider);
+    return { dispose: () => fakeVscode.contentProviders.delete(scheme) };
+  });
+  fakeVscode.workspace.openTextDocument.mockImplementation(async (uri: { scheme: string; toString(): string }) => ({
+    uri,
+    languageId: 'plaintext',
+    getText: () => fakeVscode.contentProviders.get(uri.scheme)?.provideTextDocumentContent(uri) ?? '',
+  }));
+  fakeVscode.languages.setTextDocumentLanguage.mockImplementation(async (document: object, languageId: string) => ({ ...document, languageId }));
+  window.showTextDocument.mockImplementation(async (document: unknown) => ({ document }));
   window.showInformationMessage.mockResolvedValue(undefined);
   window.showWarningMessage.mockResolvedValue(undefined);
   window.showErrorMessage.mockResolvedValue(undefined);
