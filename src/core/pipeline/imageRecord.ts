@@ -5,6 +5,7 @@
 // The labels of a devspace image: the devspace ID, its repository and owner, and the build record of the image,
 // so that another computer (or this one after a lost registry) takes the record over from the newest image of the
 // devspace. Pure functions, no I/O.
+import type { MergeRecord } from '../helperChannel/mergeRecords';
 import {
   LABEL_BUILD_RECORD,
   LABEL_DEVSPACE_ID,
@@ -15,6 +16,7 @@ import {
   composeProjectName,
   devspaceImageName,
   isConfigPathLabelValue,
+  ownDevspaceLabel,
 } from '../names';
 import { isBuildRecord } from '../storage/registry';
 import type { BuildRecord, Devspace, RefusedUpdate } from '../types';
@@ -31,6 +33,15 @@ export function buildRecordLabel(record: BuildRecord): string {
   const { imageId: _pinned, ...stored } = record;
   const json = JSON.stringify(stored);
   return json.length <= MAX_BUILD_RECORD_LABEL_LENGTH ? json : '';
+}
+
+/**
+ * Whether the dev container can carry the build record `record` as its label (buildRecordLabel: not too long;
+ * devspaceContainerLabels: no variable of the CLI). Only such a record vouches for a shared image (R-DS-010).
+ */
+export function fitsOnDevContainer(record: BuildRecord): boolean {
+  const label = buildRecordLabel(record);
+  return label !== '' && ownDevspaceLabel(`${LABEL_BUILD_RECORD}=${label}`) !== undefined;
 }
 
 /**
@@ -97,6 +108,42 @@ export function containerBuildRecord(labels: Readonly<Record<string, string>>, e
   const value = recordLabelValue(labels);
   if (!isRecord(value) || typeof value.buildNumber !== 'number' || !Number.isSafeInteger(value.buildNumber) || value.buildNumber < 1) return undefined;
   return imageBuildRecord(labels, env, devspaceImageName(env.repository, env.id, value.buildNumber), value.buildNumber);
+}
+
+/**
+ * R-DS-010: the build record of the devspace `env` after the Monitor moved its devspace image to the shared image
+ * `sharedId` of the key `key` (imageMerge.ts of the Monitor): the record `record` of the duplicate, for the tag of the
+ * build number `buildNumber`, with the ID of the shared image pinned and its key. The rest stays: the images are really
+ * identical, so the configuration and the digests that the record names are those of the shared image too.
+ */
+export function movedBuildRecord(
+  record: BuildRecord,
+  env: Pick<Devspace, 'id' | 'repository'>,
+  buildNumber: number,
+  sharedId: string,
+  key: string,
+): BuildRecord & { imageId: string; imageKey: string } {
+  return { ...record, devspaceImage: devspaceImageName(env.repository, env.id, buildNumber), buildNumber, imageId: sharedId, imageKey: key };
+}
+
+/**
+ * R-DS-010: the build record of the merge record `merge` (MergeRecord, written by the Monitor when it moved the
+ * devspace image of `env` to a shared image), for the devspace image `tag` of the build number `buildNumber`, which names
+ * the image `imageId` with the key `key` (its label LABEL_IMAGE_KEY); `undefined` when it does not fit: the owner must be
+ * that of `env`, the record must name exactly `tag` and `buildNumber` (buildRecordFits), pin `imageId`, and carry `key`.
+ */
+export function mergedBuildRecord(
+  merge: MergeRecord,
+  env: Pick<Devspace, 'id' | 'repository' | 'owner'>,
+  tag: string,
+  buildNumber: number,
+  imageId: string,
+  key: string | undefined,
+): BuildRecord | undefined {
+  const record = merge.record;
+  if (merge.ownerId !== env.owner.id || !buildRecordFits(record, env, tag, buildNumber)) return undefined;
+  if (record.imageId.toLowerCase() !== imageId.toLowerCase() || key === undefined || record.imageKey !== key) return undefined;
+  return { ...record, imageId };
 }
 
 /**

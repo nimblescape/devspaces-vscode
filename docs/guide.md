@@ -326,6 +326,10 @@ After **Continue** or **Update Now**, Devspaces uses the image that the backgrou
 
 If the build of a newer image fails, or the new image needs access to your computer that the checks refuse, the devspace starts with its current container, and a message says so.
 
+### One image for identical devspaces
+
+Devspaces whose builds have the same inputs, for example the repositories of a course that all use the same configuration, use one image: the first start builds it, and the others only add their own name to it ([R-DS-010](requirements.md#r-ds-010)). An image that was built for one devspace earlier and that is identical to such a shared image is merged by the Monitor when it is idle: when that devspace is stopped, the Monitor removes its stopped container and the duplicate image. The next start creates the container from the shared image without a build and without a question, as after an update: your files in the workspace stay, programs and files that you added outside the workspace are gone, and the lifecycle commands of the configuration (for example `postCreateCommand`) run again. A running devspace is never touched.
+
 ## Stop on close
 
 When you close the last window of a devspace, switch to another devspace, or quit VS Code, the Monitor on its Docker engine stops the container 5 minutes later. A window that connects again within that time keeps it running. If the window cannot say goodbye (the computer sleeps or goes offline, or VS Code crashes), the monitor stops the container after `devspaces.stopAfterMinutes` (default 10 minutes) without a sign from any window.

@@ -79,11 +79,18 @@ export type UpgradeEngine = Pick<
 >;
 
 /**
- * The engine of `run`: the loop's, the image maintenance's, the VS Code part's, the prepares' and the cleanup's of the
- * background run, the one of its own end after 30 days without use, and the one of its move to the current build of its
- * helper image.
+ * What the merge of identical devspace images asks of the engine (imageMerge.ts): the volumes of the devspaces, the
+ * images and the dev containers with their inspects, the containers that use an image, the removal of a stopped
+ * container (never with force), the tag of the shared image and the removal of the tags of the duplicate.
  */
-export type MonitorEngineParts = LoopEngine & ImageEngine & VscodeEngine & PrepareEngine & CleanupEngine & SelfEngine & UpgradeEngine;
+export type MergeEngine = Pick<DockerEngine, 'volumeNames' | 'inspect' | 'images' | 'containers' | 'containerIds' | 'removeStoppedContainer' | 'tagImage' | 'removeImage'>;
+
+/**
+ * The engine of `run`: the loop's, the image maintenance's, the VS Code part's, the prepares' and the cleanup's of the
+ * background run, the one of its own end after 30 days without use, the one of its move to the current build of its
+ * helper image, and the one of the merge of identical devspace images.
+ */
+export type MonitorEngineParts = LoopEngine & ImageEngine & VscodeEngine & PrepareEngine & CleanupEngine & SelfEngine & UpgradeEngine & MergeEngine;
 
 /** The engine of the socket of the monitor container (the one of its engine, as the worker's). */
 export function socketEngine(): MonitorEngineParts {

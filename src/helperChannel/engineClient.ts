@@ -318,6 +318,14 @@ export function dockerEngine(
       const answer = await api({ method: 'DELETE', path: `/containers/${encodeURIComponent(container)}?force=true`, signal });
       if (answer.status !== 204 && answer.status !== 404) fail(answer);
     },
+    removeStoppedContainer: async (container, signal) => {
+      const answer = await api({ method: 'DELETE', path: `/containers/${encodeURIComponent(container)}`, signal });
+      if (answer.status === 204) return 'removed';
+      if (answer.status === 404) return 'missing';
+      // A running container, or one whose removal runs already.
+      if (answer.status === 409) return 'refused';
+      return fail(answer);
+    },
     renameContainer: async (container, name, signal) => {
       const answer = await api({ method: 'POST', path: `/containers/${encodeURIComponent(container)}/rename?name=${encodeURIComponent(name)}`, signal });
       if (answer.status !== 204) fail(answer);

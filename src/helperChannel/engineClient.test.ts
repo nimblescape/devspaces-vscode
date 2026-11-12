@@ -647,6 +647,18 @@ describe('the port of the engine over the Engine API', () => {
       }
       answers['DELETE /images/img:1'] = 500;
       await expect(engine.removeImage('img:1')).rejects.toMatchObject({ status: 500 });
+      // A stopped container, without force: Docker refuses a running one (409).
+      for (const [status, outcome] of [
+        [204, 'removed'],
+        [404, 'missing'],
+        [409, 'refused'],
+      ] as const) {
+        answers['DELETE /containers/stopped'] = status;
+        expect(await engine.removeStoppedContainer('stopped')).toBe(outcome);
+      }
+      answers['DELETE /containers/stopped'] = 500;
+      await expect(engine.removeStoppedContainer('stopped')).rejects.toMatchObject({ status: 500 });
+      expect(calls.filter((call) => call.url.startsWith('/containers/stopped')).every((call) => call.url === '/containers/stopped')).toBe(true);
       answers['POST /volumes/create'] = 201;
       await engine.createVolume('v', { a: 'b' });
       answers['DELETE /volumes/v'] = 404;

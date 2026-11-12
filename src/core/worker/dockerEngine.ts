@@ -256,6 +256,11 @@ export interface DockerEngine {
   networkNames(filters: EngineFilters, signal?: AbortSignal): Promise<string[]>;
   /** Removes a container, running or not (`docker rm -f`); a missing one is no failure. */
   removeContainer(container: string, signal?: AbortSignal): Promise<void>;
+  /**
+   * Removes a container that is not running, without force (`docker rm`): Docker refuses a running container (409), and
+   * so a container that started meanwhile stays. `missing` and `refused` are answers, not failures.
+   */
+  removeStoppedContainer(container: string, signal?: AbortSignal): Promise<'removed' | 'missing' | 'refused'>;
   /** Renames a container (`docker rename`). */
   renameContainer(container: string, name: string, signal?: AbortSignal): Promise<void>;
   /** Removes an image without force: `missing` and `inUse` (409) are answers, not failures. */

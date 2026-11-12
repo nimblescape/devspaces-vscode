@@ -110,7 +110,6 @@ import { Messages, listSome } from '../messages';
 import {
   CONFIG_FOLDER,
   CONTAINER_CONFIG_UNKNOWN_LABEL,
-  LABEL_BUILD_RECORD,
   LABEL_COMPOSE_SERVICE,
   LABEL_CONFIG_PATH,
   LABEL_DEVSPACE_ID,
@@ -134,7 +133,6 @@ import {
   hasDevspaceImageLabel,
   isKeyOnlyImage,
   newDevspaceId,
-  ownDevspaceLabel,
   preparedImageName,
   preparedServiceImageName,
   repositoryFolder,
@@ -144,7 +142,7 @@ import {
 import { sameSource, sourceLabel, sourceOf, sourceOperationKey, sourceSegment } from '../devspaceSource';
 import { MAX_REFERENCE_LENGTH } from '../imageCheck/dockerfile';
 import { namePair } from '../namePairs';
-import { buildRecordLabel, containerBuildRecord, imageBuildRecord, imageRecordLabels, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
+import { buildRecordLabel, containerBuildRecord, fitsOnDevContainer, imageBuildRecord, imageRecordLabels, mergedBuildRecord, preparedImageLabels, preparedImageMismatch, type PrepareKey } from './imageRecord';
 import { chosenSharedImage, imageKey, isSharedImage, isSharedImageCandidate, sameImageId, sharedImageInputs } from './imageKey';
 import { ownerOf } from '../ownership';
 import { keepFlagsOf, keptWhenClosed } from '../session/sessionRules';
@@ -843,15 +841,6 @@ export function kindSwitchFailure(
  */
 export function additionalVolumeLabels(devspace: Devspace): Record<string, string> {
   return { ...volumeLabels(devspace), [LABEL_VOLUME]: VOLUME_KIND_ADDITIONAL };
-}
-
-/**
- * Whether the dev container can carry the build record `record` as its label (buildRecordLabel: not too long;
- * devspaceContainerLabels: no variable of the CLI). Only such a record vouches for a shared image (R-DS-010).
- */
-function fitsOnDevContainer(record: BuildRecord): boolean {
-  const label = buildRecordLabel(record);
-  return label !== '' && ownDevspaceLabel(`${LABEL_BUILD_RECORD}=${label}`) !== undefined;
 }
 
 /**
@@ -2590,7 +2579,7 @@ export class DevspaceService extends OperationBase {
     }
     this.entryUpdated(ctx, await this.openRecords.build(env.id, { kind: 'record', record, dropRefused: false }));
     this.logger.info(
-      `The devspace image ${own.devspaceImage} of the build record of ${env.repository} is gone, and the newer devspace image ${tag} (${record.imageId}) exists, for example from another computer that uses this Docker engine. Its build record${found.fromContainer === true ? ', from the labels of the dev container,' : ''} is used.`,
+      `The devspace image ${own.devspaceImage} of the build record of ${env.repository} is gone, and the newer devspace image ${tag} (${record.imageId}) exists, for example from another computer that uses this Docker engine${found.fromMerge === true ? ', or the Monitor that moved the devspace to an identical shared image' : ''}. Its build record${found.fromContainer === true ? ', from the labels of the dev container,' : found.fromMerge === true ? ', from the record of the Monitor,' : ''} is used.`,
     );
     return record;
   }
@@ -2627,7 +2616,12 @@ export class DevspaceService extends OperationBase {
     }
     const { record, tag } = found;
     this.entryUpdated(ctx, await this.openRecords.build(ctx.env.id, { kind: 'record', record, dropRefused: false }));
-    const source = found.fromContainer === true ? 'the labels of its dev container, for its devspace image' : 'its devspace image';
+    const source =
+      found.fromContainer === true
+        ? 'the labels of its dev container, for its devspace image'
+        : found.fromMerge === true
+          ? 'the record of the Monitor, which moved it to the shared devspace image'
+          : 'its devspace image';
     this.logger.info(`The build record of ${env.repository} was taken from ${source} ${tag} (${record.imageId}).`);
     return record;
   }
@@ -2639,9 +2633,11 @@ export class DevspaceService extends OperationBase {
    * from adoptImageRecord, for the prepare (the approved record). `above`: only an image with a higher build number
    * counts (adoptNewerImageRecord); a newest image that is not higher is no image, without a warning. The record on
    * the dev container (containerImageRecord) is taken unless the newest image has a record with a higher build number:
-   * it is the record of the image that the container runs, also when that image carries no labels of the devspace.
+   * it is the record of the image that the container runs, also when that image carries no labels of the devspace. The
+   * newest image of a devspace that the Monitor moved to a shared image (R-DS-010) has the record of the Monitor
+   * (mergeRecords), as its dev container is gone.
    */
-  private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string; fromContainer?: true } | { reason: string; warning?: string }> {
+  private async newestImageRecord(env: Devspace, above = 0): Promise<{ record: BuildRecord; tag: string; fromContainer?: true; fromMerge?: true } | { reason: string; warning?: string }> {
     const [fromContainer, fromImage] = await Promise.all([this.containerImageRecord(env, above), this.newestImageLabelRecord(env, above)]);
     if (fromContainer === undefined) return fromImage;
     // A newer image, also one without a usable record (the open then builds, as before), comes before the container.
@@ -2651,10 +2647,11 @@ export class DevspaceService extends OperationBase {
   }
 
   /**
-   * newestImageRecord without the dev container: the record in the labels of the newest devspace image of `env`; with a
-   * reason, the build number of that image (`newest`) when there is one higher than `above`.
+   * newestImageRecord without the dev container: the record in the labels of the newest devspace image of `env`, or, for a
+   * shared image, the merge record of the Monitor for it (mergedBuildRecord: the record names that tag and pins that
+   * image); with a reason, the build number of that image (`newest`) when there is one higher than `above`.
    */
-  private async newestImageLabelRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string } | { reason: string; warning?: string; newest?: number }> {
+  private async newestImageLabelRecord(env: Devspace, above: number): Promise<{ record: BuildRecord; tag: string; fromMerge?: true } | { reason: string; warning?: string; newest?: number }> {
     const repository = devspaceImageRepository(env.repository, env.id);
     let tags: string[];
     try {
@@ -2677,9 +2674,15 @@ export class DevspaceService extends OperationBase {
       return { reason: warning, warning, newest: newest.number };
     }
     const found = labels === undefined ? undefined : imageBuildRecord(labels, env, newest.tag, newest.number);
+    // A shared image (R-DS-010) carries no build record: the record is on the dev container, which is gone here; or, when
+    // the Monitor moved the devspace image to the shared image (and removed the dev container), in its merge record.
+    const shared = labels !== undefined && isKeyOnlyImage(labels);
+    if (id !== undefined && found === undefined && shared) {
+      const merge = await this.deps.mergeRecords?.read(env.id);
+      const merged = merge === undefined ? undefined : mergedBuildRecord(merge, env, newest.tag, newest.number, id, labels?.[LABEL_IMAGE_KEY]);
+      if (merged !== undefined) return { record: merged, tag: newest.tag, fromMerge: true };
+    }
     if (id === undefined || found === undefined) {
-      // A shared image (R-DS-010) carries no build record: the record is on the dev container, which is gone here.
-      const shared = labels !== undefined && isKeyOnlyImage(labels);
       const why = id === undefined ? 'it is gone' : shared ? 'it is a shared image, whose build record is only on the dev container' : 'its labels do not fit';
       return {
         reason: `its devspace image ${newest.tag} has no build record of it (${why})`,

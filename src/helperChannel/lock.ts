@@ -15,6 +15,7 @@ import { acquireFlock, flockFailure, openLockFile, openPrepareLockFile, startFlo
 import { OperationError } from './server';
 import { PREPARE_FILES, type PrepareFiles } from './prepareFiles';
 import { sharedImageRecords, type SharedImageRecords } from '../core/helperChannel/sharedImageRecords';
+import { mergeRecords, type MergeRecords } from '../core/helperChannel/mergeRecords';
 
 export interface LockDeps {
   /** The mount point of the volume of the Monitor. */
@@ -36,6 +37,11 @@ export interface LockDeps {
    * them, no record is read or written (a prepare builds its image for its devspace alone).
    */
   sharedImageRecords?: (stateDir: string) => SharedImageRecords;
+  /**
+   * The records of the devspaces whose devspace image the Monitor moved to a shared image, in the lock folder (R-DS-010,
+   * mergeRecords). Without them, no record is read (such a devspace is built again).
+   */
+  mergeRecords?: (stateDir: string) => MergeRecords;
   closeFile(fd: number): void;
   /** Starts `flock <args>` with `fd` as its file descriptor FLOCK_FD. */
   startFlock(args: readonly string[], fd: number): FlockProcess;
@@ -47,6 +53,7 @@ export const LOCK_DEPS: LockDeps = {
   openPrepareLockFile,
   prepareFiles: PREPARE_FILES,
   sharedImageRecords,
+  mergeRecords,
   closeFile: (fd) => fs.closeSync(fd),
   startFlock: startFlockProcess,
 };

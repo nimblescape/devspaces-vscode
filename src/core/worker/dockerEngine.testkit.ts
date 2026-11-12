@@ -35,6 +35,7 @@ export function unusedEngine(): DockerEngine {
     volumeNames: unused('volumeNames'),
     networkNames: unused('networkNames'),
     removeContainer: unused('removeContainer'),
+    removeStoppedContainer: unused('removeStoppedContainer'),
     renameContainer: unused('renameContainer'),
     removeImage: unused('removeImage'),
     tagImage: unused('tagImage'),
