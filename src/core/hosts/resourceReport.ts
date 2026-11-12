@@ -7,16 +7,20 @@
 // and devspaces-worker-cache report what they contain (read by the reader of the shared volumes, volumeReader.ts), the
 // container of the Monitor reports its mode and its last runs (from the records in its volume), the objects of a
 // devspace report their devspace and the rules of Devspaces for them (devspaceReport.ts; the dev container also the
-// windows of the heartbeat records in the volume of the Monitor), and every object reports the facts of Docker
+// windows of the heartbeat records in the volume of the Monitor), the images of Devspaces their build, version and
+// rules (imageReport.ts, with the answers of the registries and the other records of the Monitor), the helper
+// containers what they serve and when they end (helperReport.ts), and every object reports the facts of Docker
 // (objectDetails.ts); an object that is not of Devspaces reports only those, and Devspaces never reads the content of
 // its volume. Pure; no I/O.
 import type { VscodePlatform } from '../helperChannel/protocol';
 import { HELPER_CACHE_VOLUME, VSCODE_STORE_VOLUME } from '../names';
 import { REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import { devspaceReport, isDevspaceObject } from './devspaceReport';
+import { helperReport, isHelperContainer } from './helperReport';
+import { imageReport, imageReportNeedsRecords, isImageReportObject } from './imageReport';
 import type { HostObject } from './hostObjects';
 import { monitorRecords, type MonitorRecords } from './monitorRecords';
-import { monitorContainerReport, monitorVolumeReport, type ReportComputer } from './monitorReport';
+import { monitorContainerReport, monitorVolumeReport, type ReportComputer, type ReportDevspace } from './monitorReport';
 import { dockerFactsSections, type ObjectDetails } from './objectDetails';
 import { countText, optional, type ReportClock, type ReportContent } from './reportModel';
 import { vscodeStoreReport, workerCacheReport } from './storeReport';
@@ -25,13 +29,16 @@ import type { ReaderVolumeNames, VolumeReadOutcome, VolumeReading } from './volu
 /**
  * The shared volumes that the reader reads for the report of `object` (none: the report needs no reader): the store of
  * VS Code with the volume of the Monitor (its rules need the records of the Monitor), the volume of the Monitor, the
- * cache of the workers; the container of the Monitor and the dev container of a devspace need the volume of the
- * Monitor. The caller mounts only those that exist.
+ * cache of the workers; the container of the Monitor, the dev container of a devspace, a devspace image, a base image
+ * and the helper image need the volume of the Monitor. The caller mounts only those that exist.
  */
 export function reportVolumes(object: Pick<HostObject, 'kind' | 'name' | 'purpose' | 'role'>): ReaderVolumeNames {
   if (object.kind === 'container' && object.purpose === 'monitor') return { monitor: REMOTE_MONITOR_VOLUME };
   // The dev container of a devspace: the windows that use it, from the heartbeat records of the Monitor.
   if (object.kind === 'container' && (object.purpose === 'devspace' || object.purpose === 'otherDevspace') && object.role === 'dev container') return { monitor: REMOTE_MONITOR_VOLUME };
+  // A devspace image, a base image and the helper image: the answers of the registries, the older versions, the check
+  // of the helper image.
+  if (imageReportNeedsRecords(object)) return { monitor: REMOTE_MONITOR_VOLUME };
   if (object.kind !== 'volume' || object.purpose !== 'sharedVolume') return {};
   switch (object.name) {
     case VSCODE_STORE_VOLUME:
@@ -54,6 +61,8 @@ export interface ResourceReportInput {
   volumes?: VolumeReadOutcome;
   /** The platform of the engine (serverPlatform of its architecture), when it is known: for the rules of the store of VS Code. */
   platform?: VscodePlatform;
+  /** The helper tag of this version of Devspaces (helperImageTag), when it is known: for the helper image and the helper containers. */
+  currentHelperTag?: string;
   computer: ReportComputer;
   clock: ReportClock;
 }
@@ -87,6 +96,11 @@ function readingNotices(reading: VolumeReading): string[] {
   return notices;
 }
 
+/** The entry of the devspace of an object of a devspace of this computer in its registry. */
+function devspaceOf(object: HostObject, computer: ReportComputer): ReportDevspace | undefined {
+  return object.purpose === 'devspace' && object.devspaceId !== undefined ? computer.devspaces?.get(object.devspaceId) : undefined;
+}
+
 /** The content of the report of `input.object`. */
 export function resourceReport(input: ResourceReportInput): ReportContent {
   const { object, details, computer, clock } = input;
@@ -102,8 +116,11 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
   } else if (volumes.vscode !== undefined) {
     if (reading?.vscode !== undefined) own = vscodeStoreReport(reading.vscode, records, clock, input.platform);
   } else if (isDevspaceObject(object)) {
-    const devspace = object.purpose === 'devspace' && object.devspaceId !== undefined ? computer.devspaces?.get(object.devspaceId) : undefined;
-    own = devspaceReport({ object, ...optional('details', details), ...optional('devspace', devspace), ...optional('records', records), computer, clock });
+    own = devspaceReport({ object, ...optional('details', details), ...optional('devspace', devspaceOf(object, computer)), ...optional('records', records), computer, clock });
+  } else if (isImageReportObject(object)) {
+    own = imageReport({ object, ...optional('details', details), ...optional('devspace', devspaceOf(object, computer)), ...optional('records', records), computer, ...optional('currentHelperTag', input.currentHelperTag), clock });
+  } else if (isHelperContainer(object)) {
+    own = helperReport({ object, ...optional('details', details), computer, ...optional('currentHelperTag', input.currentHelperTag) });
   } else if (volumes.monitor !== undefined) {
     if (records !== undefined) own = monitorVolumeReport(records, computer, clock);
   } else if (volumes['worker-cache'] !== undefined) {

@@ -60,12 +60,12 @@ export function isDevspaceObject(object: Pick<HostObject, 'kind' | 'purpose' | '
 }
 
 /** The labels of the details (none without them). */
-function labelsOf(details: ObjectDetails | undefined): ReadonlyMap<string, string> {
+export function labelsOf(details: ObjectDetails | undefined): ReadonlyMap<string, string> {
   return details?.labels ?? new Map<string, string>();
 }
 
 /** A label that is not empty. */
-function label(labels: ReadonlyMap<string, string>, key: string): string | undefined {
+export function label(labels: ReadonlyMap<string, string>, key: string): string | undefined {
   const value = labels.get(key);
   return value !== undefined && value !== '' ? value : undefined;
 }
@@ -83,13 +83,13 @@ export function labelBuildRecord(labels: ReadonlyMap<string, string>): BuildReco
 }
 
 /** A build in words: `build 2 of 2026-11-10 14:22`. */
-function buildText(record: Pick<BuildRecord, 'buildNumber' | 'builtAt'>, clock: ReportClock): string {
+export function buildText(record: Pick<BuildRecord, 'buildNumber' | 'builtAt'>, clock: ReportClock): string {
   const built = dockerTimeText(record.builtAt, clock);
   return `build ${record.buildNumber}${built !== undefined ? ` of ${built}` : ''}`;
 }
 
 /** The fact "Devspace": its repository, with its owner on this computer, or the tag of a devspace that it does not know. */
-function devspaceFact(object: HostObject, devspace: ReportDevspace | undefined): ReportFact {
+export function devspaceFact(object: HostObject, devspace: ReportDevspace | undefined): ReportFact {
   if (devspace === undefined) return fact('Devspace', object.repository ?? 'not known: the object has no label of its repository', UNKNOWN_DEVSPACE);
   return fact('Devspace', `${devspace.repository} · owner ${devspace.owner.login !== '' ? devspace.owner.login : `GitHub user ${devspace.owner.id}`}`);
 }

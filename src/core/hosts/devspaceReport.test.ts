@@ -228,8 +228,5 @@ describe('the report of an object of a devspace in the report of a resource', ()
     expect(facts(report, 'The devspace').Devspace).toEqual({ text: 'majikmate/shop · owner scalarion' });
     expect(report.notices).toEqual(['The volume devspaces-monitor is not there: the records of the Monitor are missing from this report.']);
     expect(resourceReport({ object: devContainer, volumes: { kind: 'failed', detail: 'boom' }, computer: COMPUTER, clock: CLOCK }).notices).toEqual(['The records of the Monitor in devspaces-monitor could not be read: boom']);
-    // An image of a devspace has no part of its devspace yet: only the facts of Docker.
-    const image = resourceReport({ object: { kind: 'image', id: 'sha256:i', name: IMAGE, tags: [IMAGE], purpose: 'devspace', devspaceId: DEVSPACE, role: 'image' }, computer: COMPUTER, clock: CLOCK });
-    expect(image.sections.map((section) => section.title)).toEqual(['Facts of Docker']);
   });
 });

@@ -35,7 +35,9 @@ describe('the report of a resource', () => {
     // A volume of the same name that is not of Devspaces, and other objects, are never read.
     expect(reportVolumes({ kind: 'volume', name: 'devspaces-vscode', purpose: 'notDevspaces' })).toEqual({});
     expect(reportVolumes({ kind: 'volume', name: 'shop_pgdata', purpose: 'notDevspaces' })).toEqual({});
-    expect(reportVolumes({ kind: 'image', name: 'devspaces-worker:0123456789ab', purpose: 'helperImage' })).toEqual({});
+    expect(reportVolumes({ kind: 'image', name: 'nginx:1.27', purpose: 'notDevspaces' })).toEqual({});
+    // The helper image needs the check of the Monitor (imageReport.test.ts tests the other images).
+    expect(reportVolumes({ kind: 'image', name: 'devspaces-worker:0123456789ab', purpose: 'helperImage' })).toEqual({ monitor: 'devspaces-monitor' });
   });
 
   it('puts the sections of Devspaces before the facts of Docker', () => {
