@@ -3124,7 +3124,7 @@ export class DevspaceService extends OperationBase {
     const [imageId, labels] = found;
     // The image of a devspace of the account (the policy allows it as a base): its labels of that devspace would stay on
     // an image that gets only the key. The build of this devspace alone writes its own labels over them.
-    if (hasDevspaceImageLabel(labels)) return notShared(`its image ${inputs.image} is the image of a devspace`);
+    if (hasDevspaceImageLabel(labels)) return notShared(`its image ${inputs.image} was built for one devspace`);
     return imageKey({
       cliVersion: DEVCONTAINER_CLI_VERSION,
       written: inputs.written,

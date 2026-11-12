@@ -17,7 +17,7 @@ import { abortError, isAbortError, silentLogger, withTimeLimit, type Credentials
 import type { ContainerState } from '../types';
 import { credentialServerName, isDockerHub, parseImageReference } from '../imageCheck/reference';
 import { IDENTITY_TOKEN_USER } from '../imageCheck/credentials';
-import { EngineError, isDevContainer, isMissing, type DockerEngine, type EngineContainer } from './dockerEngine';
+import { EngineError, isDevContainer, isMissing, type DockerEngine, type EngineContainer, type EngineFilters } from './dockerEngine';
 import { devContainerOf, devspaceContainers } from './devspaceContainers';
 
 /**
@@ -408,19 +408,24 @@ export class EngineDocker implements DevspaceDocker {
    * references.
    */
   async listDevspaceImages(signal?: AbortSignal): Promise<ImageInfo[]> {
-    const images = await this.call('the list of the images', signal, (limited) => this.engine.images({ reference: [`${RESOURCE_NAME_PREFIX}*`] }, limited));
-    if (signal?.aborted) throw abortError();
-    return images
-      .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX) && !tag.endsWith(':<none>')), createdAt: image.created }))
-      .filter((image) => image.tags.length > 0);
+    const images = await this.taggedImages({ reference: [`${RESOURCE_NAME_PREFIX}*`] }, (tag) => tag.startsWith(RESOURCE_NAME_PREFIX), signal);
+    return images.map(({ labels: _labels, ...image }) => image);
   }
 
   /** DevspaceDocker.imagesByLabel: the label filter of the list of the images. */
-  async imagesByLabel(key: string, value: string, signal?: AbortSignal): Promise<LabelledImage[]> {
-    const images = await this.call('the list of the images', signal, (limited) => this.engine.images({ label: [`${key}=${value}`] }, limited));
+  imagesByLabel(key: string, value: string, signal?: AbortSignal): Promise<LabelledImage[]> {
+    return this.taggedImages({ label: [`${key}=${value}`] }, () => true, signal);
+  }
+
+  /**
+   * The images of the list with the filters `filters`, each with its tags that `keep` keeps (never `<none>`), its labels,
+   * and the time of its create; an image without such a tag is left out (listDevspaceImages, imagesByLabel).
+   */
+  private async taggedImages(filters: EngineFilters, keep: (tag: string) => boolean, signal: AbortSignal | undefined): Promise<LabelledImage[]> {
+    const images = await this.call('the list of the images', signal, (limited) => this.engine.images(filters, limited));
     if (signal?.aborted) throw abortError();
     return images
-      .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => !tag.endsWith(':<none>')), labels: { ...image.labels }, createdAt: image.created }))
+      .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => keep(tag) && !tag.endsWith(':<none>')), labels: { ...image.labels }, createdAt: image.created }))
       .filter((image) => image.tags.length > 0);
   }
 

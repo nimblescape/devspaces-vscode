@@ -209,7 +209,7 @@ describe('a shared devspace image', () => {
     const api = (await h.registry.get(result.devspace.id))!.buildRecord!;
     expect(h.docker.labelFilters).toEqual([]);
     expect(api.imageKey).toBeUndefined();
-    expect(h.logger.infos).toContain(`The devspace image of ${REPO} is not shared: its image ${BASE_IMAGE} is the image of a devspace.`);
+    expect(h.logger.infos).toContain(`The devspace image of ${REPO} is not shared: its image ${BASE_IMAGE} was built for one devspace.`);
     expect(h.docker.labelled.get(api.devspaceImage)).toMatchObject({ [LABEL_DEVSPACE_ID]: result.devspace.id, [LABEL_REPOSITORY]: REPO, [LABEL_BUILD_RECORD]: expect.any(String) });
     expect(h.docker.labelled.get(api.devspaceImage)).not.toHaveProperty(LABEL_IMAGE_KEY);
   });
