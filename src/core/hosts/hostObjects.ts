@@ -40,7 +40,7 @@ import type { Devspace } from '../types';
 import { isRecord } from '../valueChecks';
 import { IMAGE_IN_USE_PATTERN, commandText, parseJsonLines, parseJsonOutput, type BootstrapDocker } from '../docker/bootstrapDocker';
 import { BUILDX_REPOSITORY } from '../docker/buildxImage';
-import { isHelperImageTag } from '../helper/helperState';
+import { isHelperImageTag, isMonitorImageTag } from '../helper/helperState';
 import { baseImageOf } from '../helper/helperImage';
 import { DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { VOLUME_REMOVE_TIMEOUT_MS } from '../docker/engineRemoval';
@@ -482,23 +482,27 @@ function untaggedName(id: string): string {
 }
 
 /**
- * The name of a helper image without its helper tag `devspaces-worker:<hash>` (hasHelperTag): usually an earlier build,
- * whose helper tag a newer build took (Docker keeps no record of the tag that an image had). It can still have its
- * monitor tag `devspaces-monitor:<hash>` while the Monitor runs from it, until the next open tags the new build.
+ * The name of an earlier build of the helper image (isEarlierHelperBuild): its helper tag `devspaces-worker:<hash>` was
+ * taken by a newer build, and Docker keeps no record of the tag that an image had. It can still have its monitor tag
+ * `devspaces-monitor:<hash>` while the Monitor runs from it, until the next open tags the new build.
  */
 export function earlierHelperBuildName(id: string): string {
   return `devspaces-worker (earlier build, ${shortImageId(id)})`;
 }
 
 /**
+ * True for an image with the label of the helper image whose tags are at most monitor tags `devspaces-monitor:<hash>`:
+ * an earlier build of the helper image (earlierHelperBuildName). An image with any other tag keeps its tag as its name,
+ * also an image that the user built from the helper image (it has the label of the helper image too).
+ */
+export function isEarlierHelperBuild(object: Pick<HostObject, 'kind' | 'purpose' | 'tags'>): boolean {
+  return object.kind === 'image' && object.purpose === 'helperImage' && (object.tags ?? []).every(isMonitorImageTag);
+}
+
+/**
  * The base image of the helper image: the first FROM of its Dockerfile `dockerfileText` (with the defaults of its ARGs),
  * as a normalized reference (normalizedReference) in a set; an empty set when the Dockerfile names none.
  */
-/** True if the helper image has its helper tag `devspaces-worker:<hash>`; without it, it is named earlierHelperBuildName. */
-export function hasHelperTag(object: Pick<HostObject, 'tags'>): boolean {
-  return (object.tags ?? []).some(isHelperImageTag);
-}
-
 export function helperBaseImageReferences(dockerfileText: string): Set<string> {
   const first = baseImageOf(dockerfileText);
   const reference = first === undefined ? '' : normalizedReference(first);
@@ -512,18 +516,18 @@ function classifyImage(
   const { id, tags, item } = image;
   // The tags of Devspaces first, so that the name of the row is one of them, and of those the helper tag
   // devspaces-worker:<hash> first: a helper image that the Monitor runs from has its monitor tag
-  // devspaces-monitor:<hash> too, which only names the image of the Monitor. A helper image without its helper tag is
-  // an earlier build, also while it still has its monitor tag.
+  // devspaces-monitor:<hash> too, which only names the image of the Monitor.
   const ordered = [
     ...tags.filter(isHelperImageTag),
     ...tags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX) && !isHelperImageTag(tag)),
     ...tags.filter((tag) => !tag.startsWith(RESOURCE_NAME_PREFIX)),
   ];
   const helper = input.helperImageIds.has(id);
+  const earlier = helper && isEarlierHelperBuild({ kind: 'image', purpose: 'helperImage', tags: ordered });
   const base: HostObject = {
     kind: 'image',
     id,
-    name: helper && !ordered.some(isHelperImageTag) ? earlierHelperBuildName(id) : (ordered[0] ?? untaggedName(id)),
+    name: earlier ? earlierHelperBuildName(id) : (ordered[0] ?? untaggedName(id)),
     tags: ordered,
     purpose: 'other',
     ...(parseDockerSize(item.Size) !== undefined ? { sizeBytes: parseDockerSize(item.Size) } : {}),

@@ -14,6 +14,7 @@ import {
   BUILD_CACHE_PRUNE_ARGS,
   buildInventory,
   earlierHelperBuildName,
+  isEarlierHelperBuild,
   formatSize,
   helperBaseImageReferences,
   IMAGE_TAGS_ARGS,
@@ -474,6 +475,12 @@ describe('buildInventory', () => {
     const result = buildInventory(input({ Images: [{ ID: 'sha256:547784e940da0123', Repository: '<none>', Tag: '<none>' }] }, { helperImageIds: new Set(['sha256:547784e940da0123']) }));
     expect(result.images[0]).toMatchObject({ name: 'devspaces-worker (earlier build, 547784e940da)', tags: [], purpose: 'helperImage' });
     expect(earlierHelperBuildName('547784e940da0123')).toBe('devspaces-worker (earlier build, 547784e940da)');
+  });
+
+  it('keeps the tag as the name of an image that the user built from the helper image (it has the label of the helper image)', () => {
+    const result = buildInventory(input({ Images: [{ ID: 'sha256:mine', Repository: 'myapp', Tag: '1' }] }, { helperImageIds: new Set(['sha256:mine']) }));
+    expect(result.images[0]).toMatchObject({ name: 'myapp:1', purpose: 'helperImage' });
+    expect(isEarlierHelperBuild(result.images[0])).toBe(false);
   });
 
   it('names a helper image that kept only its monitor tag as an earlier build: a rebuild took its helper tag', () => {

@@ -8,7 +8,7 @@
 // build cache. The texts, icons, context values and
 // commands of each row, without `vscode` (dockerHostsView.ts renders them).
 import { describeDockerHost, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
-import { formatSize, hasHelperTag, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
+import { formatSize, isEarlierHelperBuild, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
 import type { VmState } from '../core/vm/vmState';
 import { Commands } from './commands';
 import type { RowColor } from './rowColors';
@@ -140,7 +140,7 @@ export const DockerHostsTexts = {
     }
   },
   purposeTooltip: (purpose: HostObjectPurpose): string => PURPOSE_TOOLTIPS[purpose],
-  /** The tooltip line of a helper image without its helper tag (earlierHelperBuildName). */
+  /** The tooltip line of an earlier build of the helper image (isEarlierHelperBuild). */
   earlierHelperBuild:
     'A helper image without its tag devspaces-worker:<hash>: usually an earlier build, whose tag a newer build took. Docker keeps no record of the tag that an image had. Docker does not remove an image while a container that was created from it exists, also a stopped one.',
   /** Why the row has its color: the view shows an inactive object dimmed. */
@@ -316,7 +316,7 @@ export function objectRowLook(row: ObjectRow): RowLook {
     if (object.usedBy !== undefined && object.usedBy > 0) parts.push(`${object.usedBy} container${object.usedBy === 1 ? '' : 's'}`);
   }
   const tooltip = [`${capitalized(object.kind)} ${object.name}`, object.builtIn === true ? 'A network that Docker creates itself (bridge, host and none on every engine; ingress and docker_gwbridge on a node of Docker Swarm). Devspaces does not remove it.' : DockerHostsTexts.purposeTooltip(object.purpose)];
-  if (object.kind === 'image' && object.purpose === 'helperImage' && !hasHelperTag(object)) tooltip.push(DockerHostsTexts.earlierHelperBuild);
+  if (isEarlierHelperBuild(object)) tooltip.push(DockerHostsTexts.earlierHelperBuild);
   if (object.status !== undefined) tooltip.push(`Status: ${object.status}`);
   // Every tag when the name is not the only one: several tags, or a name that is not a tag (an earlier build).
   const tags = object.tags ?? [];

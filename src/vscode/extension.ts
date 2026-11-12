@@ -1425,12 +1425,14 @@ async function activateExtension(
   // the login of the relay.
   const onHostShell = <T>(host: string, fn: () => Promise<T>): Promise<T> => runWithDockerTarget(remoteDockerTarget(host), fn, { onShell: true });
   // The base image of the helper image, from its Dockerfile in this extension: read once, and again at the next read of
-  // a host after a failed read (then none).
+  // a host after a failed read (then none; the first failure is logged).
   let helperBaseImages: Promise<Set<string>> | undefined;
+  let helperBaseImagesWarned = false;
   const readHelperBaseImages = (): Promise<Set<string>> =>
     (helperBaseImages ??= fs.promises.readFile(helperDockerfile, 'utf8').then(helperBaseImageReferences, (error: unknown) => {
       helperBaseImages = undefined;
-      logger.warn(`The Dockerfile of the helper image could not be read for the view Docker Hosts: ${errorMessage(error)}`);
+      if (!helperBaseImagesWarned) logger.warn(`The Dockerfile of the helper image could not be read for the view Docker Hosts: ${errorMessage(error)}`);
+      helperBaseImagesWarned = true;
       return new Set<string>();
     }));
   // The objects of a host with their sizes: for the view Docker Hosts and for Read Sizes of the utilization page.
