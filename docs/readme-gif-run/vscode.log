@@ -1,0 +1,19 @@
+[9328:1112/233320.137128:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+
+DevTools listening on ws://127.0.0.1:9222/devtools/browser/8f936da1-aba3-4e5f-92a9-75389c176a8a
+[9328:1112/233320.151275:ERROR:dbus/object_proxy.cc:589] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+[9328:1112/233320.151379:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[9328:1112/233320.153246:ERROR:dbus/object_proxy.cc:589] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: 
+Warning: 'remote-debugging-port' is not in the list of known options, but still passed to Electron/Chromium.
+[90m[main 2026-11-12T23:33:20.201Z][0m [node-compile-cache] main: packaged cache enabled (status: enabled, configured: /home/runner/work/devspaces-vscode/devspaces-vscode/.vscode-test/vscode-linux-x64-1.146.0/resources/app/node-compile-cache/main, active: /home/runner/work/devspaces-vscode/devspaces-vscode/.vscode-test/vscode-linux-x64-1.146.0/resources/app/node-compile-cache/main/v24.22.1-x64-7034790f)
+[90m[main 2026-11-12T23:33:20.235Z][0m StorageMainService: creating application shared storage
+[9328:1112/233320.301878:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[90m[main 2026-11-12T23:33:20.337Z][0m [shared storage] Creating shared storage database at '/home/runner/.vscode-shared/sharedStorage/state.vscdb' (wasCreated: true)
+[90m[main 2026-11-12T23:33:20.337Z][0m [shared storage] Initializing fallback application storage (path: /home/runner/work/devspaces-vscode/devspaces-vscode/test/gif/output/user-data/User/globalStorage/state.vscdb)
+[90m[main 2026-11-12T23:33:20.343Z][0m [shared storage] Fallback application storage initialized with 3 items
+[90m[main 2026-11-12T23:33:20.343Z][0m update#setState disabled
+[90m[main 2026-11-12T23:33:20.343Z][0m update#ctor - updates are disabled by the environment
+[9328:1112/233320.354846:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[90m[main 2026-11-12T23:33:49.201Z][0m Extension host with pid 9561 exited with code: 0, signal: unknown.
+[9361:1112/233520.036621:ERROR:ui/gfx/x/connection.cc:66] X connection error received.
+[9361:1112/233520.036819:ERROR:ui/gfx/x/connection.cc:66] X connection error received.
