@@ -484,7 +484,8 @@ function untaggedName(id: string): string {
 /**
  * The name of an earlier build of the helper image (isEarlierHelperBuild): its helper tag `devspaces-worker:<hash>` was
  * taken by a newer build, and Docker keeps no record of the tag that an image had. It can still have its monitor tag
- * `devspaces-monitor:<hash>` while the Monitor runs from it, until the next open tags the new build.
+ * `devspaces-monitor:<hash>` while the Monitor runs from it, until the Monitor moves to the new build (its successor
+ * tags it, src/remoteMonitor/selfUpgrade.ts) or the next open tags it.
  */
 export function earlierHelperBuildName(id: string): string {
   return `devspaces-worker (earlier build, ${shortImageId(id)})`;

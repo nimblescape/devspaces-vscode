@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
-// monitorImage: a failed tag is a warning, and the tag has the time limit of the monitor's Docker calls.
+// monitorImage: the current build of the helper tag, a failed tag is a warning, and the tag has the time limit of the
+// monitor's Docker calls.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_MONITOR_DOCKER_TIMEOUT_MS } from '../core/remoteMonitor/remoteSessionMonitor';
 import type { Logger } from '../core/ports';
@@ -27,6 +28,26 @@ afterEach(() => {
 });
 
 describe('monitorImage', () => {
+  it('the current build of the helper tag (R-DS-009), tagged as the monitor tag; the own image when the tag is on none or cannot be read', async () => {
+    const current = `sha256:${'b'.repeat(64)}`;
+    const tags: string[] = [];
+    const tagImage = async (image: string, reference: string) => void tags.push(`${image} ${reference}`);
+    const { logger, lines } = recordingLogger();
+    const rebuilt: DockerEngine = { ...unusedEngine(), inspect: async (kind, reference) => (kind === 'image' && reference === OWN.tag ? { Id: current } : undefined), tagImage };
+    expect(await monitorImage(rebuilt, OWN, logger, new AbortController().signal)).toEqual({ reference: 'devspaces-monitor:0123456789ab', id: current });
+    for (const inspect of [async () => undefined, async () => ({ Id: 'sha256:x' }), async () => Promise.reject(new Error('socket gone'))]) {
+      const engine: DockerEngine = { ...unusedEngine(), inspect, tagImage };
+      expect(await monitorImage(engine, OWN, logger, new AbortController().signal)).toEqual({ reference: 'devspaces-monitor:0123456789ab', id: OWN.id });
+    }
+    expect(tags).toEqual([`${current} devspaces-monitor:0123456789ab`, ...Array.from({ length: 3 }, () => `${OWN.id} devspaces-monitor:0123456789ab`)]);
+    expect(lines).toEqual([]);
+    // A cancel of the inspect passes.
+    const cancel = new AbortController();
+    cancel.abort();
+    const engine: DockerEngine = { ...unusedEngine(), inspect: async () => Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), tagImage };
+    await expect(monitorImage(engine, OWN, logger, cancel.signal)).rejects.toThrow();
+  });
+
   it('a failed tag is logged as a warning, and the monitor runs from the ID', async () => {
     const { logger, lines } = recordingLogger();
     const engine: DockerEngine = { ...unusedEngine(), tagImage: async () => Promise.reject(new Error('no such image')) };

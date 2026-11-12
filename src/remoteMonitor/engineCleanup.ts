@@ -19,7 +19,8 @@
 //      image is built on it, and it has at most one tag (a second tag may be a name that a user gave it).
 //   5. On the VM of Devspaces only: the records of the build cache that no build used for 7 days.
 // Docker refuses to remove an image that a container uses (also a stopped one): such an image stays, and the log names
-// it. When the Monitor upgrades itself to a newer helper build, the next cleanup removes the build that it ran from.
+// it. When the Monitor moved to a newer helper build (selfUpgrade.ts), its successor removes the container of the earlier
+// Monitor and its build; the next cleanup removes that build when a worker still used it then.
 // Which helper tags running containers use is looked at every HELPER_USE_OBSERVE_MS while the Monitor runs (observe),
 // and kept in the volume (CLEANUP_FILE). Never throws; each problem is one line of the log. No `vscode`.
 import { BUILDX_PIN, BUILDX_REPOSITORY, isOlderBuildxTag, type BuildxPin } from '../core/docker/buildxImage';

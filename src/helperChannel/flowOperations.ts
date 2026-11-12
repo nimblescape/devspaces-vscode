@@ -520,24 +520,47 @@ export function recordGitStateOperation(engineOf: EngineOfOperation, ownHelperOf
 }
 
 /**
- * The image of the monitor container: the worker's own image (the pinned helper image) by its monitor tag
- * `devspaces-monitor:<hash>`, tagged here, with the ID that the create checks; by the ID itself when the tag of the
- * worker is no helper tag or the tag fails (the name in the Containers view only).
+ * The image of the monitor container: the current build of the worker's helper tag (the image of the tag now, newer
+ * than the worker's own image when the Monitor or a window built the tag again since the worker started:
+ * docs/requirements.md R-DS-009; the worker's own image when the tag is on no image or cannot be read), by its monitor
+ * tag `devspaces-monitor:<hash>`, tagged here, with the ID that the create checks; by the worker's own image ID itself
+ * when the tag of the worker is no helper tag, and by the ID of the build when the tag fails (the name in the
+ * Containers view only).
  */
-export async function monitorImage(engine: DockerEngine, own: { tag: string; id?: string }, logger: Logger, signal: AbortSignal): Promise<{ reference: string; id?: string }> {
+export async function monitorImage(
+  engine: Pick<DockerEngine, 'inspect' | 'tagImage'>,
+  own: { tag: string; id?: string },
+  logger: Logger,
+  signal: AbortSignal,
+): Promise<{ reference: string; id?: string }> {
   // Without an ID, its tag (readOwnHelper always reads one).
   if (own.id === undefined) return { reference: own.tag };
   const reference = monitorImageTag(own.tag);
   if (reference === undefined) return { reference: own.id };
+  const id = (await currentBuild(engine, own.tag, signal)) ?? own.id;
   try {
-    const id = own.id;
     await limited(REMOTE_MONITOR_DOCKER_TIMEOUT_MS, signal, (limit) => engine.tagImage(id, reference, limit));
   } catch (error) {
     if (signal.aborted) throw error;
-    logger.warn(`The image of the Monitor could not be tagged as ${reference}; it runs from ${own.id}: ${errorMessage(error)}`);
-    return { reference: own.id };
+    logger.warn(`The image of the Monitor could not be tagged as ${reference}; it runs from ${id}: ${errorMessage(error)}`);
+    return { reference: id };
   }
-  return { reference, id: own.id };
+  return { reference, id };
+}
+
+/**
+ * The ID of the image of the helper tag `tag` now (an inspect within REMOTE_MONITOR_DOCKER_TIMEOUT_MS); undefined when
+ * the tag is on no image or the inspect fails. A cancel passes.
+ */
+async function currentBuild(engine: Pick<DockerEngine, 'inspect'>, tag: string, signal: AbortSignal): Promise<string | undefined> {
+  try {
+    const image = await limited(REMOTE_MONITOR_DOCKER_TIMEOUT_MS, signal, (limit) => engine.inspect('image', tag, limit));
+    const id = typeof image === 'object' && image !== null ? (image as { Id?: unknown }).Id : undefined;
+    return typeof id === 'string' && /^sha256:[0-9a-f]{64}$/.test(id) ? id : undefined;
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return undefined;
+  }
 }
 
 /**

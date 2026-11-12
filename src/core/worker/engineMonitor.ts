@@ -34,11 +34,12 @@ export function monitorInspected(value: unknown): MonitorInspected {
     RestartCount?: unknown;
     Id?: unknown;
     Created?: unknown;
+    Image?: unknown;
   };
   const labels = raw.Config?.Labels;
   const label = typeof labels === 'object' && labels !== null ? (labels as Record<string, unknown>)[LABEL_MONITOR] : undefined;
   const owner = typeof labels === 'object' && labels !== null ? (labels as Record<string, unknown>)[LABEL_MONITOR_OWNER] : undefined;
-  const { RestartCount: restartCount, Id: id } = raw;
+  const { RestartCount: restartCount, Id: id, Image: image } = raw;
   const exitCode = raw.State?.ExitCode;
   // An empty name is the policy `no` (as Docker shows a container created without one).
   const policy = raw.HostConfig?.RestartPolicy?.Name;
@@ -52,8 +53,12 @@ export function monitorInspected(value: unknown): MonitorInspected {
     createdAt: parseDockerTime(raw.Created),
     ...(typeof owner === 'string' ? { owner } : {}),
     ...(typeof policy === 'string' ? { restartPolicy: policy === '' ? 'no' : policy } : {}),
+    ...(typeof image === 'string' && IMAGE_ID.test(image) ? { image } : {}),
   };
 }
+
+/** A full image ID. */
+const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
 
 /**
  * The largest stored script (in bytes) that the check reads: the loader bounds the JSON line of the script by
@@ -61,8 +66,14 @@ export function monitorInspected(value: unknown): MonitorInspected {
  */
 export const MAX_STORED_SCRIPT_BYTES = 3 * MAX_BUNDLE_LINE_LENGTH;
 
+/**
+ * What engineMonitor asks of the engine: the worker's (the ensure of a window) or the Monitor's own (the create of its
+ * successor, src/remoteMonitor/selfUpgrade.ts).
+ */
+export type MonitorEngineSource = Pick<DockerEngine, 'inspect' | 'systemTime' | 'removeContainer' | 'start' | 'containerFile' | 'containerIds' | 'createAttached'>;
+
 /** MonitorEngine over the worker's engine (see the module comment). */
-export function engineMonitor(engine: DockerEngine): MonitorEngine {
+export function engineMonitor(engine: MonitorEngineSource): MonitorEngine {
   return {
     async inspect(name, signal) {
       try {

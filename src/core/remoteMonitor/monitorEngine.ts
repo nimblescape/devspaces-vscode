@@ -15,8 +15,8 @@ import type { MonitorCreated, MonitorRunSpec } from '../worker/dockerEngine';
  * without that label), how often Docker restarted it by
  * its restart policy since its last start by a client (`RestartCount`; 0 when it cannot be read), its ID (64 hex digits;
  * undefined when it cannot be read), when the daemon created it (milliseconds since the epoch on the clock of the
- * daemon; undefined when it cannot be read), and its restart policy (`no`, `on-failure`, `unless-stopped`, …; missing
- * when it cannot be read).
+ * daemon; undefined when it cannot be read), its restart policy (`no`, `on-failure`, `unless-stopped`, …; missing
+ * when it cannot be read), and the ID of its image (`sha256:` and 64 hex digits; missing when it cannot be read).
  */
 export type MonitorInspected =
   | { exists: false }
@@ -30,6 +30,7 @@ export type MonitorInspected =
       createdAt: number | undefined;
       owner?: string;
       restartPolicy?: string;
+      image?: string;
     };
 
 /**
