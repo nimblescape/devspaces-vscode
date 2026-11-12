@@ -661,7 +661,7 @@ class UsagePage {
       if (isAbortError(error) || controller.signal.aborted || this.disposed) return;
       ran = true;
       const detail = errorMessage(error);
-      this.deps.logger.warn(`The sizes of ${this.host} could not be read${background ? ' (the page reads them by itself again after a click on Resume, Retry or Refresh Sizes)' : ''}: ${detail}`);
+      this.deps.logger.warn(`The sizes of ${this.host} could not be read${background ? ' (the page reads them by itself again after a start from a click, such as Resume, or a Read Sizes that works)' : ''}: ${detail}`);
       this.sizesError = detail.split('\n')[0].slice(0, 300);
       if (background) this.sizesAuto = false;
     } finally {
@@ -669,11 +669,11 @@ class UsagePage {
       this.sizesReading = false;
       // The next read in the background 10 minutes after this one; after a new start of the host, after the next sample.
       // A read that did not reach the host (refused without an open login, the VM did not run) leaves the sizes of
-      // before as they are, so that the next start reads.
+      // before as they are, so that the next start reads, and the next try comes after a minute.
       const current = epoch === this.bootEpoch;
       if (!current) this.sizesReadAt = undefined;
       else if (ran) this.sizesReadAt = this.timers.now();
-      this.sizesDueAt = current ? this.timers.now() + SIZES_EVERY_MS : undefined;
+      this.sizesDueAt = !current ? undefined : this.timers.now() + (ran ? SIZES_EVERY_MS : SIZES_FRESH_MS);
       this.post();
     }
   }

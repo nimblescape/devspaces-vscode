@@ -924,6 +924,16 @@ describe('UsagePages', () => {
     expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
   });
 
+  it('tries again a minute after a read in the background that did not reach the host', async () => {
+    readSizes.mockRejectedValueOnce(Object.assign(new Error('The operation was cancelled.'), { name: 'AbortError' }));
+    const panel = await open(pages(), 'build-box');
+    await timers.advance(SIZES_FRESH_MS - SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(1);
+    await timers.advance(SSH_USAGE_INTERVAL_MS);
+    expect(readSizes).toHaveBeenCalledTimes(2);
+    expect(lastView(panel).sizes.label).toBe('Refresh Sizes');
+  });
+
   it('says in the header that it reads the sizes, and does not end a read in the background at a close', async () => {
     let signal: AbortSignal | undefined;
     readSizes.mockImplementation((_host, readSignal) => {
