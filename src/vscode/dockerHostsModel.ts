@@ -335,9 +335,9 @@ export function objectRowLook(row: ObjectRow): RowLook {
     contextValue: flags.join(';'),
     icon: object.kind === 'container' ? (isRunningContainer(object) ? 'vm-running' : 'vm-outline') : object.kind === 'image' ? 'file-binary' : object.kind === 'network' ? 'plug' : 'database',
     ...(color !== undefined ? { color } : {}),
+    // A click opens its report in the editor (R-ENG-010): the view gives the row the command vscode.open with the address
+    // of the report (dockerHostsView.ts), so the editor of VS Code opens it as a preview tab, as a file of the Explorer.
     collapsible: 'none',
-    // A click opens its report in the editor (R-ENG-010).
-    command: { command: Commands.showResourceReport, title: DockerHostsTexts.showReport, arguments: [row] },
   };
 }
 

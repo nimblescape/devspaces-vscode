@@ -16,7 +16,7 @@
 // container that is not of Devspaces) or Remove… (never with force), after one question, also for several selected
 // rows. The rows come from dockerHostsModel.ts.
 import * as vscode from 'vscode';
-import { formatSize, type HostInventory, type HostObject, type ObjectResult } from '../core/hosts/hostObjects';
+import { formatSize, type HostInventory, type HostObject, type HostObjectKind, type ObjectResult } from '../core/hosts/hostObjects';
 import { errorMessage } from '../core/errors';
 import { Actions } from '../core/messages';
 import { isAbortError, type Logger } from '../core/ports';
@@ -35,9 +35,11 @@ import {
   type HostsNode,
   type MessageRow,
   type ObjectRow,
+  DockerHostsTexts,
 } from './dockerHostsModel';
 import { showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
+import { reportUri } from './reportPage';
 import { colorTreeItem } from './rowColors';
 
 /** User-visible texts of the commands of the view (plain language). */
@@ -160,7 +162,19 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     item.contextValue = look.contextValue;
     colorTreeItem(item, look.icon, look.color);
     if (look.command !== undefined) item.command = look.command;
+    // A click on an object row opens its report with vscode.open, as the Explorer opens a file: VS Code passes the kind of
+    // the click to the editor, so a click opens a preview tab (italic title) and a double click keeps it (R-ENG-010).
+    if (node.hostsNode === 'object') item.command = { command: 'vscode.open', title: DockerHostsTexts.showReport, arguments: [reportUri(node)] };
     return item;
+  }
+
+  /** The object `kind` `id` of `host` as the last read of the host found it (for the report page), else undefined. */
+  objectOf(host: string, kind: HostObjectKind, id: string): HostObject | undefined {
+    const entry = this.entries.get(host);
+    if (entry?.kind !== 'inventory') return undefined;
+    const { inventory } = entry;
+    const objects = kind === 'container' ? inventory.containers : kind === 'image' ? inventory.images : kind === 'volume' ? inventory.volumes : inventory.networks;
+    return objects.find((object) => object.id === id);
   }
 
   async getChildren(node?: HostsNode): Promise<HostsNode[]> {

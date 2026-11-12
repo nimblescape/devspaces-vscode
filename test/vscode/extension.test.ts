@@ -106,7 +106,49 @@ describe('the extension in VS Code', () => {
       await extensions.update('confirmedUriHandlerExtensionIds', undefined, vscode.ConfigurationTarget.Global);
     }
   });
+
+  // The report page of a resource of the view Docker Hosts (R-ENG-010) is the custom editor of the report addresses, so
+  // VS Code opens it as it opens a file: a preview tab that the next report replaces, and a kept tab after a double
+  // click (vscode.open with preview false here). The view has read no host, so the page reads nothing (no Docker).
+  it('opens a report address as a preview tab of the report page, and keeps it', async () => {
+    const extension = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.ok(extension);
+    await extension.activate();
+    const monitor = vscode.Uri.from({ scheme: 'devspaces-report', path: '/no-host/container/devspaces-monitor', query: 'id=m1' });
+    const image = vscode.Uri.from({ scheme: 'devspaces-report', path: '/no-host/image/ghcr.io/owner/image:1', query: 'id=sha256%3Aabc' });
+    try {
+      await vscode.commands.executeCommand('vscode.open', monitor);
+      assert.deepStrictEqual(await reportTabs(1), [{ uri: monitor.toString(), label: 'devspaces-monitor', preview: true }]);
+      await vscode.commands.executeCommand('vscode.open', image);
+      assert.deepStrictEqual(await reportTabs(1, image), [{ uri: image.toString(), label: 'image:1', preview: true }]);
+      await vscode.commands.executeCommand('vscode.open', image, { preview: false });
+      await vscode.commands.executeCommand('vscode.open', monitor);
+      assert.deepStrictEqual(await reportTabs(2), [
+        { uri: image.toString(), label: 'image:1', preview: false },
+        { uri: monitor.toString(), label: 'devspaces-monitor', preview: true },
+      ]);
+    } finally {
+      await vscode.window.tabGroups.close(vscode.window.tabGroups.all.flatMap((group) => group.tabs.filter(isReportTab)));
+    }
+  });
 });
+
+/** Whether `tab` is a tab of the report page (the custom editor devspaces.resourceReport). */
+function isReportTab(tab: vscode.Tab): boolean {
+  return tab.input instanceof vscode.TabInputCustom && tab.input.viewType === 'devspaces.resourceReport';
+}
+
+/** The report tabs once there are `count` of them (and one of `uri`), in the order of their group; fails after 10 s. */
+async function reportTabs(count: number, uri?: vscode.Uri): Promise<Array<{ uri: string; label: string; preview: boolean }>> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const tabs = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs.filter(isReportTab))
+      .map((tab) => ({ uri: (tab.input as vscode.TabInputCustom).uri.toString(), label: tab.label, preview: tab.isPreview }));
+    if ((tabs.length === count && (uri === undefined || tabs.some((tab) => tab.uri === uri.toString()))) || Date.now() > deadline) return tabs;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
 
 /**
  * The log of the extension once it has a line that matches `expected` and then did not change for LOG_QUIET_MS (the

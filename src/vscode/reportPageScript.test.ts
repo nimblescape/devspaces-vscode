@@ -92,7 +92,7 @@ const content: ReportContent = {
   ],
 };
 const view = (overrides: Partial<Parameters<typeof reportPageView>[0]> = {}): ReportPageView =>
-  reportPageView({ target: { host: LIMA_HOST, object: monitor }, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, kept: false, clock: CLOCK, ...overrides });
+  reportPageView({ target: { host: LIMA_HOST, object: monitor }, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK, ...overrides });
 
 describe('the script of the report page', () => {
   it('asks for the view at the start', () => {
@@ -107,7 +107,7 @@ describe('the script of the report page', () => {
     expect(page.byId('title').textContent).toBe('devspaces-monitor');
     expect(page.byId('kind').textContent).toContain('Container · Monitor · Running');
     expect(page.byId('status').textContent).toBe('Read today 07:52');
-    expect(page.byId('buttons').all('button').map((button) => button.textContent)).toEqual(['Show Log of the Monitor', 'Keep Open', 'Refresh']);
+    expect(page.byId('buttons').all('button').map((button) => button.textContent)).toEqual(['Show Log of the Monitor', 'Refresh']);
     expect(page.byId('summary').text()).toBe('7 runs2 removed');
     expect(page.byId('notices').hidden).toBe(false);
     expect(page.byId('notices').all('li').map((item) => item.textContent)).toEqual(content.notices);
@@ -126,7 +126,7 @@ describe('the script of the report page', () => {
     const page = loadScript();
     page.show(view());
     for (const button of page.byId('buttons').all('button')) button.dispatch('click');
-    expect(page.posted.slice(1)).toEqual([{ type: 'showLog' }, { type: 'keepOpen' }, { type: 'refresh' }]);
+    expect(page.posted.slice(1)).toEqual([{ type: 'showLog' }, { type: 'refresh' }]);
     page.show({ ...view(), buttons: [{ action: 'removeAll', label: 'Remove All' }] });
     expect(page.byId('buttons').all('button')).toEqual([]);
   });

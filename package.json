@@ -137,6 +137,18 @@
         }
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "devspaces.resourceReport",
+        "displayName": "Devspaces Report",
+        "selector": [
+          {
+            "filenamePattern": "devspaces-report:/**"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
         {

@@ -3,24 +3,41 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The report page of a resource of the view Docker Hosts (docs/requirements.md R-ENG-010): a click on an object row
-// opens its report in the editor, a read-only page. One page follows the clicks (it shows the report of the last click);
-// Keep Open keeps a page with its resource, and the next click opens a new page. The page reads when it opens, when it
-// follows a click, and at Refresh; never in the background and never with a start of the VM of Devspaces (R-VM-004): on
-// the VM it reads its state first, and a stopped VM shows Start the VM. Thin glue: the reads run on the shared shell of
+// opens its report in the editor, a read-only page. The page is a custom editor of the report address of the resource
+// (reportAddress, scheme devspaces-report), so the editor of VS Code treats it like a file of the Explorer: a click opens a
+// preview tab with an italic title, the next click replaces it, and a double click on the row (or on the tab, or Keep
+// Open of VS Code) keeps it with a regular title; the setting workbench.editor.enablePreview applies. The page reads when
+// it opens and at Refresh; never in the background and never with a start of the VM of Devspaces (R-VM-004): on the VM
+// it reads its state first, and a stopped VM shows Start the VM. A tab that VS Code opens again at its start reads
+// nothing until Refresh, because the view has not read the host then. Thin glue: the reads run on the shared shell of
 // the host (readResourceReport, src/core/hosts/reportRead.ts), and what the page shows comes from reportPageModel.ts. A
 // read is a flow of the user, so a first login to a remote host may ask for a password. Show Log of the Monitor opens the
 // last lines of the log of the Monitor as a read-only document.
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { errorMessage } from '../core/errors';
+import type { HostObject, HostObjectKind } from '../core/hosts/hostObjects';
 import type { ReportClock, ReportContent } from '../core/hosts/reportModel';
 import { isAbortError, type Logger } from '../core/ports';
 import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { showWarningMessage } from './notifications';
-import { ReportPageTexts, parseReportRequest, reportPageHtml, reportPageView, reportTargetOfArgument, sameTarget, type ReportPhase, type ReportTarget } from './reportPageModel';
+import {
+  REPORT_SCHEME,
+  ReportPageTexts,
+  parseReportRequest,
+  reportAddress,
+  reportKeyOf,
+  reportPageHtml,
+  reportPageView,
+  reportTargetOfArgument,
+  type ReportKey,
+  type ReportPhase,
+  type ReportTarget,
+} from './reportPageModel';
 
-const VIEW_TYPE = 'devspaces.resourceReport';
+/** The view type of the custom editor of the report page (package.json, `customEditors`). */
+export const REPORT_VIEW_TYPE = 'devspaces.resourceReport';
 /** Folder of the style sheet and the script of the webview (package: resources/**). */
 const ASSETS = ['resources', 'reportPage'];
 /** The scheme of the read-only documents of Show Log of the Monitor. */
@@ -35,6 +52,8 @@ export interface ReportPagesDeps {
   vmState: () => Promise<VmState>;
   /** "Start the VM" (VmCommands.start), which never throws. */
   startVm: () => Promise<void>;
+  /** The object `kind` `id` of `host` as the view Docker Hosts shows it now (DockerHostsView.objectOf), else undefined. */
+  objectOf: (host: string, kind: HostObjectKind, id: string) => HostObject | undefined;
   /** The report of `target`, read now on the shared shell of its host (readResourceReport). */
   read: (target: ReportTarget, clock: ReportClock) => Promise<ReportContent>;
   /** The last lines of the log of the Monitor of `host`, with times in `timeZone` (readMonitorLog on the shared shell of the host). */
@@ -43,45 +62,52 @@ export interface ReportPagesDeps {
   clock: () => ReportClock;
 }
 
-/** The report pages of this window. */
-export class ReportPages implements vscode.Disposable {
+/** The address of the report of `target`. */
+export function reportUri(target: ReportTarget): vscode.Uri {
+  return vscode.Uri.from({ scheme: REPORT_SCHEME, ...reportAddress(target) });
+}
+
+/** The report pages of this window: the provider of the custom editor of the report addresses. */
+export class ReportPages implements vscode.CustomReadonlyEditorProvider, vscode.Disposable {
   private readonly pages = new Set<ReportPage>();
-  /** The page that follows the clicks: the newest page without Keep Open. */
-  private follow: ReportPage | undefined;
+  private readonly registration: vscode.Disposable;
   private readonly logs = new Map<string, string>();
   private readonly logChanged = new vscode.EventEmitter<vscode.Uri>();
   /** The provider of the documents of Show Log of the Monitor, registered at the first Show Log. */
   private logProvider: vscode.Disposable | undefined;
   private disposed = false;
 
-  constructor(private readonly deps: ReportPagesDeps) {}
+  constructor(private readonly deps: ReportPagesDeps) {
+    // A hidden page keeps its content here; a show asks for it again (`ready`) and reads nothing.
+    this.registration = vscode.window.registerCustomEditorProvider(REPORT_VIEW_TYPE, this, { supportsMultipleEditorsPerDocument: false, webviewOptions: { retainContextWhenHidden: false } });
+  }
 
-  /** The click on an object row (or Show Report of its menu): the page of its report. */
+  /** Show Report of the menu of an object row: its report, as a click on the row opens it. */
   show(argument: unknown): void {
     const target = reportTargetOfArgument(argument);
     if (target === undefined || this.disposed) return;
-    // A page that is kept with this resource shows it; the page that follows the clicks shows it too.
-    const kept = [...this.pages].find((page) => page.kept && sameTarget(page.target, target));
-    if (kept !== undefined) {
-      kept.showTarget(target);
+    vscode.commands.executeCommand('vscode.open', reportUri(target)).then(undefined, (error: unknown) => {
+      this.deps.logger.warn(`The report of ${target.object.kind} ${target.object.name} on ${target.host} could not be opened: ${errorMessage(error)}`);
+    });
+  }
+
+  openCustomDocument(uri: vscode.Uri): vscode.CustomDocument {
+    return { uri, dispose: () => undefined };
+  }
+
+  /** The page of a report address in the tab that VS Code opened for it (a click on a row, or a tab of the last session). */
+  resolveCustomEditor(document: vscode.CustomDocument, panel: vscode.WebviewPanel): void {
+    const key = reportKeyOf({ path: document.uri.path, query: document.uri.query });
+    if (key === undefined || this.disposed) {
+      panel.webview.options = { enableScripts: false };
+      panel.webview.html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"></head><body><p>${ReportPageTexts.notAReport}</p></body></html>`;
       return;
     }
-    if (this.follow !== undefined) {
-      this.follow.showTarget(target);
-      return;
-    }
-    const page: ReportPage = new ReportPage(target, this.deps, {
-      disposed: () => {
-        this.pages.delete(page);
-        if (this.follow === page) this.follow = undefined;
-      },
-      kept: () => {
-        if (this.follow === page) this.follow = undefined;
-      },
+    const page: ReportPage = new ReportPage(panel, key, this.deps, {
+      disposed: () => this.pages.delete(page),
       showLog: (host) => this.showLog(host),
     });
     this.pages.add(page);
-    this.follow = page;
   }
 
   /** The VM may have started or stopped (a command of the VM): its pages that wait for it read again. */
@@ -121,9 +147,9 @@ export class ReportPages implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
+    this.registration.dispose();
     for (const page of [...this.pages]) page.dispose();
     this.pages.clear();
-    this.follow = undefined;
     this.logProvider?.dispose();
     this.logProvider = undefined;
     this.logChanged.dispose();
@@ -131,78 +157,56 @@ export class ReportPages implements vscode.Disposable {
   }
 }
 
-/** The page of one report. */
+/** The page of one report, in the tab of its address. */
 class ReportPage {
-  private readonly panel: vscode.WebviewPanel;
   private readonly listeners: vscode.Disposable[];
   /** Ends a password question of a read when the page closes (never a command on the shared shell: that would end it). */
   private readonly abort = new AbortController();
+  /** The resource as the view showed it last; undefined while the view does not show it (`missing`). */
+  private target: ReportTarget | undefined;
   private phase: ReportPhase = { kind: 'reading' };
   private content: ReportContent | undefined;
-  /** Counts the reads: the result of an earlier one (of another resource, or before a Refresh) is dropped. */
+  /** Counts the reads: the result of an earlier one (before a Refresh) is dropped. */
   private generation = 0;
   private disposed = false;
-  kept = false;
 
   constructor(
-    public target: ReportTarget,
+    private readonly panel: vscode.WebviewPanel,
+    private readonly key: ReportKey,
     private readonly deps: ReportPagesDeps,
-    private readonly events: { disposed: () => void; kept: () => void; showLog: (host: string) => Promise<void> },
+    private readonly events: { disposed: () => void; showLog: (host: string) => Promise<void> },
   ) {
     const assets = vscode.Uri.joinPath(deps.extensionUri, ...ASSETS);
-    // The focus stays in the view, so that the arrow keys go on to the next row and Enter opens its report.
-    this.panel = vscode.window.createWebviewPanel(
-      VIEW_TYPE,
-      ReportPageTexts.panelTitle(target.object),
-      { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
-      {
-        enableScripts: true,
-        enableCommandUris: false,
-        enableForms: false,
-        localResourceRoots: [assets],
-        // A hidden page keeps its content here; a show asks for it again (`ready`) and reads nothing.
-        retainContextWhenHidden: false,
-      },
-    );
-    const webview = this.panel.webview;
+    const webview = panel.webview;
+    webview.options = { enableScripts: true, enableCommandUris: false, enableForms: false, localResourceRoots: [assets] };
     webview.html = reportPageHtml({
       cspSource: webview.cspSource,
       nonce: randomBytes(16).toString('base64'),
       scriptUri: webview.asWebviewUri(vscode.Uri.joinPath(assets, 'page.js')).toString(),
       styleUri: webview.asWebviewUri(vscode.Uri.joinPath(assets, 'page.css')).toString(),
-      title: ReportPageTexts.panelTitle(target.object),
+      title: key.name,
     });
-    this.listeners = [webview.onDidReceiveMessage((raw: unknown) => this.onMessage(raw)), this.panel.onDidDispose(() => this.dispose())];
-    void this.read();
-  }
-
-  reveal(): void {
-    this.panel.reveal(undefined, true);
-  }
-
-  /**
-   * The page shows the report of `target`. The same resource again is only a show, with the name and the state of the
-   * newer row (the view may have read the host again since); another resource (only on the page that follows the clicks)
-   * is read.
-   */
-  showTarget(target: ReportTarget): void {
-    if (sameTarget(target, this.target)) {
-      this.target = target;
-      this.panel.title = ReportPageTexts.panelTitle(target.object);
-      this.reveal();
+    this.listeners = [webview.onDidReceiveMessage((raw: unknown) => this.onMessage(raw)), panel.onDidDispose(() => this.dispose())];
+    // A click on a row: the view shows the resource, so the page reads it. A tab that VS Code opened again at its start:
+    // the view has not read the host, so the page reads nothing until Refresh.
+    this.target = this.current();
+    if (this.target !== undefined) {
+      void this.read();
+    } else {
+      this.phase = { kind: 'missing' };
       this.post();
-      return;
     }
-    this.target = target;
-    this.content = undefined;
-    this.panel.title = ReportPageTexts.panelTitle(target.object);
-    this.reveal();
-    void this.read();
+  }
+
+  /** The resource of the page as the view shows it now, else undefined. */
+  private current(): ReportTarget | undefined {
+    const object = this.deps.objectOf(this.key.host, this.key.kind, this.key.id);
+    return object !== undefined ? { host: this.key.host, object } : undefined;
   }
 
   /** The VM may have started: a page on the VM that waits for it reads again. */
   vmChanged(): void {
-    if (!this.disposed && this.phase.kind === 'vm' && this.target.host === this.deps.vmHost) void this.read();
+    if (!this.disposed && this.phase.kind === 'vm' && this.key.host === this.deps.vmHost) void this.read();
   }
 
   dispose(): void {
@@ -223,18 +227,22 @@ class ReportPage {
     }
     switch (request.type) {
       case 'ready':
+        // The page shows again: with the name and the state of the newer row (the view may have read the host since).
+        this.target = this.current() ?? this.target;
         this.post();
         return;
       case 'refresh':
-        if (this.phase.kind !== 'reading') void this.read();
-        return;
-      case 'keepOpen':
-        this.kept = true;
-        this.events.kept();
-        this.post();
+        if (this.phase.kind === 'reading') return;
+        this.target = this.current() ?? this.target;
+        if (this.target !== undefined) {
+          void this.read();
+        } else {
+          this.phase = { kind: 'missing' };
+          this.post();
+        }
         return;
       case 'showLog':
-        void this.events.showLog(this.target.host);
+        void this.events.showLog(this.key.host);
         return;
       case 'startVm':
         void this.startVm();
@@ -254,8 +262,9 @@ class ReportPage {
    * on the shared shell of the host, which an end would stop.
    */
   private async read(): Promise<void> {
-    const generation = ++this.generation;
     const target = this.target;
+    if (target === undefined) return;
+    const generation = ++this.generation;
     this.phase = { kind: 'reading' };
     this.post();
     try {
@@ -285,15 +294,14 @@ class ReportPage {
   private post(): void {
     if (this.disposed || !this.panel.visible) return;
     const view = reportPageView({
-      target: this.target,
-      vm: this.target.host === this.deps.vmHost,
+      target: this.target ?? this.key,
+      vm: this.key.host === this.deps.vmHost,
       phase: this.phase,
       ...(this.content !== undefined ? { content: this.content } : {}),
-      kept: this.kept,
       clock: this.deps.clock(),
     });
     this.panel.webview.postMessage({ type: 'view', view }).then(undefined, (error: unknown) => {
-      this.deps.logger.warn(`The report page of ${this.target.object.name} could not be updated: ${errorMessage(error)}`);
+      this.deps.logger.warn(`The report page of ${this.key.name} could not be updated: ${errorMessage(error)}`);
     });
   }
 }

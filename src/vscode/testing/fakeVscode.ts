@@ -61,7 +61,12 @@ export class FileDecoration {
 const fileUri = (fsPath: string) => ({ scheme: 'file', fsPath, toString: () => `file://${fsPath}` });
 
 export const Uri = {
-  from: (parts: { scheme: string; path?: string }) => ({ scheme: parts.scheme, path: parts.path ?? '', toString: () => `${parts.scheme}:${parts.path ?? ''}` }),
+  from: (parts: { scheme: string; path?: string; query?: string }) => ({
+    scheme: parts.scheme,
+    path: parts.path ?? '',
+    query: parts.query ?? '',
+    toString: () => `${parts.scheme}:${parts.path ?? ''}${parts.query !== undefined && parts.query !== '' ? `?${parts.query}` : ''}`,
+  }),
   parse: (value: string) => ({ scheme: value.split(':')[0], toString: () => value }),
   file: fileUri,
   /** A file URI stays a file URI with the joined path; any other URI gets the parts after a `/`. */
@@ -155,6 +160,28 @@ function fakeWebviewPanel(viewType: string, title: string, column: unknown, opti
   return panel;
 }
 
+/** A provider of `window.registerCustomEditorProvider`. */
+export interface FakeCustomEditorProvider {
+  openCustomDocument(uri: unknown, context: unknown, token: unknown): unknown;
+  resolveCustomEditor(document: unknown, panel: FakeWebviewPanel, token: unknown): unknown;
+}
+
+/**
+ * Test helper: VS Code opens `uri` in a tab of the custom editor `viewType` (a click on a tree item with `vscode.open`,
+ * or a tab of the last session): a new panel in `webviewPanels`, titled with the path as VS Code titles it, given to the
+ * provider.
+ */
+export async function openFakeCustomEditor(viewType: string, uri: { path: string }): Promise<FakeWebviewPanel> {
+  const entry = fakeVscode.customEditors.get(viewType);
+  if (entry === undefined) throw new Error(`No custom editor ${viewType} is registered.`);
+  const panel = fakeWebviewPanel(viewType, uri.path, undefined, undefined);
+  fakeVscode.webviewPanels.push(panel);
+  const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) };
+  const document = await entry.provider.openCustomDocument(uri, { backupId: undefined, untitledDocumentData: undefined }, token);
+  await entry.provider.resolveCustomEditor(document, panel, token);
+  return panel;
+}
+
 export interface FakeTerminal {
   name?: string;
   shown: number;
@@ -230,6 +257,8 @@ export const fakeVscode = {
     registerFileDecorationProvider: vi.fn(() => ({ dispose: () => undefined })),
     /** Each panel goes to `webviewPanels`. */
     createWebviewPanel: vi.fn(),
+    /** Keeps the provider in `customEditors` until its dispose (openFakeCustomEditor opens a tab of it). */
+    registerCustomEditorProvider: vi.fn(),
     /** Resolves to an editor of the document. */
     showTextDocument: vi.fn(),
     /** Fired by `fireWindowState`. */
@@ -282,6 +311,8 @@ export const fakeVscode = {
   terminals: [] as FakeTerminal[],
   outputChannels: [] as FakeOutputChannel[],
   webviewPanels: [] as FakeWebviewPanel[],
+  /** The providers of `window.registerCustomEditorProvider` by view type, with their options (removed at their dispose). */
+  customEditors: new Map<string, { provider: FakeCustomEditorProvider; options: unknown }>(),
   /** The providers of `workspace.registerTextDocumentContentProvider` by scheme (removed at their dispose). */
   contentProviders: new Map<string, { provideTextDocumentContent(uri: { toString(): string }): string | undefined }>(),
 };
@@ -296,6 +327,7 @@ export function resetFakeVscode(): void {
   window.state.focused = true;
   fakeVscode.outputChannels.length = 0;
   fakeVscode.webviewPanels.length = 0;
+  fakeVscode.customEditors.clear();
   fakeVscode.contentProviders.clear();
   // A listener of an earlier test never hears a later window state.
   windowStates.dispose();
@@ -336,6 +368,10 @@ export function resetFakeVscode(): void {
     const panel = fakeWebviewPanel(viewType, title, column, options);
     fakeVscode.webviewPanels.push(panel);
     return panel;
+  });
+  window.registerCustomEditorProvider.mockImplementation((viewType: string, provider: FakeCustomEditorProvider, options?: unknown) => {
+    fakeVscode.customEditors.set(viewType, { provider, options });
+    return { dispose: () => fakeVscode.customEditors.delete(viewType) };
   });
   window.onDidChangeWindowState.mockImplementation(windowStates.event);
   fakeVscode.env.openExternal.mockResolvedValue(true);

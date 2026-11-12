@@ -126,10 +126,9 @@ describe('objectActions', () => {
 });
 
 describe('objectRowLook', () => {
-  it('opens the report of the resource with a click on its row (R-ENG-010), also for an object that is not of Devspaces', () => {
+  it('gives an object row no command of its own: the view opens its report with the address of the report (R-ENG-010)', () => {
     for (const object of [container('running'), container('exited', { purpose: 'notDevspaces' }), { kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true } as const]) {
-      const row = objectRow(object);
-      expect(objectRowLook(row).command).toEqual({ command: 'devspaces.showResourceReport', title: 'Show Report', arguments: [row] });
+      expect(objectRowLook(objectRow(object)).command).toBeUndefined();
     }
   });
 
