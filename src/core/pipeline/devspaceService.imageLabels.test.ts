@@ -448,15 +448,15 @@ describe('the build record on the dev container', () => {
     expect(h.helper.builds).toHaveLength(1);
   });
 
-  it('does not take the record of a container whose tag names another image now, and takes the record of the newest image', async () => {
+  it('does not take the record of a container whose tag names another image now, and builds', async () => {
     await seedDevspace(h, { record: null, container: null });
     addImage(IMAGE_3, {});
     addContainerWithRecord(IMAGE_3, recordOf(IMAGE_3, 3));
-    // The tag of build 3 was built again elsewhere: it names another image than the container's.
+    // The tag of build 3 was built again elsewhere: it names another image (without labels) than the container's.
     h.docker.imageIds.set(IMAGE_3, `sha256:${'7'.repeat(64)}`);
-    addImage(IMAGE_2, labelsOf(recordOf(IMAGE_2, 2)));
     await h.service.open(TARGET, options());
-    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).not.toBe(IMAGE_3);
+    expect(h.helper.builds).toHaveLength(1);
+    expect((await h.registry.get(ENV_ID))?.buildRecord?.devspaceImage).toBe(devspaceImageName(REPO, ENV_ID, 4));
   });
 
   it('takes a newer record from the container when the image of the own record is gone', async () => {
@@ -519,6 +519,10 @@ describe('a container is created again only from its own image', () => {
     expect(ups).toHaveLength(1);
     expect(ups[0]).toBe(`up ${own} --remove-existing-container`);
     expect(h.logger.warnings.some((line) => line.includes('no longer names the image of the container'))).toBe(true);
+    // The record does not describe that image: the record label of the new container is empty, so that no label of
+    // the image stays.
+    expect(h.helper.ups[0].override.runArgs).toContain(`${LABEL_BUILD_RECORD}=`);
+    expect(h.helper.ups[0].override.runArgs).toContain(`${LABEL_OWNER_ID}=${ACCOUNT.id}`);
   });
 });
 

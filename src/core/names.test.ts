@@ -468,8 +468,13 @@ describe('devspaceContainerLabels', () => {
     expect(devspaceContainerLabels({ repository: 'acme/api', ownerId: '1001', buildRecord: '' })).toContain(`${LABEL_BUILD_RECORD}=`);
   });
 
-  it('leaves out a value that the host access policy refuses', () => {
-    expect(devspaceContainerLabels({ repository: 'acme/${localEnv:HOME}', ownerId: '10 01', buildRecord: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH + 1) })).toEqual([]);
+  it('leaves out a repository or an owner that the host access policy refuses, and writes such a build record empty', () => {
+    expect(devspaceContainerLabels({ repository: 'acme/${localEnv:HOME}', ownerId: '10 01', buildRecord: 'x'.repeat(MAX_BUILD_RECORD_LABEL_LENGTH + 1) })).toEqual([`${LABEL_BUILD_RECORD}=`]);
+    expect(devspaceContainerLabels({ repository: 'acme/api', ownerId: '1001', buildRecord: '{"a":"${localEnv:HOME}"}' })).toEqual([
+      `${LABEL_REPOSITORY}=acme/api`,
+      `${LABEL_OWNER_ID}=1001`,
+      `${LABEL_BUILD_RECORD}=`,
+    ]);
   });
 });
 

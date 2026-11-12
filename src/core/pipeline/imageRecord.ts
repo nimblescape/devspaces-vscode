@@ -60,17 +60,21 @@ export function imageBuildRecord(
   buildNumber: number,
 ): BuildRecord | undefined {
   if (labels[LABEL_DEVSPACE_ID] !== env.id || labels[LABEL_REPOSITORY] !== env.repository || labels[LABEL_OWNER_ID] !== env.owner.id) return undefined;
-  const text = labels[LABEL_BUILD_RECORD];
-  if (text === undefined || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
+  const value = recordLabelValue(labels);
   if (!isBuildRecord(value) || !buildRecordFits(value, env, tag, buildNumber)) return undefined;
   const { imageId: _ignored, ...record } = value;
   return record;
+}
+
+/** The parsed JSON of the label LABEL_BUILD_RECORD of `labels`, or `undefined` when it is missing, too long, or no JSON. */
+function recordLabelValue(labels: Readonly<Record<string, string>>): unknown {
+  const text = labels[LABEL_BUILD_RECORD];
+  if (text === undefined || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -80,14 +84,7 @@ export function imageBuildRecord(
  * pins the image that the container was created from.
  */
 export function containerBuildRecord(labels: Readonly<Record<string, string>>, env: Pick<Devspace, 'id' | 'repository' | 'owner'>): BuildRecord | undefined {
-  const text = labels[LABEL_BUILD_RECORD];
-  if (text === undefined || text === '' || text.length > MAX_BUILD_RECORD_LABEL_LENGTH) return undefined;
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
+  const value = recordLabelValue(labels);
   if (!isRecord(value) || typeof value.buildNumber !== 'number' || !Number.isSafeInteger(value.buildNumber) || value.buildNumber < 1) return undefined;
   return imageBuildRecord(labels, env, devspaceImageName(env.repository, env.id, value.buildNumber), value.buildNumber);
 }

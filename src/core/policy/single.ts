@@ -22,7 +22,7 @@ import {
   VSCODE_STORE_VOLUME,
   WORKSPACES_ROOT,
   isConfigPathLabelValue,
-  isOwnDevspaceLabel,
+  ownDevspaceLabel,
   vscodeStoreMount,
 } from '../names';
 import { exposingLocalPortHostValues, LOCAL_PORT_HOST_SETTING } from '../devContainers';
@@ -852,17 +852,11 @@ function isOwnConfigPathLabel(value: string): boolean {
  * are refused); a build record of any valid value (the policy does not know it).
  */
 function isLabelOfDevspace(value: string, own: VolumeInput['devspace']): boolean {
-  if (!isOwnDevspaceLabel(value)) return false;
-  const index = value.indexOf('=');
-  const text = value.slice(index + 1);
-  switch (value.slice(0, index)) {
-    case LABEL_REPOSITORY:
-      return own?.repository !== undefined && text === own.repository;
-    case LABEL_OWNER_ID:
-      return own !== undefined && text === own.ownerId;
-    default:
-      return true;
-  }
+  const label = ownDevspaceLabel(value);
+  if (label === undefined) return false;
+  if (label.key === LABEL_REPOSITORY) return own?.repository !== undefined && label.text === own.repository;
+  if (label.key === LABEL_OWNER_ID) return own !== undefined && label.text === own.ownerId;
+  return true;
 }
 
 /**

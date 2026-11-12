@@ -2667,9 +2667,8 @@ export class DevspaceService extends OperationBase {
     const record = containerBuildRecord(container.labels, env);
     if (record === undefined || record.buildNumber <= above) return undefined;
     // A tag that is gone or that names another image (removed or built again elsewhere) gives no record of the tag.
-    const id = await this.deps.docker.imageId(record.devspaceImage).catch(() => undefined);
-    if (id === undefined || id.toLowerCase() !== container.imageId.toLowerCase()) return undefined;
-    return { record: { ...record, imageId: id }, tag: record.devspaceImage };
+    if (!(await this.tagNamesImage(record.devspaceImage, container.imageId))) return undefined;
+    return { record: { ...record, imageId: container.imageId }, tag: record.devspaceImage };
   }
 
   /**
@@ -4128,16 +4127,20 @@ export class DevspaceService extends OperationBase {
   }
 
   /**
-   * The label of the build record `record` for a container that `up` creates from `image` (buildRecordLabel), as
-   * `buildRecord`, only when the record describes that image: `image` is its tag, and the tag still names the image
-   * that it pins. Otherwise none (also for a record without a pinned ID), and the container keeps the label that its
-   * image gives it.
+   * The value of the label of the build record for a container that `up` creates from `image`: the label of `record`
+   * (buildRecordLabel) only when the record describes that image (`image` is its tag, and the tag still names the
+   * image that it pins), else empty (also for a record without a pinned ID), so that the container never keeps a
+   * record label of its image: the record of a container is always one that Devspaces wrote for it.
    */
-  private async upRecordLabel(image: string, record: BuildRecord | undefined): Promise<{ buildRecord?: string }> {
-    if (record?.imageId === undefined || record.devspaceImage !== image) return {};
-    const id = await this.deps.docker.imageId(image).catch(() => undefined);
-    if (id === undefined || id.toLowerCase() !== record.imageId.toLowerCase()) return {};
-    return { buildRecord: buildRecordLabel(record) };
+  private async upRecordLabel(image: string, record: BuildRecord | undefined): Promise<string> {
+    if (record?.imageId === undefined || record.devspaceImage !== image) return '';
+    return (await this.tagNamesImage(image, record.imageId)) ? buildRecordLabel(record) : '';
+  }
+
+  /** Whether the tag `tag` names the image `imageId` now. A Docker failure counts as no. */
+  private async tagNamesImage(tag: string, imageId: string): Promise<boolean> {
+    const id = await this.deps.docker.imageId(tag).catch(() => undefined);
+    return id !== undefined && id.toLowerCase() === imageId.toLowerCase();
   }
 
   /**
@@ -4184,7 +4187,7 @@ export class DevspaceService extends OperationBase {
       devspace: {
         repository: env.repository,
         ownerId: env.owner.id,
-        ...(createsContainer ? await this.upRecordLabel(image, record) : {}),
+        ...(createsContainer ? { buildRecord: await this.upRecordLabel(image, record) } : {}),
       },
       // The shared VS Code server store, read-only, for an open that carries a server (only a container that `up`
       // creates gets it; an existing one is started as it is).
