@@ -18,13 +18,14 @@ import * as path from 'path';
 import { EXISTING_PATHS_SCRIPT, type ServiceFolders } from '../git/gitSummary';
 import { passwdUserIds, type UserIds } from '../docker/passwdUsers';
 import { TOKEN_WRITE_SCRIPT } from '../helper/containerToken';
-import type { ContainerInfo, ImageInfo, ImageInspection, ListedContainer, MountTarget, NetworkInfo, VolumeInfo } from '../docker/dockerObjects';
+import type { ContainerInfo, ImageInfo, ImageInspection, LabelledImage, ListedContainer, MountTarget, NetworkInfo, VolumeInfo } from '../docker/dockerObjects';
 import { CommandError, UserFacingError } from '../errors';
 import { WORKSPACE_VOLUME_KEY, type ComposeModel } from '../helper/composeModel';
 import { COMPOSE_MODEL_PATH, type ComposeModelOutput } from '../helper/compose';
 import { checkConfiguration } from '../helper/configChecks';
 import { DevcontainerCommandError } from '../helper/devcontainerCli';
 import type { HelperImageUse } from '../helper/helperImage';
+import type { ConfigFilesRead } from '../helper/workspaceHelper';
 import type { CheckOutcome, ConfigReferences } from '../imageCheck/imageCheck';
 import { parseJsonc } from '../jsonc';
 import type { ProgressStep } from '../messages';
@@ -587,6 +588,33 @@ export class FakeDocker implements DevspaceDocker {
     return [...byId.values()];
   }
 
+  /** The creation time of an image by its ID (imagesByLabel), else ''. */
+  readonly imageCreated = new Map<string, string>();
+  /** imagesByLabel fails with this error, when set. */
+  imagesByLabelError: Error | undefined;
+  /** The filter `<key>=<value>` of each imagesByLabel. */
+  readonly labelFilters: string[] = [];
+
+  /**
+   * As `docker image ls --filter label=<key>=<value>`: the images whose labels (of any of their names; the fake keeps
+   * labels by name) have that value, each ID once with its references.
+   */
+  async imagesByLabel(key: string, value: string): Promise<LabelledImage[]> {
+    this.labelFilters.push(`${key}=${value}`);
+    if (this.imagesByLabelError) throw this.imagesByLabelError;
+    const byId = new Map<string, LabelledImage>();
+    for (const name of this.images) {
+      if (name.includes('@')) continue;
+      const labels = this.imageConfigs.get(name)?.Labels ?? {};
+      if (labels[key] !== value) continue;
+      const id = this.imageIds.get(name) ?? `sha256:image-of-${name}`;
+      const image = byId.get(id) ?? { id, tags: [], labels: { ...labels }, createdAt: this.imageCreated.get(id) ?? '' };
+      image.tags.push(name.includes(':') ? name : `${name}:latest`);
+      byId.set(id, image);
+    }
+    return [...byId.values()];
+  }
+
   async listImageTags(repository: string): Promise<string[]> {
     return [...this.images]
       .filter((image) => image.startsWith(`${repository}:`))
@@ -675,12 +703,7 @@ export function imageConfigWithUser(
 // ---------------------------------------------------------------------------------------------------------------------
 // Workspace helper
 
-export interface FakeFiles {
-  configText: string;
-  dockerfilePath?: string;
-  dockerfileText?: string;
-  dockerfileMissing?: boolean;
-}
+export type FakeFiles = ConfigFilesRead;
 
 type Maybe<T> = T | undefined;
 
@@ -894,7 +917,9 @@ export class FakeHelper implements DevspaceHelper {
     this.dockerfileReads.push(p.dockerfile);
     const root = '/r';
     const file = path.posix.resolve(root, path.posix.dirname(p.configPath), p.dockerfile);
-    const result: FakeFiles = { configText: files.configText };
+    // The files without the Dockerfile of the text.
+    const { dockerfilePath: _path, dockerfileText: _text, dockerfileMissing: _missing, ...rest } = files;
+    const result: FakeFiles = rest;
     if (!file.startsWith(`${root}/`)) return result;
     result.dockerfilePath = path.posix.relative(root, file);
     const known =

@@ -8,7 +8,7 @@
 // inspectedImageItems, otherAccountImageItems). Pure functions, no I/O.
 import { MAX_REFERENCE_LENGTH } from '../imageCheck/dockerfile';
 import { isDockerHub, parseImageReference } from '../imageCheck/reference';
-import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_OWNER_ID, LABEL_PREPARED, LABEL_REPOSITORY, RESOURCE_NAME_PREFIX, isDevspaceResourceName, resourceName } from '../names';
+import { LABEL_BUILD_RECORD, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, LABEL_OWNER_ID, LABEL_PREPARED, LABEL_REPOSITORY, RESOURCE_NAME_PREFIX, isDevspaceResourceName, isImageKey, resourceName } from '../names';
 import type { HostAccessFinding } from './report';
 import { isReservedLabel } from './rules';
 
@@ -232,8 +232,10 @@ export interface OwnImageLabels {
  * The labels that the extension gives the images of the devspace `own` (imageRecordLabels of the devspace image,
  * and nimblescape.devspaces.id of the images that Compose builds for it), with the values of `own`; the
  * build record with any value, only on the devspace image (the extension writes it after each build); the label of a
- * prepared image (LABEL_PREPARED) only empty, only on the devspace image. A container created from such an image
- * carries the same ID, repository, and owner as the devspace.
+ * prepared image (LABEL_PREPARED) only empty, only on the devspace image; the image key of a shared image
+ * (LABEL_IMAGE_KEY, R-DS-010) as a key (isImageKey), also on the image of a service (a shared image of the account's
+ * own devspaces, which carries no devspace ID). A container created from such an image carries the same ID,
+ * repository, and owner as the devspace.
  */
 function isOwnImageLabel(key: string, value: string, own: OwnImageLabels | undefined): boolean {
   if (own === undefined) return false;
@@ -250,6 +252,14 @@ function isOwnImageLabel(key: string, value: string, own: OwnImageLabels | undef
     // of an image can only be added to). A prepare key on an image that a container is created from is refused.
     case LABEL_PREPARED:
       return own.devspaceImage === true && value === '';
+    // A shared devspace image carries only its key (no devspace ID, repository, owner, or build record: those are on the
+    // dev container). The key says only from which inputs the image was built: the extension takes an image by it only
+    // as a shared image (isSharedImage: with the tag of a devspace image, none of the labels of a devspace, and a dev
+    // container that the extension created from it with a build record of the key). A shared build writes its own key
+    // over one that the base image carries; an image built for one devspace may keep such a key, and is never taken as
+    // a shared image (it carries the labels of its devspace). So a key label that a Dockerfile wrote is harmless.
+    case LABEL_IMAGE_KEY:
+      return isImageKey(value);
     default:
       return false;
   }

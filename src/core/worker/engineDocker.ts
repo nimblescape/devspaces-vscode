@@ -6,7 +6,7 @@
 // It answers as the Docker CLI answers and is the one implementation of DevspaceDocker, so that DevspaceService
 // runs in the worker; the inspect JSON is read by the same functions as `docker inspect` (dockerObjects.ts). Pure over
 // the port; no I/O, no `vscode`.
-import { mapContainerState, publicInfo, toLabels, toNetworkInfo, toVolumeInfo, type ContainerInfo, type ImageInfo, type ImageInspection, type ImageNames, type InspectedContainer, type ListedContainer, type NetworkInfo, type VolumeInfo } from '../docker/dockerObjects';
+import { mapContainerState, publicInfo, toLabels, toNetworkInfo, toVolumeInfo, type ContainerInfo, type ImageInfo, type ImageInspection, type ImageNames, type LabelledImage, type InspectedContainer, type ListedContainer, type NetworkInfo, type VolumeInfo } from '../docker/dockerObjects';
 import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from '../docker/dockerTimeouts';
 import { passwdUserIds, type UserIds } from '../docker/passwdUsers';
 import { errorMessage } from '../errors';
@@ -17,7 +17,7 @@ import { abortError, isAbortError, silentLogger, withTimeLimit, type Credentials
 import type { ContainerState } from '../types';
 import { credentialServerName, isDockerHub, parseImageReference } from '../imageCheck/reference';
 import { IDENTITY_TOKEN_USER } from '../imageCheck/credentials';
-import { EngineError, isDevContainer, isMissing, type DockerEngine, type EngineContainer } from './dockerEngine';
+import { EngineError, isDevContainer, isMissing, type DockerEngine, type EngineContainer, type EngineFilters } from './dockerEngine';
 import { devContainerOf, devspaceContainers } from './devspaceContainers';
 
 /**
@@ -162,8 +162,10 @@ export class EngineDocker implements DevspaceDocker {
   }
 
   /** DevspaceDocker.listDevspaceContainers: each with the time of its create (ListedContainer). */
-  async listDevspaceContainers(): Promise<ListedContainer[]> {
-    return (await this.containersWithLabel(LABEL_DEVSPACE_ID)).map(listed);
+  async listDevspaceContainers(signal?: AbortSignal): Promise<ListedContainer[]> {
+    const containers = await this.containersWithLabel(LABEL_DEVSPACE_ID, signal);
+    if (signal?.aborted) throw abortError();
+    return containers.map(listed);
   }
 
   /**
@@ -406,10 +408,24 @@ export class EngineDocker implements DevspaceDocker {
    * references.
    */
   async listDevspaceImages(signal?: AbortSignal): Promise<ImageInfo[]> {
-    const images = await this.call('the list of the images', signal, (limited) => this.engine.images({ reference: [`${RESOURCE_NAME_PREFIX}*`] }, limited));
+    const images = await this.taggedImages({ reference: [`${RESOURCE_NAME_PREFIX}*`] }, (tag) => tag.startsWith(RESOURCE_NAME_PREFIX), signal);
+    return images.map(({ labels: _labels, ...image }) => image);
+  }
+
+  /** DevspaceDocker.imagesByLabel: the label filter of the list of the images. */
+  imagesByLabel(key: string, value: string, signal?: AbortSignal): Promise<LabelledImage[]> {
+    return this.taggedImages({ label: [`${key}=${value}`] }, () => true, signal);
+  }
+
+  /**
+   * The images of the list with the filters `filters`, each with its tags that `keep` keeps (never `<none>`), its labels,
+   * and the time of its create; an image without such a tag is left out (listDevspaceImages, imagesByLabel).
+   */
+  private async taggedImages(filters: EngineFilters, keep: (tag: string) => boolean, signal: AbortSignal | undefined): Promise<LabelledImage[]> {
+    const images = await this.call('the list of the images', signal, (limited) => this.engine.images(filters, limited));
     if (signal?.aborted) throw abortError();
     return images
-      .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => tag.startsWith(RESOURCE_NAME_PREFIX) && !tag.endsWith(':<none>')), createdAt: image.created }))
+      .map((image) => ({ id: image.id, tags: image.repoTags.filter((tag) => keep(tag) && !tag.endsWith(':<none>')), labels: { ...image.labels }, createdAt: image.created }))
       .filter((image) => image.tags.length > 0);
   }
 

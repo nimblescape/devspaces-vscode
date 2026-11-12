@@ -1606,6 +1606,15 @@ describe('imageLabelItems', () => {
       expect(imageLabelItems('base:1', { 'nimblescape.devspaces.id': OWN_ENV.id }, service)).toEqual([]);
     });
 
+    it('allows the key of a shared image (R-DS-010) as a key, on the devspace image and on the image of a service, never without the own devspace', () => {
+      const key = `sha256:${'6'.repeat(64)}`;
+      expect(imageLabelItems(`${OWN}:2`, { 'nimblescape.devspaces.image-key': key }, OWN_ENV)).toEqual([]);
+      expect(imageLabelItems(`${OWN}-db`, { 'nimblescape.devspaces.image-key': key }, { ...OWN_ENV, devspaceImage: false })).toEqual([]);
+      expect(imageLabelItems(`${OWN}:2`, { 'nimblescape.devspaces.image-key': 'sha256:short' }, OWN_ENV)).toEqual([`label nimblescape.devspaces.image-key of the image ${OWN}:2`]);
+      expect(imageLabelItems(`${OWN}:2`, { 'nimblescape.devspaces.image-key': '' }, OWN_ENV)).toEqual([`label nimblescape.devspaces.image-key of the image ${OWN}:2`]);
+      expect(imageLabelItems('base:1', { 'nimblescape.devspaces.image-key': key })).toEqual(['label nimblescape.devspaces.image-key of the image base:1']);
+    });
+
     it('allows the label of a prepared image only empty and only on the devspace image', () => {
       expect(imageLabelItems(`${OWN}:2`, { ...LABELS, 'nimblescape.devspaces.prepared': '' }, OWN_ENV)).toEqual([]);
       expect(imageLabelItems(`${OWN}:2`, { ...LABELS, 'nimblescape.devspaces.prepared': '{"key":{}}' }, OWN_ENV)).toEqual([`label nimblescape.devspaces.prepared of the image ${OWN}:2`]);

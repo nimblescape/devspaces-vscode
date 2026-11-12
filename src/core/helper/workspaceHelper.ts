@@ -140,6 +140,20 @@ const MAX_SERVICE_FOLDERS_REQUEST_CHARACTERS = 1024 * 1024;
 /** Time limit of the model run of a Docker Compose configuration (composeModel). */
 export const COMPOSE_MODEL_TIMEOUT_MS = 60_000;
 
+/** What WorkspaceHelper.readConfigFiles read (READ_FILES_SCRIPT). */
+export interface ConfigFilesRead {
+  configText: string;
+  /** The Dockerfile relative to the repository folder. */
+  dockerfilePath?: string;
+  dockerfileText?: string;
+  /** The Dockerfile does not exist in the repository (not a link out). */
+  dockerfileMissing?: boolean;
+  /** The text of the lockfile next to the configuration, for the image key of a shared image (R-DS-010). */
+  lockfileText?: string;
+  /** The lockfile next to the configuration is no plain file of the repository, or is too long. */
+  lockfileUnreadable?: boolean;
+}
+
 /** Workspace helper. */
 export class WorkspaceHelper {
   constructor(private readonly deps: HelperDeps) {}
@@ -193,7 +207,8 @@ export class WorkspaceHelper {
   }
 
   /**
-   * devcontainer.json and its Dockerfile (if any) from the volume. `undefined` if the configuration file does not exist.
+   * devcontainer.json, its Dockerfile (if any), and its lockfile (if any) from the volume (ConfigFilesRead). `undefined`
+   * if the configuration file does not exist.
    * `dockerfile`: the Dockerfile that the configuration names after the Dev Container CLI resolved its variables, read
    * rather than the one that the text names. `dockerfileMissing`: the Dockerfile does not exist in the repository
    * (READ_FILES_SCRIPT).
@@ -206,7 +221,7 @@ export class WorkspaceHelper {
     /** The helper image of the open (HelperImageUse). */
     image?: HelperImageUse;
     signal?: AbortSignal;
-  }): Promise<{ configText: string; dockerfilePath?: string; dockerfileText?: string; dockerfileMissing?: boolean } | undefined> {
+  }): Promise<ConfigFilesRead | undefined> {
     checkRepository(p.repository);
     checkConfigPath(p.configPath);
     const result = await this.runStreams(p.volumeName, {
@@ -221,11 +236,14 @@ export class WorkspaceHelper {
     if (!isRecord(value) || typeof value.configText !== 'string') {
       throw new Error('The workspace helper returned invalid configuration files.');
     }
-    const files: { configText: string; dockerfilePath?: string; dockerfileText?: string; dockerfileMissing?: boolean } = { configText: value.configText };
+    const files: ConfigFilesRead = { configText: value.configText };
     if (typeof value.dockerfilePath === 'string') files.dockerfilePath = value.dockerfilePath;
     if (typeof value.dockerfileText === 'string') files.dockerfileText = value.dockerfileText;
     // The Dockerfile does not exist in the repository (not a link out).
     if (value.dockerfileMissing === true && files.dockerfileText === undefined) files.dockerfileMissing = true;
+    // The lockfile next to the configuration (for the image key of a shared image), or that it could not be read.
+    if (typeof value.lockfileText === 'string') files.lockfileText = value.lockfileText;
+    else if (value.lockfileUnreadable === true) files.lockfileUnreadable = true;
     return files;
   }
 

@@ -15,6 +15,7 @@ import {
   LABEL_BUILD_RECORD,
   LABEL_CONTAINER_VERSION,
   LABEL_DEVSPACE_ID,
+  LABEL_IMAGE_KEY,
   LABEL_OWNER_ID,
   LABEL_REPOSITORY,
   composeProjectName,
@@ -36,6 +37,7 @@ import {
   OTHER_ACCOUNT,
   OTHER_ID,
   REPO,
+  checked,
   createHarness,
   imageConfigWithUser,
   seedDevspace,
@@ -125,6 +127,8 @@ function stored(record: BuildRecord | undefined): Omit<BuildRecord, 'imageId'> |
 
 describe('the labels of a new devspace image, and its pinned ID', () => {
   it('labels the image after the build with the devspace and its build record, and pins the ID after the labels', async () => {
+    // No shared image (R-DS-010): the registry gave no digest of the Feature in this open.
+    h.checker.outcome = checked({ [BASE_IMAGE]: DIGEST_NEW }, {});
     labelsChangeTheId();
     const result = await h.service.open(TARGET, options());
     const env = (await h.registry.get(result.devspace.id))!;
@@ -144,6 +148,17 @@ describe('the labels of a new devspace image, and its pinned ID', () => {
     expect(h.helper.ups.map((up) => up.image)).toEqual([image]);
   });
 
+  it('labels the shared image of a first build with its key only, and pins the ID after the label (R-DS-010)', async () => {
+    labelsChangeTheId();
+    const result = await h.service.open(TARGET, options());
+    const env = (await h.registry.get(result.devspace.id))!;
+    const image = devspaceImageName(REPO, env.id, 1);
+    expect(h.docker.labelled.get(image)).toEqual({ [LABEL_IMAGE_KEY]: expect.stringMatching(/^sha256:[0-9a-f]{64}$/) });
+    expect(env.buildRecord?.devspaceImage).toBe(image);
+    expect(env.buildRecord?.imageId).toBe(LABELLED_ID);
+    expect(h.helper.ups.map((up) => up.image)).toEqual([image]);
+  });
+
   it('labels the image of an update and pins its new ID', async () => {
     await seedDevspace(h, { record: { images: { [BASE_IMAGE]: DIGEST_OLD } } });
     labelsChangeTheId();
@@ -151,7 +166,8 @@ describe('the labels of a new devspace image, and its pinned ID', () => {
     const record = (await h.registry.get(ENV_ID))?.buildRecord;
     expect(record?.devspaceImage).toBe(IMAGE_2);
     expect(record?.imageId).toBe(LABELLED_ID);
-    expect(JSON.parse(h.docker.labelled.get(IMAGE_2)![LABEL_BUILD_RECORD])).toEqual(stored(record));
+    // A shared image: its key, no record (the record is on the dev container).
+    expect(Object.keys(h.docker.labelled.get(IMAGE_2)!)).toEqual([LABEL_IMAGE_KEY]);
   });
 
   it('fails a first open whose labels cannot be set like a failed build, and removes the image', async () => {

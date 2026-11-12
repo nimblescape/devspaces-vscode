@@ -7,7 +7,7 @@
 // sizes, the build cache, which objects the running containers use, and their start, stop and removal without force.
 import { describe, expect, it } from 'vitest';
 import { silentLogger, type Logger, type RunOptions, type RunResult } from '../ports';
-import { resourceName } from '../names';
+import { LABEL_IMAGE_KEY, resourceName } from '../names';
 import type { Devspace } from '../types';
 import {
   baseImageReferences,
@@ -559,6 +559,35 @@ describe('readHostInventory', () => {
       ['bridge', 0],
       ['mynet', 1],
     ]);
+  });
+
+  it('counts a shared image (its key and the tag of a devspace image) as an image of a devspace, not another image with the key', async () => {
+    const shared = 'devspaces-acme-web-config-curious-hopper:2';
+    const docker = {
+      ...fakeDocker({
+        'system df': ok(
+          JSON.stringify({
+            Images: [
+              { ID: 'sha256:s', Repository: shared.split(':')[0], Tag: '2' },
+              { ID: 'sha256:k', Repository: 'acme/base', Tag: '1' },
+              { ID: 'sha256:u', Repository: '<none>', Tag: '<none>' },
+            ],
+            Containers: [],
+            Volumes: [],
+          }),
+        ),
+      }),
+      listImagesByLabel: async (label: string) =>
+        label === LABEL_IMAGE_KEY
+          ? [
+              { id: 'sha256:s', tags: [shared], createdAt: '' },
+              { id: 'sha256:k', tags: ['acme/base:1'], createdAt: '' },
+              { id: 'sha256:u', tags: [], createdAt: '' },
+            ]
+          : [],
+    };
+    const inventory = await readHostInventory(docker, { known: [], baseImages: new Set(), helperBaseImages: new Set() });
+    expect(Object.fromEntries(inventory.images.map((image) => [image.id, image.purpose]))).toEqual({ 'sha256:s': 'otherDevspace', 'sha256:k': 'notDevspaces', 'sha256:u': 'notDevspaces' });
   });
 
   it('reads what the running containers use with docker container inspect, in batches, and only when containers run', async () => {

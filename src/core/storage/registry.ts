@@ -25,6 +25,7 @@ import { DEFAULT_LOCK_STALE_MS, DEFAULT_LOCK_TIMEOUT_MS, LockLostError, withLock
 import { errorCode, isStorageId, parseJson, readTextFile, retryTransient, type StoragePaths } from './paths';
 import { isRecord } from '../valueChecks';
 import { parseImageReference } from '../remoteMonitor/protocol';
+import { isImageKey } from '../names';
 import { DEFAULT_CONFIG_PATH } from '../pipeline/recordRules';
 import { isSourceOf, sourceOf } from '../devspaceSource';
 
@@ -525,7 +526,8 @@ export function isBuildRecord(value: unknown): value is BuildRecord {
     isString(value.configHash) &&
     (value.defaultImage === undefined || isImageReference(value.defaultImage)) &&
     isStringRecord(value.images) &&
-    isStringRecord(value.features)
+    isStringRecord(value.features) &&
+    (value.imageKey === undefined || isImageKey(value.imageKey))
   );
 }
 

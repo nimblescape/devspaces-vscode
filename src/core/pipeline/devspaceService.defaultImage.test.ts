@@ -8,7 +8,7 @@
 // keeps its kind; it asks Rebuild now or Later when the default image of the settings changes; and the headless prepare
 // builds the synthesized configuration too. The extension side (the settings, the rows, the commands) is in src/vscode.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { LABEL_BUILD_RECORD, LABEL_CONFIG_PATH, LABEL_DEFAULT_IMAGE, LABEL_DEVSPACE_ID, LABEL_OWNER_ID, LABEL_REPOSITORY, devspaceImageName, preparedImageName, resourceName } from '../names';
+import { LABEL_BUILD_RECORD, LABEL_CONFIG_PATH, LABEL_DEFAULT_IMAGE, LABEL_DEVSPACE_ID, LABEL_IMAGE_KEY, LABEL_OWNER_ID, LABEL_REPOSITORY, devspaceImageName, preparedImageName, resourceName } from '../names';
 import type { BuildRecord, Devspace, DevspaceSource } from '../types';
 import type { RepositoryTarget } from './operationBase';
 import {
@@ -74,9 +74,10 @@ async function seedDefaultImageDevspace(extra: Parameters<typeof seedDevspace>[1
   });
 }
 
-/** The build record of the devspace image `tag` as its labels carry it (without the pinned ID). */
-function labelledRecord(tag: string): Record<string, unknown> {
-  return JSON.parse(h.docker.labelled.get(tag)![LABEL_BUILD_RECORD]) as Record<string, unknown>;
+/** The build record that the dev container of the override configuration `override` carries (its label). */
+function containerRecord(override: Record<string, unknown>): Record<string, unknown> {
+  const label = (override.runArgs as string[]).find((arg) => arg.startsWith(`${LABEL_BUILD_RECORD}=`))!;
+  return JSON.parse(label.slice(LABEL_BUILD_RECORD.length + 1)) as Record<string, unknown>;
 }
 
 
@@ -113,8 +114,10 @@ describe('the default-image devspace of a repository', () => {
     expect(h.helper.builds).toEqual([{ imageName: image, configPath: DEFAULT_CONFIG_PATH, override: SYNTHESIZED.config }]);
     expect(h.docker.log).toContain(`pull ${IMAGE}`);
     expect(h.helper.ups.map((up) => up.override.image)).toEqual([image]);
-    // The image carries the record with the source.
-    expect(labelledRecord(image)).toMatchObject({ defaultImage: IMAGE });
+    // A shared image (R-DS-010): its only label of the extension is its key; the dev container carries the record with
+    // the source.
+    expect(Object.keys(h.docker.labelled.get(image)!)).toEqual([LABEL_IMAGE_KEY]);
+    expect(containerRecord(h.helper.ups[0].override)).toMatchObject({ defaultImage: IMAGE });
     expect(h.ui.prompts).toEqual([]);
     expect(h.ui.warnings).toEqual([]);
     expect(h.logger.infos).toContain(`${REPO} opens with the default image ${IMAGE} in place of its configuration.`);

@@ -10,7 +10,14 @@ describe('checkConfiguration', () => {
     expect(checkConfiguration('{ "image": "mcr.microsoft.com/devcontainers/python:3.12" }')).toEqual({
       compose: false,
       computerDependent: [],
+      written: { image: 'mcr.microsoft.com/devcontainers/python:3.12' },
     });
+  });
+
+  it('gives the configuration as written only when it is a JSON object (with comments)', () => {
+    expect(checkConfiguration('// c\n{ "image": "alpine", }').written).toEqual({ image: 'alpine' });
+    expect(checkConfiguration('[1]').written).toBeUndefined();
+    expect(checkConfiguration('{ "image": ').written).toBeUndefined();
   });
 
   it('detects Docker Compose', () => {
@@ -21,7 +28,7 @@ describe('checkConfiguration', () => {
 
   it('does not report ${localWorkspaceFolder} in dockerComposeFile: the compose files are read in the workspace helper', () => {
     const text = '{ "dockerComposeFile": "${localWorkspaceFolder}/.devcontainer/compose.yml", "service": "app" }';
-    expect(checkConfiguration(text)).toEqual({ compose: true, computerDependent: [] });
+    expect(checkConfiguration(text)).toMatchObject({ compose: true, computerDependent: [] });
     expect(checkConfiguration('{ "service": "${localWorkspaceFolder}" }').computerDependent).toEqual(['${localWorkspaceFolder}']);
   });
 
