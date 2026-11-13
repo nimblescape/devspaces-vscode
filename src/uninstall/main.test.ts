@@ -172,7 +172,7 @@ describe('the Docker context devspaces in the uninstall hook', () => {
     const { lines, run } = setUp('linux');
     await run();
     expect(JSON.parse(fs.readFileSync(contextFile(), 'utf8'))).toEqual(other);
-    expect(lines()).toContain('The Docker context devspaces was not created by Devspaces, so it stays.');
+    expect(lines()).toContain('The Docker context devspaces was not created by Devspaces, or its file cannot be read, so it stays.');
   });
 
   it('keeps its own context while it is the current one, or while config.json cannot be read, and says how to remove it', async () => {
@@ -278,6 +278,17 @@ describe('the uninstall hook on Windows', () => {
     expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
   });
 
+  it('keeps the folder when it cannot read the folder of the distribution', async () => {
+    const { deps, lines, run } = setUp('win32', windowsAnswers());
+    const root = windowsFiles(deps, { disk: false });
+    // readdir of the folder `wsl` fails with ENOTDIR, not with ENOENT.
+    fs.rmSync(deps.wslFolder!, { recursive: true });
+    write(deps.wslFolder!, 'not a folder');
+    await run();
+    expect(fs.existsSync(deps.wslFolder!)).toBe(true);
+    expect(lines()).toContain(`Devspaces cannot tell whether the WSL distribution of Devspaces exists, so the folder ${root} stays. The user guide says how to delete it (Uninstall).`);
+  });
+
   it('keeps the folder when neither the registry nor wsl.exe tells whether a distribution has its disk there', async () => {
     const answers = windowsAnswers();
     const { deps, lines, run } = setUp('win32', (file, args) => (file.endsWith('reg.exe') ? failed('ERROR: The system was unable to find the specified registry key.') : answers(file, args)));
@@ -378,7 +389,7 @@ describe('the paths of the uninstall hook', () => {
         expect(calls, platform).toEqual([]);
         const warnings = logger.warn.mock.calls.map(([text]) => String(text));
         expect(warnings[0], platform).toContain('the folder of the configuration of the Docker CLI is not an absolute path');
-        if (platform === 'linux') expect(warnings[1]).toContain('the home folder "" is not an absolute path');
+        expect(warnings[1], platform).toContain(platform === 'linux' ? 'the home folder "" is not an absolute path' : 'LOCALAPPDATA is missing or not an absolute path');
       }
       expect(fs.existsSync(path.join(home, '.nimblescape', 'devspaces', 'lima', 'file'))).toBe(true);
       expect(fs.existsSync(path.join(home, 'nimblescape', 'devspaces', 'task', 'task.xml'))).toBe(true);

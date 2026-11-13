@@ -353,9 +353,15 @@ export class WslTask {
     this.deps.logger.info('Devspaces removed its scheduled task, which started the WSL distribution of Devspaces at the times of devspaces.cacheUpdateSchedule.');
   }
 
-  /** Whether the task of the user exists (`schtasks /Query`). */
+  /**
+   * Whether the task of the user exists (`schtasks /Query`: exit code 0). Throws when the call did not end by itself
+   * (time limit, or ended by a signal), because that tells nothing, and a removal must then keep the record of the task.
+   */
   private async exists(sid: string): Promise<boolean> {
-    return (await this.schtasks(['/Query', '/TN', wslTaskName(sid)])) === undefined;
+    const args = ['/Query', '/TN', wslTaskName(sid)];
+    const result = await this.deps.runner.run(system32Program(this.deps.env, 'schtasks.exe'), args, { timeoutMs: TASK_CALL_TIMEOUT_MS });
+    if (result.timedOut || result.exitCode === null) throw new Error(`schtasks ${args[0]} ${failureOf(result)}`);
+    return result.exitCode === 0;
   }
 
   /** The SID of the Windows user of this process (`whoami /user`), once per window. */

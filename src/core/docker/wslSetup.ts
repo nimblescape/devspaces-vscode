@@ -61,9 +61,10 @@ const REGISTRY_EXPORT_NAME = 'distributions.reg';
  * The lock of the setup for all windows (withLockFolder): its holder refreshes it every 15 seconds, so that a lock
  * older than a minute is of a window that ended; another window waits for it one second. After the computer slept for
  * more than a minute, another window can take it before the holder refreshes it; then the script in the distribution
- * still runs only once at a time (flock), and WSL registers the name only once.
+ * still runs only once at a time (flock), and WSL registers the name only once. The uninstall hook takes it with the
+ * same timings (src/uninstall/main.ts).
  */
-const LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
+export const WSL_SETUP_LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
 /** The folders `disk-2` and so on that a new registration may take when `disk` has files of unknown use. */
 const MAX_DISK_FOLDERS = 20;
 
@@ -548,7 +549,7 @@ export class WslSetup {
           started = true;
           return task();
         },
-        LOCK_TIMINGS,
+        WSL_SETUP_LOCK_TIMINGS,
       );
       return { value };
     } catch (error) {

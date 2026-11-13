@@ -23,22 +23,17 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { envValue, findExecutable } from '../core/docker/dockerCli';
-import { WslSetup, wslSetupFolder, wslSetupLockFolder } from '../core/docker/wslSetup';
+import { WSL_SETUP_LOCK_TIMINGS, WslSetup, wslSetupFolder, wslSetupLockFolder } from '../core/docker/wslSetup';
 import { WSL_TASK_FOLDER, WslTask } from '../core/docker/wslTask';
 import { errorMessage } from '../core/errors';
 import type { Logger, ProcessRunner } from '../core/ports';
 import { NodeProcessRunner } from '../core/process';
-import { LockTimeoutError, lockTakeoverFolder, withLockFolder } from '../core/storage/lockFolder';
+import { LockTimeoutError, lockTakeoverFolder, withLockFolder, type LockTimings } from '../core/storage/lockFolder';
 import { errorCode, retryTransient } from '../core/storage/paths';
 import { dockerConfigDir, removeDockerContextFiles } from '../core/vm/dockerContext';
-import { LIMA_INSTANCE, limaPaths, limaSetupLockFolder } from '../core/vm/limaInstance';
+import { LIMA_INSTANCE, LIMA_SETUP_LOCK_TIMINGS, limaPaths, limaSetupLockFolder } from '../core/vm/limaInstance';
 import { VmTask, vmTaskPaths } from '../core/vm/vmTask';
 
-/**
- * The locks of the setup of the VM for all windows (limaSetup.ts, wslSetup.ts): a lock older than a minute is of a
- * window that ended. The hook waits for a held lock at most one second, and then keeps the folder.
- */
-const SETUP_LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
 /** The file name extension of the virtual disk of a WSL distribution. */
 const WSL_DISK_EXTENSION = '.vhdx';
 
@@ -63,6 +58,8 @@ interface DevspacesFolder {
   root: string;
   /** The lock folder of the setup in `root` (limaSetupLockFolder, wslSetupLockFolder), which only its holder removes. */
   lock: string;
+  /** The timings of the setup for its lock: the hook waits for a held lock as long as a window does (one second). */
+  lockTimings: LockTimings;
   vm: () => Promise<VmPresence>;
   /** The names in `root` that stay although no VM is there. */
   keep: () => Promise<string[]>;
@@ -108,7 +105,7 @@ async function removeDockerContext(deps: UninstallDeps): Promise<void> {
     case 'missing':
       return;
     case 'taken':
-      logger.info('The Docker context devspaces was not created by Devspaces, so it stays.');
+      logger.info('The Docker context devspaces was not created by Devspaces, or its file cannot be read, so it stays.');
       return;
     case 'current':
       logger.warn(
@@ -138,7 +135,7 @@ async function removeScheduledTask(deps: UninstallDeps): Promise<void> {
   }
   if (platform !== 'win32') return;
   const folders = windowsFolders(deps);
-  if (folders === undefined) return;
+  if (folders === undefined) throw new Error('LOCALAPPDATA is missing or not an absolute path, so the folder of Devspaces is not known');
   await wslTaskOf(deps, folders.root).remove();
 }
 
@@ -165,6 +162,7 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
     return {
       root: paths.root,
       lock: limaSetupLockFolder(paths),
+      lockTimings: LIMA_SETUP_LOCK_TIMINGS,
       // Also a VM that `limactl create` left half done: only `limactl delete` removes it.
       vm: async () => presence(await pathState(path.join(paths.home, LIMA_INSTANCE))),
       // A task that step 2 could not unload (launchctl, systemctl) finds no program anymore, so it starts nothing, and it
@@ -189,12 +187,14 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
   return {
     root,
     lock: wslSetupLockFolder(wslFolder),
+    lockTimings: WSL_SETUP_LOCK_TIMINGS,
     // The virtual disk of a distribution of Devspaces is in a folder `disk` (or `disk-2` and so on) of the folder `wsl`;
     // the registry of WSL names the folder of the disk of every distribution (also when its file has another name).
     vm: async () => {
       const folder = await pathState(wslFolder);
       if (folder !== 'present') return presence(folder);
-      if (await holdsFileWith(wslFolder, WSL_DISK_EXTENSION)) return 'present';
+      const disk = await holdsFileWith(wslFolder, WSL_DISK_EXTENSION).catch(() => undefined);
+      if (disk !== false) return disk === true ? 'present' : 'unknown';
       const users = await setup.folderUsers();
       return users === undefined ? 'unknown' : users.length > 0 ? 'present' : 'absent';
     },
@@ -237,7 +237,7 @@ async function removeDevspacesFolder(deps: UninstallDeps): Promise<void> {
           }
         }
       },
-      SETUP_LOCK_TIMINGS,
+      folder.lockTimings,
     );
   } catch (error) {
     if (!(error instanceof LockTimeoutError)) throw error;

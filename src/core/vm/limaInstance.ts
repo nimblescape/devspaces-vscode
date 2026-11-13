@@ -61,6 +61,13 @@ export function limaPaths(homeDir: string = os.homedir()): LimaPaths {
 }
 
 /**
+ * The lock of the creation of the VM for all windows (withLockFolder, as the setup of the WSL distribution): its holder
+ * refreshes it every 15 seconds, so a lock older than a minute is of a window that ended; another window waits for it
+ * one second. The uninstall hook takes it with the same timings (src/uninstall/main.ts).
+ */
+export const LIMA_SETUP_LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
+
+/**
  * The lock folder of the creation of the VM for all windows (limaSetup.ts), which the uninstall hook takes as well
  * (src/uninstall/main.ts): `<root>/vm-setup.lock`.
  */

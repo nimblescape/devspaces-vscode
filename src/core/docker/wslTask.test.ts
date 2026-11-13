@@ -317,6 +317,8 @@ describe('WslTask', () => {
   let calls: string[];
   /** The calls (a part of their text) that end with exit code 1. */
   let failing: string[];
+  /** The calls (a part of their text) that do not end within their time limit. */
+  let timingOut: string[];
   let registered: Buffer | undefined;
   let program: string | undefined;
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
@@ -326,6 +328,7 @@ describe('WslTask', () => {
     folder = path.join(home, 'nimblescape', 'devspaces', 'task');
     calls = [];
     failing = [];
+    timingOut = [];
     registered = undefined;
     program = WSLG;
     vi.clearAllMocks();
@@ -342,6 +345,7 @@ describe('WslTask', () => {
           const call = `${file === SCHTASKS ? 'schtasks' : file === WHOAMI ? 'whoami' : file} ${args.join(' ')}`;
           calls.push(call);
           expect(options?.timeoutMs).toBe(30_000);
+          if (timingOut.some((text) => call.includes(text))) return { exitCode: null, stdout: '', stderr: '', timedOut: true };
           if (failing.some((text) => call.includes(text))) return { exitCode: 1, stdout: '', stderr: 'ERROR: Access is denied.', timedOut: false };
           if (file === WHOAMI) return { exitCode: 0, stdout: `"desktop-7k2\\hannes","${SID}"\r\n`, stderr: '', timedOut: false };
           if (args[0] === '/Create') registered = fs.readFileSync(args[4]);
@@ -474,6 +478,18 @@ describe('WslTask', () => {
     await subject.remove();
     expect(calls).toEqual([`schtasks /Query /TN ${NAME}`]);
     expect(fs.existsSync(recordFile())).toBe(false);
+  });
+
+  it('keeps the record when schtasks /Query does not end, because that does not tell whether the task exists', async () => {
+    const subject = task();
+    await subject.update(SETTINGS);
+    timingOut = ['/Query'];
+    calls = [];
+    await subject.remove();
+    expect(calls).toEqual([`schtasks /Query /TN ${NAME}`]);
+    expect(logger.warn).toHaveBeenCalledWith('The scheduled task of the WSL distribution of Devspaces could not be removed: schtasks /Query did not end within 30 seconds');
+    expect(fs.existsSync(recordFile())).toBe(true);
+    expect(lastRegistered()).toBeDefined();
   });
 
   it('runs the calls of a window one after the other', async () => {
