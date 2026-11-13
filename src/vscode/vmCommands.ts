@@ -3,8 +3,8 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The management of the VM of Devspaces in its row of the view "Docker Hosts" (docs/requirements.md R-VM-010), the
-// same on every platform: Start the VM, Stop the VM…, Remove the VM…, Remove and Set Up the VM Again…, and Settings of
-// the VM (macOS and Linux, R-VM-006). The work is in the setup of each platform: on macOS and Linux the Lima VM
+// same on every platform: Start the VM, Stop the VM…, Remove the VM…, Remove and Set Up the VM Again… (only in the
+// Command Palette), and Settings of the VM (macOS and Linux, R-VM-006). The work is in the setup of each platform: on macOS and Linux the Lima VM
 // (limaSetupCommands.ts, `limactl stop` and `limactl delete`), on Windows the WSL distribution (wslSetupCommands.ts,
 // `wsl --terminate` and `wsl --unregister`). Start is the test of the host, which starts the VM (each Docker connection
 // to it starts it), without a change of the Docker host of Devspaces. Stop asks first while devspaces run in the VM and

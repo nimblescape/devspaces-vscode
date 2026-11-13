@@ -4199,7 +4199,7 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(h.connection.open).not.toHaveBeenCalled();
   });
 
-  it('is a command of package.json, in the Command Palette and in the last group of the "…" menu of the view, with only Remove Devspaces from This Computer…', () => {
+  it('is a command of package.json, only in the Command Palette: in no menu of a view and on no row', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -4209,20 +4209,11 @@ describe('Remove Devspaces from This Docker Engine…', () => {
       category: 'Devspaces',
       icon: '$(clear-all)',
     });
+    // A command without an entry of the menu commandPalette is in the Command Palette, on the Docker host of Devspaces.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromDockerEngine)).toBe(false);
-    expect(manifest.contributes.menus['view/title'].find((entry) => entry.command === Commands.removeFromDockerEngine)).toEqual({
-      command: Commands.removeFromDockerEngine,
-      when: 'view == devspaces.repositories',
-      group: '3_remove@1',
-    });
-    // As Delete in the ⋯ menu of a row: the last group, apart from the others, and in it only the removal of
-    // everything from this computer after it (R-GEN-009). VS Code sorts the groups of the "…" menu by name and puts
-    // the items without a group last; the items of the group navigation are the buttons of the title bar.
-    const more = manifest.contributes.menus['view/title'].filter((entry) => entry.when?.startsWith('view == devspaces.repositories') && !entry.group?.startsWith('navigation'));
-    const withoutGroup = (entry: { group?: string }) => (entry.group ? 0 : 1);
-    const sorted = [...more].sort((a, b) => withoutGroup(a) - withoutGroup(b) || (a.group ?? '').localeCompare(b.group ?? ''));
-    expect(sorted.slice(-2).map((entry) => entry.command)).toEqual([Commands.removeFromDockerEngine, Commands.removeFromComputer]);
-    expect(more.filter((entry) => entry.group?.startsWith('3_remove@')).map((entry) => entry.command)).toEqual([Commands.removeFromDockerEngine, Commands.removeFromComputer]);
+    for (const [menu, entries] of Object.entries(manifest.contributes.menus)) {
+      if (menu !== 'commandPalette') expect(entries.some((entry) => entry.command === Commands.removeFromDockerEngine), menu).toBe(false);
+    }
   });
 });
 
@@ -4866,7 +4857,7 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
     // Not in the view "Docker Hosts", whose actions are off by default (devspaces.dockerHostsActions), and not on a row.
     expect(manifest.contributes.menus['view/title'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
-      { command: Commands.removeFromComputer, when: 'view == devspaces.repositories', group: '3_remove@2' },
+      { command: Commands.removeFromComputer, when: 'view == devspaces.repositories', group: '3_remove@1' },
     ]);
     expect(manifest.contributes.menus['view/item/context'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
   });

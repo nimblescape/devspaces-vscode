@@ -759,14 +759,9 @@
           "group": "2_maintenance@1"
         },
         {
-          "command": "devspaces.removeFromDockerEngine",
-          "when": "view == devspaces.repositories",
-          "group": "3_remove@1"
-        },
-        {
           "command": "devspaces.removeFromComputer",
           "when": "view == devspaces.repositories",
-          "group": "3_remove@2"
+          "group": "3_remove@1"
         }
       ],
       "view/item/context": [
@@ -796,11 +791,6 @@
           "group": "inline@3"
         },
         {
-          "command": "devspaces.removeFromDockerEngine",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions == icons",
-          "group": "inline@4"
-        },
-        {
           "command": "devspaces.removeDockerHostFromList",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;remote(;|$)/ && config.devspaces.dockerHostsActions == icons",
           "group": "inline@5"
@@ -809,11 +799,6 @@
           "command": "devspaces.removeVm",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions == icons",
           "group": "inline@7"
-        },
-        {
-          "command": "devspaces.resetVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions == icons",
-          "group": "inline@8"
         },
         {
           "command": "devspaces.stop",
@@ -886,24 +871,14 @@
           "group": "2_engine@1"
         },
         {
-          "command": "devspaces.removeFromDockerEngine",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
-          "group": "3_remove@1"
-        },
-        {
           "command": "devspaces.removeDockerHostFromList",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;remote(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
-          "group": "3_remove@2"
+          "group": "3_remove@1"
         },
         {
           "command": "devspaces.removeVm",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "4_removeVm@1"
-        },
-        {
-          "command": "devspaces.resetVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
-          "group": "4_removeVm@2"
         },
         {
           "command": "devspaces.startDockerObject",

@@ -38,7 +38,8 @@ describe('consoleScript', () => {
   it('sets TERM and the size, writes the mark, and runs the login shell; it has no double quote for wsl.exe', () => {
     const script = consoleScript(SIZE);
     expect(script).toContain('TERM=xterm-256color; export TERM');
-    expect(script).toContain('stty rows 40 cols 132 2>/dev/null');
+    // The modes before the size: `stty sane` resets no size.
+    expect(script).toContain('stty sane iutf8 ixon 38400 2>/dev/null || stty sane 2>/dev/null; stty rows 40 cols 132 2>/dev/null');
     expect(script).toContain(`printf '\\033]7717;devspaces-tty=%s\\007' $(tty)`);
     expect(script.endsWith('exec ${SHELL:-/bin/sh} -l')).toBe(true);
     expect(script).not.toContain('"');
@@ -72,6 +73,36 @@ describe('consoleScript', () => {
       fs.rmSync(folder, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform === 'linux' && fs.existsSync('/usr/bin/script'))(
+    'sets the modes of a terminal on which every mode is off (an `ssh -tt` with a pipe as its input, through a shared connection)',
+    () => {
+      // The terminal first gets the modes of such an `ssh`; the login shell then prints its modes and two lines.
+      const folder = fs.mkdtempSync('/tmp/console-');
+      const shell = `${folder}/shell`;
+      fs.writeFileSync(shell, `#!/bin/sh\nif [ "$1" = -c ]; then exec /bin/sh "$@"; fi\nstty -a\nprintf 'one\\ntwo\\n'\n`, { mode: 0o755 });
+      const off = 'stty -opost -onlcr -icrnl -ixon -isig -icanon -iexten -echo -echoe -echok intr undef quit undef erase undef kill undef eof undef susp undef 9600';
+      try {
+        const result = spawnSync('script', ['-qfec', `/bin/sh -c '${off}; ${consoleScript(SIZE).replace(/'/g, `'\\''`)}'`, '/dev/null'], {
+          env: { PATH: process.env.PATH, SHELL: shell },
+          encoding: 'utf8',
+          input: '',
+        });
+        const shown = new ConsoleTtyMark().take(result.stdout);
+        const modes = shown.split(/\s+/);
+        for (const mode of ['opost', 'onlcr', 'icrnl', 'ixon', 'iutf8', 'isig', 'icanon', 'iexten', 'echo', 'echoe', 'echok']) expect(modes, mode).toContain(mode);
+        expect(shown).toContain('intr = ^C;');
+        expect(shown).toContain('erase = ^?;');
+        expect(shown).toContain('eof = ^D;');
+        expect(shown).toContain('speed 38400 baud');
+        expect(shown).toContain('rows 40; columns 132;');
+        // A carriage return before each new line of the output.
+        expect(shown).toContain('one\r\ntwo\r\n');
+      } finally {
+        fs.rmSync(folder, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe('the arguments of the programs of the console', () => {

@@ -6,8 +6,10 @@
 // in a container. The extension runs on this computer, also in a remote window, so the program of the console runs here
 // and gets no terminal of this computer: `ssh -tt` for an SSH host, `wsl.exe … script` for the WSL distribution of
 // Devspaces, and the SSH of Lima (`-tt`) for its VM. Each gets a terminal on the host. The start script (consoleScript)
-// sets the size of that terminal and writes its name with an OSC sequence (ConsoleTtyMark), so that a later change of
-// the size can be set from a second connection that asks nothing (consoleResizeCommand). No `vscode`.
+// sets the modes of that terminal as on a terminal of this computer (an `ssh -tt` whose input is no terminal can send
+// the modes of no terminal: every mode off, so no echo, no Ctrl+C, and no carriage return before a new line), its
+// size, and writes its name with an OSC sequence (ConsoleTtyMark), so that a later change of the size can be set from a
+// second connection that asks nothing (consoleResizeCommand). No `vscode`.
 import { sshCommandArgs, wslCommandArgs, type SshAddress } from '../docker/dockerHost';
 import { LIMA_SSH_HOST, limaSshConfigFile, type LimaPaths } from '../vm/limaInstance';
 
@@ -35,15 +37,26 @@ const TTY_NAME = /^\/dev\/pts\/\d{1,6}$/;
 const TTY_MARK_SEARCH_LIMIT = 64 * 1024;
 
 /**
- * The start script of the console, for `sh` (POSIX): TERM of the terminal of VS Code, the size of the terminal on the
- * host, the mark with its name, and then the login shell of the account (SHELL, else the account database, else
- * `/bin/sh`). The script has no double quote, so that the command line of `wsl.exe` on Windows carries it unchanged.
+ * The modes of the terminal on the host, as a terminal of this computer has them: `stty sane` (echo, Ctrl+C and the
+ * other control keys, a carriage return before each new line of the output, and Enter as a new line), UTF-8 input,
+ * Ctrl+S and Ctrl+Q, and a speed. An `ssh -tt` whose input is a pipe sends the modes of no terminal when it goes
+ * through a connection that it shares (ControlMaster, as the SSH configuration of Lima has it): every mode off and
+ * the speed 0. A host whose `stty` does not know one of the extra modes still gets `stty sane`.
+ */
+const TERMINAL_MODES = 'stty sane iutf8 ixon 38400 2>/dev/null || stty sane 2>/dev/null';
+
+/**
+ * The start script of the console, for `sh` (POSIX): TERM of the terminal of VS Code, the modes (TERMINAL_MODES) and
+ * the size of the terminal on the host, the mark with its name, and then the login shell of the account (SHELL, else
+ * the account database, else `/bin/sh`). The script has no double quote, so that the command line of `wsl.exe` on
+ * Windows carries it unchanged.
  */
 export function consoleScript(size: ConsoleSize): string {
   const { columns, rows } = consoleSize(size.columns, size.rows);
   return [
     'TERM=xterm-256color',
     'export TERM',
+    TERMINAL_MODES,
     `stty rows ${rows} cols ${columns} 2>/dev/null`,
     `printf '\\033]7717;devspaces-tty=%s\\007' $(tty)`,
     "case $SHELL in '') SHELL=$(getent passwd $(id -u) 2>/dev/null | cut -d: -f7);; esac",

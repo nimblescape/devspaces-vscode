@@ -66,6 +66,11 @@ describe('LimaVm', () => {
     lima.forgetRunning();
     await lima.ready();
     expect(fake.calls).toEqual(['list', 'start', 'list', 'list']);
+    // A read of the state that found the VM running counts as the check (the view Docker Hosts reads it every 30 s).
+    lima.forgetRunning();
+    lima.noteRunning();
+    await lima.ready();
+    expect(fake.calls).toEqual(['list', 'start', 'list', 'list']);
   });
 
   it('refuses a VM that is not set up, and installs Lima again after a failed install', async () => {
