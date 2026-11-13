@@ -120,6 +120,8 @@ export const ControllerTexts = {
   computerNewDevspaces: (where: string, count: number, names: string) =>
     `${count === 1 ? 'A devspace was' : 'Devspaces were'} created ${where} after the question: ${names}. Nothing was removed there, so that no devspace is deleted without a question. Run the command again.`,
   inTheVm: 'in the VM of Devspaces',
+  computerVmSetUpMeanwhile:
+    'The VM of Devspaces was set up after the question, so it stays, and so do its scheduled task, the Docker context devspaces and the folder of Devspaces. Run the command again.',
   uninstallFailed: (detail: string) => `VS Code could not uninstall the extension: ${detail.replace(/\.$/, '')}. Uninstall it in the Extensions view.`,
   removedFromComputer: 'Devspaces was removed from this computer. VS Code uninstalls the extension now.',
   removalFromComputerLeft: (count: number) =>

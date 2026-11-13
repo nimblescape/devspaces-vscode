@@ -4263,6 +4263,7 @@ describe('Remove Devspaces from This Computer…', () => {
         folder: FOLDER as string | undefined,
         ...inventory,
       })),
+      vmExists: vi.fn(async () => false),
       removeVm: vi.fn(async () => {
         order.push('remove the VM');
         return left.vm;
@@ -4616,6 +4617,18 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(refreshed).toBeDefined();
     expect(h.service.reconcileInWorker).not.toHaveBeenCalled();
     expect(h.logger.info).toHaveBeenCalledWith('The devspaces are not restored from the volumes on build-box: Devspaces is being removed from there.');
+  });
+
+  // Mutation: the files removed under a VM that another VS Code set up while the remote hosts were removed.
+  it('keeps a VM that was set up after the question, with its files, and says so', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [], vm: undefined });
+    cleanup.vmExists.mockResolvedValue(true);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the key and its line on no host']);
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
   });
 
   // Mutation: a failed uninstall that is not caught ends the command with an error of VS Code and nothing in the log.

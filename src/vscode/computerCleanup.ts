@@ -94,7 +94,7 @@ export class ComputerCleanup {
       listUnreadable = errorMessage(error);
       logger.warn(`The list of Docker hosts of Devspaces could not be read: ${listUnreadable}`);
     }
-    const vm = vmHost !== undefined && (await this.deps.vmExists().catch(() => true)) ? vmHost : undefined;
+    const vm = (await this.vmExists()) ? vmHost : undefined;
     return {
       listUnreadable,
       engines: (file.remoteHosts ?? []).filter((host) => host !== vmHost),
@@ -103,6 +103,11 @@ export class ComputerCleanup {
       keyFile: this.exists(this.deps.key.keyPath) ? this.deps.key.keyPath : undefined,
       folder: this.deps.folder !== undefined && this.exists(this.deps.folder) ? this.deps.folder : undefined,
     };
+  }
+
+  /** Whether the VM of Devspaces exists now (as `vm` of inventory). Never throws. */
+  async vmExists(): Promise<boolean> {
+    return this.deps.vmHost !== undefined && (await this.deps.vmExists().catch(() => true));
   }
 
   /** The VM of Devspaces with every devspace in it, its host in the list, its Docker context and its scheduled task. */

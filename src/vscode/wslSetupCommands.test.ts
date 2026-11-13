@@ -608,12 +608,21 @@ describe('the removal of the distribution for Remove Devspaces from This Compute
     expect(logger.warn).toHaveBeenCalledWith(`${WSL_HOST} could not be removed from the list of Devspaces: EBUSY`);
   });
 
-  it('says what stays: a distribution that Devspaces did not set up, another window that holds the lock, a refused removal', async () => {
+  // Mutation: a distribution of another origin named devspaces that counts as a part of Devspaces that stays, so that
+  // the files of Devspaces stay with it and the extension is never uninstalled.
+  it('leaves a distribution that Devspaces did not set up, removes only the files of an unfinished setup of Devspaces, and calls it no part that stays', async () => {
     const distributionGone = vi.fn();
     registered('foreign');
-    expect(await commands({ distributionGone }).removeForComputer()).toBe(WslSetupTexts.foreignRemove);
+    expect(await commands({ distributionGone }).removeForComputer()).toBeUndefined();
     expect(setup.remove).not.toHaveBeenCalled();
+    expect(setup.removeLeftovers).toHaveBeenCalledTimes(1);
     expect(forgetHost).not.toHaveBeenCalled();
+    expect(distributionGone).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith('The WSL distribution devspaces was not set up by Devspaces; it is not removed.');
+  });
+
+  it('says what stays: another window that holds the lock, a refused removal', async () => {
+    const distributionGone = vi.fn();
     registered('own');
     setup.locked.mockResolvedValueOnce(undefined);
     expect(await commands().removeForComputer()).toBe(WslSetupTexts.busyElsewhere);

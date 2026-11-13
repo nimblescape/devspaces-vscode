@@ -7,7 +7,18 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authorizedKeyPresentCommand, authorizedKeysCommand, devspacesKeyPath, keyComment, parsePublicKey, removeAuthorizedKeyCommand, removeKeyLinesCommand, sshWrapper } from './sshKey';
+import {
+  NO_KEY_LINE_EXIT,
+  NO_KEY_LINE_TEXT,
+  authorizedKeyPresentCommand,
+  authorizedKeysCommand,
+  devspacesKeyPath,
+  keyComment,
+  parsePublicKey,
+  removeAuthorizedKeyCommand,
+  removeKeyLinesCommand,
+  sshWrapper,
+} from './sshKey';
 
 const BLOB = 'AAAAC3NzaC1lZDI1NTE5AAAAIHgJ3c2oQkQe4m4oY0bJ6qNnV6l0Sx5Jm8m2bq9b3n1d';
 const KEY = { type: 'ssh-ed25519', blob: BLOB };
@@ -129,10 +140,24 @@ describe('the command that adds the key to authorized_keys (run by sh in a home 
 
   it('removes every line of the key of Devspaces with any comment for the removal from this computer', () => {
     const remove = (): void => void execFileSync('sh', ['-c', removeKeyLinesCommand(KEY)], { env: { HOME: home, PATH: process.env.PATH }, cwd: os.tmpdir(), stdio: 'pipe' });
-    // No file: nothing to remove, and no file is created.
-    remove();
+    const fails = (): { status: number | null; stderr: string } => {
+      try {
+        remove();
+        return { status: 0, stderr: '' };
+      } catch (error) {
+        const failure = error as { status: number | null; stderr: Buffer };
+        return { status: failure.status, stderr: failure.stderr.toString().trim() };
+      }
+    };
+    // Mutation: a file without a line of the key that counts as done, so that the key is deleted while the host still
+    // allows it in another way (the login with the key worked). No file: the same, and no file is created.
+    expect(fails()).toEqual({ status: NO_KEY_LINE_EXIT, stderr: NO_KEY_LINE_TEXT });
     expect(fs.existsSync(file())).toBe(false);
     fs.mkdirSync(path.join(home, '.ssh'), { mode: 0o700 });
+    fs.writeFileSync(file(), `ssh-ed25519 AAAAother ann@desk\nfrom="10.0.0.1" ssh-ed25519 ${BLOB} devspaces@box\n`);
+    expect(fails()).toEqual({ status: NO_KEY_LINE_EXIT, stderr: NO_KEY_LINE_TEXT });
+    expect(fs.readFileSync(file(), 'utf8')).toBe(`ssh-ed25519 AAAAother ann@desk\nfrom="10.0.0.1" ssh-ed25519 ${BLOB} devspaces@box\n`);
+    fs.rmSync(file());
     const kept = `ssh-ed25519 AAAAother ann@desk
 # ssh-ed25519 ${BLOB} devspaces@box
 from="10.0.0.1" ssh-ed25519 ${BLOB} devspaces@box

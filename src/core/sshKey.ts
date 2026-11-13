@@ -38,6 +38,22 @@ export function keyComment(computerName: string): string {
 }
 
 const AUTHORIZED_KEYS = '.ssh/authorized_keys';
+/** The copy of `~/.ssh/authorized_keys` that replaces it (removeAuthorizedKeyCommand, removeKeyLinesCommand). */
+const AUTHORIZED_KEYS_COPY = `${AUTHORIZED_KEYS}.devspaces-$$`;
+/** The step of removeAuthorizedKeyCommand and removeKeyLinesCommand that changes no file that is a symbolic link (exit code 3). */
+const SYMBOLIC_LINK_GUARD = `[ ! -L ${AUTHORIZED_KEYS} ] || { echo '~/${AUTHORIZED_KEYS} is a symbolic link' >&2; exit 3; }`;
+/**
+ * The last steps of removeAuthorizedKeyCommand and removeKeyLinesCommand, after the lines to keep are in `$kept`: they go
+ * into a copy of the file (`cp -p`: its mode and owner), which then replaces it, so that a failed write (a full disk)
+ * leaves the file as it was; then `restorecon` when the host has it, and the end of the subshell.
+ */
+const REPLACE_WITH_KEPT = [
+  `cp -p ${AUTHORIZED_KEYS} ${AUTHORIZED_KEYS_COPY} && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${AUTHORIZED_KEYS_COPY} && mv -f ${AUTHORIZED_KEYS_COPY} ${AUTHORIZED_KEYS} || { s=$?; rm -f ${AUTHORIZED_KEYS_COPY}; exit $s; }`,
+  `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${AUTHORIZED_KEYS} >/dev/null 2>&1 || true; } )`,
+];
+/** The exit code and the error of removeKeyLinesCommand when the host allows the key, but the file has no line of it. */
+export const NO_KEY_LINE_EXIT = 4;
+export const NO_KEY_LINE_TEXT = `the host allows the key, but ~/${AUTHORIZED_KEYS} has no line of it, so the key is allowed in another way there`;
 
 /** A test of the shell whose exit code is 0 when `key` is in a line of `~/.ssh/authorized_keys` that is no comment. */
 function keyInAuthorizedKeys(key: PublicKey): string {
@@ -84,31 +100,21 @@ export function removeAuthorizedKeyCommand(key: PublicKey, comment: string): str
  * `~/.ssh/authorized_keys` whose first two fields are the type and the key data of `key`, with any comment: the key of
  * Devspaces is its own, so each such line is one that Devspaces added (also on a computer that has another name since).
  * A line with options before the key, and a comment line, stay. As removeAuthorizedKeyCommand: a copy of the file
- * replaces it, a symbolic link is not changed (exit code 3). Its exit code is 0 when the file was replaced or does not
- * exist.
+ * replaces it, a symbolic link is not changed (exit code 3). Its exit code is 0 when the file was replaced. The login
+ * with the key worked, so a file without such a line (also no file) means that the host allows the key in another way
+ * (another file of `AuthorizedKeysFile`, a line with options): exit code NO_KEY_LINE_EXIT with NO_KEY_LINE_TEXT.
  */
 export function removeKeyLinesCommand(key: PublicKey): string {
   const file = AUTHORIZED_KEYS;
+  const noLine = `{ echo ${shellWord(NO_KEY_LINE_TEXT)} >&2; exit ${NO_KEY_LINE_EXIT}; }`;
   return [
-    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || exit 0; ${SYMBOLIC_LINK_GUARD}`,
+    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || ${noLine}; ${SYMBOLIC_LINK_GUARD}`,
     // Without the carriage return of a line end of Windows, which a line without a comment has in its second field.
-    `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '{ k = $1 " " $2; sub(/\\r$/, "", k) } k != key' ${file}) || exit`,
+    `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '{ k = $1 " " $2; sub(/\\r$/, "", k) } k == key { found = 1; next } { print } END { exit found ? 0 : ${NO_KEY_LINE_EXIT} }' ${file}); s=$?`,
+    `[ $s -ne ${NO_KEY_LINE_EXIT} ] || ${noLine}; [ $s -eq 0 ] || exit $s`,
     ...REPLACE_WITH_KEPT,
   ].join('; ');
 }
-
-/** The step of removeAuthorizedKeyCommand and removeKeyLinesCommand that changes no file that is a symbolic link (exit code 3). */
-const SYMBOLIC_LINK_GUARD = `[ ! -L ${AUTHORIZED_KEYS} ] || { echo '~/${AUTHORIZED_KEYS} is a symbolic link' >&2; exit 3; }`;
-
-/**
- * The last steps of removeAuthorizedKeyCommand and removeKeyLinesCommand, after the lines to keep are in `$kept`: they go
- * into a copy of the file (`cp -p`: its mode and owner), which then replaces it, so that a failed write (a full disk)
- * leaves the file as it was; then `restorecon` when the host has it, and the end of the subshell.
- */
-const REPLACE_WITH_KEPT = ((file: string, copy: string) => [
-  `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
-  `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${file} >/dev/null 2>&1 || true; } )`,
-])(AUTHORIZED_KEYS, `${AUTHORIZED_KEYS}.devspaces-$$`);
 
 /** One line for the shell before the relay whose exit code is 0 when `key` is in `~/.ssh/authorized_keys` (no comment). */
 export function authorizedKeyPresentCommand(key: PublicKey): string {

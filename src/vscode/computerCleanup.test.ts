@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import type { RunOptions, RunResult } from '../core/ports';
+import { NO_KEY_LINE_TEXT } from '../core/sshKey';
 import { ComputerCleanup, ComputerCleanupTexts, type ComputerCleanupDeps } from './computerCleanup';
 import { SshKeyOffer } from './sshKeyOffer';
 
@@ -159,11 +160,12 @@ describe('the removal of the SSH key of Devspaces', () => {
   it('removes the line of the key on each host with a login that may use only the key, then deletes the key', async () => {
     keyFiles();
     write(authorizedKeys('box'), `ssh-ed25519 AAAAother ann@desk\n${PUBLIC}\nssh-ed25519 ${BLOB} devspaces@old-name\n`);
+    // The fake ssh logs in to `cloud` with `-l me`, so its home folder is that of `cloud`.
+    write(authorizedKeys('cloud'), `${PUBLIC}\n`);
     const { cleanup, calls, state, logger } = setUp();
     expect(await cleanup.removeSshKey(['box', 'me@cloud'])).toEqual([]);
     expect(fs.readFileSync(authorizedKeys('box'), 'utf8')).toBe('ssh-ed25519 AAAAother ann@desk\n');
-    // No file on the second host: nothing to remove.
-    expect(fs.existsSync(authorizedKeys('me@cloud'))).toBe(false);
+    expect(fs.readFileSync(authorizedKeys('cloud'), 'utf8')).toBe('');
     expect(calls[0]).toMatchObject({ file: '/usr/bin/ssh-keygen', args: ['-y', '-f', keyPath()] });
     const logins = calls.filter((call) => call.file === '/usr/bin/ssh');
     expect(logins.map((call) => call.args.slice(0, -2))).toEqual([
@@ -181,6 +183,7 @@ describe('the removal of the SSH key of Devspaces', () => {
 
   it('keeps the key when a line stays, so that a new run can still log in, and says what to remove by hand', async () => {
     keyFiles();
+    write(authorizedKeys('cloud'), `${PUBLIC}\n`);
     const { cleanup, state } = setUp({}, (call) =>
       call.file === '/usr/bin/ssh' && call.args.at(-2) === 'box' ? { exitCode: 255, stdout: '', stderr: 'box: Permission denied (publickey).\n', timedOut: false } : undefined,
     );
@@ -210,6 +213,14 @@ describe('the removal of the SSH key of Devspaces', () => {
     const only = setUp();
     expect(await only.cleanup.removeSshKey([], ['box'])).toEqual([ComputerCleanupTexts.keyKeptFor(['box'], keyPath())]);
     expect(only.calls).toEqual([]);
+    expect(fs.existsSync(keyPath())).toBe(true);
+  });
+
+  it('keeps the key when the host allows it without a line in ~/.ssh/authorized_keys (another file), and names that', async () => {
+    keyFiles();
+    const { cleanup, state } = setUp();
+    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyLineLeft('box', NO_KEY_LINE_TEXT, keyPath()), ComputerCleanupTexts.keyKept(keyPath())]);
+    expect(state.setSshKey).not.toHaveBeenCalled();
     expect(fs.existsSync(keyPath())).toBe(true);
   });
 

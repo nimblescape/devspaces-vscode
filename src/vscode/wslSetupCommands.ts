@@ -404,8 +404,9 @@ export class WslSetupCommands {
   /**
    * The removal of the distribution for "Remove Devspaces from This Computer…" after its question (R-GEN-009): as
    * remove(), without a question and without a message of its own, in the progress of that command, under the lock of
-   * all windows. A distribution that Devspaces did not set up stays. Undefined when the distribution of Devspaces is
-   * gone (also when there was none), else what stays, for the message of that command (logged). Never throws. Without
+   * all windows. A distribution that Devspaces did not set up stays, and only the files of a setup of Devspaces that did
+   * not end go. Undefined when the distribution of Devspaces is gone (also when there was none, or only that other
+   * distribution), else what stays, for the message of that command (logged). Never throws. Without
    * forgetDistribution: the next step of that command removes the Docker context and the scheduled task itself
    * (removeDevspacesFiles), so that no update in the background removes them at the same time; distributionGone instead.
    */
@@ -417,7 +418,12 @@ export class WslSetupCommands {
     try {
       const done = await setup.locked(async () => {
         const registration = await this.removalCheck(setup);
-        if (registration === 'foreign') return 'foreign' as const;
+        if (registration === 'foreign') {
+          // Not of Devspaces, so it is no part of Devspaces that stays; the files of a setup of Devspaces that did not
+          // end are in the folder of Devspaces, where the disk of that distribution is not.
+          await setup.removeLeftovers();
+          return 'foreign' as const;
+        }
         if (registration === 'none') {
           await setup.removeLeftovers();
         } else {
@@ -433,10 +439,7 @@ export class WslSetupCommands {
       });
       if (done === undefined) return WslSetupTexts.busyElsewhere;
       if (done.value === 'gone') this.deps.distributionGone?.();
-      if (done.value === 'foreign') {
-        logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
-        return WslSetupTexts.foreignRemove;
-      }
+      if (done.value === 'foreign') logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
       return undefined;
     } catch (error) {
       const text = isWslSetupError(error)
