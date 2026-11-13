@@ -156,12 +156,17 @@ describe('the Docker context devspaces in the uninstall hook', () => {
 
   it('keeps its own context while it is the current one, or while config.json cannot be read, and says how to remove it', async () => {
     write(contextFile(), JSON.stringify(ownContext));
-    for (const config of [JSON.stringify({ currentContext: 'devspaces' }), '{ not json']) {
+    const cases = [
+      { config: JSON.stringify({ currentContext: 'devspaces' }), warning: 'is the current Docker context (DOCKER_CONTEXT, or' },
+      { config: '{ not json', warning: 'cannot tell whether the Docker context devspaces is the current Docker context' },
+    ];
+    for (const { config, warning } of cases) {
       write(path.join(dockerConfig(), 'config.json'), config);
       const { logger, run } = setUp('linux');
       await run();
       expect(fs.existsSync(contextFile()), config).toBe(true);
-      expect(String(logger.warn.mock.calls[0]?.[0])).toContain('"docker context use default" and then "docker context rm devspaces"');
+      expect(String(logger.warn.mock.calls[0]?.[0]), config).toContain(warning);
+      expect(String(logger.warn.mock.calls[0]?.[0]), config).toContain('"docker context rm devspaces"');
     }
   });
 

@@ -17,7 +17,7 @@ import { ownDockerCliDownload, OWN_DOCKER_CLI_API, OWN_DOCKER_CLI_VERSION, prese
 import { WslSetup, dockerDesktopIntegrates, readWindowsArch, wslSetupFolder } from '../core/docker/wslSetup';
 import { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import { WslKeeper, wslgPathOf } from '../core/docker/wslKeeper';
-import { WslTask } from '../core/docker/wslTask';
+import { WSL_TASK_FOLDER, WslTask } from '../core/docker/wslTask';
 import { WslLifetime } from '../core/docker/wslLifetime';
 import {
   LIMA_HOST,
@@ -1377,7 +1377,7 @@ async function activateExtension(
           logger,
           env,
           // Next to the folder of the distribution: %LOCALAPPDATA%\nimblescape\devspaces\task.
-          folder: path.win32.join(path.win32.dirname(wslFolder), 'task'),
+          folder: path.win32.join(path.win32.dirname(wslFolder), WSL_TASK_FOLDER),
           // wslg.exe has no console window; the task falls back to wsl.exe as the keeper does.
           program: () => {
             const wslg = wslgPathOf(env);

@@ -20,6 +20,11 @@ import { envValue } from './dockerCli';
 import { WSL_DISTRIBUTION } from './dockerHost';
 import { KEEPER_SCRIPT } from './wslKeeper';
 
+/**
+ * The folder of the record of the task in the folder of Devspaces on Windows (`%LOCALAPPDATA%\nimblescape\devspaces\task`),
+ * for extension.ts and the uninstall hook (src/uninstall/main.ts).
+ */
+export const WSL_TASK_FOLDER = 'task';
 /** The start of the name of the task in the root folder of Task Scheduler; the SID of the Windows user follows. */
 export const WSL_TASK_NAME_PREFIX = 'nimblescape Devspaces WSL';
 /** The task starts this many minutes after a time of the schedule, so that the network is back after a wake or a login. */

@@ -23,14 +23,15 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { envValue, findExecutable } from '../core/docker/dockerCli';
-import { WslSetup, wslSetupFolder } from '../core/docker/wslSetup';
-import { WslTask } from '../core/docker/wslTask';
+import { WslSetup, wslSetupFolder, wslSetupLockFolder } from '../core/docker/wslSetup';
+import { WSL_TASK_FOLDER, WslTask } from '../core/docker/wslTask';
 import { errorMessage } from '../core/errors';
 import type { Logger, ProcessRunner } from '../core/ports';
 import { NodeProcessRunner } from '../core/process';
 import { LockTimeoutError, withLockFolder } from '../core/storage/lockFolder';
+import { errorCode } from '../core/storage/paths';
 import { dockerConfigDir, removeDockerContextFiles } from '../core/vm/dockerContext';
-import { LIMA_INSTANCE, limaPaths } from '../core/vm/limaInstance';
+import { LIMA_INSTANCE, limaPaths, limaSetupLockFolder } from '../core/vm/limaInstance';
 import { VmTask, vmTaskPaths } from '../core/vm/vmTask';
 
 /**
@@ -40,8 +41,6 @@ import { VmTask, vmTaskPaths } from '../core/vm/vmTask';
 const SETUP_LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
 /** The file name extension of the virtual disk of a WSL distribution. */
 const WSL_DISK_EXTENSION = '.vhdx';
-/** The folder of the scheduled task in the folder of Devspaces on Windows (as in extension.ts). */
-const WSL_TASK_FOLDER = 'task';
 
 export interface UninstallDeps {
   runner: ProcessRunner;
@@ -59,8 +58,8 @@ export interface UninstallDeps {
 /** The folder of Devspaces outside of VS Code, its lock of the setup of the VM, and whether a VM of Devspaces is in it. */
 interface DevspacesFolder {
   root: string;
-  /** The name of the lock folder of the setup in `root`, which only the window that holds it removes. */
-  lockName: string;
+  /** The lock folder of the setup in `root` (limaSetupLockFolder, wslSetupLockFolder), which only its holder removes. */
+  lock: string;
   /** True when the VM of Devspaces, or what is left of it, is in the folder, or when that cannot be told. */
   hasVm: () => Promise<boolean>;
   /** The names in `root` that stay although no VM is there. */
@@ -72,7 +71,7 @@ interface DevspacesFolder {
 /** Runs the three steps of the hook. Never rejects. */
 export async function runUninstall(deps: UninstallDeps): Promise<void> {
   const { logger } = deps;
-  logger.info('nimblescape Devspaces 2 was uninstalled: Devspaces removes its Docker context, its scheduled task and its files outside of VS Code.');
+  logger.info('nimblescape Devspaces 2 was uninstalled: Devspaces checks its Docker context, its scheduled task and its folder outside of VS Code. The next lines tell what was removed and what stays.');
   await step(logger, 'The Docker context devspaces', () => removeDockerContext(deps));
   await step(logger, 'The scheduled task', () => removeScheduledTask(deps));
   await step(logger, 'The folder of Devspaces', () => removeDevspacesFolder(deps));
@@ -114,6 +113,11 @@ async function removeDockerContext(deps: UninstallDeps): Promise<void> {
         `The Docker context devspaces is the current Docker context (DOCKER_CONTEXT, or ${path.join(configDir, 'config.json')}), so it stays. To remove it, run "docker context use default" and then "docker context rm devspaces".`,
       );
       return;
+    case 'unreadable':
+      logger.warn(
+        `Devspaces cannot read ${path.join(configDir, 'config.json')}, so it cannot tell whether the Docker context devspaces is the current Docker context, and the context stays. To remove it, run "docker context rm devspaces".`,
+      );
+      return;
     case 'failed':
       throw new Error(result.detail);
   }
@@ -121,7 +125,7 @@ async function removeDockerContext(deps: UninstallDeps): Promise<void> {
 
 /** 2. The scheduled task (R-VM-005). VmTask and WslTask remove only a task that this computer has, and log a failure. */
 async function removeScheduledTask(deps: UninstallDeps): Promise<void> {
-  const { runner, logger, platform, env } = deps;
+  const { runner, logger, platform } = deps;
   if (platform === 'darwin' || platform === 'linux') {
     const homeDir = absolute(deps.homeDir);
     if (homeDir === undefined) throw new Error(`the home folder "${deps.homeDir}" is not an absolute path`);
@@ -133,7 +137,12 @@ async function removeScheduledTask(deps: UninstallDeps): Promise<void> {
   if (platform !== 'win32') return;
   const root = windowsRoot(deps);
   if (root === undefined) return;
-  await new WslTask({ runner, logger, env, folder: path.join(root, WSL_TASK_FOLDER), program: () => undefined }).remove();
+  await wslTaskOf(deps, root).remove();
+}
+
+/** The task of Task Scheduler with its record in `root` (as in extension.ts); a removal needs no program of the task. */
+function wslTaskOf(deps: UninstallDeps, root: string): WslTask {
+  return new WslTask({ runner: deps.runner, logger: deps.logger, env: deps.env, folder: path.join(root, WSL_TASK_FOLDER), program: () => undefined });
 }
 
 /** The folder of the WSL distribution of Devspaces (`%LOCALAPPDATA%\nimblescape\devspaces\wsl`); undefined without LOCALAPPDATA. */
@@ -155,10 +164,11 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
     const paths = limaPaths(homeDir);
     return {
       root: paths.root,
-      lockName: 'vm-setup.lock',
+      lock: limaSetupLockFolder(paths),
       // Also a VM that `limactl create` left half done: only `limactl delete` removes it.
       hasVm: () => exists(path.join(paths.home, LIMA_INSTANCE)),
-      // A task that step 2 could not remove finds no program anymore, so it starts nothing.
+      // A task that step 2 could not unload (launchctl, systemctl) finds no program anymore, so it starts nothing, and it
+      // is gone at the next login, because its definition file is gone. A task of Task Scheduler stays until it is deleted.
       keep: async () => [],
       vmName: 'The VM of Devspaces',
     };
@@ -167,6 +177,7 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
   const wslFolder = wslFolderOf(deps);
   if (wslFolder === undefined) return undefined;
   const root = path.dirname(wslFolder);
+  const task = wslTaskOf(deps, root);
   const setup = new WslSetup({
     runner: deps.runner,
     wslPath: () => findExecutable('wsl', deps.env, 'win32'),
@@ -177,12 +188,12 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
   });
   return {
     root,
-    lockName: `${path.basename(wslFolder)}.lock`,
+    lock: wslSetupLockFolder(wslFolder),
     // The virtual disk of a distribution of Devspaces is in a folder `disk` (or `disk-2` and so on) of the folder `wsl`;
     // the registry of WSL names the folder of the disk of every distribution (also when its file has another name).
     hasVm: async () => (await holdsFileWith(wslFolder, WSL_DISK_EXTENSION)) || setup.folderInUse(),
     // The record of a task that step 2 could not remove: without it, a later install of Devspaces cannot remove the task.
-    keep: async () => ((await exists(path.join(root, WSL_TASK_FOLDER, 'task.xml'))) ? [WSL_TASK_FOLDER] : []),
+    keep: async () => ((await exists(task.file)) ? [WSL_TASK_FOLDER] : []),
     vmName: 'The WSL distribution of Devspaces',
   };
 }
@@ -199,13 +210,13 @@ async function removeDevspacesFolder(deps: UninstallDeps): Promise<void> {
   let failed: string[] | undefined;
   try {
     await withLockFolder(
-      path.join(folder.root, folder.lockName),
+      folder.lock,
       async () => {
         if (await folder.hasVm()) {
           logger.info(`${folder.vmName} exists, so its folder ${folder.root} stays. The user guide says how to delete it (Uninstall).`);
           return;
         }
-        const kept = [folder.lockName, ...(await folder.keep())];
+        const kept = [path.basename(folder.lock), ...(await folder.keep())];
         failed = [];
         for (const name of await fs.promises.readdir(folder.root)) {
           if (kept.includes(name)) continue;
@@ -259,7 +270,7 @@ async function holdsFileWith(folder: string, extension: string): Promise<boolean
   try {
     entries = await fs.promises.readdir(folder, { withFileTypes: true, recursive: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if (errorCode(error) === 'ENOENT') return false;
     throw error;
   }
   return entries.some((entry) => !entry.isDirectory() && entry.name.toLowerCase().endsWith(extension));

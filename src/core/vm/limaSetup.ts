@@ -15,7 +15,7 @@ import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type ProcessRunner } from '../ports';
 import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
 import { downloadVmImage, vmImageFile, type DownloadVmImageOptions } from './vmImage';
-import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, limaSshArgs, type LimaResources } from './limaInstance';
+import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, limaSetupLockFolder, limaSshArgs, type LimaResources } from './limaInstance';
 import type { LimaVm } from './limaVm';
 
 /** Why the setup cannot run or failed. */
@@ -241,7 +241,7 @@ export class LimaSetup {
     await this.step(async () => {
       try {
         await withLockFolder(
-          path.join(this.deps.vm.paths.root, 'vm-setup.lock'),
+          limaSetupLockFolder(this.deps.vm.paths),
           () => {
             started = true;
             return task();

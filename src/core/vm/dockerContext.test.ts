@@ -119,7 +119,12 @@ describe('the removal of the Docker context devspaces without the Docker CLI (un
     store(ours(HOST));
     fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({ currentContext: 'devspaces' }));
     expect(await removeDockerContextFiles(config)).toEqual({ kind: 'current' });
+    // config.json still names it, so the Docker CLI would fail without DOCKER_CONTEXT.
+    expect(await removeDockerContextFiles(config, 'desktop-linux')).toEqual({ kind: 'current' });
+    fs.writeFileSync(path.join(config, 'config.json'), '{ "currentContext": "default", }');
+    expect(await removeDockerContextFiles(config)).toEqual({ kind: 'unreadable' });
     fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({ currentContext: 'default' }));
+    expect(await removeDockerContextFiles(config, 'devspaces')).toEqual({ kind: 'current' });
     fs.mkdirSync(tls, { recursive: true });
     expect(await removeDockerContextFiles(config)).toEqual({ kind: 'removed' });
     expect(fs.existsSync(path.dirname(file))).toBe(false);

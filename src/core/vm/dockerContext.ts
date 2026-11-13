@@ -15,6 +15,7 @@ import * as path from 'path';
 import { envValue } from '../docker/dockerCli';
 import { errorMessage } from '../errors';
 import type { RunResult } from '../ports';
+import { errorCode } from '../storage/paths';
 import { isRecord } from '../valueChecks';
 
 export const DOCKER_CONTEXT = 'devspaces';
@@ -114,15 +115,16 @@ export async function syncDockerContext(deps: DockerContextDeps, host: string | 
 }
 
 /** The result of removeDockerContextFiles. */
-export type DockerContextFilesResult = { kind: 'removed' | 'missing' | 'taken' | 'current' } | { kind: 'failed'; detail: string };
+export type DockerContextFilesResult = { kind: 'removed' | 'missing' | 'taken' | 'current' | 'unreadable' } | { kind: 'failed'; detail: string };
 
 /**
  * Removes the context `devspaces` from the context store of the Docker CLI in `configDir` without the Docker CLI, as
  * `docker context rm` does: the folder of its metadata and the folder of its TLS files, both named by the SHA-256 of
  * the name. For the uninstall hook (src/uninstall/main.ts, R-GEN-008), which has no Docker CLI. Only a context with the
- * description of Devspaces goes (`taken`: another one stays), and not while it is the current one (`current`): while
- * `environmentContext` (DOCKER_CONTEXT, which the Docker CLI takes first) or `currentContext` of the `config.json` of the
- * Docker CLI names it, or while that file cannot be read. Never throws.
+ * description of Devspaces goes (`taken`: another one stays). It stays while `environmentContext` (DOCKER_CONTEXT) names
+ * it, and while `currentContext` of the `config.json` of the Docker CLI names it, also when DOCKER_CONTEXT names another
+ * one (`current`): without the context, the Docker CLI would fail in every shell that has no DOCKER_CONTEXT. It also
+ * stays while that file exists but cannot be read (`unreadable`), because then nobody can tell. Never throws.
  */
 export async function removeDockerContextFiles(configDir: string, environmentContext?: string): Promise<DockerContextFilesResult> {
   const file = dockerContextFile(configDir);
@@ -130,7 +132,9 @@ export async function removeDockerContextFiles(configDir: string, environmentCon
   if (state.kind === 'missing') return { kind: 'missing' };
   if (state.kind === 'other') return { kind: 'taken' };
   try {
-    if (environmentContext === DOCKER_CONTEXT || currentContextOf(configDir) !== 'other') return { kind: 'current' };
+    const current = environmentContext === DOCKER_CONTEXT ? 'ours' : currentContextOf(configDir);
+    if (current === 'ours') return { kind: 'current' };
+    if (current === 'unknown') return { kind: 'unreadable' };
     const folder = path.dirname(file);
     await fs.promises.rm(path.join(configDir, 'contexts', 'tls', path.basename(folder)), { recursive: true, force: true });
     await fs.promises.rm(folder, { recursive: true, force: true });
@@ -149,7 +153,7 @@ function currentContextOf(configDir: string): 'ours' | 'unknown' | 'other' {
   try {
     text = fs.readFileSync(path.join(configDir, 'config.json'), 'utf8');
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'other' : 'unknown';
+    return errorCode(error) === 'ENOENT' ? 'other' : 'unknown';
   }
   try {
     const config: unknown = JSON.parse(text);

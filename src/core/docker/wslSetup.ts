@@ -78,6 +78,14 @@ export function wslSetupFolder(env: NodeJS.ProcessEnv): string | undefined {
 }
 
 /**
+ * The lock folder of the setup of the WSL distribution for all windows of the Windows user, which the uninstall hook
+ * takes as well (src/uninstall/main.ts): `<folder>.lock`, next to the folder of the distribution.
+ */
+export function wslSetupLockFolder(folder: string): string {
+  return `${folder}.lock`;
+}
+
+/**
  * The arguments of `wsl.exe` that register the file `file` as the distribution `devspaces` of WSL 2 (also when the
  * default of the user is WSL 1, which has no systemd), without a start.
  */
@@ -535,7 +543,7 @@ export class WslSetup {
     let started = false;
     try {
       const value = await withLockFolder(
-        `${this.deps.folder}.lock`,
+        wslSetupLockFolder(this.deps.folder),
         () => {
           started = true;
           return task();

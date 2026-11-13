@@ -542,7 +542,7 @@ VS Code runs the uninstall step of Devspaces once, at its next start after Devsp
 - the scheduled task that starts the VM of Devspaces, or the WSL distribution of Devspaces, at the times of `devspaces.cacheUpdateSchedule`;
 - the folder `~/.nimblescape/devspaces` with Lima on macOS and Linux, or `%LOCALAPPDATA%\nimblescape\devspaces` on Windows, only when the VM of Devspaces is not in it.
 
-It never deletes the VM of Devspaces, the WSL distribution or a devspace, because they can hold work that you did not push, and it cannot ask you. It never connects to a Docker engine or to a remote host. Until that start of VS Code, the scheduled task can still start the VM. When you use Devspaces in another VS Code on this computer too, for example VS Code Insiders, it shares the VM, the task and the context: its next window writes the task and the context again. VS Code writes the lines of the step into the log of its shared process, `sharedprocess.log` (**Developer: Open Logs Folder**).
+It never deletes the VM of Devspaces, the WSL distribution or a devspace, because they can hold work that you did not push, and it cannot ask you. It never connects to a Docker engine or to a remote host. Until that start of VS Code, the scheduled task can still start the VM. When the step needs more than the 5 seconds, VS Code ends it, and you remove what stays by hand (see [What stays after the uninstall](#what-stays-after-the-uninstall)). When you use Devspaces in another VS Code on this computer too, for example VS Code Insiders, it shares the VM, the task and the context: its next window writes the task and the context again. VS Code writes the lines of the step into the log of its shared process, `sharedprocess.log` (**Developer: Open Logs Folder**).
 
 ### What stays after the uninstall
 
@@ -554,7 +554,7 @@ It never deletes the VM of Devspaces, the WSL distribution or a devspace, becaus
   ```
 
   On Windows, `wsl --unregister devspaces` in a terminal deletes the distribution; then remove the folder `%LOCALAPPDATA%\nimblescape\devspaces`.
-- **The scheduled task**, only when VS Code does not start again after the uninstall, for example when you remove VS Code too. Remove it by hand. On macOS:
+- **The scheduled task**, only when VS Code does not start again after the uninstall (for example when you remove VS Code too), or when the uninstall step did not end within the 5 seconds. Remove it by hand. On macOS:
 
   ```sh
   launchctl bootout gui/$(id -u)/com.nimblescape.devspaces.vm
@@ -576,6 +576,7 @@ It never deletes the VM of Devspaces, the WSL distribution or a devspace, becaus
   Unregister-ScheduledTask -TaskName "nimblescape Devspaces WSL $sid" -Confirm:$false
   ```
 
+- **The Docker context `devspaces`**, when it was the current Docker context at the uninstall, or when the uninstall step could not read the `config.json` of the Docker CLI; the log of the step says so. Run `docker context use default` and then `docker context rm devspaces`.
 - **The objects of Devspaces on each Docker engine** where you did not run **Devspaces: Remove Devspaces from This Docker Engine…**. On a remote host, the Monitor can keep running; it ends itself after 30 days without a devspace there. [Remove by hand](#remove-by-hand) has the Docker commands.
 - **The SSH key of Devspaces**, after **Use a Key**: the files `~/.ssh/devspaces_ed25519` and `devspaces_ed25519.pub` on your computer, and the line of the public key in `~/.ssh/authorized_keys` on each remote host; that line ends with `devspaces@` and the name of your computer. Delete the line on each host, then the two files.
 - **What you installed for Devspaces**: QEMU and your membership in the group `kvm` on Linux, WSL 2 on Windows, and the Dev Containers extension, which other tools can use too.

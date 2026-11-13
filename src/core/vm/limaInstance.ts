@@ -60,6 +60,14 @@ export function limaPaths(homeDir: string = os.homedir()): LimaPaths {
   return { root, lima: path.join(root, 'lima'), home: path.join(root, 'vm'), download: path.join(root, 'download') };
 }
 
+/**
+ * The lock folder of the creation of the VM for all windows (limaSetup.ts), which the uninstall hook takes as well
+ * (src/uninstall/main.ts): `<root>/vm-setup.lock`.
+ */
+export function limaSetupLockFolder(paths: Pick<LimaPaths, 'root'>): string {
+  return path.join(paths.root, 'vm-setup.lock');
+}
+
 /** The environment of `limactl` and of the `ssh` to the VM: LIMA_HOME of Devspaces. */
 export function limaEnv(base: NodeJS.ProcessEnv, paths: LimaPaths): NodeJS.ProcessEnv {
   return { ...base, LIMA_HOME: paths.home };
