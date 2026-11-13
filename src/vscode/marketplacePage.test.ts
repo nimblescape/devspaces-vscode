@@ -276,6 +276,18 @@ describe('the Marketplace page and the files of the package', () => {
     expect(section(read('docs/guide.md'), 'Troubleshooting')).toContain('(../SUPPORT.md)');
   });
 
+  it('shows the GIF of docs/images/ on the branch main at the top of the README, as the Marketplace requires', () => {
+    // The Marketplace shows no SVG image and no image with a relative address; docs/ is not in the package.
+    const base = 'https://raw.githubusercontent.com/nimblescape/devspaces-vscode/main/';
+    const readme = read('README.md');
+    const images = [...readme.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)].map((match) => match[1]);
+    expect(images).toHaveLength(1);
+    expect(images[0]).toMatch(/^https:\/\/raw\.githubusercontent\.com\/nimblescape\/devspaces-vscode\/main\/docs\/images\/[\w-]+\.gif$/);
+    expect(readme.indexOf('![')).toBeLessThan(readme.indexOf(`## ${HEADING}`));
+    const file = fs.readFileSync(path.join(ROOT, images[0].slice(base.length)));
+    expect(file.subarray(0, 4).toString('latin1')).toBe('GIF8');
+  });
+
   // Devspaces signs in with the GitHub sign-in of VS Code for github.com and asks the GitHub API of github.com.
   it('says in the requirements that only accounts on github.com work', () => {
     expect(GITHUB_PROVIDER_ID).toBe('github');
