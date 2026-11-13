@@ -165,6 +165,15 @@ describe('the Docker context devspaces in the uninstall hook', () => {
     }
   });
 
+  it('keeps its own context while DOCKER_CONTEXT names it', async () => {
+    write(contextFile(), JSON.stringify(ownContext));
+    const { deps, logger, run } = setUp('linux');
+    deps.env = { ...deps.env, DOCKER_CONTEXT: 'devspaces' };
+    await run();
+    expect(fs.existsSync(contextFile())).toBe(true);
+    expect(String(logger.warn.mock.calls[0]?.[0])).toContain('is the current Docker context (DOCKER_CONTEXT');
+  });
+
   it('removes its own context when config.json names another current context, and uses DOCKER_CONFIG', async () => {
     const config = path.join(home, 'docker-config');
     const file = dockerContextFile(config);
@@ -188,19 +197,38 @@ describe('the uninstall hook on Windows', () => {
     return root;
   }
 
-  const windowsAnswers = (file: string): RunResult | undefined => {
-    if (file.endsWith('whoami.exe')) return ok(`"desktop\\ada","${SID}"\r\n`);
-    return undefined;
-  };
+  /** The export of the registry key of WSL with the distributions `folders` (name and BasePath), as `reg.exe export` writes it. */
+  function registry(folders: Record<string, string>): string {
+    const keys = Object.entries(folders).map(
+      ([name, folder], index) => `[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\{0000000${index}-0000-0000-0000-000000000000}]\r\n"DistributionName"="${name}"\r\n"BasePath"="${folder.replace(/\\/g, '\\\\')}"\r\n"State"=dword:00000001\r\n`,
+    );
+    return ['Windows Registry Editor Version 5.00\r\n', '[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss]\r\n', ...keys].join('\r\n');
+  }
+
+  /** whoami names the SID; reg.exe writes the registry with `folders`; schtasks answers as `schtasks` says. */
+  const windowsAnswers =
+    (options: { folders?: Record<string, string>; schtasks?: (args: readonly string[]) => RunResult | undefined } = {}) =>
+    (file: string, args: readonly string[]): RunResult | undefined => {
+      if (file.endsWith('whoami.exe')) return ok(`"desktop\\ada","${SID}"\r\n`);
+      if (file.endsWith('reg.exe') && args[0] === 'export') {
+        write(args[2], registry(options.folders ?? {}));
+        return ok();
+      }
+      if (file.endsWith('schtasks.exe')) return options.schtasks?.(args);
+      return undefined;
+    };
+
+  const programs = (calls: { file: string; args: readonly string[] }[]) => calls.map(({ file, args }) => [path.win32.basename(file), ...(file.endsWith('reg.exe') ? [args[0]] : args)]);
 
   it('deletes the task of Task Scheduler and the folder of Devspaces when no distribution is in it', async () => {
-    const { deps, calls, logger, run } = setUp('win32', windowsAnswers);
+    const { deps, calls, logger, run } = setUp('win32', windowsAnswers({ folders: { ubuntu: 'C:\\Users\\ada\\Ubuntu' } }));
     const root = windowsFiles(deps, { disk: false });
     await run();
-    expect(calls.map(({ file, args }) => [path.win32.basename(file), ...args])).toEqual([
+    expect(programs(calls)).toEqual([
       ['whoami.exe', '/user', '/fo', 'csv', '/nh'],
       ['schtasks.exe', '/Query', '/TN', wslTaskName(SID)],
       ['schtasks.exe', '/Delete', '/TN', wslTaskName(SID), '/F'],
+      ['reg.exe', 'export'],
     ]);
     expect(fs.existsSync(root)).toBe(false);
     expect(fs.existsSync(path.dirname(root))).toBe(false);
@@ -208,26 +236,45 @@ describe('the uninstall hook on Windows', () => {
   });
 
   it('keeps the WSL distribution and its folder, and deletes only the task', async () => {
-    const { deps, lines, run } = setUp('win32', windowsAnswers);
+    const { deps, lines, run } = setUp('win32', windowsAnswers());
     const root = windowsFiles(deps, { disk: true });
     await run();
     expect(fs.existsSync(path.join(root, 'task', 'task.xml'))).toBe(false);
     expect(fs.existsSync(path.join(deps.wslFolder!, 'disk', 'ext4.vhdx'))).toBe(true);
+    expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
     expect(lines()).toContain(`The WSL distribution of Devspaces exists, so its folder ${root} stays. The user guide says how to delete it (Uninstall).`);
   });
 
-  it('goes on with the other steps when the task cannot be removed, and never throws', async () => {
-    const { deps, logger, run } = setUp('win32', (file) => (file.endsWith('whoami.exe') ? failed('Access is denied.') : undefined));
+  it('keeps the folder when the registry names a distribution with its disk there, also without a .vhdx file', async () => {
+    const { deps, run } = setUp('win32', windowsAnswers({ folders: { devspaces: path.join(home, 'AppData', 'Local', 'nimblescape', 'devspaces', 'wsl', 'disk-2') } }));
+    windowsFiles(deps, { disk: false });
+    await run();
+    expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
+  });
+
+  it('keeps the record of a task that it could not delete, so that a later install can delete the task', async () => {
+    const { deps, logger, lines, run } = setUp('win32', windowsAnswers({ schtasks: (args) => (args[0] === '/Delete' ? failed('Access is denied.') : undefined) }));
     const root = windowsFiles(deps, { disk: false });
+    await run();
+    expect(String(logger.warn.mock.calls[0]?.[0])).toContain('The scheduled task of the WSL distribution of Devspaces could not be removed: schtasks /Delete ended with exit code 1: Access is denied.');
+    expect(fs.readdirSync(root)).toEqual(['task']);
+    expect(fs.existsSync(path.join(root, 'task', 'task.xml'))).toBe(true);
+    expect(lines()).toContain(`Devspaces removed its files in ${root}; the folder stays, because it is not empty.`);
+  });
+
+  it('goes on with the other steps when the task cannot be read, and never throws', async () => {
+    const answers = windowsAnswers();
+    const { deps, logger, run } = setUp('win32', (file, args) => (file.endsWith('whoami.exe') ? failed('Access is denied.') : answers(file, args)));
+    windowsFiles(deps, { disk: false });
     write(contextFile(), JSON.stringify(ownContext));
     await expect(run()).resolves.toBeUndefined();
     expect(String(logger.warn.mock.calls[0]?.[0])).toContain('The scheduled task of the WSL distribution of Devspaces could not be removed: whoami /user did not name the SID');
     expect(fs.existsSync(contextFile())).toBe(false);
-    expect(fs.existsSync(root)).toBe(false);
+    expect(fs.existsSync(path.join(deps.wslFolder!, 'download'))).toBe(false);
   });
 
-  it('runs no program without the record of the task', async () => {
-    const { calls, run } = setUp('win32', windowsAnswers);
+  it('runs no program without the record of the task and without the folder', async () => {
+    const { calls, run } = setUp('win32', windowsAnswers());
     await run();
     expect(calls).toEqual([]);
   });
@@ -285,7 +332,9 @@ describe('the paths of the uninstall hook', () => {
         deps.wslFolder = undefined;
         await run();
         expect(calls, platform).toEqual([]);
-        if (platform === 'linux') expect(String(logger.warn.mock.calls[0]?.[0])).toContain('the home folder "" is not an absolute path');
+        const warnings = logger.warn.mock.calls.map(([text]) => String(text));
+        expect(warnings[0], platform).toContain('the folder of the configuration of the Docker CLI is not an absolute path');
+        if (platform === 'linux') expect(warnings[1]).toContain('the home folder "" is not an absolute path');
       }
       expect(fs.existsSync(path.join(home, '.nimblescape', 'devspaces', 'lima', 'file'))).toBe(true);
       expect(fs.existsSync(path.join(home, 'nimblescape', 'devspaces', 'task', 'task.xml'))).toBe(true);

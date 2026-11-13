@@ -538,11 +538,11 @@ What to know:
 
 VS Code runs the uninstall step of Devspaces once, at its next start after Devspaces was uninstalled from every profile, without a window and for at most 5 seconds. Then VS Code deletes the files of Devspaces in its storage (see **Files** in [Docker contexts and your computer](#docker-contexts-and-your-computer)). The uninstall step removes:
 
-- the scheduled task that starts the VM of Devspaces, or the WSL distribution of Devspaces, at the times of `devspaces.cacheUpdateSchedule`;
 - the Docker context `devspaces` of the setting `devspaces.createDockerContext`, when Devspaces created it and it is not the current Docker context;
+- the scheduled task that starts the VM of Devspaces, or the WSL distribution of Devspaces, at the times of `devspaces.cacheUpdateSchedule`;
 - the folder `~/.nimblescape/devspaces` with Lima on macOS and Linux, or `%LOCALAPPDATA%\nimblescape\devspaces` on Windows, only when the VM of Devspaces is not in it.
 
-It never deletes the VM of Devspaces, the WSL distribution or a devspace, because they can hold work that you did not push, and it cannot ask you. It never connects to a Docker engine or to a remote host. Until that start of VS Code, the scheduled task can still start the VM. VS Code writes the lines of the step into the log of its shared process, `sharedprocess.log` (**Developer: Open Logs Folder**).
+It never deletes the VM of Devspaces, the WSL distribution or a devspace, because they can hold work that you did not push, and it cannot ask you. It never connects to a Docker engine or to a remote host. Until that start of VS Code, the scheduled task can still start the VM. When you use Devspaces in another VS Code on this computer too, for example VS Code Insiders, it shares the VM, the task and the context: its next window writes the task and the context again. VS Code writes the lines of the step into the log of its shared process, `sharedprocess.log` (**Developer: Open Logs Folder**).
 
 ### What stays after the uninstall
 

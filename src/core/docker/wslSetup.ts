@@ -623,6 +623,16 @@ export class WslSetup {
   }
 
   /**
+   * Whether a WSL distribution has its virtual disk in the folder of Devspaces (the registry, else `wsl.exe --list`), or
+   * may have it there because neither tells. For the uninstall hook (src/uninstall/main.ts), which then keeps the
+   * folder. Never throws.
+   */
+  async folderInUse(): Promise<boolean> {
+    const users = await this.diskUsers(this.deps.folder).catch(() => undefined);
+    return users === undefined || users.length > 0;
+  }
+
+  /**
    * Removes the folder of Devspaces when no WSL distribution has its virtual disk there (the registry): after the
    * removal, or the files of a setup that did not end. True when the folder is gone. Never throws (logged).
    */

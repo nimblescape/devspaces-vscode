@@ -120,16 +120,17 @@ export type DockerContextFilesResult = { kind: 'removed' | 'missing' | 'taken' |
  * Removes the context `devspaces` from the context store of the Docker CLI in `configDir` without the Docker CLI, as
  * `docker context rm` does: the folder of its metadata and the folder of its TLS files, both named by the SHA-256 of
  * the name. For the uninstall hook (src/uninstall/main.ts, R-GEN-008), which has no Docker CLI. Only a context with the
- * description of Devspaces goes (`taken`: another one stays), and not while `currentContext` of the `config.json` of
- * the Docker CLI names it, or while that file cannot be read (`current`). Never throws.
+ * description of Devspaces goes (`taken`: another one stays), and not while it is the current one (`current`): while
+ * `environmentContext` (DOCKER_CONTEXT, which the Docker CLI takes first) or `currentContext` of the `config.json` of the
+ * Docker CLI names it, or while that file cannot be read. Never throws.
  */
-export async function removeDockerContextFiles(configDir: string): Promise<DockerContextFilesResult> {
+export async function removeDockerContextFiles(configDir: string, environmentContext?: string): Promise<DockerContextFilesResult> {
   const file = dockerContextFile(configDir);
   const state = readDockerContext(file);
   if (state.kind === 'missing') return { kind: 'missing' };
   if (state.kind === 'other') return { kind: 'taken' };
   try {
-    if (currentContextOf(configDir) !== 'other') return { kind: 'current' };
+    if (environmentContext === DOCKER_CONTEXT || currentContextOf(configDir) !== 'other') return { kind: 'current' };
     const folder = path.dirname(file);
     await fs.promises.rm(path.join(configDir, 'contexts', 'tls', path.basename(folder)), { recursive: true, force: true });
     await fs.promises.rm(folder, { recursive: true, force: true });
