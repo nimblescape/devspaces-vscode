@@ -11,3 +11,4 @@ coverage/
 test-results/
 .vscode-test/
 out/
+test/gif/output/

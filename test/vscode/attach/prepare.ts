@@ -29,6 +29,9 @@
 // With DEVSPACE_TEST_ATTACH_PREPARE=update (the runs `previous` and `updated`, a CI job of its own), the test VS Code
 // also gets the last released version of the extension from the VSIX of its GitHub release, and the helper image is
 // built as that version builds it (prepareUpdate). That run has no plain container.
+// With DEVSPACE_TEST_ATTACH_PREPARE=gif (the README GIF, test/gif/record.mjs, a CI job of its own), the devspace is the
+// demo repository GIF_REPOSITORY of the demo account, without container, on the engine of the runner, which the host
+// GIF_HOST of the SSH config reaches (prepareGif). That run has no plain container.
 // Each download from the network (VS Code, Dev Containers and the VSIX of the last release) is tried again after an
 // error (withTries, NETWORK_TRIES), and the process ends as soon as the preparation is done (see the call of main).
 import * as crypto from 'crypto';
@@ -42,6 +45,7 @@ import { findDockerCli } from '../../../src/core/docker/dockerCli';
 import { sshEndpoint } from '../../../src/core/docker/dockerHost';
 import { DEVCONTAINER_CLI_VERSION, helperImageTag } from '../../../src/core/helper/helperImage';
 import { HelperImages } from '../../../src/core/helper/helperImages';
+import { namePair } from '../../../src/core/namePairs';
 import { LABEL_DEVSPACE_ID, LABEL_HELPER, LABEL_OWNER_ID, LABEL_REPOSITORY, WORKSPACES_ROOT, newDevspaceId, repositoryFolder, resourceName } from '../../../src/core/names';
 import type { Logger } from '../../../src/core/ports';
 import { NodeProcessRunner } from '../../../src/core/process';
@@ -131,6 +135,36 @@ const ENGINE_HOST = 'devspaces-test-engine';
 const ENGINE_HOST_CONTAINER = 'attach-test-engine-host';
 const ENGINE_HOST_START = `${SSH_HOST_SETUP}exec /usr/sbin/sshd -D -e
 `;
+/** The run `gif`: the engine host and its container (prepareGif), and the demo repository of the GIF. */
+const GIF_HOST = 'school-server';
+const GIF_HOST_CONTAINER = 'school-server-ssh';
+const GIF_REPOSITORY = 'school/web-basics';
+/** The longest name pair of the devspace of the GIF (`<adjective>-<scientist>`), so that the view shows its names whole. */
+const GIF_NAME_PAIR_LENGTH = 10;
+/**
+ * The image of the devspace of the GIF, built once before the GIF and removed again: its layers stay in the build cache
+ * of the engine, so that the build at the start takes seconds, and the view Docker Hosts does not list it.
+ */
+const GIF_WARM_IMAGE = 'devspaces-gif-warm:1';
+/** The name of the image of the engine host in the GIF (REMOTE_HOST_IMAGE gets it), as an image of the school server. */
+const GIF_HOST_IMAGE = 'school-server-ssh:1';
+/** The repository of the GIF: a small web page with a devcontainer.json that names two extensions. */
+const GIF_FILES: Record<string, string> = {
+  '.devcontainer/devcontainer.json': `${JSON.stringify(
+    {
+      name: 'Web basics',
+      build: { dockerfile: 'Dockerfile' },
+      remoteUser: 'node',
+      customizations: { vscode: { extensions: ['esbenp.prettier-vscode', 'dbaeumer.vscode-eslint'] } },
+    },
+    null,
+    2,
+  )}\n`,
+  '.devcontainer/Dockerfile': DOCKERFILE,
+  'README.md': '# Web basics\n\nThe exercises of the course Web basics.\n',
+  'index.html': '<!doctype html>\n<html lang="en">\n  <head>\n    <meta charset="utf-8">\n    <title>Web basics</title>\n    <link rel="stylesheet" href="style.css">\n  </head>\n  <body>\n    <h1>Hello, web!</h1>\n  </body>\n</html>\n',
+  'style.css': 'body {\n  font-family: sans-serif;\n  margin: 2rem;\n}\n',
+};
 /** The longest wait for the Docker engine of the other computer to answer over SSH. */
 const REMOTE_ENGINE_WAIT_MS = 120_000;
 /**
@@ -180,12 +214,19 @@ async function fetchWithTries(url: string, headers: Record<string, string>, time
   });
 }
 
+/**
+ * Writes the repository of a devspace into the folder $1 of its workspace volume: the files of the pairs of path and
+ * content after it, in one commit.
+ */
 const SEED_SCRIPT = `set -eu
-mkdir -p "$1/.devcontainer"
-printf '%s\\n' "$2" > "$1/.devcontainer/devcontainer.json"
-printf '%s' "$3" > "$1/.devcontainer/Dockerfile"
-printf '# Attach test\\n' > "$1/README.md"
+mkdir -p "$1"
 cd "$1"
+shift
+while [ $# -gt 1 ]; do
+  mkdir -p "$(dirname "$1")"
+  printf '%s' "$2" > "$1"
+  shift 2
+done
 git init -q -b main
 git add -A
 git -c user.name=Test -c user.email=test@example.invalid commit -q -m 'Initial commit'
@@ -243,16 +284,9 @@ function hostWindow(host: string, computerId: string, name: string, folder: stri
   return { folderUri: folderUri(name, folder, { host: dockerHost }), remoteHost: host, computerId, dockerHost };
 }
 
-/**
- * A devspace without container on the engine of `docker`: its workspace volume with the labels of the extension (the
- * test account owns it) and a repository with a devcontainer.json, written by a container of the helper image.
- */
-async function seedDevspace(docker: BootstrapDocker, helperTag: string): Promise<{ devspaceId: string; name: string; folder: string }> {
-  const devspaceId = newDevspaceId();
-  const name = resourceName(REPOSITORY, devspaceId);
-  const folder = repositoryFolder(REPOSITORY);
-  await docker.runChecked(['volume', 'create', '--label', `${LABEL_DEVSPACE_ID}=${devspaceId}`, '--label', `${LABEL_REPOSITORY}=${REPOSITORY}`, '--label', `${LABEL_OWNER_ID}=${TEST_ACCOUNT_ID}`, name]);
-  const devcontainerJson = JSON.stringify(
+/** The repository of the devspace of the attach tests: its devcontainer.json, its Dockerfile and a README. */
+const ATTACH_FILES: Record<string, string> = {
+  '.devcontainer/devcontainer.json': `${JSON.stringify(
     {
       name: 'Attach test',
       build: { dockerfile: 'Dockerfile' },
@@ -263,8 +297,28 @@ async function seedDevspace(docker: BootstrapDocker, helperTag: string): Promise
     },
     null,
     2,
-  );
-  await docker.runChecked(['run', '--rm', '--pull', 'never', '--network', 'none', '--mount', `type=volume,source=${name},target=${WORKSPACES_ROOT}`, '--entrypoint', 'sh', helperTag, '-c', SEED_SCRIPT, 'sh', folder, devcontainerJson, DOCKERFILE]);
+  )}\n`,
+  '.devcontainer/Dockerfile': DOCKERFILE,
+  'README.md': '# Attach test\n',
+};
+
+/**
+ * A devspace without container on the engine of `docker`: its workspace volume with the labels of the extension (the
+ * test account owns it) and the repository `repository` with the files `files`, written by a container of the helper
+ * image.
+ */
+async function seedDevspace(
+  docker: BootstrapDocker,
+  helperTag: string,
+  repository = REPOSITORY,
+  files = ATTACH_FILES,
+  devspaceId = newDevspaceId(),
+): Promise<{ devspaceId: string; name: string; folder: string }> {
+  const name = resourceName(repository, devspaceId);
+  const folder = repositoryFolder(repository);
+  await docker.runChecked(['volume', 'create', '--label', `${LABEL_DEVSPACE_ID}=${devspaceId}`, '--label', `${LABEL_REPOSITORY}=${repository}`, '--label', `${LABEL_OWNER_ID}=${TEST_ACCOUNT_ID}`, name]);
+  const pairs = Object.entries(files).flat();
+  await docker.runChecked(['run', '--rm', '--pull', 'never', '--network', 'none', '--mount', `type=volume,source=${name},target=${WORKSPACES_ROOT}`, '--entrypoint', 'sh', helperTag, '-c', SEED_SCRIPT, 'sh', folder, ...pairs]);
   return { devspaceId, name, folder };
 }
 
@@ -343,16 +397,39 @@ async function sshHostDocker(dockerPath: string, host: string): Promise<Bootstra
 /**
  * The engine host (ENGINE_HOST_START) with the Docker socket of the runner, and the host ENGINE_HOST in the SSH config
  * of the runner. .vscode-test.mjs makes it the Docker host of Devspaces in its storage folder, as "Use a Remote Docker
- * Host…" does. The check that its engine is the engine of the runner: a volume that only the runner made.
+ * Host…" does. The check that its engine is the engine of the runner: a volume that only the runner made. `options`: more
+ * options of its `docker run`.
  */
-async function prepareEngineHost(local: BootstrapDocker, dockerPath: string): Promise<void> {
-  await startSshHost(local, ENGINE_HOST, ENGINE_HOST_CONTAINER, ['--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock'], ENGINE_HOST_START);
-  const remote = await sshHostDocker(dockerPath, ENGINE_HOST);
+async function prepareEngineHost(local: BootstrapDocker, dockerPath: string, host = ENGINE_HOST, container = ENGINE_HOST_CONTAINER, options: string[] = []): Promise<void> {
+  await startSshHost(local, host, container, ['--mount', 'type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock', ...options], ENGINE_HOST_START);
+  const remote = await sshHostDocker(dockerPath, host);
   const mark = `attach-test-engine-${crypto.randomBytes(3).toString('hex')}`;
   await local.runChecked(['volume', 'create', mark]);
   const seen = (await remote.runChecked(['volume', 'ls', '-q', '--filter', `name=^${mark}$`])).trim();
   await local.runChecked(['volume', 'rm', mark]);
-  if (seen !== mark) throw new Error(`The engine of ${ENGINE_HOST} is not the engine of the runner: it has no volume ${mark}.`);
+  if (seen !== mark) throw new Error(`The engine of ${host} is not the engine of the runner: it has no volume ${mark}.`);
+}
+
+/**
+ * The run `gif`: the README GIF (test/gif/record.mjs). The engine host has the name GIF_HOST, as a server of a school,
+ * and the devspace is the demo repository GIF_REPOSITORY with a small web page, without container. Its image is built
+ * once here (GIF_WARM_IMAGE), so that the build at the start in the GIF finds its layers in the cache, and the image of
+ * the engine host has a name of the school server (GIF_HOST_IMAGE). The engine host gets the Docker data folder of the
+ * runner, read-only: the utilization page reads the disk of that folder on the host, and the volume of its image
+ * docker:dind at that folder would show in the view Docker Hosts as a volume without a name. The ID of the devspace has
+ * a short name pair (GIF_NAME_PAIR_LENGTH).
+ */
+async function prepareGif(docker: BootstrapDocker, dockerPath: string, started: number): Promise<Record<string, unknown>> {
+  const dataFolder = (await docker.runChecked(['info', '--format', '{{.DockerRootDir}}'])).trim();
+  await prepareEngineHost(docker, dockerPath, GIF_HOST, GIF_HOST_CONTAINER, ['--mount', `type=bind,source=${dataFolder},target=${dataFolder},readonly`]);
+  await docker.runChecked(['tag', REMOTE_HOST_IMAGE, GIF_HOST_IMAGE]);
+  await docker.runChecked(['image', 'rm', REMOTE_HOST_IMAGE]);
+  let shortId = newDevspaceId();
+  while (namePair(shortId).length > GIF_NAME_PAIR_LENGTH) shortId = newDevspaceId();
+  const { devspaceId, name, folder } = await seedDevspace(docker, await helperImage(docker, started), GIF_REPOSITORY, GIF_FILES, shortId);
+  await docker.runChecked(['build', '-t', GIF_WARM_IMAGE, '-'], { input: DOCKERFILE, timeoutMs: 300_000 });
+  await docker.runChecked(['image', 'rm', GIF_WARM_IMAGE]);
+  return { gif: { repository: GIF_REPOSITORY, volumeName: name, folder, devspaceId, remoteHost: GIF_HOST, computerId: newComputerId(), accountId: TEST_ACCOUNT_ID } };
 }
 
 /**
@@ -509,7 +586,9 @@ async function main(): Promise<void> {
       ? await prepareRemote(docker, dockerPath, started)
       : kind === 'update'
         ? await prepareUpdate(docker, dockerPath, vscode, started, githubToken)
-        : await prepareLocal(docker, dockerPath, started);
+        : kind === 'gif'
+          ? await prepareGif(docker, dockerPath, started)
+          : await prepareLocal(docker, dockerPath, started);
   const file = path.join(ROOT, 'out', 'test', 'vscode', 'attach', 'seed.json');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(seed, null, 2));

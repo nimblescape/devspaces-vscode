@@ -4,6 +4,8 @@ Open your GitHub repositories in dev containers with one click, on your own Dock
 
 Devspaces lists the GitHub repositories that you can access and that have a Dev Container configuration. **Start** opens a repository in its own dev container, a **devspace**, and connects the VS Code window to it. The containers run in a VM of Devspaces on your computer, or on Docker on another computer that you reach over SSH.
 
+![nimblescape Devspaces 2 in VS Code, in six scenes: after the sign-in with GitHub, the view lists the repositories that have a Dev Container configuration; a double-click starts the devspace of school/web-basics on the remote host school-server, and the window connects to its container; the view Docker Hosts shows the containers, volumes and networks of the host; a click on a volume and on the devspace container opens their reports in a preview tab, and a double-click keeps the tab; the report of the Monitor lists its last runs, and Show Log of the Monitor opens its log; Show Utilization shows the CPU, memory and disk use of the host; a blue band above the window names each scene](https://raw.githubusercontent.com/nimblescape/devspaces-vscode/main/docs/images/devspaces.gif)
+
 ## What Devspaces does on your computer
 
 - **GitHub sign-in.** Devspaces uses the GitHub sign-in of VS Code with the scopes `repo` (read and change the repositories that you can access, also the private ones) and `read:org` (read your organization memberships), and with `read:packages` only for a private image on `ghcr.io`. VS Code keeps the sign-ins, and Devspaces saves no token. At each open, Devspaces writes the token of the account that owns the devspace into the memory of its container, so that Git works there; code in that container can use it.

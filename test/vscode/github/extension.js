@@ -9,12 +9,17 @@
 // Each answer has a new session ID. The extension asks for a new sign-in (forceNewSession, a dialog that VS Code
 // refuses in tests) only while the session whose token GitHub rejected is still the current one (src/vscode/auth.ts,
 // isRejected); with a new ID the open of the window does not depend on whether a 401 arrives before it asks.
+// With DEVSPACE_TEST_GITHUB_SIGNED_OUT=1 (the README GIF, test/gif/record.mjs), VS Code starts without a session, as
+// before the first sign-in: the provider gives sessions only after the first createSession (Sign in with GitHub),
+// which it keeps in its global state, so that the next window (the window of the devspace) is signed in too.
 const vscode = require('vscode');
 
 /** The account: the test account of the Docker tests, or DEVSPACE_TEST_GITHUB_ACCOUNT (JSON with id and label). */
 const ACCOUNT = process.env.DEVSPACE_TEST_GITHUB_ACCOUNT ? JSON.parse(process.env.DEVSPACE_TEST_GITHUB_ACCOUNT) : { id: '4242', label: 'devspaces-test' };
 const TOKEN = 'dummy-token-of-the-vscode-attach-tests';
 let sessions = 0;
+const SIGNED_IN_KEY = 'signedIn';
+let signedIn = true;
 
 function session(scopes) {
   sessions += 1;
@@ -22,6 +27,7 @@ function session(scopes) {
 }
 
 exports.activate = (context) => {
+  signedIn = process.env.DEVSPACE_TEST_GITHUB_SIGNED_OUT !== '1' || context.globalState.get(SIGNED_IN_KEY) === true;
   const changes = new vscode.EventEmitter();
   context.subscriptions.push(
     changes,
@@ -30,8 +36,16 @@ exports.activate = (context) => {
       'GitHub',
       {
         onDidChangeSessions: changes.event,
-        getSessions: async (scopes) => [session(scopes ?? [])],
-        createSession: async (scopes) => session(scopes),
+        getSessions: async (scopes) => (signedIn ? [session(scopes ?? [])] : []),
+        createSession: async (scopes) => {
+          const created = session(scopes);
+          if (!signedIn) {
+            signedIn = true;
+            await context.globalState.update(SIGNED_IN_KEY, true);
+            changes.fire({ added: [created], removed: [], changed: [] });
+          }
+          return created;
+        },
         removeSession: async () => {},
       },
       { supportsMultipleAccounts: false },

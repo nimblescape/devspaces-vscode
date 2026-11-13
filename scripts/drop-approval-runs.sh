@@ -10,7 +10,8 @@
 # workflow "CI" (lima.yml also "VM image") on the branch itself instead, and the checks of that run appear on the pull
 # request. A waiting run that nobody approves ends as a failed run when the pull request is merged or closed, so every
 # pin left one failed run of each workflow that its change starts in the list of runs (for example the run 42367557515
-# of "CI" for the pull request #81). A deleted run is gone from that list.
+# of "CI" for the pull request #81). The job "commit" of readme-gif.yml pushes the GIF of the README with the
+# GITHUB_TOKEN to a branch that can have a pull request, which creates such runs too. A deleted run is gone from that list.
 #
 #   bash scripts/drop-approval-runs.sh lima-2.3.0
 #

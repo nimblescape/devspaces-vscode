@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: MIT
+# © 2026 Hannes Stauss (scalarion@nimblescape.com)
+# Licensed under the MIT License. See LICENSE in the repository root for details.
+
+# Record the GIF of the README (docs/images/devspaces.gif) from a real VS Code
+# with the packaged extension, on a manual start for a branch. The job "record"
+# prepares the demo devspace on the Docker engine of the runner, which the
+# extension reaches over SSH as the remote host "school-server"
+# (test/vscode/attach/prepare.ts with DEVSPACE_TEST_ATTACH_PREPARE=gif),
+# installs the VSIX files of the extension and of the test sign-in
+# (scripts/install-attach-extensions.mjs), and records the six scenes with
+# test/gif/record.mjs: the sign-in, the start of the devspace, the view Docker
+# Hosts, the reports of a volume and of the devspace container, the report of
+# the Monitor, and the utilization page. The repository list comes from the
+# fake GitHub API of test/gif/fakeGitHub.mjs, because the test account has no
+# real GitHub access. The job uploads the GIF, the video of the take, a
+# screenshot of each scene and the logs as the artifact "readme-gif"; it gets no
+# write scope. After a manual start, the job "commit" commits the GIF to the
+# branch of the run, never to the default branch. A pull request that changes
+# the recorder records too, as a check, and commits nothing: a commit of the
+# workflow would start no checks of its own on the pull request.
+
+name: README GIF
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/readme-gif.yml
+      - test/gif/**
+      - test/vscode/attach/prepare.ts
+
+permissions:
+  contents: read
+
+# A newer run of the same branch replaces a run that has not ended, also a run of a pull request: only the newest take counts.
+concurrency:
+  group: readme-gif-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      # As in the job "vscode attach" of ci.yml: the newest stable release, pinned for every step.
+      - name: Choose the VS Code version
+        run: |
+          VERSION=$(curl -fsS --retry 3 'https://update.code.visualstudio.com/api/releases/stable?released=true' | jq -er '.[0]')
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]$ ]]; then
+            echo "::warning::The newest stable VS Code $VERSION is not pinned: @vscode/test-electron takes a stable version only with a patch number of one digit."
+            VERSION=
+          fi
+          echo "VS Code ${VERSION:-stable}"
+          echo "VSCODE_TEST_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check out the source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up the pinned Node release
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Install the locked development tools without install scripts
+        run: npm ci --ignore-scripts
+
+      - name: Install Xvfb, xdotool, ffmpeg and the font Inter
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends xvfb xdotool ffmpeg fonts-inter
+
+      # The runner comes with images of GitHub, which the view Docker Hosts would list in the GIF. No container uses them.
+      - name: Remove the images of the runner
+        run: docker image prune --all --force
+
+      - name: Prepare the Docker engine, the demo devspace and the test VS Code
+        env:
+          DEVSPACE_TEST_ATTACH_PREPARE: gif
+        run: npm run test:vscode:attach:prepare
+
+      - name: Install the extension and the test sign-in provider from VSIX files
+        run: node scripts/install-attach-extensions.mjs
+
+      - name: Record the GIF
+        run: node test/gif/record.mjs
+
+      - name: Show the Docker objects and the logs
+        if: ${{ always() }}
+        run: |
+          set +e
+          docker ps -a
+          docker volume ls
+          docker images
+          cat test/gif/output/github.log
+          tail -n 100 test/gif/output/vscode.log
+
+      - name: Keep the GIF, the take, the screenshots and the logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: readme-gif
+          path: |
+            test/gif/output/*.gif
+            test/gif/output/*.png
+            test/gif/output/*.log
+            test/gif/output/take.mkv
+            test/gif/output/take.mkv.marks.json
+          if-no-files-found: warn
+
+  commit:
+    needs: record
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # The push of the GIF to the branch of the run.
+      contents: write
+      # The deletion of the runs of its pull request that wait for an approval (scripts/drop-approval-runs.sh).
+      actions: write
+    steps:
+      - name: Check out the branch of the run
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+
+      - name: Take the files of the job "record"
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: readme-gif
+          path: ${{ runner.temp }}/readme-gif
+
+      - name: Commit the GIF to the branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          mkdir -p docs/images
+          cp "$RUNNER_TEMP/readme-gif/devspaces.gif" docs/images/devspaces.gif
+          git add docs/images/devspaces.gif
+          if git diff --cached --quiet; then
+            echo "Nothing changed."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --quiet --message "Record the README GIF" --message "The workflow \"README GIF\": $RUN_URL"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
+          # A push with the GITHUB_TOKEN to the branch of a pull request creates runs of the pull request that wait
+          # for an approval; they would end as failed runs.
+          bash scripts/drop-approval-runs.sh "$BRANCH"
