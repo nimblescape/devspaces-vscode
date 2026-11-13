@@ -4265,6 +4265,8 @@ describe('Remove Devspaces from This Computer…', () => {
         ...inventory,
       })),
       vmExists: vi.fn(async () => false),
+      vmSetUp: vi.fn(async () => false),
+      vmGone: vi.fn(() => void order.push('update the task and the context of the VM')),
       removeVm: vi.fn(async () => {
         order.push('remove the VM');
         return left.vm;
@@ -4494,7 +4496,8 @@ describe('Remove Devspaces from This Computer…', () => {
     });
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
     await run('removeFromComputer');
-    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM']);
+    // The scheduled task and the Docker context of the VM that is gone are updated as after "Remove the VM…".
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM', 'update the task and the context of the VM']);
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
     expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
     // The host that did not answer before the Cancel is in the log.
@@ -4630,6 +4633,45 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(cleanup.removeVm).not.toHaveBeenCalled();
     expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: only a VM that did not exist at the question checked again, so that the files of a VM that another
+  // VS Code set up again after its removal were removed under it.
+  it('keeps the files when the VM was set up again after its removal, and says so', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.vmSetUp.mockResolvedValue(true);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host']);
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(cleanup.vmGone).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a removal mark that could not be written named in what stays also when everything else went (the
+  // extension is uninstalled then, so no background work comes back), or not named when the extension stays installed.
+  it('names a host whose removal mark could not be written only when the extension stays installed', async () => {
+    for (const stays of [false, true]) {
+      const { left, cleanup } = onComputer({ keyHosts: [], vm: undefined });
+      const mark = vi.spyOn(h.engineRecords, 'startRemoval').mockRejectedValue(new Error('EACCES: permission denied'));
+      if (stays) left.files = ['The folder could not be deleted.'];
+      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+      await run('removeFromComputer');
+      expect(mark).toHaveBeenCalled();
+      const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+      expect(warnings).toContain(ControllerTexts.removalNotRecorded('build-box'));
+      const named = warnings.filter((text) => text === `Stays on this computer: ${ControllerTexts.removalNotRecorded('build-box')}`);
+      if (stays) {
+        expect(named).toHaveLength(1);
+        expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(2), Actions.showDetails, ControllerTexts.uninstallAnyway);
+        expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+      } else {
+        expect(named).toEqual([]);
+        expect(cleanup.uninstallExtension).toHaveBeenCalledTimes(1);
+      }
+      mark.mockRestore();
+    }
   });
 
   // Mutation: the devspaces of this computer on an engine that is not in the list left out of the question, so that the

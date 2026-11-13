@@ -117,6 +117,7 @@ function setUp(overrides: Partial<ComputerCleanupDeps> & Programs = {}, answer: 
     vmHost: 'devspaces-vm',
     vmState: async () => 'vm' as const,
     removeVm: vi.fn(async () => undefined),
+    vmGone: vi.fn(),
     key,
     folder: path.join(dir, 'local', '.nimblescape', 'devspaces'),
     files: { runner, platform: 'linux', env: {}, homeDir: path.join(dir, 'local'), uid: () => 1000 },
@@ -198,13 +199,31 @@ describe('the removal of the SSH key of Devspaces', () => {
   it('keeps the key when a line stays, so that a new run can still log in, and says what to remove by hand', async () => {
     keyFiles();
     write(authorizedKeys('cloud'), `${PUBLIC}\n`);
+    // The login with the key works there, but the file step does not (also with "Permission denied" in its text).
+    const failure = 'sh: 1: cannot create /home/me/.ssh/authorized_keys.devspaces: Permission denied';
     const { cleanup, state } = setUp({}, (call) =>
-      call.file === '/usr/bin/ssh' && call.args.at(-2) === 'box' ? { exitCode: 255, stdout: '', stderr: 'box: Permission denied (publickey).\n', timedOut: false } : undefined,
+      call.file === '/usr/bin/ssh' && call.args.at(-2) === 'box' ? { exitCode: 2, stdout: '', stderr: `${failure}\n`, timedOut: false } : undefined,
     );
-    expect(await cleanup.removeSshKey(['box', 'me@cloud'])).toEqual([ComputerCleanupTexts.keyLineLeft('box', 'box: Permission denied (publickey).', keyPath()), ComputerCleanupTexts.keyKept(keyPath())]);
+    expect(await cleanup.removeSshKey(['box', 'me@cloud'])).toEqual([ComputerCleanupTexts.keyLineLeft('box', failure, keyPath()), ComputerCleanupTexts.keyKept(keyPath())]);
     expect(state.setSshKey.mock.calls).toEqual([['me@cloud', undefined]]);
     expect(fs.existsSync(keyPath())).toBe(true);
     expect(fs.existsSync(`${keyPath()}.pub`)).toBe(true);
+  });
+
+  // Mutation: a host that refuses the login with the key counted as a line that stays, so that the key stayed at every
+  // run of the command although no run can log in there with it.
+  it('deletes the key when a host refuses the login with it, forgets the key for that host, and says to check the file there by hand', async () => {
+    keyFiles();
+    const { cleanup, state, logger } = setUp({}, (call) =>
+      call.file === '/usr/bin/ssh' && call.args.at(-2) === 'box' ? { exitCode: 255, stdout: '', stderr: 'box: Permission denied (publickey).\n', timedOut: false } : undefined,
+    );
+    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyRefused('box', keyPath())]);
+    expect(state.setSshKey.mock.calls).toEqual([['box', undefined]]);
+    expect(fs.existsSync(keyPath())).toBe(false);
+    expect(fs.existsSync(`${keyPath()}.pub`)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(`${ComputerCleanupTexts.keyRefused('box', keyPath())} (box: Permission denied (publickey))`);
+    expect(logger.info).toHaveBeenCalledWith(`Devspaces deleted its SSH key ${keyPath()}, if it was there.`);
+    expect(ComputerCleanupTexts.keyRefused('box', keyPath())).toContain('box does not accept the SSH key of Devspaces any more');
   });
 
   // Mutation: the key deleted while its line stays on a host where something of Devspaces stays, so that a new run of

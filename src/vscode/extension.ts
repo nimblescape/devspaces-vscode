@@ -97,7 +97,7 @@ import { isHandedOffStop, releaseDevspace } from '../core/session/windowRelease'
 import { readOrCreateComputerId } from '../core/storage/computerId';
 import { DockerEngineRecords } from '../core/storage/dockerEngineRecords';
 import { devspacesUsed } from '../core/storage/firstUse';
-import { StoragePaths } from '../core/storage/paths';
+import { StoragePaths, pathState } from '../core/storage/paths';
 import { ConfigCheckStore } from '../core/storage/configChecks';
 import { bundleHash } from '../core/loader/pipeLoader';
 import { DevspaceRegistry } from '../core/storage/registry';
@@ -1756,8 +1756,10 @@ async function activateExtension(
       // the folder of Devspaces would stay at every run of the command. An error counts as the VM (ComputerCleanup).
       vmState: async () => {
         if (limaVm !== undefined) {
-          if (await limaVm.exists()) return 'vm';
-          return fs.existsSync(path.join(limaVm.paths.home, LIMA_INSTANCE)) ? 'leftovers' : 'none';
+          // As LimaSetup.remove: a lima.yaml that cannot be checked counts as the VM.
+          const instance = path.join(limaVm.paths.home, LIMA_INSTANCE);
+          if ((await pathState(path.join(instance, 'lima.yaml'))) !== 'missing') return 'vm';
+          return (await pathState(instance)) === 'missing' ? 'none' : 'leftovers';
         }
         if (wslSetupCore === undefined || wslFolder === undefined) return 'none';
         // The list of WSL and the registry (WslSetup.registration), without the disk walk and the run state of readVmState.
@@ -1767,6 +1769,10 @@ async function activateExtension(
         return fs.existsSync(wslFolder) ? 'leftovers' : 'none';
       },
       removeVm: () => (limaVm !== undefined ? limaSetup.removeForComputer() : wslSetup.removeForComputer()),
+      vmGone: () => {
+        background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+        background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
+      },
       key: sshKeys,
       folder: limaVm?.paths.root ?? (wslFolder !== undefined ? path.win32.dirname(wslFolder) : undefined),
       files: { runner, platform, env, homeDir: os.homedir(), uid: () => os.userInfo().uid },

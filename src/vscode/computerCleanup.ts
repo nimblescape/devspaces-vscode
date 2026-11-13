@@ -50,6 +50,11 @@ export interface ComputerCleanupDeps {
   /** The removal of the VM without a question (LimaSetupCommands/WslSetupCommands.removeForComputer): what stays. */
   removeVm: () => Promise<string | undefined>;
   /**
+   * After the removal of the VM, when the files step did not run (a Cancel): the window updates the scheduled task and
+   * the Docker context in the background, as after "Remove the VM…".
+   */
+  vmGone: () => void;
+  /**
    * The SSH key of Devspaces (SshKeyOffer): its file, its public key from the private key (`ssh-keygen -y`), and a
    * command on a host with a login without questions that may use only that key.
    */
@@ -75,6 +80,8 @@ export const ComputerCleanupTexts = {
     `The list of Docker hosts of Devspaces could not be read (${detail}), so Devspaces stays on the remote hosts of the list, and so does its SSH key with its line there. Run the command again when the list can be read, or remove them by hand (Uninstall in the user guide).`,
   keyUnreadable: (keyPath: string, detail: string, hosts: readonly string[]) =>
     `The SSH key of Devspaces ${keyPath} could not be read (${detail.replace(/\.$/, '')}), so its line stays in ~/.ssh/authorized_keys on ${hosts.join(', ')}. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
+  keyRefused: (host: string, keyPath: string) =>
+    `${host} does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has it, remove it by hand. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
   /** The removal by hand of the lines of the key, with any comment (also from a former name of this computer). */
   removeLinesByHand: (keyPath: string) =>
     `Remove each line there with the public key of ${keyPath}.pub; its comment is "devspaces@" and the name of this computer, or a former name of it.`,
@@ -116,6 +123,15 @@ export class ComputerCleanup {
     return (await this.vmState()) !== 'none';
   }
 
+  /** Whether the VM of Devspaces itself exists now (not only the files of a setup). Never throws. */
+  async vmSetUp(): Promise<boolean> {
+    return (await this.vmState()) === 'vm';
+  }
+
+  vmGone(): void {
+    this.deps.vmGone();
+  }
+
   /** The state of the VM; one that cannot be read counts as there, so that the question names it. */
   private async vmState(): Promise<'vm' | 'leftovers' | 'none'> {
     if (this.deps.vmHost === undefined) return 'none';
@@ -137,6 +153,7 @@ export class ComputerCleanup {
     const { logger } = this.deps;
     const { keyPath } = this.deps.key;
     const left: string[] = [];
+    let linesLeft = false;
     if (hosts.length > 0) {
       // From the private key itself, never from the .pub file: the login uses the private key, so a .pub file of another
       // key would remove other lines and leave the line of the key.
@@ -148,14 +165,27 @@ export class ComputerCleanup {
       }
       for (const host of hosts) {
         const failure = await this.removeKeyLine(host, key);
+        const forget = (): Promise<void> =>
+          this.deps.state.setSshKey(host, undefined).catch((error: unknown) => logger.warn(`The key state of ${host} could not be recorded: ${errorMessage(error)}`));
         if (failure === undefined) {
           logger.info(`The line of the SSH key of Devspaces was removed from ~/.ssh/authorized_keys on ${host}.`);
-          await this.deps.state.setSshKey(host, undefined).catch((error: unknown) => logger.warn(`The key state of ${host} could not be recorded: ${errorMessage(error)}`));
+          await forget();
+          continue;
+        }
+        // A host that refuses the login with the key (its line went, or the account changed; the text of `ssh`, not that
+        // of a file step there): no later run can log in there with it, so the key does not stay for it, and the record
+        // forgets it, so that the next run does not try again.
+        if (/Permission denied \(/.test(failure)) {
+          const text = ComputerCleanupTexts.keyRefused(host, keyPath);
+          logger.warn(`${text} (${failure.replace(/\.$/, '')})`);
+          left.push(text);
+          await forget();
           continue;
         }
         const text = ComputerCleanupTexts.keyLineLeft(host, failure, keyPath);
         logger.warn(text);
         left.push(text);
+        linesLeft = true;
       }
     }
     // A host that got the line meanwhile (another window): the key stays for it too.
@@ -174,10 +204,11 @@ export class ComputerCleanup {
       left.push(ComputerCleanupTexts.keyKeptFor([...keepFor, ...added], keyPath));
       return left;
     }
-    if (left.length > 0) {
+    if (linesLeft) {
       left.push(ComputerCleanupTexts.keyKept(keyPath));
       return left;
     }
+    let deleted = true;
     for (const file of [keyPath, `${keyPath}.pub`]) {
       try {
         await fs.promises.rm(file, { force: true });
@@ -185,9 +216,10 @@ export class ComputerCleanup {
         const text = ComputerCleanupTexts.keyFileLeft(file, errorMessage(error));
         logger.warn(text);
         left.push(text);
+        deleted = false;
       }
     }
-    if (left.length === 0) logger.info(`Devspaces deleted its SSH key ${keyPath}, if it was there.`);
+    if (deleted) logger.info(`Devspaces deleted its SSH key ${keyPath}, if it was there.`);
     return left;
   }
 
