@@ -141,8 +141,13 @@ const GIF_HOST_CONTAINER = 'school-server-ssh';
 const GIF_REPOSITORY = 'school/web-basics';
 /** The longest name pair of the devspace of the GIF (`<adjective>-<scientist>`), so that the view shows its names whole. */
 const GIF_NAME_PAIR_LENGTH = 10;
-/** The image of the devspace of the GIF, built once before the GIF, so that its build at the start takes seconds. */
+/**
+ * The image of the devspace of the GIF, built once before the GIF and removed again: its layers stay in the build cache
+ * of the engine, so that the build at the start takes seconds, and the view Docker Hosts does not list it.
+ */
 const GIF_WARM_IMAGE = 'devspaces-gif-warm:1';
+/** The name of the image of the engine host in the GIF (REMOTE_HOST_IMAGE gets it), as an image of the school server. */
+const GIF_HOST_IMAGE = 'school-server-ssh:1';
 /** The repository of the GIF: a small web page with a devcontainer.json that names two extensions. */
 const GIF_FILES: Record<string, string> = {
   '.devcontainer/devcontainer.json': `${JSON.stringify(
@@ -408,18 +413,22 @@ async function prepareEngineHost(local: BootstrapDocker, dockerPath: string, hos
 /**
  * The run `gif`: the README GIF (test/gif/record.mjs). The engine host has the name GIF_HOST, as a server of a school,
  * and the devspace is the demo repository GIF_REPOSITORY with a small web page, without container. Its image is built
- * once here, so that the build at the start in the GIF finds its layers in the cache. The engine host gets the Docker
- * data folder of the runner, read-only: the utilization page reads the disk of that folder on the host, and the volume
- * of its image docker:dind at that folder would show in the view Docker Hosts as a volume without a name. The ID of the
- * devspace has a short name pair (GIF_NAME_PAIR_LENGTH).
+ * once here (GIF_WARM_IMAGE), so that the build at the start in the GIF finds its layers in the cache, and the image of
+ * the engine host has a name of the school server (GIF_HOST_IMAGE). The engine host gets the Docker data folder of the
+ * runner, read-only: the utilization page reads the disk of that folder on the host, and the volume of its image
+ * docker:dind at that folder would show in the view Docker Hosts as a volume without a name. The ID of the devspace has
+ * a short name pair (GIF_NAME_PAIR_LENGTH).
  */
 async function prepareGif(docker: BootstrapDocker, dockerPath: string, started: number): Promise<Record<string, unknown>> {
   const dataFolder = (await docker.runChecked(['info', '--format', '{{.DockerRootDir}}'])).trim();
   await prepareEngineHost(docker, dockerPath, GIF_HOST, GIF_HOST_CONTAINER, ['--mount', `type=bind,source=${dataFolder},target=${dataFolder},readonly`]);
+  await docker.runChecked(['tag', REMOTE_HOST_IMAGE, GIF_HOST_IMAGE]);
+  await docker.runChecked(['image', 'rm', REMOTE_HOST_IMAGE]);
   let shortId = newDevspaceId();
   while (namePair(shortId).length > GIF_NAME_PAIR_LENGTH) shortId = newDevspaceId();
   const { devspaceId, name, folder } = await seedDevspace(docker, await helperImage(docker, started), GIF_REPOSITORY, GIF_FILES, shortId);
   await docker.runChecked(['build', '-t', GIF_WARM_IMAGE, '-'], { input: DOCKERFILE, timeoutMs: 300_000 });
+  await docker.runChecked(['image', 'rm', GIF_WARM_IMAGE]);
   return { gif: { repository: GIF_REPOSITORY, volumeName: name, folder, devspaceId, remoteHost: GIF_HOST, computerId: newComputerId(), accountId: TEST_ACCOUNT_ID } };
 }
 

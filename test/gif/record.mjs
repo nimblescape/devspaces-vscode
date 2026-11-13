@@ -21,7 +21,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Cdp, click, jump, move, placeWindow, record, screenshot, SCREEN, startXvfb, targets, wait, xdo } from './desktop.mjs';
+import { Cdp, click, DISPLAY, jump, move, placeWindow, record, screenshot, SCREEN, startXvfb, targets, wait, xdo } from './desktop.mjs';
 import { makeCertificates, startFakeGitHub } from './fakeGitHub.mjs';
 import { writeGif } from './gif.mjs';
 
@@ -137,7 +137,7 @@ async function startVscode(userData, account, ca) {
   ];
   const env = {
     ...process.env,
-    DISPLAY: ':99',
+    DISPLAY,
     DEVSPACE_TEST_GITHUB_SIGNED_OUT: '1',
     DEVSPACE_TEST_GITHUB_ACCOUNT: JSON.stringify({ id: account.id, label: account.login }),
     NODE_EXTRA_CA_CERTS: ca,
