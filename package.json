@@ -1218,6 +1218,7 @@
     "test:vscode:attach:prepare": "node esbuild.mjs && node scripts/build-vscode-tests.mjs && node out/test/vscode/attach/prepare.js",
     "test:vscode:attach": "node scripts/run-attach-tests.mjs",
     "vscode:prepublish": "node esbuild.mjs --production",
+    "vscode:uninstall": "node ./dist/uninstall.js",
     "package": "vsce package --no-dependencies --no-rewrite-relative-links",
     "install-local": "node scripts/install-local.mjs",
     "uninstall-local": "node scripts/uninstall-local.mjs"

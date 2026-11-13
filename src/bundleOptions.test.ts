@@ -15,7 +15,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { packageBundleOptions, sharedBundleOptions } from '../scripts/bundleOptions.mjs';
 
 const ROOT = path.resolve(__dirname, '..');
-const OUTFILES = ['dist/extension.js', 'dist/groupsPreviewWorker.js', 'dist/helperChannel.js', 'dist/vmTask.js'];
+const OUTFILES = ['dist/extension.js', 'dist/groupsPreviewWorker.js', 'dist/helperChannel.js', 'dist/uninstall.js', 'dist/vmTask.js'];
 
 /** The text of each bundle of a production build, by its output file. */
 const bundles = new Map<string, string>();
@@ -52,6 +52,7 @@ describe('the bundles of the package', () => {
       ['dist/extension.js', true],
       ['dist/groupsPreviewWorker.js', true],
       ['dist/helperChannel.js', false],
+      ['dist/uninstall.js', true],
       ['dist/vmTask.js', false],
     ]);
     for (const options of development) expect(options, options.outfile).toMatchObject({ minify: false, keepNames: true });
@@ -104,6 +105,8 @@ describe('a new version without a change of the code', () => {
     const { scripts } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
     // buildCopy runs this build.
     expect(scripts['vscode:prepublish']).toBe('node esbuild.mjs --production');
+    // The uninstall hook of VS Code runs a bundle of the package.
+    expect(scripts['vscode:uninstall']).toBe('node ./dist/uninstall.js');
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'devspaces-version-'));
     try {
       fs.mkdirSync(path.join(dir, 'a'));

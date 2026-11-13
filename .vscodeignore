@@ -8,6 +8,7 @@
 !dist/extension.js
 !dist/groupsPreviewWorker.js
 !dist/helperChannel.js
+!dist/uninstall.js
 !dist/vmTask.js
 !resources/**
 !package.json

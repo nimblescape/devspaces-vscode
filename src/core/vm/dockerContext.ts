@@ -112,3 +112,48 @@ export async function syncDockerContext(deps: DockerContextDeps, host: string | 
     return { kind: 'failed', detail: errorMessage(error) };
   }
 }
+
+/** The result of removeDockerContextFiles. */
+export type DockerContextFilesResult = { kind: 'removed' | 'missing' | 'taken' | 'current' } | { kind: 'failed'; detail: string };
+
+/**
+ * Removes the context `devspaces` from the context store of the Docker CLI in `configDir` without the Docker CLI, as
+ * `docker context rm` does: the folder of its metadata and the folder of its TLS files, both named by the SHA-256 of
+ * the name. For the uninstall hook (src/uninstall/main.ts, R-GEN-008), which has no Docker CLI. Only a context with the
+ * description of Devspaces goes (`taken`: another one stays), and not while `currentContext` of the `config.json` of
+ * the Docker CLI names it, or while that file cannot be read (`current`). Never throws.
+ */
+export async function removeDockerContextFiles(configDir: string): Promise<DockerContextFilesResult> {
+  const file = dockerContextFile(configDir);
+  const state = readDockerContext(file);
+  if (state.kind === 'missing') return { kind: 'missing' };
+  if (state.kind === 'other') return { kind: 'taken' };
+  try {
+    if (currentContextOf(configDir) !== 'other') return { kind: 'current' };
+    const folder = path.dirname(file);
+    await fs.promises.rm(path.join(configDir, 'contexts', 'tls', path.basename(folder)), { recursive: true, force: true });
+    await fs.promises.rm(folder, { recursive: true, force: true });
+    return { kind: 'removed' };
+  } catch (error) {
+    return { kind: 'failed', detail: errorMessage(error) };
+  }
+}
+
+/**
+ * Whether `currentContext` of the `config.json` in `configDir` names the context `devspaces`: `ours` when it does,
+ * `unknown` when the file exists but cannot be read as JSON, `other` else (also without the file).
+ */
+function currentContextOf(configDir: string): 'ours' | 'unknown' | 'other' {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(configDir, 'config.json'), 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'other' : 'unknown';
+  }
+  try {
+    const config: unknown = JSON.parse(text);
+    return isRecord(config) && config.currentContext === DOCKER_CONTEXT ? 'ours' : 'other';
+  } catch {
+    return 'unknown';
+  }
+}
