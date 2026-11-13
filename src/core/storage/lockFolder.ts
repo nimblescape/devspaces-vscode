@@ -118,7 +118,7 @@ async function writeLockToken(lockDir: string, token: string): Promise<boolean> 
 
 /**
  * The guard folder of `lockDir` that one waiter holds while it removes a stale `lockDir` (removeStaleLockFolder):
- * `<lockDir>.takeover`. A removal of the folder around a lock must keep it too (src/uninstall/main.ts).
+ * `<lockDir>.takeover`. A removal of the folder around a lock must keep it too (src/core/devspacesFiles.ts).
  */
 export function lockTakeoverFolder(lockDir: string): string {
   return `${lockDir}.takeover`;

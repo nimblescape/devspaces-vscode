@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authorizedKeyPresentCommand, authorizedKeysCommand, devspacesKeyPath, keyComment, parsePublicKey, removeAuthorizedKeyCommand, sshWrapper } from './sshKey';
+import { authorizedKeyPresentCommand, authorizedKeysCommand, devspacesKeyPath, keyComment, parsePublicKey, removeAuthorizedKeyCommand, removeKeyLinesCommand, sshWrapper } from './sshKey';
 
 const BLOB = 'AAAAC3NzaC1lZDI1NTE5AAAAIHgJ3c2oQkQe4m4oY0bJ6qNnV6l0Sx5Jm8m2bq9b3n1d';
 const KEY = { type: 'ssh-ed25519', blob: BLOB };
@@ -125,6 +125,36 @@ describe('the command that adds the key to authorized_keys (run by sh in a home 
     fs.rmSync(file());
     expect(() => runCommand(removeAuthorizedKeyCommand(KEY, 'devspaces@box'))).toThrow();
     expect(fs.existsSync(file())).toBe(false);
+  });
+
+  it('removes every line of the key of Devspaces with any comment for the removal from this computer', () => {
+    const remove = (): void => void execFileSync('sh', ['-c', removeKeyLinesCommand(KEY)], { env: { HOME: home, PATH: process.env.PATH }, cwd: os.tmpdir(), stdio: 'pipe' });
+    // No file: nothing to remove, and no file is created.
+    remove();
+    expect(fs.existsSync(file())).toBe(false);
+    fs.mkdirSync(path.join(home, '.ssh'), { mode: 0o700 });
+    const kept = `ssh-ed25519 AAAAother ann@desk
+# ssh-ed25519 ${BLOB} devspaces@box
+from="10.0.0.1" ssh-ed25519 ${BLOB} devspaces@box
+
+ssh-ed25519 ${BLOB}x devspaces@box
+`;
+    fs.writeFileSync(file(), `ssh-ed25519 ${BLOB} devspaces@box
+${kept}ssh-ed25519 ${BLOB} devspaces@renamed
+ssh-ed25519 ${BLOB}
+`, { mode: 0o640 });
+    remove();
+    expect(fs.readFileSync(file(), 'utf8')).toBe(kept);
+    if (process.platform !== 'win32') expect(fs.statSync(file()).mode & 0o777).toBe(0o640);
+    expect(fs.readdirSync(path.join(home, '.ssh'))).toEqual(['authorized_keys']);
+    // A symbolic link stays as it is.
+    fs.writeFileSync(path.join(home, 'managed'), `ssh-ed25519 ${BLOB} devspaces@box
+`);
+    fs.rmSync(file());
+    fs.symlinkSync(path.join(home, 'managed'), file());
+    expect(remove).toThrow(/is a symbolic link/);
+    expect(fs.readFileSync(path.join(home, 'managed'), 'utf8')).toBe(`ssh-ed25519 ${BLOB} devspaces@box
+`);
   });
 
   it('fails when the file cannot be written', () => {

@@ -268,3 +268,35 @@ describe('Remove the VM… and Remove and Set Up the VM Again… (R-VM-010)', ()
     expect(forgetHost).not.toHaveBeenCalled();
   });
 });
+
+describe('the removal of the VM for Remove Devspaces from This Computer… (R-GEN-009)', () => {
+  it('removes the VM without a question or a message, ends the connections first, and takes the host out of the list', async () => {
+    const order: string[] = [];
+    setup.remove.mockImplementation(async () => {
+      order.push('remove');
+      return true;
+    });
+    const forgetHost = vi.fn(async (_host: string) => {
+      order.push('forget');
+      return true;
+    });
+    const result = await commands({ forgetHost, beforeRemove: () => order.push('close'), afterRemove: async () => void order.push('after') }).removeForComputer();
+    expect(result).toBeUndefined();
+    // Not the update of the Docker context and of the task in the background: the next step of the command removes them.
+    expect(order).toEqual(['close', 'remove', 'forget']);
+    expect(forgetHost).toHaveBeenCalledWith(LIMA_HOST);
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+  });
+
+  it('says what stays when the removal fails; a list that cannot be changed is no failure', async () => {
+    setup.remove.mockRejectedValueOnce(new LimaSetupError('failed', 'limactl delete failed: boom'));
+    const forgetHost = vi.fn(async () => Promise.reject(new Error('EBUSY')));
+    expect(await commands({ forgetHost }).removeForComputer()).toBe('The VM of Devspaces could not be removed: limactl delete failed: boom');
+    expect(forgetHost).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+    expect(await commands({ forgetHost }).removeForComputer()).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(`${LIMA_HOST} could not be removed from the list of Devspaces: EBUSY`);
+    expect(await commands({ setup: undefined }).removeForComputer()).toBeUndefined();
+  });
+});

@@ -84,6 +84,25 @@ export function removeAuthorizedKeyCommand(key: PublicKey, comment: string): str
   ].join('; ');
 }
 
+/**
+ * One command for a login with the key itself ("Remove Devspaces from This Computer…") that removes every line of
+ * `~/.ssh/authorized_keys` whose first two fields are the type and the key data of `key`, with any comment: the key of
+ * Devspaces is its own, so each such line is one that Devspaces added (also on a computer that has another name since).
+ * A line with options before the key, and a comment line, stay. As removeAuthorizedKeyCommand: a copy of the file
+ * replaces it, a symbolic link is not changed (exit code 3). Its exit code is 0 when the file was replaced or does not
+ * exist.
+ */
+export function removeKeyLinesCommand(key: PublicKey): string {
+  const file = AUTHORIZED_KEYS;
+  const copy = `${file}.devspaces-$$`;
+  return [
+    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || exit 0; [ ! -L ${file} ] || { echo '~/${file} is a symbolic link' >&2; exit 3; }`,
+    `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '($1 " " $2) != key' ${file}) || exit`,
+    `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
+    `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${file} >/dev/null 2>&1 || true; } )`,
+  ].join('; ');
+}
+
 /** One line for the shell before the relay whose exit code is 0 when `key` is in `~/.ssh/authorized_keys` (no comment). */
 export function authorizedKeyPresentCommand(key: PublicKey): string {
   return `( cd && ${keyInAuthorizedKeys(key)} )`;

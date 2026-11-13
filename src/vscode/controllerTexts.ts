@@ -87,6 +87,34 @@ export const ControllerTexts = {
   /** The progress detail: `item` is, for example, "the container devspaces-monitor". */
   removingItem: (item: string) => `Removing ${item}.`,
   removedFromEngine: (engine: string) => `Devspaces was removed from ${engine}.`,
+  // "Remove Devspaces from This Computer…" (R-GEN-009).
+  thisComputer: 'this computer',
+  removeComputerQuestion: 'Remove Devspaces from this computer?',
+  removeComputerEngines: (engines: readonly string[], devspaces: number) =>
+    `On each Docker host of the list (${listSome(engines)}): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and ${devspaces === 0 ? 'no devspace of yours' : devspaces === 1 ? 'your devspace there' : `your ${devspaces} devspaces there`}.`,
+  removeComputerVm: (devspaces: number) =>
+    `The VM of Devspaces with every devspace in it${devspaces > 0 ? ` (${devspaces === 1 ? 'one devspace' : `${devspaces} devspaces`} of this computer)` : ''}, its images and its volumes.`,
+  removeComputerKey: (hosts: readonly string[]) =>
+    `The SSH key of Devspaces on this computer${hosts.length > 0 ? `, and its line in ~/.ssh/authorized_keys on ${listSome(hosts)}` : ''}.`,
+  removeComputerFiles: (folder: string | undefined) =>
+    `The scheduled task that starts the VM, the Docker context devspaces${folder !== undefined ? `, and the folder ${folder}` : ''}.`,
+  /** `changes`: the recorded changes of the devspaces that are deleted (recordedChanges), or "none". */
+  removeComputerChanges: (changes: string) =>
+    `Each devspace is deleted with its container and all its volumes, also the clone of the repository. Changes that you did not push are lost. Recorded changes: ${changes}.`,
+  removeComputerSignedOut: 'Your devspaces on the Docker hosts of the list stay, because no GitHub account is signed in to Devspaces. To delete them too, sign in first.',
+  removeComputerEnd: 'Then VS Code uninstalls the extension. Your settings stay. This cannot be undone.',
+  removeEverything: 'Remove Everything',
+  removingComputer: 'Removing Devspaces from this computer…',
+  removingComputerVm: 'Removing the VM of Devspaces.',
+  removingComputerKey: 'Removing the SSH key of Devspaces.',
+  removingComputerFiles: 'Removing the files of Devspaces.',
+  computerEngineNotAnswering: (engine: string) => `Devspaces cannot reach ${engine}, so its objects of Devspaces and your devspaces there stay.`,
+  computerEngineFailed: (engine: string, detail: string) => `Devspaces could not be removed from ${engine}: ${detail}`,
+  removedFromComputer: 'Devspaces was removed from this computer. VS Code uninstalls the extension now.',
+  removalFromComputerLeft: (count: number) =>
+    `Devspaces could not remove everything from this computer: ${count === 1 ? 'one thing stays' : `${count} things stay`}. The details name each one. The extension stays installed, so that you can run the command again.`,
+  removalFromComputerEnded: 'The removal of Devspaces from this computer stopped before the end. The extension stays installed, so that you can run the command again.',
+  uninstallAnyway: 'Uninstall Anyway',
   /** After removedFromEngine, when devspaces stay on the engine. */
   vscodeVolumeKept: 'The volume devspaces-vscode stays because devspaces still use it.',
   removalLeftItems: (count: number, engine: string) =>

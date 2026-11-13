@@ -120,7 +120,7 @@ export type DockerContextFilesResult = { kind: 'removed' | 'missing' | 'taken' |
 /**
  * Removes the context `devspaces` from the context store of the Docker CLI in `configDir` without the Docker CLI, as
  * `docker context rm` does: the folder of its metadata and the folder of its TLS files, both named by the SHA-256 of
- * the name. For the uninstall hook (src/uninstall/main.ts, R-GEN-008), which has no Docker CLI. Only a context with the
+ * the name. For the uninstall hook (src/core/devspacesFiles.ts, R-GEN-008), which has no Docker CLI. Only a context with the
  * description of Devspaces goes (`taken`: another one stays). It stays while `environmentContext` (DOCKER_CONTEXT) names
  * it, and while `currentContext` of the `config.json` of the Docker CLI names it, also when DOCKER_CONTEXT names another
  * one (`current`): without the context, the Docker CLI would fail in every shell that has no DOCKER_CONTEXT. It also

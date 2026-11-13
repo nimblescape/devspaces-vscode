@@ -397,6 +397,52 @@ export class WslSetupCommands {
   }
 
   /**
+   * The removal of the distribution for "Remove Devspaces from This Computer…" after its question (R-GEN-009): as
+   * remove(), without a question and without a message of its own, in the progress of that command, under the lock of
+   * all windows. A distribution that Devspaces did not set up stays. Undefined when the distribution of Devspaces is
+   * gone (also when there was none), else what stays, for the message of that command (logged). Never throws. Without
+   * forgetDistribution: the next step of that command removes the Docker context and the scheduled task itself
+   * (removeDevspacesFiles), so that no update in the background removes them at the same time.
+   */
+  async removeForComputer(): Promise<string | undefined> {
+    const { setup, folder, logger } = this.deps;
+    if (setup === undefined || folder === undefined) return undefined;
+    if (this.running) return WslSetupTexts.busy;
+    this.running = true;
+    try {
+      const done = await setup.locked(async () => {
+        const registration = await this.removalCheck(setup);
+        if (registration === 'foreign') return 'foreign' as const;
+        if (registration === 'none') {
+          await setup.removeLeftovers();
+        } else {
+          this.deps.beforeRemove?.();
+          await setup.remove();
+        }
+        await this.deps.forgetHost(WSL_HOST).catch((error: unknown) => {
+          // The distribution is gone; the list of Devspaces in the storage of VS Code goes with the extension.
+          logger.warn(`${WSL_HOST} could not be removed from the list of Devspaces: ${errorMessage(error)}`);
+        });
+        return 'gone' as const;
+      });
+      if (done === undefined) return WslSetupTexts.busyElsewhere;
+      if (done.value === 'foreign') {
+        logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
+        return WslSetupTexts.foreignRemove;
+      }
+      return undefined;
+    } catch (error) {
+      const text = isWslSetupError(error)
+        ? `${WslSetupTexts.problem(error.problem)} ${error.message}`
+        : `${WslSetupTexts.removeFailedUnknown.replace(/\.$/, ':')} ${errorMessage(error)}`;
+      logger.error(text);
+      return text;
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
    * The button "Remove and Set Up Again" of the error about a damaged disk of the distribution (the problem
    * wslDiskCorrupt): the removal without its question, because that message says what it deletes, and then the setup of
    * a new distribution as for a link (ensureDockerHost), which Devspaces uses afterwards. Then `retry`, the Try again of

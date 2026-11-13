@@ -579,6 +579,52 @@ describe('Remove the WSL Distribution of Devspaces…', () => {
   });
 });
 
+describe('the removal of the distribution for Remove Devspaces from This Computer… (R-GEN-009)', () => {
+  it('removes the distribution of Devspaces without a question or a message, under the lock, and forgets its host', async () => {
+    registered('own');
+    const forgetDistribution = vi.fn(async () => undefined);
+    const beforeRemove = vi.fn();
+    expect(await commands({ forgetDistribution, beforeRemove }).removeForComputer()).toBeUndefined();
+    expect(setup.locked).toHaveBeenCalledTimes(1);
+    expect(beforeRemove).toHaveBeenCalledTimes(1);
+    expect(setup.remove).toHaveBeenCalledTimes(1);
+    // Not the update of the Docker context and of the task in the background: the next step of the command removes them.
+    expect(forgetDistribution).not.toHaveBeenCalled();
+    expect(forgetHost).toHaveBeenCalledWith(WSL_HOST);
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it('removes the files of a distribution that is gone, also without WSL, and a list that cannot be changed is no failure', async () => {
+    setup.registration.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
+    forgetHost.mockRejectedValue(new Error('EBUSY'));
+    expect(await commands().removeForComputer()).toBeUndefined();
+    expect(setup.removeLeftovers).toHaveBeenCalledTimes(1);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(`${WSL_HOST} could not be removed from the list of Devspaces: EBUSY`);
+  });
+
+  it('says what stays: a distribution that Devspaces did not set up, another window that holds the lock, a refused removal', async () => {
+    registered('foreign');
+    expect(await commands().removeForComputer()).toBe(WslSetupTexts.foreignRemove);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(forgetHost).not.toHaveBeenCalled();
+    registered('own');
+    setup.locked.mockResolvedValueOnce(undefined);
+    expect(await commands().removeForComputer()).toBe(WslSetupTexts.busyElsewhere);
+    expect(setup.remove).not.toHaveBeenCalled();
+    setup.remove.mockRejectedValue(new WslSetupError('removeFailed', 'Access is denied.'));
+    expect(await commands().removeForComputer()).toBe(`${WslSetupTexts.problem('removeFailed')} Access is denied.`);
+    expect(forgetHost).not.toHaveBeenCalled();
+    setup.remove.mockRejectedValue(new Error('boom'));
+    expect(await commands().removeForComputer()).toBe('The WSL distribution of Devspaces could not be removed: boom');
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+    // Without the WSL setup of this computer there is nothing to remove.
+    expect(await commands({ setup: undefined }).removeForComputer()).toBeUndefined();
+  });
+});
+
 describe('Remove and Set Up Again (a damaged disk of the distribution)', () => {
   const CORRUPT = 'Error code: Wsl/Service/CreateInstance/MountDisk/HCS/ERROR_FILE_CORRUPT';
 

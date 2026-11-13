@@ -92,6 +92,7 @@ export const LimaSetupTexts = {
     `The VM of Devspaces was removed.${noHost ? ' Devspaces has no Docker host now: set up Docker for Devspaces again in the Devspaces view, or choose another host.' : ''}`,
   notSetUp: 'The VM of Devspaces is not set up.',
   removeFailed: 'The VM of Devspaces could not be removed. The details show why.',
+  removeFailedBecause: (detail: string) => `The VM of Devspaces could not be removed: ${detail}`,
   removedStillListed: `The VM of Devspaces was removed, but Devspaces could not take "${LIMA_HOST}" out of its list of Docker hosts. Take it out with "Remove a Host from the List…".`,
   /** The log before the setup of "Remove and Set Up the VM Again…". */
   removedToSetUpAgain: 'The Lima VM of Devspaces was removed, and is set up again.',
@@ -219,6 +220,34 @@ export class LimaSetupCommands {
       if (isAbortError(error)) return;
       logger.error(LimaSetupTexts.removeFailed, error);
       this.showError(LimaSetupTexts.removeFailed, [Actions.showDetails]);
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * The removal of the VM for "Remove Devspaces from This Computer…" after its question (R-GEN-009): as remove(), without
+   * a question and without a message of its own, in the progress of that command. Undefined when the VM is gone (also
+   * when there was none), else what stays, for the message of that command (logged). Never throws. Without afterRemove:
+   * the next step of that command removes the Docker context and the scheduled task itself (removeDevspacesFiles), so
+   * that no update in the background removes them at the same time.
+   */
+  async removeForComputer(): Promise<string | undefined> {
+    const { setup, logger } = this.deps;
+    if (setup === undefined) return undefined;
+    if (this.running) return LimaSetupTexts.busy;
+    this.running = true;
+    try {
+      this.deps.beforeRemove?.();
+      await setup.remove();
+      await (this.deps.forgetHost?.(LIMA_HOST) ?? Promise.resolve(false)).catch((error: unknown) => {
+        // The VM is gone; the list of Devspaces in the storage of VS Code goes with the extension.
+        logger.warn(`${LIMA_HOST} could not be removed from the list of Devspaces: ${errorMessage(error)}`);
+      });
+      return undefined;
+    } catch (error) {
+      logger.error(LimaSetupTexts.removeFailed, error);
+      return LimaSetupTexts.removeFailedBecause(errorMessage(error));
     } finally {
       this.running = false;
     }
