@@ -1,0 +1,178 @@
+[00:08:53] info Docker CLI: /usr/bin/docker
+[00:08:53] info Docker host of the sidebar: school-server.
+[00:08:53] info The workspace helper image on school-server is prepared in the background through the connection of this window to the host, when that connection is open.
+[00:08:53] info The shell on school-server is open: one login for the checks before the relay.
+[00:08:53] info The connection to school-server starts on the login of the shell before the relay.
+[00:08:54] info The connection to school-server is open.
+[00:08:55] info Helper channel to school-server is open (Node.js v26.13.1; operations: delete, deleteCheck, heartbeat, listConfigurations, monitorEnsure, monitorRunNow, open, prepare, probe, reconcile, recordGitState, refresh, stop, sweep, tokenRemove, windowState).
+[00:08:55] info [school-server] probe#1: started.
+[00:08:55] info [school-server] probe#1: probe
+[00:08:55] info [school-server] probe#1: done after 0.0 s.
+[00:08:55] info [school-server] sweep#2: started.
+[00:08:55] info [school-server] reconcile#3: started.
+[00:08:55] info The Docker pipe of the extension on school-server listens on unix:///run/user/1001/devspaces-95312aa55a4fa8d6/docker.sock.
+[00:08:55] info [school-server] sweep#2: The sweep removed 0 stopped helper container(s) older than 10 minutes.
+[00:08:55] info [school-server] sweep#2: done after 0.0 s.
+[00:08:55] info Docker pipe of the extension on school-server: HEAD /_ping
+[00:08:55] info [school-server] reconcile#3: 1 devspaces were restored from the labels of their volumes.
+[00:08:55] info [school-server] reconcile#3: done after 0.0 s.
+[00:08:55] info The workspace helper image devspaces-worker:f40f7ce5e417 is ready.
+[00:08:56] info The last devspace is not opened: no devspace is recorded: the window that closed last was not connected to one, or the devspace was stopped or deleted.
+[00:09:00] info Docker pipe of the extension on school-server: HEAD /_ping
+[00:09:00] info [school-server] refresh#4: started.
+[00:09:00] info [school-server] refresh#4: refresh
+[00:09:00] info [school-server] refresh#4: done after 0.0 s.
+[00:09:04] info Repository list: configurations of 4 repositories read with 1 requests.
+[00:09:04] info Repository list: 4 of 4 repositories have a Dev Container configuration.
+[00:09:04] info Repository list: loaded in 0.1 seconds with 2 requests.
+[00:09:04] info Repository list: 1 list requests (0.1 seconds each on average), 1 lookup requests (0.0 seconds each on average), 0 other requests; at most 1 at the same time; first repositories with a configuration after 0.1 seconds.
+[00:09:04] info Repository list: configurations of 4 new or changed repositories read with 1 requests.
+[00:09:04] info Repository list: 4 of 4 repositories have a Dev Container configuration.
+[00:09:04] info Repository list: loaded in 0.0 seconds with 2 requests.
+[00:09:04] info Repository list: 1 list requests (0.0 seconds each on average), 1 lookup requests (0.0 seconds each on average), 0 other requests; at most 1 at the same time; first repositories with a configuration after 0.0 seconds.
+[00:09:08] info Docker pipe of the extension on school-server: HEAD /_ping
+[00:09:08] info Docker host school-server: Docker engine 29.4.2.
+[00:09:08] info [school-server] open#5: started.
+[00:09:08] info [school-server] open#5: open – 9f8231f7-83f1-4f82-8588-88781dfb4620
+[00:09:08] info [school-server] open#5: Downloading the VS Code server 69047191fc427f2f92828279aae1d90d8eeda7ab (stable) for linux-x64 into the shared store of the engine.
+[00:09:08] info [school-server] open#5: school/web-basics is locked on the Docker host.
+[00:09:08] info [school-server] open#5: State of school/web-basics: container missing, devspace image not built yet.
+[00:09:08] info [school-server] open#5: Step: Checking for a newer image
+[00:09:08] info [school-server] open#5: checkingImage
+[00:09:09] info [school-server] open#5: The Monitor on the Docker host was created (devspaces-monitor, image devspaces-worker:f40f7ce5e417).
+[00:09:09] info [school-server] open#5: Batch helper step readFiles.
+[00:09:09] info [school-server] open#5: batch – devspaces-school-web-basics-sleek-kare
+[00:09:12] info [school-server] open#5: Helper channel to batch 4f6c74a6 is open (Node.js v26.13.1; operations: build, clone, composeHash, composeModel, createFolders, gitFiles, listConfigs, ownershipFix, readConfiguration, readFiles, repositoryOwnershipFix, runUserCommands, up).
+[00:09:12] info [school-server] open#5: The batch helper 4f6c74a653baa9490e1e548f on the volume devspaces-school-web-basics-sleek-kare is open.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readFiles#1: started.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readFiles#1: readFiles
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readFiles#1: $ (as the owner of /workspaces/web-basics) node <script> /workspaces/web-basics .devcontainer/devcontainer.json
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readFiles#1: exit code 0 after 0.0 s
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readFiles#1: done after 0.0 s.
+[00:09:12] info [school-server] open#5: Batch helper step readConfiguration.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#2: started.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#2: readConfiguration
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#2: $ devcontainer read-configuration --workspace-folder /workspaces/web-basics --config /workspaces/web-basics/.devcontainer/devcontainer.json --id-label nimblescape.devspaces.id=9f8231f7-83f1-4f82-8588-88781dfb4620
+[2026-11-13T00:09:12.410Z] @devcontainers/cli 0.90.0. Node.js v26.13.1. linux 7.0.0-1019-azure x64.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#2: exit code 0 after 0.1 s
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#2: done after 0.1 s.
+[00:09:12] info [school-server] open#5: Batch helper step readConfiguration.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#3: started.
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#3: readConfiguration
+[00:09:12] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#3: $ devcontainer read-configuration --workspace-folder /workspaces/web-basics --config /workspaces/web-basics/.devcontainer/devcontainer.json --id-label nimblescape.devspaces.id=9f8231f7-83f1-4f82-8588-88781dfb4620 --include-merged-configuration
+[2026-11-13T00:09:12.620Z] @devcontainers/cli 0.90.0. Node.js v26.13.1. linux 7.0.0-1019-azure x64.
+[00:09:14] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#3: exit code 0 after 1.6 s
+[00:09:14] info [school-server] open#5: [batch 4f6c74a6] readConfiguration#3: done after 1.6 s.
+[00:09:14] info [school-server] open#5: The VS Code server 69047191fc427f2f92828279aae1d90d8eeda7ab (stable) for linux-x64 is in the shared store.
+[00:09:14] info [school-server] open#5: Image check: mirror.gcr.io/library/node:24-trixie-slim → sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
+[00:09:14] info [school-server] open#5: Changed since the last build: mirror.gcr.io/library/node:24-trixie-slim
+[00:09:14] info [school-server] open#5: Decision for school/web-basics: a new devspace image (no devspace image yet).
+[00:09:14] info [school-server] open#5: school/web-basics is marked as busy (update).
+[00:09:14] info [school-server] open#5: Step: Downloading the new image
+[00:09:14] info [school-server] open#5: downloadingImage
+[00:09:14] info [school-server] open#5: Pulling image mirror.gcr.io/library/node:24-trixie-slim.
+24-trixie-slim: Pulling from library/node
+Digest: sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
+Status: Downloaded newer image for mirror.gcr.io/library/node:24-trixie-slim
+[00:09:16] info [school-server] open#5: Step: Preparing devspace
+[00:09:16] info [school-server] open#5: preparing
+[00:09:16] info [school-server] open#5: Batch helper step readFiles.
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] readFiles#4: started.
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] readFiles#4: readFiles
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] readFiles#4: $ (as the owner of /workspaces/web-basics) node <script> /workspaces/web-basics .devcontainer/devcontainer.json Dockerfile .devcontainer
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] readFiles#4: exit code 0 after 0.0 s
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] readFiles#4: done after 0.0 s.
+[00:09:16] info [school-server] open#5: No shared image has the key sha256:a41672a3cdc55f7ec39fcbf6fd735e63306bc754c07379c848060909af60363b of school/web-basics. The devspace image is built, as a shared image.
+[00:09:16] info [school-server] open#5: Building the devspace image devspaces-school-web-basics-sleek-kare:1 of school/web-basics.
+[00:09:16] info [school-server] open#5: Building the devspace image devspaces-school-web-basics-sleek-kare:1 from .devcontainer/devcontainer.json.
+[00:09:16] info [school-server] open#5: Batch helper step build.
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] build#5: started.
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] build#5: build
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] build#5: $ node <script> /tmp/devspace-override /workspaces/web-basics/.devcontainer/devcontainer.json /tmp/devspace-override/devcontainer.json build --workspace-folder /workspaces/web-basics --config /tmp/devspace-override/devcontainer.json --image-name devspaces-school-web-basics-sleek-kare:1 --user-data-folder /devspace-cache
+[2026-11-13T00:09:16.409Z] @devcontainers/cli 0.90.0. Node.js v26.13.1. linux 7.0.0-1019-azure x64.
+[2026-11-13T00:09:16.610Z] Start: Run: docker buildx build --load --build-arg BUILDKIT_INLINE_CACHE=1 -f /tmp/devcontainercli-root/container-features/0.90.0-1794528556609/Dockerfile-with-features -t devspaces-school-web-basics-sleek-kare:1 --target dev_containers_target_stage --build-arg _DEV_CONTAINERS_BASE_IMAGE=dev_container_auto_added_stage_label /tmp/devspace-override/context-copy
+[2026-11-13T00:09:16.707Z] #0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile-with-features
+
+[2026-11-13T00:09:16.809Z] #1 transferring dockerfile: 530B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for mirror.gcr.io/library/node:24-trixie-slim
+#2 DONE 0.0s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 2B done
+
+[2026-11-13T00:09:16.810Z] #3 DONE 0.0s
+
+#4 [dev_container_auto_added_stage_label 1/2] FROM mirror.gcr.io/library/node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0
+#4 resolve mirror.gcr.io/library/node:24-trixie-slim@sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0 0.0s done
+#4 DONE 0.0s
+
+#5 [dev_container_auto_added_stage_label 2/2] RUN apt-get update && apt-get install -y --no-install-recommends docker-cli git && rm -rf /var/lib/apt/lists/*
+#5 CACHED
+
+#6 exporting to image
+#6 exporting layers done
+#6 preparing layers for inline cache 0.0s done
+#6 exporting manifest sha256:e456a41eda838abfbf67f4a0308a0340a4c14c6e4eefb91de53dd9bbad36f538 done
+#6 exporting config sha256:855b05a939498cfab37f987c21d9adffcae903e047445cc0228d5050ea8ba9b6 done
+#6 exporting attestation manifest sha256:429476a3b1c04ddf1845fada044490304909ab6b8c7e434df5f9ccfe735cc53f done
+#6 exporting manifest list sha256:2fd26f812cb47970acac81c43de8a64fab5a773f6d11b45c2f509b316719d898 done
+#6 naming to docker.io/library/devspaces-school-web-basics-sleek-kare:1 done
+#6 unpacking to docker.io/library/devspaces-school-web-basics-sleek-kare:1 done
+
+[2026-11-13T00:09:16.867Z] #6 DONE 0.1s
+
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] build#5: exit code 0 after 0.6 s
+[00:09:16] info [school-server] open#5: [batch 4f6c74a6] build#5: done after 0.6 s.
+[00:09:19] info [school-server] open#5: Removed image sha256:2fd26f812cb47970acac81c43de8a64fab5a773f6d11b45c2f509b316719d898.
+[00:09:19] info [school-server] open#5: Step: Starting devspace
+[00:09:19] info [school-server] open#5: starting
+[00:09:20] info [school-server] open#5: Writing the Git configuration of school/web-basics into the volume devspaces-school-web-basics-sleek-kare.
+[00:09:20] info [school-server] open#5: Batch helper step gitFiles.
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] gitFiles#6: started.
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] gitFiles#6: gitFiles
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] gitFiles#6: $ node <script> -- web-basics Demo Student 4242+demo-student@users.noreply.github.com !f() { test "$1" = get || exit 0; p=; h=; while IFS= read -r l; do case "$l" in protocol=https) p=1 ;; host=github.com) h=1 ;; esac; done; test -n "$p" && test -n "$h" && test -s /run/devspace/github-token || exit 0; printf 'username=x-access-token\npassword=%s\n' "$(cat /run/devspace/github-token)"; }; f
+The Git configuration of the devspace is in /workspaces/.devspace+.
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] gitFiles#6: exit code 0 after 0.1 s
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] gitFiles#6: done after 0.1 s.
+[00:09:20] info [school-server] open#5: Starting the container of school/web-basics.
+[00:09:20] info [school-server] open#5: Batch helper step up.
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] up#7: started.
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] up#7: up
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] up#7: $ sh <script> /tmp/devspace-override/devcontainer.json up --workspace-folder /workspaces/web-basics --override-config /tmp/devspace-override/devcontainer.json --id-label nimblescape.devspaces.id=9f8231f7-83f1-4f82-8588-88781dfb4620 --user-data-folder /devspace-cache --update-remote-user-uid-default never --skip-post-create --skip-post-attach
+[2026-11-13T00:09:20.305Z] @devcontainers/cli 0.90.0. Node.js v26.13.1. linux 7.0.0-1019-azure x64.
+[2026-11-13T00:09:20.480Z] Start: Run: docker run --sig-proxy=false -a STDOUT -a STDERR --mount source=devspaces-school-web-basics-sleek-kare,target=/workspaces,type=volume -l nimblescape.devspaces.id=9f8231f7-83f1-4f82-8588-88781dfb4620 -e GIT_CONFIG_GLOBAL=/workspaces/.devspace+/gitconfig -e GIT_CONFIG_COUNT=4 -e GIT_CONFIG_KEY_0=credential.helper -e GIT_CONFIG_VALUE_0= -e GIT_CONFIG_KEY_1=include.path -e GIT_CONFIG_VALUE_1=/workspaces/.devspace+/credentials.gitconfig -e GIT_CONFIG_KEY_2=credential.https://github.com.helper -e GIT_CONFIG_VALUE_2= -e GIT_CONFIG_KEY_3=credential.https://github.com.helper -e GIT_CONFIG_VALUE_3=!f() { test "$1" = get || exit 0; p=; h=; while IFS= read -r l; do case "$l" in protocol=https) p=1 ;; host=github.com) h=1 ;; esac; done; test -n "$p" && test -n "$h" && test -s /run/devspace/github-token || exit 0; printf 'username=x-access-token\npassword=%s\n' "$(cat /run/devspace/github-token)"; }; f -e DOCKER_CONFIG=/workspaces/.devspace+/docker -e GIT_SSH_COMMAND=ssh -o IdentityAgent=none -e GH_CONFIG_DIR=/run/devspace/gh --label nimblescape.devspaces.container-version=1 --label nimblescape.devspaces.config-path=.devcontainer/devcontainer.json --label nimblescape.devspaces.repository=school/web-basics --label nimblescape.devspaces.owner-id=4242 --label nimblescape.devspaces.build-record={"builtAt":"2026-11-13T00:09:16.254Z","devspaceImage":"devspaces-school-web-basics-sleek-kare:1","buildNumber":1,"configPath":".devcontainer/devcontainer.json","configHash":"sha256:74056bdba856325d483d248ad0d121301b756ef092d1ebade016ee3ebda310fb","images":{"mirror.gcr.io/library/node:24-trixie-slim":"sha256:af02d57b57719b9657a45199a79264a9437940cd55b3c7b3fc99615654f124a0"},"features":{},"imageKey":"sha256:a41672a3cdc55f7ec39fcbf6fd735e63306bc754c07379c848060909af60363b"} --label com.docker.compose.project= --label com.docker.compose.service= --name devspaces-school-web-basics-sleek-kare --hostname web-basics --tmpfs /run/devspace:rw,nosuid,nodev,noexec,size=1m,mode=0700 --mount type=volume,source=devspaces-vscode,target=/opt/devspace/vscode,readonly,volume-nocopy --entrypoint /bin/sh -l devcontainer.metadata=[{"customizations":{"vscode":{"extensions":["esbenp.prettier-vscode","dbaeumer.vscode-eslint"]}},"remoteUser":"node"},{"customizations":{"vscode":{"settings":{"dev.containers.copyGitConfig":false,"remote.containers.copyGitConfig":false,"dev.containers.gitCredentialHelperConfigLocation":"none","dev.containers.dockerCredentialHelper":false,"dev.containers.githubCLILoginWithToken":false}}},"containerEnv":{"GIT_CONFIG_GLOBAL":"/workspaces/.devspace+/gitconfig","GIT_CONFIG_COUNT":"4","GIT_CONFIG_KEY_0":"credential.helper","GIT_CONFIG_VALUE_0":"","GIT_CONFIG_KEY_1":"include.path","GIT_CONFIG_VALUE_1":"/workspaces/.devspace+/credentials.gitconfig","GIT_CONFIG_KEY_2":"credential.https://github.com.helper","GIT_CONFIG_VALUE_2":"","GIT_CONFIG_KEY_3":"credential.https://github.com.helper","GIT_CONFIG_VALUE_3":"!f() { test \"$1\" = get || exit 0; p=; h=; while IFS= read -r l; do case \"$l\" in protocol=https) p=1 ;; host=github.com) h=1 ;; esac; done; test -n \"$p\" && test -n \"$h\" && test -s /run/devspace/github-token || exit 0; printf 'username=x-access-token\\npassword=%s\\n' \"$(cat /run/devspace/github-token)\"; }; f","DOCKER_CONFIG":"/workspaces/.devspace+/docker","GIT_SSH_COMMAND":"ssh -o IdentityAgent=none","GH_CONFIG_DIR":"/run/devspace/gh"},"remoteEnv":{"GIT_CONFIG_GLOBAL":"/workspaces/.devspace+/gitconfig","GIT_CONFIG_COUNT":"4","GIT_CONFIG_KEY_0":"credential.helper","GIT_CONFIG_VALUE_0":"","GIT_CONFIG_KEY_1":"include.path","GIT_CONFIG_VALUE_1":"/workspaces/.devspace+/credentials.gitconfig","GIT_CONFIG_KEY_2":"credential.https://github.com.helper","GIT_CONFIG_VALUE_2":"","GIT_CONFIG_KEY_3":"credential.https://github.com.helper","GIT_CONFIG_VALUE_3":"!f() { test \"$1\" = get || exit 0; p=; h=; while IFS= read -r l; do case \"$l\" in protocol=https) p=1 ;; host=github.com) h=1 ;; esac; done; test -n \"$p\" && test -n \"$h\" && test -s /run/devspace/github-token || exit 0; printf 'username=x-access-token\\npassword=%s\\n' \"$(cat /run/devspace/github-token)\"; }; f","DOCKER_CONFIG":"/workspaces/.devspace+/docker","GIT_SSH_COMMAND":"ssh -o IdentityAgent=none","GH_CONFIG_DIR":"/run/devspace/gh"},"shutdownAction":"none"}] devspaces-school-web-basics-sleek-kare:1 -c echo Container started
+[2026-11-13T00:09:20.679Z] Container started
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] up#7: exit code 0 after 0.7 s
+[00:09:20] info [school-server] open#5: [batch 4f6c74a6] up#7: done after 0.7 s.
+[00:09:21] info [school-server] open#5: The GitHub token of the devspace is in /run/devspace, in the memory of the container.
+[00:09:21] info [school-server] open#5: Running the lifecycle commands of school/web-basics in the container 2454621626a0.
+[00:09:21] info [school-server] open#5: Batch helper step runUserCommands.
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] runUserCommands#8: started.
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] runUserCommands#8: runUserCommands
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] runUserCommands#8: $ sh <script> /tmp/devspace-override/devcontainer.json run-user-commands --workspace-folder /workspaces/web-basics --override-config /tmp/devspace-override/devcontainer.json --id-label nimblescape.devspaces.id=9f8231f7-83f1-4f82-8588-88781dfb4620 --container-id 2454621626a03f2db8968f4d97faaa8c42d50baa151b5328648bec278faf1ac2 --user-data-folder /devspace-cache --skip-post-attach
+[2026-11-13T00:09:21.185Z] @devcontainers/cli 0.90.0. Node.js v26.13.1. linux 7.0.0-1019-azure x64.
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] runUserCommands#8: exit code 0 after 0.3 s
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] runUserCommands#8: done after 0.3 s.
+[00:09:21] info [school-server] open#5: New devspace image of school/web-basics: devspaces-school-web-basics-sleek-kare:1.
+[00:09:21] info [school-server] open#5: Giving the files in /workspaces/web-basics to node.
+[00:09:21] info [school-server] open#5: Giving the files in /workspaces/.devspace+ to node (1000:1000) in a helper container.
+[00:09:21] info [school-server] open#5: Batch helper step ownershipFix.
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] ownershipFix#9: started.
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] ownershipFix#9: ownershipFix
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] ownershipFix#9: $ sh <script> /workspaces/.devspace+ 1000 1000
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] ownershipFix#9: exit code 0 after 0.0 s
+[00:09:21] info [school-server] open#5: [batch 4f6c74a6] ownershipFix#9: done after 0.0 s.
+[00:09:21] info [school-server] open#5: The VS Code server 69047191fc427f2f92828279aae1d90d8eeda7ab is linked from the shared store into the container of school/web-basics.
+[00:09:21] info [school-server] open#5: The shared extension cache has none of the 2 extension(s) of school/web-basics yet; the Monitor downloads them in the background.
+[00:09:21] info [school-server] open#5: school/web-basics is ready in the container devspaces-school-web-basics-sleek-kare.
+[00:09:21] info [school-server] open#5: The batch helper 4f6c74a653baa9490e1e548f on the volume devspaces-school-web-basics-sleek-kare is closed.
+[00:09:21] info [school-server] open#5: school/web-basics is unlocked on the Docker host.
+[00:09:21] info [school-server] open#5: done after 13.1 s.
+[00:09:21] info Before the window connects: the Dev Containers extension reaches school-server through the Docker pipe unix:///run/user/1001/devspaces-4866e0606ac5b984/docker.sock of the window.
+[00:09:21] info [school-server] windowState#6: started.
+[00:09:21] info [school-server] windowState#6: done after 0.0 s.
+[00:09:21] info Connecting the window to devspaces-school-web-basics-sleek-kare (vscode-remote://attached-container%2B7b22636f6e7461696e65724e616d65223a222f6465767370616365732d7363686f6f6c2d7765622d6261736963732d736c65656b2d6b617265222c2273657474696e6773223a7b22686f7374223a22756e69783a2f2f2f72756e2f757365722f313030312f6465767370616365732d343836366530363036616335623938342f646f636b65722e736f636b227d7d/workspaces/web-basics).
