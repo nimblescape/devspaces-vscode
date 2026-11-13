@@ -41,6 +41,7 @@ import { GITHUB_ENTERPRISE_CONTEXT_KEY, SIGNED_IN_CONTEXT_KEY } from './auth';
 import { Commands } from './commands';
 import { CONNECTED_CONTEXT_KEY, Controller, HELPER_BUILDS_STOP_WAIT_MS, type ControllerDeps } from './controller';
 import { placeholderRepositoryInfo } from './targets';
+import { ComputerCleanupTexts } from './computerCleanup';
 import { ControllerTexts } from './controllerTexts';
 import { DisconnectRequests } from './disconnectRequests';
 import { DOUBLE_CLICK_INTERVAL_MS, type ListOpenMode } from './rowActivation';
@@ -4253,13 +4254,21 @@ describe('Remove Devspaces from This Computer…', () => {
       computerId: () => 'c'.repeat(32),
     };
     const cleanup = {
-      inventory: vi.fn(async () => ({ engines, vm: LIMA_HOST as string | undefined, keyHosts: ['build-box'], keyFile: KEY as string | undefined, folder: FOLDER as string | undefined, ...inventory })),
+      inventory: vi.fn(async () => ({
+        listUnreadable: undefined as string | undefined,
+        engines,
+        vm: LIMA_HOST as string | undefined,
+        keyHosts: ['build-box'],
+        keyFile: KEY as string | undefined,
+        folder: FOLDER as string | undefined,
+        ...inventory,
+      })),
       removeVm: vi.fn(async () => {
         order.push('remove the VM');
         return left.vm;
       }),
-      removeSshKey: vi.fn(async (hosts: readonly string[]) => {
-        order.push(`remove the key and its line on ${hosts.join(', ') || 'no host'}`);
+      removeSshKey: vi.fn(async (hosts: readonly string[], keepFor: readonly string[] = []) => {
+        order.push(`remove the key and its line on ${hosts.join(', ') || 'no host'}${keepFor.length > 0 ? `, keep them for ${keepFor.join(', ')}` : ''}`);
         return left.key;
       }),
       removeFiles: vi.fn(async () => {
@@ -4300,7 +4309,7 @@ describe('Remove Devspaces from This Computer…', () => {
           modal: true,
           detail:
             'On each Docker host of the list (build-box): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and your devspace there. ' +
-            'The VM of Devspaces with every devspace in it (one devspace of this computer), its images and its volumes. ' +
+            'The VM of Devspaces with every devspace in it (one devspace of this VS Code), also those of another VS Code on this computer, its images and its volumes. ' +
             'The SSH key of Devspaces on this computer, and its line in ~/.ssh/authorized_keys on build-box. ' +
             `The scheduled task that starts the VM, the Docker context devspaces, and the folder ${FOLDER}. ` +
             'Each devspace is deleted with its container and all its volumes, also the clone of the repository. Changes that you did not push are lost. Recorded changes: acme/api (2 uncommitted · 1 unpushed). ' +
@@ -4381,29 +4390,79 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.removedFromComputer);
   });
 
-  it('names what stays: Show Details keeps the extension, Uninstall Anyway uninstalls it', async () => {
-    for (const choice of [Actions.showDetails, ControllerTexts.uninstallAnyway]) {
+  // Mutation: a Show Details that ends the command loses the choice Uninstall Anyway after a look at the log.
+  it('names what stays: closed keeps the extension, Show Details shows the message again, Uninstall Anyway uninstalls it', async () => {
+    const runs: { choices: (string | undefined)[]; details: number; uninstalled: boolean }[] = [
+      { choices: [undefined], details: 0, uninstalled: false },
+      { choices: [Actions.showDetails, undefined], details: 1, uninstalled: false },
+      { choices: [Actions.showDetails, Actions.showDetails, ControllerTexts.uninstallAnyway], details: 2, uninstalled: true },
+      { choices: [ControllerTexts.uninstallAnyway], details: 0, uninstalled: true },
+    ];
+    for (const { choices, details, uninstalled } of runs) {
       const { order, left, cleanup } = onComputer({ engines: ['build-box', 'old-box'] }, { 'old-box': false });
       left.vm = 'The VM of Devspaces could not be removed: limactl failed';
-      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(choice);
+      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+      for (const choice of choices) fakeVscode.window.showWarningMessage.mockResolvedValueOnce(choice);
       await run('removeFromComputer');
       // The removal goes on after an engine that does not answer.
       expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual([
         'remove the VM',
         'remove the key and its line on build-box',
         'remove the files',
-        ...(choice === ControllerTexts.uninstallAnyway ? ['uninstall the extension'] : []),
+        ...(uninstalled ? ['uninstall the extension'] : []),
       ]);
-      expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(2), Actions.showDetails, ControllerTexts.uninstallAnyway);
+      const ends = fakeVscode.window.showWarningMessage.mock.calls.filter((call) => call[0] === ControllerTexts.removalFromComputerLeft(2));
+      expect(ends).toHaveLength(choices.length);
+      expect(ends.every((call) => call[1] === Actions.showDetails && call[2] === ControllerTexts.uninstallAnyway)).toBe(true);
       const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
       expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerEngineNotAnswering('old-box')}`);
       expect(warnings).toContain(`Stays on this computer: ${left.vm}`);
-      expect(h.logger.show).toHaveBeenCalledTimes(choice === Actions.showDetails ? 1 : 0);
-      expect(cleanup.uninstallExtension).toHaveBeenCalledTimes(choice === Actions.showDetails ? 0 : 1);
+      expect(h.logger.show).toHaveBeenCalledTimes(details);
+      expect(cleanup.uninstallExtension).toHaveBeenCalledTimes(uninstalled ? 1 : 0);
       expect(fakeVscode.window.showInformationMessage).not.toHaveBeenCalledWith(ControllerTexts.removedFromComputer);
       expect(await h.engineRecords.removed('build-box')).toBe(true);
       expect(await h.engineRecords.removed('old-box')).toBe(false);
     }
+  });
+
+  // Mutation: the line of the key removed on a host where something of Devspaces stays, and the key deleted, so that a
+  // new run of the command cannot log in there any more.
+  it('keeps the key with its line for a remote host where something stays, and removes the line on the other hosts', async () => {
+    const { order, cleanup } = onComputer({ engines: ['build-box', 'old-box'], keyHosts: ['build-box', 'old-box'], vm: undefined }, { 'old-box': false });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(cleanup.removeSshKey).toHaveBeenCalledWith(['build-box'], ['old-box']);
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the key and its line on build-box, keep them for old-box', 'remove the files']);
+  });
+
+  // Mutation: a list of hosts that cannot be read counted as empty, so that the key was deleted while its lines stayed.
+  it('with a list of hosts that cannot be read, keeps the key, names it in the question and in what stays, and removes the rest', async () => {
+    const { order, cleanup } = onComputer({ listUnreadable: 'EACCES', engines: [], keyHosts: [] });
+    await h.registry.add(inVm());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    const detail = String((modals()[0]?.[1] as { detail: string }).detail);
+    expect(detail.startsWith(ControllerTexts.removeComputerListUnreadable)).toBe(true);
+    expect(detail).not.toContain('The SSH key of Devspaces');
+    expect(cleanup.removeSshKey).not.toHaveBeenCalled();
+    expect(order).toEqual(['remove the VM', 'remove the files']);
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ComputerCleanupTexts.listUnreadable('EACCES')}`);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: an error of the removal of the VM that ends the command, so that the key and the files stay without a word.
+  it('names an error of the removal of the VM as what stays, and removes the key and the files after it', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.removeVm.mockImplementation(async () => {
+      order.push('remove the VM');
+      throw new Error('limactl crashed');
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files']);
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmFailed('limactl crashed')}`);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
   });
 
   it('Cancel while the engines are removed ends before the VM, the key and the files, and keeps the extension', async () => {
@@ -4479,6 +4538,8 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(h.service.deleteInWorker).not.toHaveBeenCalled();
     expect(await h.engineRecords.removed('build-box')).toBe(false);
     expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain('Stays on this computer: Close the windows of your devspaces on build-box first: acme/api. Nothing was removed.');
+    // The devspace stays there, so the key stays with its line there.
+    expect(order.slice(-2)).toEqual(['remove the key and its line on no host, keep them for build-box', 'remove the files']);
   });
 
   it('is a command of package.json, in the Command Palette and last in the "…" menu of the repository view', () => {

@@ -13,11 +13,16 @@ import { errorMessage } from '../core/errors';
 import type { Logger } from '../core/ports';
 import { shellWord } from '../core/relay/startScript';
 import { removeKeyLinesCommand, type PublicKey } from '../core/sshKey';
-import type { RemoteDockerState } from '../core/storage/remoteDockerState';
+import type { RemoteDockerState, RemoteDockerStateFile } from '../core/storage/remoteDockerState';
 import type { SshKeyOffer } from './sshKeyOffer';
 
 /** What this computer has of Devspaces besides the devspaces, for the question of the command. */
 export interface ComputerInventory {
+  /**
+   * Why the list of Docker hosts of Devspaces (remote-docker.json) could not be read, or undefined. Then the remote
+   * hosts and the SSH key with its line there stay, because the command does not know them.
+   */
+  listUnreadable: string | undefined;
   /** The remote Docker hosts of the list of Devspaces, without the VM of Devspaces. */
   engines: string[];
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), when it exists. */
@@ -32,7 +37,7 @@ export interface ComputerInventory {
 
 export interface ComputerCleanupDeps {
   logger: Logger;
-  state: Pick<RemoteDockerState, 'remoteHosts' | 'read' | 'setSshKey'>;
+  state: Pick<RemoteDockerState, 'readStrict' | 'setSshKey'>;
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), undefined where there is none. */
   vmHost: string | undefined;
   /** Whether the VM of Devspaces exists, without a start. */
@@ -59,6 +64,10 @@ export const ComputerCleanupTexts = {
   keyLineLeft: (host: string, detail: string) =>
     `The line of the SSH key of Devspaces could not be removed from ~/.ssh/authorized_keys on ${host} (${detail.replace(/\.$/, '')}). Remove the line that ends with "devspaces@" and the name of this computer there.`,
   keyKept: (keyPath: string) => `The SSH key of Devspaces stays on this computer (${keyPath}), so that a new run of the command can still log in with it.`,
+  keyKeptFor: (hosts: readonly string[], keyPath: string) =>
+    `The SSH key of Devspaces stays on this computer (${keyPath}), and so does its line on ${hosts.join(', ')}, where something of Devspaces stays, so that a new run of the command can still log in there with it.`,
+  listUnreadable: (detail: string) =>
+    `The list of Docker hosts of Devspaces could not be read (${detail}), so Devspaces stays on the remote hosts of the list, and so does its SSH key with its line there. Run the command again when the list can be read, or remove them by hand (Uninstall in the user guide).`,
   keyUnreadable: (keyPath: string, detail: string) => `The SSH key of Devspaces ${keyPath} could not be read, so its line stays on the hosts: ${detail}`,
   keyFileLeft: (file: string, detail: string) => `The file ${file} could not be deleted: ${detail}`,
 };
@@ -67,21 +76,26 @@ export class ComputerCleanup {
   constructor(private readonly deps: ComputerCleanupDeps) {}
 
   /**
-   * What this computer has of Devspaces besides the devspaces. Never throws: a list that cannot be read counts as empty,
-   * a VM whose state cannot be read counts as there, so that the question names it.
+   * What this computer has of Devspaces besides the devspaces. Never throws: a list that cannot be read is named
+   * (listUnreadable), never counted as empty, and a VM whose state cannot be read counts as there, so that the question
+   * names it.
    */
   async inventory(): Promise<ComputerInventory> {
     const { logger, vmHost } = this.deps;
-    const list = await this.deps.state.remoteHosts().catch((error: unknown) => {
-      logger.warn(`The list of Docker hosts of Devspaces could not be read: ${errorMessage(error)}`);
-      return [];
-    });
-    const records = await this.deps.state.read().catch(() => ({ hosts: [] }));
+    let file: RemoteDockerStateFile = {};
+    let listUnreadable: string | undefined;
+    try {
+      file = await this.deps.state.readStrict();
+    } catch (error) {
+      listUnreadable = errorMessage(error);
+      logger.warn(`The list of Docker hosts of Devspaces could not be read: ${listUnreadable}`);
+    }
     const vm = vmHost !== undefined && (await this.deps.vmExists().catch(() => true)) ? vmHost : undefined;
     return {
-      engines: list.filter((host) => host !== vmHost),
+      listUnreadable,
+      engines: (file.remoteHosts ?? []).filter((host) => host !== vmHost),
       vm,
-      keyHosts: (records.hosts ?? []).filter((record) => record.sshKey === 'installed').map((record) => record.host),
+      keyHosts: (file.hosts ?? []).filter((record) => record.sshKey === 'installed' && record.host !== vmHost).map((record) => record.host),
       keyFile: this.exists(this.deps.key.keyPath) ? this.deps.key.keyPath : undefined,
       folder: this.deps.folder !== undefined && this.exists(this.deps.folder) ? this.deps.folder : undefined,
     };
@@ -94,10 +108,11 @@ export class ComputerCleanup {
 
   /**
    * The line of the key of Devspaces in `~/.ssh/authorized_keys` on each host of `hosts` (a login with the key itself,
-   * which asks nothing), then the key files, but only when every line went: with a line that stays, the key stays too,
-   * so that a new run of the command can log in with it. What stays. Never throws.
+   * which asks nothing), then the key files, but only when every line went and `keepFor` is empty: with a line that
+   * stays, the key stays too, so that a new run of the command can log in with it. `keepFor`: the hosts with the line
+   * where something of Devspaces stays, whose line is not removed. What stays. Never throws.
    */
-  async removeSshKey(hosts: readonly string[]): Promise<string[]> {
+  async removeSshKey(hosts: readonly string[], keepFor: readonly string[] = []): Promise<string[]> {
     const { logger } = this.deps;
     const { keyPath } = this.deps.key;
     const left: string[] = [];
@@ -121,6 +136,10 @@ export class ComputerCleanup {
         logger.warn(text);
         left.push(text);
       }
+    }
+    if (keepFor.length > 0) {
+      left.push(ComputerCleanupTexts.keyKeptFor(keepFor, keyPath));
+      return left;
     }
     if (left.length > 0) {
       left.push(ComputerCleanupTexts.keyKept(keyPath));

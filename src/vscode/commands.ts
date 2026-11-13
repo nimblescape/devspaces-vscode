@@ -79,7 +79,7 @@ export const Commands = {
   removeFromDockerEngine: 'devspaces.removeFromDockerEngine',
   // Removes Devspaces from this computer (R-GEN-009): from each remote Docker host of the list with the devspaces of the
   // signed-in accounts, the VM with its devspaces, the SSH key of Devspaces with its line on each host, and the files of
-  // Devspaces; then VS Code uninstalls the extension (Command Palette, the "…" menu of the view "Docker Hosts").
+  // Devspaces; then VS Code uninstalls the extension (Command Palette, the "…" menu of the repository view).
   removeFromComputer: 'devspaces.removeFromComputer',
   // The view "Docker Hosts" (dockerHostsView.ts, R-ENG-008): Refresh of the view or of a host row (a host is read only
   // when the user opens it or clicks Refresh), Remove from the List of a remote host row, and Stop and Remove… of a

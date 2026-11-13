@@ -60,8 +60,10 @@ function setUp(overrides: Partial<ComputerCleanupDeps> & Programs = {}, answer: 
   const calls: Call[] = [];
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
   const state = {
-    remoteHosts: vi.fn(async () => ['devspaces-vm', 'box', 'me@cloud']),
-    read: vi.fn(async () => ({ hosts: [{ host: 'box', sshKey: 'installed' as const }, { host: 'me@cloud', sshKey: 'declined' as const }, { host: 'old' }] })),
+    readStrict: vi.fn(async () => ({
+      remoteHosts: ['devspaces-vm', 'box', 'me@cloud'],
+      hosts: [{ host: 'devspaces-vm', sshKey: 'installed' as const }, { host: 'box', sshKey: 'installed' as const }, { host: 'me@cloud', sshKey: 'declined' as const }, { host: 'old' }],
+    })),
     setSshKey: vi.fn(async () => undefined),
   };
   const runner = {
@@ -122,6 +124,7 @@ describe('the inventory for the question of the command', () => {
     fs.mkdirSync(path.join(dir, 'local', '.nimblescape', 'devspaces'), { recursive: true });
     const { cleanup } = setUp();
     expect(await cleanup.inventory()).toEqual({
+      listUnreadable: undefined,
       engines: ['box', 'me@cloud'],
       vm: 'devspaces-vm',
       keyHosts: ['box'],
@@ -130,16 +133,25 @@ describe('the inventory for the question of the command', () => {
     });
   });
 
-  it('leaves out what is not there, and counts a list that cannot be read as empty and an unknown VM as there', async () => {
+  // Mutation: a list that cannot be read counted as empty, so that the key was deleted while its lines stayed.
+  it('leaves out what is not there, names a list that cannot be read instead of counting it as empty, and counts an unknown VM as there', async () => {
     const { cleanup, logger } = setUp({
-      state: { remoteHosts: async () => Promise.reject(new Error('EACCES')), read: async () => Promise.reject(new Error('EACCES')), setSshKey: async () => undefined },
+      state: { readStrict: async () => Promise.reject(new Error('remote-docker.json is not a valid list of Docker hosts')), setSshKey: async () => undefined },
       vmExists: async () => Promise.reject(new Error('limactl failed')),
     });
-    expect(await cleanup.inventory()).toEqual({ engines: [], vm: 'devspaces-vm', keyHosts: [], keyFile: undefined, folder: undefined });
-    expect(logger.warn).toHaveBeenCalledWith('The list of Docker hosts of Devspaces could not be read: EACCES');
+    expect(await cleanup.inventory()).toEqual({
+      listUnreadable: 'remote-docker.json is not a valid list of Docker hosts',
+      engines: [],
+      vm: 'devspaces-vm',
+      keyHosts: [],
+      keyFile: undefined,
+      folder: undefined,
+    });
+    expect(logger.warn).toHaveBeenCalledWith('The list of Docker hosts of Devspaces could not be read: remote-docker.json is not a valid list of Docker hosts');
     const none = setUp({ vmExists: async () => false, vmHost: undefined, folder: undefined });
     expect((await none.cleanup.inventory()).vm).toBeUndefined();
     expect((await none.cleanup.inventory()).engines).toEqual(['devspaces-vm', 'box', 'me@cloud']);
+    expect((await none.cleanup.inventory()).keyHosts).toEqual(['devspaces-vm', 'box']);
   });
 });
 
@@ -176,6 +188,29 @@ describe('the removal of the SSH key of Devspaces', () => {
     expect(state.setSshKey.mock.calls).toEqual([['me@cloud', undefined]]);
     expect(fs.existsSync(keyPath())).toBe(true);
     expect(fs.existsSync(`${keyPath()}.pub`)).toBe(true);
+  });
+
+  // Mutation: the key deleted while its line stays on a host where something of Devspaces stays, so that a new run of
+  // the command cannot log in there with it any more.
+  it('keeps the key and the line on the hosts where something of Devspaces stays, and removes the line on the others', async () => {
+    keyFiles();
+    write(authorizedKeys('box'), `${PUBLIC}\n`);
+    // The fake ssh logs in to `cloud` with `-l me`, so its home folder is that of `cloud`.
+    write(authorizedKeys('cloud'), `${PUBLIC}\n`);
+    const { cleanup, calls, state } = setUp();
+    expect(await cleanup.removeSshKey(['me@cloud'], ['box'])).toEqual([ComputerCleanupTexts.keyKeptFor(['box'], keyPath())]);
+    expect(fs.readFileSync(authorizedKeys('cloud'), 'utf8')).toBe('');
+    expect(fs.readFileSync(authorizedKeys('box'), 'utf8')).toBe(`${PUBLIC}\n`);
+    expect(calls.filter((call) => call.file === '/usr/bin/ssh').map((call) => call.args.at(-2))).toEqual(['cloud']);
+    expect(state.setSshKey.mock.calls).toEqual([['me@cloud', undefined]]);
+    expect(fs.existsSync(keyPath())).toBe(true);
+    expect(fs.existsSync(`${keyPath()}.pub`)).toBe(true);
+    expect(ComputerCleanupTexts.keyKeptFor(['box', 'me@cloud'], keyPath())).toContain('its line on box, me@cloud, where something');
+    // Only hosts where something stays: no login at all, the key stays.
+    const only = setUp();
+    expect(await only.cleanup.removeSshKey([], ['box'])).toEqual([ComputerCleanupTexts.keyKeptFor(['box'], keyPath())]);
+    expect(only.calls).toEqual([]);
+    expect(fs.existsSync(keyPath())).toBe(true);
   });
 
   it('names why a line stays: a timeout, no ssh, a host that is no SSH alias or address, a symbolic link', async () => {

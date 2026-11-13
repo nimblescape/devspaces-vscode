@@ -53,6 +53,23 @@ describe('RemoteDockerState: the list of hosts and the Docker host of Devspaces'
     await expect(state.removeHost('b')).resolves.toEqual({ removed: false, wasDockerHost: false });
   });
 
+  // Mutation: readStrict as tolerant as read, so that "Remove Devspaces from This Computer…" counts a damaged list as
+  // empty and deletes the SSH key while its lines stay on the hosts of the list.
+  it('readStrict knows nothing without the file, and throws for a file that is no valid list instead of reading it as empty', async () => {
+    expect(await state.readStrict()).toEqual({});
+    await state.setDockerHost('a');
+    expect(await state.readStrict()).toEqual(await state.read());
+    expect((await state.readStrict()).remoteHosts).toEqual(['a']);
+    fs.writeFileSync(state.file, '{"remoteHosts": ["a"');
+    await expect(state.readStrict()).rejects.toThrow(`${state.file} is not a valid list of Docker hosts`);
+    expect(await state.read()).toEqual({});
+    fs.writeFileSync(state.file, '{"remoteHosts": "a"}');
+    await expect(state.readStrict()).rejects.toThrow('is not a valid list of Docker hosts');
+    fs.rmSync(state.file);
+    fs.mkdirSync(state.file);
+    await expect(state.readStrict()).rejects.toThrow();
+  });
+
   // Most calls change nothing (the rootful engine at each Docker start, a host that is not in the list): they take no lock.
   it('takes the lock only for a change', async () => {
     await state.setDockerHost('a');

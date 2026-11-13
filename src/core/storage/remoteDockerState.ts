@@ -60,6 +60,18 @@ export class RemoteDockerState {
     return normalize(await readJsonTolerant(this.file));
   }
 
+  /**
+   * The file for "Remove Devspaces from This Computer…" (R-GEN-009), which must not count a list that it cannot read as
+   * empty: a missing file knows nothing, and a file that cannot be read or is not valid throws.
+   */
+  async readStrict(): Promise<RemoteDockerStateFile> {
+    const text = await readTextFile(this.file);
+    if (text === undefined) return {};
+    const value = parseJson(text);
+    if (!isStateFile(value)) throw new Error(`${this.file} is not a valid list of Docker hosts`);
+    return normalize(value);
+  }
+
   /** The Docker host of Devspaces: a host of the list, or undefined when it has none. */
   async dockerHost(): Promise<string | undefined> {
     return (await this.read()).dockerHost;
