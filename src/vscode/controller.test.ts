@@ -4333,7 +4333,8 @@ describe('Remove Devspaces from This Computer…', () => {
       'build-box: docker volume rm devspaces-worker-cache',
       'build-box: docker volume rm devspaces-vscode',
       'remove the VM',
-      'remove the key and its line on build-box',
+      // The devspace of the other account stays on build-box, so the key keeps its line there (the fake keeps nothing).
+      'remove the key and its line on no host, keep them for build-box',
       'remove the files',
       'uninstall the extension',
     ]);
@@ -4385,8 +4386,9 @@ describe('Remove Devspaces from This Computer…', () => {
     await run('removeFromComputer');
     expect(String((modals()[0]?.[1] as { detail: string }).detail)).toContain(ControllerTexts.removeComputerSignedOut);
     expect(h.service.deleteInWorker).not.toHaveBeenCalled();
-    // The devspace stays, so the store of the VS Code Server stays too, and that is no failure.
-    expect(order.slice(-3)).toEqual(['remove the key and its line on build-box', 'remove the files', 'uninstall the extension']);
+    // The devspace stays, so the store of the VS Code Server stays too, and that is no failure. Mutation: the line of the
+    // key removed there, so that the next run after a sign-in cannot log in there with the key.
+    expect(order.slice(-3)).toEqual(['remove the key and its line on no host, keep them for build-box', 'remove the files', 'uninstall the extension']);
     expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.removedFromComputer);
   });
 

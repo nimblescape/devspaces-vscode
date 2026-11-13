@@ -1757,7 +1757,8 @@ async function activateExtension(
         if (limaVm !== undefined) return limaVm.exists();
         if (wslSetupCore === undefined || wslFolder === undefined) return false;
         if (fs.existsSync(wslFolder)) return true;
-        // Only the registry (no wsl.exe); an error counts as there (ComputerCleanup.inventory).
+        // The list of WSL and the registry (WslSetup.registration), without the disk walk and the run state of
+        // readVmState; an error counts as there (ComputerCleanup.inventory).
         const registration = await wslSetupCore.registration();
         wslDistributionKnown(registration !== 'none');
         return registration === 'own';

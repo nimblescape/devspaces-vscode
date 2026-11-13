@@ -1725,8 +1725,7 @@ export class Controller implements vscode.Disposable {
     const computer = ControllerTexts.thisComputer;
     const known = await this.deps.registry.list();
     if (await this.removalRefusedByUse(computer, known)) return;
-    const inventory = await cleanup.inventory();
-    const accounts = known.length > 0 ? await this.readAccounts() : [];
+    const [inventory, accounts] = await Promise.all([cleanup.inventory(), known.length > 0 ? this.readAccounts() : Promise.resolve([])]);
     const onEngines = known.filter((devspace) => inventory.engines.some((host) => isOnDockerHost(devspace, host)));
     const own = availableDevspaces(onEngines, accounts);
     const others = onEngines.filter((devspace) => !own.includes(devspace));
@@ -1772,7 +1771,8 @@ export class Controller implements vscode.Disposable {
             return cancelled;
           };
           if (inventory.listUnreadable !== undefined) left.push(ComputerCleanupTexts.listUnreadable(inventory.listUnreadable));
-          // The remote hosts where something of Devspaces stays: the line of the key stays there, and so does the key.
+          // The remote hosts where something of Devspaces stays (also a devspace of this computer that is not deleted, of
+          // an account that is not signed in): the line of the key stays there, and so does the key.
           const hostsLeft: string[] = [];
           for (const host of inventory.engines) {
             if (stopped()) return;
@@ -1799,8 +1799,9 @@ export class Controller implements vscode.Disposable {
           // Without the list, the hosts with the line are not known, so the key stays (listUnreadable says so).
           if (inventory.listUnreadable === undefined) {
             progress.detail(ControllerTexts.removingComputerKey);
-            const keyHosts = inventory.keyHosts.filter((host) => !hostsLeft.includes(host));
-            left.push(...(await cleanup.removeSshKey(keyHosts, inventory.keyHosts.filter((host) => hostsLeft.includes(host)))));
+            const stays = await this.deps.registry.list();
+            const keep = inventory.keyHosts.filter((host) => hostsLeft.includes(host) || stays.some((devspace) => isOnDockerHost(devspace, host)));
+            left.push(...(await cleanup.removeSshKey(inventory.keyHosts.filter((host) => !keep.includes(host)), keep)));
           }
           if (stopped()) return;
           progress.detail(ControllerTexts.removingComputerFiles);
