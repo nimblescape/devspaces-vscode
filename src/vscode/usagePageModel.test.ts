@@ -177,6 +177,8 @@ describe('usagePageView', () => {
     expect(stopped.status).toEqual({ text: 'Not reading', tone: 'off' });
     expect(stopped.banner).toEqual({ tone: 'info', message: UsagePageTexts.vmStopped, detail: UsagePageTexts.vmStoppedDetail, buttons: [{ action: 'startVm', label: 'Start the VM', primary: true }] });
     expect(stopped.pause).toBeUndefined();
+    // While the view is read only (the setting dockerHostsActions), the page only says how the VM starts.
+    expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'stopped' } }, actions: false })).banner).toEqual({ tone: 'info', message: UsagePageTexts.vmStopped, detail: UsagePageTexts.vmStoppedReadOnlyDetail, buttons: [] });
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'stopped' }, idle: true } })).banner?.message).toBe(UsagePageTexts.vmIdle);
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'notSetUp' } } })).banner).toEqual({ tone: 'info', message: UsagePageTexts.vmNotSetUp, buttons: [] });
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'broken', detail: 'Lima says broken.' } } })).banner).toEqual({

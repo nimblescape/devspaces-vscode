@@ -101,6 +101,11 @@ function listed(names: readonly string[]): string {
 export interface DockerHostsDeps {
   logger: Logger;
   showLog: () => void;
+  /**
+   * Whether the setting dockerHostsActions allows the actions of the view now (dockerHostsActionsAllowed). Without it,
+   * the row of the stopped VM does not start the VM on a click. Missing: allowed (the tests).
+   */
+  actionsAllowed?: () => boolean;
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), undefined where there is none. */
   vmHost: string | undefined;
   /** The hosts of the list of Devspaces in its order, and the Docker host of Devspaces. */
@@ -148,7 +153,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
   }
 
   getTreeItem(node: HostsNode): vscode.TreeItem {
-    const look = rowLook(node);
+    const look = rowLook(node, this.deps.actionsAllowed?.() ?? true);
     const state =
       look.collapsible === 'expanded'
         ? vscode.TreeItemCollapsibleState.Expanded

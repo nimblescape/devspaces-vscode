@@ -45,6 +45,7 @@ import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type Re
 import { RelayConnectionError } from '../core/relay/connection';
 import { limaHostTransport, openRelayConnection, sshHostTransport, wslHostTransport, wslProcess } from '../core/relay/transport';
 import { deferredByteProcess } from '../core/relay/deferredProcess';
+import { CONTAINER_LOGS_OFF } from '../core/relay/dockerPipeRules';
 import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
@@ -52,7 +53,8 @@ import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmS
 import { readMonitorLog } from '../core/hosts/monitorLog';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
-import { limaDockerSocket, limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { consoleResizeCommand, limaConsoleArgs, sshConsoleArgs, wslConsoleArgs, wslConsoleResizeArgs } from '../core/hosts/hostConsole';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
 import { VmTask, vmTaskPaths, vscodeElectron } from '../core/vm/vmTask';
@@ -117,6 +119,8 @@ import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerHostsView } from './dockerHostsView';
 import { ReportPages } from './reportPage';
+import { HostConsoles } from './hostConsole';
+import { chooseDockerHostsSettings } from './dockerHostsSettings';
 import { UsagePages } from './usagePage';
 import { DOCKER_HOSTS_VIEW_ID } from './dockerHostsModel';
 import { DockerSetup, currentUserName, readOsRelease } from './dockerSetup';
@@ -142,6 +146,7 @@ import { SessionCoordinator } from './sessionCoordinator';
 import {
   affectsSettings,
   devContainersDefaultExtensionsValue,
+  dockerHostsActionsAllowed,
   readSettings,
   SETTINGS_SECTION,
   showSettingWarning,
@@ -578,6 +583,8 @@ async function activateExtension(
     base: () => dockerPipeBase(env, os.tmpdir()),
     relayConnection: (host) => relayConnections.get(host),
     dialStdio,
+    // Read at each request of the log of a container, so a change of the setting applies at once.
+    allowContainerLogs: () => settings.allowContainerLogs === true,
   });
   // The questions of the SSH logins of the flows of the user in VS Code (a password, a host key): the helper of
   // SSH_ASKPASS and the pipe that it asks, prepared in the background. Every other login asks nothing (BatchMode).
@@ -625,6 +632,59 @@ async function activateExtension(
     if (login !== undefined) void process.exited.then(() => login.dispose());
     return { process, prompts: login, afterLogin: login === undefined ? undefined : (shell) => sshKeys.afterLogin(host, login, shell) };
   };
+  // Open Console of a host row of the view Docker Hosts (hostConsole.ts, R-ENG-008): a login shell on the host with a
+  // terminal there, started on this computer as every transport (also in a remote window), with the same programs and
+  // the same key of Devspaces. An SSH login may ask in VS Code (a password, a host key) until the terminal closes; the
+  // WSL distribution and the Lima VM (which it starts, as `limactl shell` does) ask nothing. A change of the size of the
+  // terminal is set on the host by a second connection that asks nothing.
+  const hostConsoles = new HostConsoles({
+    logger,
+    allowed: () => settings.dockerHostsConsoleButton === true,
+    start: (host, size, signal) => {
+      const access = hostAccessOf(host);
+      if (access?.kind === 'lima') {
+        const ssh = sshPath();
+        const vm = limaVm;
+        if (ssh === undefined || vm === undefined) return undefined;
+        return deferredByteProcess(async (cancel) => {
+          await vm.ready(cancel);
+          if (cancel.aborted) throw abortError();
+          return runner.startBytes(ssh, limaConsoleArgs(vm.paths, size), { env: limaEnv(noPromptEnv(env), vm.paths) });
+        });
+      }
+      if (access?.kind === 'wsl') {
+        const wsl = wslPath();
+        if (wsl === undefined) return undefined;
+        wslLifetime?.use(host);
+        return wslProcess(runner.startBytes(wsl, wslConsoleArgs(access.distribution, size), { env: wslEnv(env) }));
+      }
+      const ssh = sshPath();
+      if (ssh === undefined || access === undefined) return undefined;
+      const login = askpass.login(host, signal);
+      const args = sshConsoleArgs(access.address, size, { prompts: login !== undefined, identity: sshKeys.identityFor(host) });
+      const process = runner.startBytes(ssh, args, { env: login !== undefined ? login.env(env) : noPromptEnv(env) });
+      if (login !== undefined) void process.exited.then(() => login.dispose());
+      return process;
+    },
+    resize: (host, tty, size) => {
+      const command = consoleResizeCommand(tty, size);
+      if (command === undefined) return undefined;
+      const access = hostAccessOf(host);
+      if (access?.kind === 'lima') {
+        const ssh = sshPath();
+        if (ssh === undefined || limaVm === undefined) return undefined;
+        const transport = limaHostTransport(limaVm.paths, ssh, env, command);
+        return runner.startBytes(transport.file, transport.args, { env: transport.env });
+      }
+      if (access?.kind === 'wsl') {
+        const wsl = wslPath();
+        return wsl === undefined ? undefined : wslProcess(runner.startBytes(wsl, wslConsoleResizeArgs(access.distribution, command), { env: wslEnv(env) }));
+      }
+      const ssh = sshPath();
+      if (ssh === undefined || access === undefined) return undefined;
+      return runner.startBytes(ssh, sshCommandArgs(access.address, command, undefined, { identity: sshKeys.identityFor(host) }), { env: noPromptEnv(env) });
+    },
+  });
   // The shells before the relay, one per remote host: the checks before a connection of the relay run on one login,
   // which the connection then takes over (`ssh … sh -s` or `wsl.exe … sh -s`, as its transport).
   remoteShells = new RemoteShells({ logger, start: startLogin });
@@ -1470,6 +1530,7 @@ async function activateExtension(
     vmState: readVmState,
     vmStopping: () => vmHost === WSL_HOST && keeper.stopping(WSL_DISTRIBUTION),
     startVm: () => vmCommands.start(),
+    actionsAllowed: () => dockerHostsActionsAllowed(settings),
     readSizes: readInventory,
     ...(vmDiskFolder !== undefined ? { localDiskFree: () => freeSpace(vmDiskFolder) } : {}),
   });
@@ -1498,8 +1559,11 @@ async function activateExtension(
       return onHostShell(target.host, () => readResourceReport(docker, { object: target.object, ...(helperTag !== undefined ? { currentHelperTag: helperTag } : {}), computer, clock }));
     },
     objectOf: (host, kind, id) => hostsView?.objectOf(host, kind, id),
-    readMonitorLog: (host, timeZone) => onHostShell(host, () => readMonitorLog(docker, timeZone)),
+    // Never a log while the setting devspaces.allowContainerLogs is off: the page shows no Show Log then, and the Docker
+    // pipe of the extension refuses the log too; this covers the shared shell of the host, which has no such filter.
+    readMonitorLog: (host, timeZone) => (settings.allowContainerLogs === true ? onHostShell(host, () => readMonitorLog(docker, timeZone)) : Promise.reject(new Error(CONTAINER_LOGS_OFF))),
     clock: () => ({ now: Date.now(), timeZone: usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) }),
+    allowed: () => ({ actions: dockerHostsActionsAllowed(settings), logs: settings.allowContainerLogs === true }),
   });
   context.subscriptions.push(reportPages);
   // Before a stop or a removal of the VM: its utilization page pauses, and the worker channel, the relay connection and
@@ -1517,6 +1581,7 @@ async function activateExtension(
   const dockerHosts = new DockerHostsView({
     logger,
     showLog: () => logger.show(),
+    actionsAllowed: () => dockerHostsActionsAllowed(settings),
     vmHost,
     hostList: async () => {
       const file = await remoteState.read();
@@ -1634,6 +1699,8 @@ async function activateExtension(
     usagePages,
     reportPages,
     vm: vmCommands,
+    hostConsoles,
+    dockerHostsSettings: () => chooseDockerHostsSettings({ logger, settings: () => settings }),
     // Close and Keep Running tells the Monitor at once, on every engine, and Keep Running When Closed and Stop
     // When Closed too, through this window's worker of the engine.
     sessionMonitor: {
@@ -1831,6 +1898,13 @@ async function activateExtension(
       if (event.affectsConfiguration(`${SETTINGS_SECTION}.cacheUpdateSchedule`)) background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
       updateOwnersContextKey(settings.owners, logger);
       updateDevspacesOnlyContextKey(settings.showOnlyDevspaces === true, logger);
+      // The menus follow dockerHostsActions by themselves (`config.` in their `when`); the rows of the view and the report
+      // pages show their actions and Show Log again.
+      if (event.affectsConfiguration(`${SETTINGS_SECTION}.dockerHostsActions`) || event.affectsConfiguration(`${SETTINGS_SECTION}.allowContainerLogs`)) {
+        dockerHosts.changed();
+        reportPages.settingsChanged();
+        usagePages.settingsChanged();
+      }
       // Another scan scope loads the list again at once.
       if (!sameScope(previous.owners, settings.owners)) {
         background(sidebar.onScopeChanged(), 'load the repository list of the selected organizations');

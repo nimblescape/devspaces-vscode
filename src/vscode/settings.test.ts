@@ -14,6 +14,7 @@ import { parseCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import {
   DEFAULT_SETTINGS,
   devContainersDefaultExtensionsValue,
+  dockerHostsActionsAllowed,
   githubEnterpriseConfigured,
   MAX_REFRESH_INTERVAL_MINUTES,
   normalizeSettings,
@@ -70,7 +71,24 @@ describe('settings', () => {
       vmCpus: 4,
       // No Docker context for the VM.
       createDockerContext: false,
+      // The view Docker Hosts is read only, no log of a container, and neither button (R-ENG-008, R-ENG-010).
+      dockerHostsActions: 'disabled',
+      allowContainerLogs: false,
+      dockerHostsSettingsButton: false,
+      dockerHostsConsoleButton: false,
     });
+  });
+
+  it('reads dockerHostsActions as one of its three values, and any other value as disabled', () => {
+    const of = (value: unknown) => normalizeSettings((key) => (key === 'dockerHostsActions' ? value : undefined)).dockerHostsActions;
+    expect(of('disabled')).toBe('disabled');
+    expect(of('contextMenu')).toBe('contextMenu');
+    expect(of('icons')).toBe('icons');
+    for (const value of ['Icons', 'buttons', '', true, 1, null, undefined, ['icons']]) expect(of(value)).toBe('disabled');
+    expect(dockerHostsActionsAllowed({ dockerHostsActions: 'disabled' })).toBe(false);
+    expect(dockerHostsActionsAllowed({})).toBe(false);
+    expect(dockerHostsActionsAllowed({ dockerHostsActions: 'contextMenu' })).toBe(true);
+    expect(dockerHostsActionsAllowed({ dockerHostsActions: 'icons' })).toBe(true);
   });
 
   it('reads defaultImage as a trimmed image reference, and ignores an invalid one', () => {

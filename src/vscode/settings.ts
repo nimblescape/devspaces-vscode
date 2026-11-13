@@ -8,7 +8,7 @@ import { errorMessage } from '../core/errors';
 import { HOST_ACCESS_CHECKS_OFF_SETTING, parseHostAccessChecksOff } from '../core/policy/hostAccessChecks';
 import { Actions, Messages } from '../core/messages';
 import type { Logger } from '../core/ports';
-import type { ExtensionSettings, UpdateContainer } from '../core/types';
+import { DOCKER_HOSTS_ACTIONS, type DockerHostsActions, type ExtensionSettings, type UpdateContainer } from '../core/types';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, normalizeCacheSchedule, parseCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { parseImageReference } from '../core/remoteMonitor/protocol';
 import { DEFAULT_VM_CPUS, DEFAULT_VM_MEMORY_GIB, limaResources } from '../core/vm/limaInstance';
@@ -42,6 +42,10 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   vmMemoryGiB: DEFAULT_VM_MEMORY_GIB,
   vmCpus: DEFAULT_VM_CPUS,
   createDockerContext: false,
+  dockerHostsActions: 'disabled',
+  allowContainerLogs: false,
+  dockerHostsSettingsButton: false,
+  dockerHostsConsoleButton: false,
 });
 
 /** The key of the setting that the button "Always Open" of the question of a link turns off. */
@@ -330,12 +334,27 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     vmMemoryGiB: wholeNumber(get('vmMemoryGiB'), DEFAULT_VM_MEMORY_GIB),
     vmCpus: wholeNumber(get('vmCpus'), DEFAULT_VM_CPUS),
     createDockerContext: bool('createDockerContext', DEFAULT_SETTINGS.createDockerContext ?? false),
+    // One of its three values, else the default `disabled`: a value that is not known shows no action.
+    dockerHostsActions: dockerHostsActionsOf(get('dockerHostsActions')),
+    allowContainerLogs: bool('allowContainerLogs', DEFAULT_SETTINGS.allowContainerLogs ?? false),
+    dockerHostsSettingsButton: bool('dockerHostsSettingsButton', DEFAULT_SETTINGS.dockerHostsSettingsButton ?? false),
+    dockerHostsConsoleButton: bool('dockerHostsConsoleButton', DEFAULT_SETTINGS.dockerHostsConsoleButton ?? false),
   };
 }
 
 /** The setting updateContainer: `yes` or `ask` as written, anything else the default `notify`. */
 function updateContainer(value: unknown): UpdateContainer {
   return value === 'yes' || value === 'ask' ? value : 'notify';
+}
+
+/** Whether the setting dockerHostsActions allows the actions of the view Docker Hosts (`contextMenu` or `icons`). */
+export function dockerHostsActionsAllowed(settings: Pick<ExtensionSettings, 'dockerHostsActions'>): boolean {
+  return settings.dockerHostsActions === 'contextMenu' || settings.dockerHostsActions === 'icons';
+}
+
+/** The value of the setting dockerHostsActions: one of its three values, else `disabled`. */
+export function dockerHostsActionsOf(value: unknown): DockerHostsActions {
+  return (DOCKER_HOSTS_ACTIONS as readonly unknown[]).includes(value) ? (value as DockerHostsActions) : 'disabled';
 }
 
 /** `value` as a whole number of at least 1 (rounded down), or `fallback` for a value that is no number. */

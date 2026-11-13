@@ -15,6 +15,8 @@ const CLOCK: ReportClock = { now: Date.UTC(2026, 10, 12, 6, 52), timeZone: 'Euro
 const monitor: HostObject = { kind: 'container', id: 'm1', name: 'devspaces-monitor', purpose: 'monitor', state: 'running', active: true };
 const target: ReportTarget = { host: LIMA_HOST, object: monitor };
 const content: ReportContent = { summary: [{ text: '3 runs', tone: 'info' }], sections: [], notices: [], monitorLog: true };
+/** Every action and the logs allowed (the settings devspaces.dockerHostsActions and devspaces.allowContainerLogs). */
+const ALL = { actions: true, logs: true };
 
 describe('reportTargetOfArgument', () => {
   it('takes the host and the object of an object row of the view Docker Hosts', () => {
@@ -85,7 +87,7 @@ describe('reportAddress and reportKeyOf', () => {
 
 describe('reportPageView', () => {
   it('shows the name, the kind line with the VM of Devspaces, the time of the read, and the buttons', () => {
-    const view = reportPageView({ target, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK });
+    const view = reportPageView({ target, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK, allowed: ALL });
     expect(view).toMatchObject({ title: 'devspaces-monitor', kind: 'container', kindLine: `Container · Monitor · Running · Local VM of Devspaces (${LIMA_HOST})`, tone: 'normal', status: 'Read today 07:52', busy: false, content });
     expect(view.buttons).toEqual([
       { action: 'showLog', label: 'Show Log of the Monitor' },
@@ -95,38 +97,38 @@ describe('reportPageView', () => {
   });
 
   it('keeps the content while a Refresh reads, with Refresh disabled; Show Log only for the Monitor', () => {
-    const view = reportPageView({ target, vm: false, phase: { kind: 'reading' }, content: { ...content, monitorLog: false }, clock: CLOCK });
+    const view = reportPageView({ target, vm: false, phase: { kind: 'reading' }, content: { ...content, monitorLog: false }, clock: CLOCK, allowed: ALL });
     expect(view).toMatchObject({ status: 'Reading…', busy: true, kindLine: `Container · Monitor · Running · ${LIMA_HOST}` });
     expect(view.content).toBeDefined();
     expect(view.buttons).toEqual([{ action: 'refresh', label: 'Refresh', primary: true, disabled: true }]);
-    expect(reportPageView({ target, vm: false, phase: { kind: 'reading' }, clock: CLOCK }).content).toBeUndefined();
+    expect(reportPageView({ target, vm: false, phase: { kind: 'reading' }, clock: CLOCK, allowed: ALL }).content).toBeUndefined();
   });
 
   it('colors the name as the view Docker Hosts does', () => {
     const image: HostObject = { kind: 'image', id: 'sha256:n', name: 'nginx:1.27', purpose: 'notDevspaces' };
-    expect(reportPageView({ target: { host: 'lab', object: image }, vm: false, phase: { kind: 'reading' }, clock: CLOCK }).tone).toBe('notDevspacesInactive');
-    expect(reportPageView({ target: { host: 'lab', object: { ...monitor, active: false, state: 'exited' } }, vm: false, phase: { kind: 'reading' }, clock: CLOCK })).toMatchObject({
+    expect(reportPageView({ target: { host: 'lab', object: image }, vm: false, phase: { kind: 'reading' }, clock: CLOCK, allowed: ALL }).tone).toBe('notDevspacesInactive');
+    expect(reportPageView({ target: { host: 'lab', object: { ...monitor, active: false, state: 'exited' } }, vm: false, phase: { kind: 'reading' }, clock: CLOCK, allowed: ALL })).toMatchObject({
       tone: 'inactive',
       kindLine: 'Container · Monitor · Stopped · lab',
     });
   });
 
   it('says why a read failed, and keeps the content of the read before', () => {
-    const view = reportPageView({ target, vm: false, phase: { kind: 'failed', message: 'ssh: connect to host lab port 22: Connection refused' }, content, clock: CLOCK });
+    const view = reportPageView({ target, vm: false, phase: { kind: 'failed', message: 'ssh: connect to host lab port 22: Connection refused' }, content, clock: CLOCK, allowed: ALL });
     expect(view.banner).toEqual({ message: ReportPageTexts.failed, detail: 'ssh: connect to host lab port 22: Connection refused', buttons: [] });
     expect(view.status).toBe('');
     expect(view.content).toBe(content);
   });
 
   it('shows a resource that the view does not show by its address: its name, its kind and its host, and why it reads nothing', () => {
-    const view = reportPageView({ target: { host: LIMA_HOST, kind: 'image', id: 'sha256:abc', name: 'nginx:1.27' }, vm: true, phase: { kind: 'missing' }, clock: CLOCK });
+    const view = reportPageView({ target: { host: LIMA_HOST, kind: 'image', id: 'sha256:abc', name: 'nginx:1.27' }, vm: true, phase: { kind: 'missing' }, clock: CLOCK, allowed: ALL });
     expect(view).toMatchObject({ title: 'nginx:1.27', kind: 'image', kindLine: `Image · Local VM of Devspaces (${LIMA_HOST})`, tone: 'normal', status: '', busy: false });
     expect(view.banner).toEqual({ message: ReportPageTexts.missing, detail: ReportPageTexts.missingDetail, buttons: [] });
     expect(view.buttons).toEqual([{ action: 'refresh', label: 'Refresh', primary: true }]);
   });
 
   it('reads nothing on a VM that does not run: Start the VM only for a stopped VM', () => {
-    const banner = (state: Parameters<typeof reportPageView>[0]['phase'] & { kind: 'vm' }) => reportPageView({ target, vm: true, phase: state, clock: CLOCK }).banner;
+    const banner = (state: Parameters<typeof reportPageView>[0]['phase'] & { kind: 'vm' }) => reportPageView({ target, vm: true, phase: state, clock: CLOCK, allowed: ALL }).banner;
     expect(banner({ kind: 'vm', state: { kind: 'stopped' } })).toEqual({
       message: ReportPageTexts.vmNotRunning,
       detail: ReportPageTexts.vmNotRunningDetail,
@@ -134,6 +136,17 @@ describe('reportPageView', () => {
     });
     expect(banner({ kind: 'vm', state: { kind: 'notSetUp' } })).toEqual({ message: 'The VM of Devspaces is not set up.', buttons: [] });
     expect(banner({ kind: 'vm', state: { kind: 'unknown', detail: 'limactl is missing' } })).toEqual({ message: 'The state of the VM of Devspaces is not known: limactl is missing', buttons: [] });
+  });
+
+  it('shows Show Log of the Monitor only while the logs are on (the setting devspaces.allowContainerLogs)', () => {
+    const view = reportPageView({ target, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK, allowed: { actions: true, logs: false } });
+    expect(view.buttons).toEqual([{ action: 'refresh', label: 'Refresh', primary: true }]);
+  });
+
+  it('offers no Start the VM while the view is read only (the setting devspaces.dockerHostsActions), and says how the VM starts', () => {
+    const view = reportPageView({ target, vm: true, phase: { kind: 'vm', state: { kind: 'stopped' } }, clock: CLOCK, allowed: { actions: false, logs: true } });
+    expect(view.banner).toEqual({ message: ReportPageTexts.vmNotRunning, detail: ReportPageTexts.vmNotRunningReadOnly, buttons: [] });
+    expect(view.buttons).toEqual([{ action: 'refresh', label: 'Refresh', primary: true }]);
   });
 });
 

@@ -58,7 +58,7 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
  * `docker system df -v`, `docker network ls`, `docker image ls` of the tags of the images, `docker container inspect` of the running containers, `docker image inspect` and `docker container ls --filter ancestor=` before the removal of an image, `docker container start` and `stop`, `rm` without force, and
  * `docker builder prune --all`: with buildx `POST /grpc`, without it `POST /build/prune`), and the report page of the view
  * (reportRead.ts: the inspect of the object, the lists of the volumes and the images, `docker info`, the reader of the
- * shared volumes as a container with `docker run --rm`, and `docker logs` of the Monitor). Its worker starts behind the relay or with
+ * shared volumes as a container with `docker run --rm`, and `docker logs` of the Monitor, CONTAINER_LOGS_ENDPOINT). Its worker starts behind the relay or with
  * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
@@ -74,9 +74,6 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('POST', `/containers/${NAME}/kill`),
   endpoint('POST', `/containers/${NAME}/stop`),
   endpoint('DELETE', `/containers/${NAME}`),
-  // Show Log of the Monitor on its report (monitorLog.ts): `docker logs devspaces-monitor` inspects the container first and
-  // then asks for the log by the ID of the container, so the pipe lets through the log of any container.
-  endpoint('GET', `/containers/${NAME}/logs`),
   endpoint('GET', '/images/json'),
   endpoint('GET', `/images/${IMAGE}/json`),
   endpoint('POST', '/images/create'),
@@ -95,6 +92,13 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
 ];
 
 /**
+ * Show Log of the Monitor on its report (monitorLog.ts): `docker logs devspaces-monitor` inspects the container first and
+ * then asks for the log by the ID of the container, so the pipe of the extension lets through the log of any container,
+ * but only while the setting allowContainerLogs is on (extensionPipeRule).
+ */
+export const CONTAINER_LOGS_ENDPOINT: Endpoint = endpoint('GET', `/containers/${NAME}/logs`);
+
+/**
  * The rule of a pipe from its list: a request whose method and path are on the list goes on. `user` names the program
  * whose calls the pipe carries, in the reason of a refusal.
  */
@@ -110,5 +114,19 @@ export function endpointRule(endpoints: readonly Endpoint[], user: string): Dock
 
 /** The filter of the Docker pipe of a window. */
 export const windowPipeRule: DockerRequestRule = endpointRule(WINDOW_PIPE_ENDPOINTS, 'the Dev Containers extension');
-/** The filter of the Docker pipe of the extension. */
-export const extensionPipeRule: DockerRequestRule = endpointRule(EXTENSION_PIPE_ENDPOINTS, 'Devspaces');
+/**
+ * The filter of the Docker pipe of the extension. The log of a container (CONTAINER_LOGS_ENDPOINT) goes through only
+ * while `allowLogs` says so; it is asked at each request, so a change of the setting applies to the next request.
+ */
+export function extensionPipeRule(allowLogs: () => boolean): DockerRequestRule {
+  const listed = endpointRule(EXTENSION_PIPE_ENDPOINTS, 'Devspaces');
+  const logs = endpointRule([CONTAINER_LOGS_ENDPOINT], 'Devspaces');
+  return (request, headers) => {
+    const reason = listed(request, headers);
+    if (reason === undefined || logs(request, headers) !== undefined) return reason;
+    return allowLogs() ? undefined : CONTAINER_LOGS_OFF;
+  };
+}
+
+/** The reason of the refusal of the log of a container while the setting allowContainerLogs is off. */
+export const CONTAINER_LOGS_OFF = 'the logs of containers are off (the setting devspaces.allowContainerLogs)';

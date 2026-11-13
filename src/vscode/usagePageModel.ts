@@ -150,6 +150,8 @@ export interface UsagePageInput {
   sizesReading: boolean;
   /** Why the last read of the sizes failed (its first line). */
   sizesError?: string;
+  /** Whether the setting dockerHostsActions allows the actions of the view (Start the VM); missing: allowed. */
+  actions?: boolean;
 }
 
 /** The most CPUs with a bar of their own; with more, the busiest MANY_CPUS_SHOWN. */
@@ -196,6 +198,7 @@ export const UsagePageTexts = {
   vmStopped: 'The VM of Devspaces does not run, so this page shows no values. The page does not start the VM by itself.',
   vmIdle: 'The VM of Devspaces went to sleep, because nothing runs there. The page does not keep it running.',
   vmStoppedDetail: 'Click "Start the VM" to start it and read again. The VM goes to sleep again by itself when nothing uses it.',
+  vmStoppedReadOnlyDetail: 'The page reads again when the VM runs, for example when you start a devspace. The VM goes to sleep again by itself when nothing uses it.',
   vmNotSetUp: 'The VM of Devspaces is not set up, so this page shows no values. The menu of its row in the view Docker Hosts sets it up.',
   vmUnusable: (state: VmState) =>
     `Devspaces cannot use the VM of Devspaces now (${state.kind === 'broken' ? 'it is broken' : 'its state is not known'}), so this page shows no values.`,
@@ -349,7 +352,10 @@ function statusAndBanner(input: UsagePageInput): Pick<UsagePageView, 'status' | 
       const { state } = phase;
       const banner: UsagePageView['banner'] =
         state.kind === 'stopped' || state.kind === 'running'
-          ? { tone: 'info', message: phase.idle === true ? T.vmIdle : T.vmStopped, detail: T.vmStoppedDetail, buttons: [{ action: 'startVm', label: T.startVm, primary: true }] }
+          ? input.actions === false
+            ? // Start the VM is an action of the view: only while the setting dockerHostsActions allows them.
+              { tone: 'info', message: phase.idle === true ? T.vmIdle : T.vmStopped, detail: T.vmStoppedReadOnlyDetail, buttons: [] }
+            : { tone: 'info', message: phase.idle === true ? T.vmIdle : T.vmStopped, detail: T.vmStoppedDetail, buttons: [{ action: 'startVm', label: T.startVm, primary: true }] }
           : state.kind === 'notSetUp'
             ? { tone: 'info', message: T.vmNotSetUp, buttons: [] }
             : { tone: 'warning', message: T.vmUnusable(state), ...(state.detail !== undefined ? { detail: state.detail } : {}), buttons: [{ action: 'showLog', label: T.showLog }] };

@@ -70,6 +70,8 @@ export interface UsagePagesDeps {
   vmStopping: () => boolean;
   /** "Start the VM" (VmCommands.start), which never throws. */
   startVm: () => Promise<void>;
+  /** Whether the setting dockerHostsActions allows the actions of the view now (Start the VM). Missing: allowed. */
+  actionsAllowed?: () => boolean;
   /**
    * The objects of the host with their sizes (readHostInventory on the shared shell of the host). `openLoginOnly`: the
    * read in the background, only on a login that is open (runWithDockerTarget); without one, it rejects with an
@@ -116,6 +118,11 @@ export class UsagePages implements vscode.Disposable {
   /** The VM may have started or stopped (a command of the VM): its page reads again when it waits for the VM. */
   vmChanged(): void {
     if (this.deps.vmHost !== undefined) this.pages.get(this.deps.vmHost)?.vmChanged();
+  }
+
+  /** The setting dockerHostsActions changed: each visible page shows its buttons again, without a read. */
+  settingsChanged(): void {
+    for (const page of this.pages.values()) page.settingsChanged();
   }
 
   dispose(): void {
@@ -257,6 +264,11 @@ class UsagePage {
       this.focusTimer = undefined;
       if (this.panel.visible && this.reading()) this.pause('focus');
     }, FOCUS_PAUSE_MS);
+  }
+
+  /** The settings of its buttons changed: the page shows them again, without a read. */
+  settingsChanged(): void {
+    this.post();
   }
 
   vmClosing(): void {
@@ -595,7 +607,9 @@ class UsagePage {
         if (this.phase.kind === 'ended') this.start(true);
         return;
       case 'startVm':
-        void this.startVm();
+        // A button of a page from before a change of the setting dockerHostsActions does nothing.
+        if (this.deps.actionsAllowed?.() ?? true) void this.startVm();
+        else this.deps.logger.info('Start the VM of a utilization page is not run: the setting devspaces.dockerHostsActions allows no actions.');
         return;
       case 'readSizes':
         void this.readSizes();
@@ -780,6 +794,7 @@ class UsagePage {
       ...(this.sizes !== undefined ? { sizes: this.sizes } : {}),
       sizesReading: this.sizesReading,
       ...(this.sizesError !== undefined ? { sizesError: this.sizesError } : {}),
+      actions: this.deps.actionsAllowed?.() ?? true,
     });
     this.panel.webview.postMessage({ type: 'view', view }).then(undefined, (error: unknown) => {
       this.deps.logger.warn(`The utilization page of ${this.host} could not be updated: ${errorMessage(error)}`);

@@ -238,6 +238,8 @@ describe('the command Update All Images Now', () => {
       command: Commands.updateImagesNow,
       title: 'Update All Images Now',
       category: 'Devspaces',
+      // The button of a host row of the view Docker Hosts with the setting dockerHostsActions = icons (R-ENG-008).
+      icon: '$(cloud-download)',
     });
     // Not hidden in the Command Palette.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.updateImagesNow)).toBe(false);
