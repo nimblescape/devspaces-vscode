@@ -32,7 +32,7 @@ A repository that you open is code that you run: open only repositories that you
 
 - **One click to code.** **Start** clones the repository into a Docker volume, builds the image, creates the container and connects the window. Git on your computer is not needed.
 - **Fast starts.** The Monitor prepares newer images, the VS Code Server and your extensions in the background.
-- **Safe updates.** When a newer image is available, Devspaces tells you before it updates the container. Your files in the workspace are kept.
+- **Safe updates.** When a newer image is available, the next start updates the container and keeps your files in the workspace. For a dialog first, set `devspaces.updateContainer` to `notify` or `ask`.
 - **Stops by itself.** A devspace stops 5 minutes after its last window closes, unless you keep it running.
 - **Open from a link.** A link on a website opens a repository in its devspace, and a course link opens the own repository of each student ([Open from a link](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#open-from-a-link)).
 - **Several GitHub accounts.** One list for all GitHub accounts of VS Code that you use in Devspaces ([Several GitHub accounts](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#several-github-accounts)).
