@@ -432,7 +432,7 @@ On macOS and Linux, Devspaces uses Docker Engine in a VM of its own, made with [
 - **The VM**: 4 GiB of memory and 4 CPUs, each at most half of the computer, and a disk of at most 100 GiB, whose file grows with your devspaces. The settings `devspaces.vmMemoryGiB` and `devspaces.vmCpus` change the memory and the CPUs from the next start of the VM: when the VM is stopped, Devspaces gives it the new values before it starts it. A value above half of the computer counts as that half, and a warning says so. When the VM runs out of memory and its kernel ends a process, for example a build step or the TypeScript server of your devspace, a warning says so and names `devspaces.vmMemoryGiB`, once per start of the VM. No folder of your computer is in the VM.
 - **Use it**: when the VM exists, **Devspaces: Use a Remote Docker Host…** and the choice of the Docker host in the first row of the view list it as `lima:devspaces` in the group **Lima**. While it does not exist, that group has **Set Up Docker for Devspaces in Its VM…** instead, so that you can go back from a remote host to the VM. Devspaces reaches it over the SSH of Lima as root, with the key that Lima made: there is no password and no question.
 - **When it runs**: Devspaces starts the VM when it needs it, for example for a Start, an Open, or the window of a devspace there. The VM powers itself off when no container ran there for some minutes. **Start the VM** and **Stop the VM…** in the menu of its row in the view **Docker Hosts** start and stop it by hand; the stop asks first while devspaces run there.
-- **Remove it**: **Remove the VM…** in the menu of its row in the view **Docker Hosts** (or **Devspaces: Remove the VM…**) asks first, then deletes the VM with `limactl delete`, with everything in it: all devspaces there with the changes that you did not push, their images and their volumes. Push your changes first. The host `lima:devspaces` leaves the list; when Devspaces used it, Devspaces has no Docker host afterwards, and the view shows the Docker setup. Lima and the downloaded files stay in `~/.nimblescape/devspaces` for the next setup. **Remove and Set Up the VM Again…** removes the VM after the same question and sets up a new one, which Devspaces then uses.
+- **Remove it**: **Remove the VM…** in the menu of its row in the view **Docker Hosts** (or **Devspaces: Remove the VM…**) asks first, then deletes the VM with `limactl delete`, with everything in it: all devspaces there with the changes that you did not push, their images and their volumes. Push your changes first. The host `lima:devspaces` leaves the list; when Devspaces used it, Devspaces has no Docker host afterwards, and the view shows the Docker setup. Lima and the downloaded files stay in `~/.nimblescape/devspaces` for the next setup, until the uninstall (see [Uninstall](#uninstall)). **Remove and Set Up the VM Again…** removes the VM after the same question and sets up a new one, which Devspaces then uses.
 - **At the times of the background run**: a scheduled task of your user starts the VM and its Monitor at the times of `devspaces.cacheUpdateSchedule`, also while VS Code is closed, so that the images of your devspaces are up to date at your next start (see [The background run](#the-background-run)). On macOS it is the launch agent `~/Library/LaunchAgents/com.nimblescape.devspaces.vm.plist`, on Linux the systemd user timer `devspaces-vm.timer` with `devspaces-vm.service` in `~/.config/systemd/user`; neither needs administrator permission. The task starts the VM 5 minutes after a time of the schedule, so that the network is back after a wake or a login. It never wakes the computer: a time that the computer missed while it slept or was off runs once after the wake or the login, after the same 5 minutes. When the Monitor has done its work, it ends, and the VM powers itself off. When a window uses the VM at that time, the VM and the Monitor run already. On Linux, the systemd of your user runs the timer only while you are logged in, unless lingering is on for your user. The task writes what it does to `~/.nimblescape/devspaces/task/task.log`. Devspaces creates the task with the VM, writes it again when the setting changes, and removes it when the VM no longer exists.
 
 ### Other Docker tools
@@ -529,35 +529,7 @@ Devspaces keeps a few things on each Docker engine that you used: the Monitor (`
 4. Run **Devspaces: Remove Devspaces from This Docker Engine…** (Command Palette, or the **…** menu of the view). It removes: the container `devspaces-monitor`, the helper containers, the helper images `devspaces-worker:<hash>` with their second tag `devspaces-monitor:<hash>`, the build image `devspaces-buildx:<version>`, and the volumes `devspaces-monitor`, `devspaces-worker-cache` and `devspaces-vscode`. In the question "Remove Devspaces from `<engine>`?", choose **Remove**.
 5. When you have devspaces there, a second question asks "Also delete your devspace on `<engine>`?" (with several devspaces, for example "Also delete your 2 devspaces on `<engine>`?") and shows their recorded changes. **Delete Devspaces Too** deletes each one as **Delete** does, with its containers, its images and its volumes, also the clone of the repository, before the rest is removed. A volume that another devspace also uses stays, and so does a devspace that a window connects to in the meantime. **Keep Devspaces** keeps them, and the volume `devspaces-vscode` then stays while they use it. If you close the question, nothing is removed.
 
-On Windows, when you set up the WSL distribution of Devspaces, run **Devspaces: Remove the WSL Distribution of Devspaces…** after these steps. It deletes the distribution with its Docker engine and its folder, and its scheduled task (see [The WSL distribution of Devspaces](#the-wsl-distribution-of-devspaces-windows)). Without the extension, `wsl --unregister devspaces` in a terminal deletes it; then remove the folders `wsl` and `task` in `%LOCALAPPDATA%\nimblescape\devspaces`, and the scheduled task, in PowerShell:
-
-```powershell
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-Unregister-ScheduledTask -TaskName "nimblescape Devspaces WSL $sid" -Confirm:$false
-```
-
-On macOS and Linux, when you set up the VM of Devspaces, the VM and its scheduled task stay after these steps and after the uninstall. To remove them, first delete the VM with all devspaces in it. Push your changes first.
-
-```sh
-LIMA_HOME="$HOME/.nimblescape/devspaces/vm" "$HOME"/.nimblescape/devspaces/lima/*/bin/limactl delete --force devspaces
-```
-
-Then remove the scheduled task. On macOS:
-
-```sh
-launchctl bootout gui/$(id -u)/com.nimblescape.devspaces.vm
-rm ~/Library/LaunchAgents/com.nimblescape.devspaces.vm.plist
-```
-
-On Linux:
-
-```sh
-systemctl --user disable --now devspaces-vm.timer
-rm ~/.config/systemd/user/devspaces-vm.service ~/.config/systemd/user/devspaces-vm.timer
-systemctl --user daemon-reload
-```
-
-Then delete the folder of Devspaces with Lima and the files of the task: `rm -rf "$HOME/.nimblescape/devspaces"`. A window of Devspaces that starts while the VM no longer exists removes the scheduled task by itself.
+Then remove the VM of Devspaces, when you set it up. Push your changes first. On macOS and Linux, run **Devspaces: Remove the VM…** (or **Remove the VM…** in the menu of its row in the view **Docker Hosts**): it deletes the VM with all devspaces in it, and its scheduled task. On Windows, run **Devspaces: Remove the WSL Distribution of Devspaces…**: it deletes the distribution with its Docker engine, its folder and its scheduled task (see [The WSL distribution of Devspaces](#the-wsl-distribution-of-devspaces-windows)).
 
 Then uninstall Devspaces in the Extensions view of VS Code, or run `code --uninstall-extension nimblescape.nimblescape-devspaces-2`.
 
@@ -571,7 +543,55 @@ What to know:
 - A build of the helper image that another VS Code window began in the background before the removal, for example right after an update of Devspaces, goes on and can make the image `devspaces-worker:<hash>` there again. When `docker image ls` still lists it after the removal, run the command again.
 - An **Update All Images Now** in another VS Code window that is already sending its request when the removal begins goes on, and can create the container `devspaces-monitor`, the helper image and the volumes there again. When `docker ps -a` still lists `devspaces-monitor` after the removal, run the command again.
 - When something cannot be removed, for example a volume that a container still uses, the message says so. The log of Devspaces (**Devspaces: Show Log**) names each item and the command that removes it.
-- Your settings and the files of Devspaces on your computer stay (see below).
+- The command removes nothing on your computer (see [What stays after the uninstall](#what-stays-after-the-uninstall)).
+
+### At the next start of VS Code
+
+VS Code runs the uninstall step of Devspaces once, at its next start after Devspaces was uninstalled from every profile, without a window and for at most 5 seconds. Then VS Code deletes the files of Devspaces in its storage (see **Files** in [Docker contexts and your computer](#docker-contexts-and-your-computer)). The uninstall step removes:
+
+- the Docker context `devspaces` of the setting `devspaces.createDockerContext`, when Devspaces created it and it is not the current Docker context;
+- the scheduled task that starts the VM of Devspaces, or the WSL distribution of Devspaces, at the times of `devspaces.cacheUpdateSchedule`;
+- the folder `~/.nimblescape/devspaces` with Lima on macOS and Linux, or `%LOCALAPPDATA%\nimblescape\devspaces` on Windows, only when the VM of Devspaces is not in it.
+
+It never deletes the VM of Devspaces, the WSL distribution or a devspace, because they can hold work that you did not push, and it cannot ask you. It never connects to a Docker engine or to a remote host. Until that start of VS Code, the scheduled task can still start the VM. When the step needs more than the 5 seconds, VS Code ends it, and you remove what stays by hand (see [What stays after the uninstall](#what-stays-after-the-uninstall)). When you use Devspaces in another VS Code on this computer too, for example VS Code Insiders, it shares the VM, the task and the context: its next window writes the task and the context again. VS Code writes the lines of the step into the log of its shared process, `sharedprocess.log` (**Developer: Open Logs Folder**).
+
+### What stays after the uninstall
+
+- **The VM of Devspaces**, when you did not remove it, with your devspaces, and the folder with Lima. Without the extension, delete the VM and the folder on macOS and Linux with:
+
+  ```sh
+  LIMA_HOME="$HOME/.nimblescape/devspaces/vm" "$HOME"/.nimblescape/devspaces/lima/*/bin/limactl delete --force devspaces
+  rm -rf "$HOME/.nimblescape/devspaces"
+  ```
+
+  On Windows, `wsl --unregister devspaces` in a terminal deletes the distribution; then remove the folder `%LOCALAPPDATA%\nimblescape\devspaces`.
+- **The scheduled task**, only when VS Code does not start again after the uninstall (for example when you remove VS Code too), or when the uninstall step did not end within the 5 seconds. Remove it by hand. On macOS:
+
+  ```sh
+  launchctl bootout gui/$(id -u)/com.nimblescape.devspaces.vm
+  rm ~/Library/LaunchAgents/com.nimblescape.devspaces.vm.plist
+  ```
+
+  On Linux:
+
+  ```sh
+  systemctl --user disable --now devspaces-vm.timer
+  rm ~/.config/systemd/user/devspaces-vm.service ~/.config/systemd/user/devspaces-vm.timer
+  systemctl --user daemon-reload
+  ```
+
+  On Windows, in PowerShell:
+
+  ```powershell
+  $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  Unregister-ScheduledTask -TaskName "nimblescape Devspaces WSL $sid" -Confirm:$false
+  ```
+
+- **The Docker context `devspaces`**, when it was the current Docker context at the uninstall, or when the uninstall step could not read the `config.json` of the Docker CLI; the log of the step says so. Run `docker context use default` and then `docker context rm devspaces`. The uninstall step sees the environment of VS Code, not of your shell: when your shell profile sets `DOCKER_CONTEXT=devspaces`, remove that line, because the context is gone; when it sets `DOCKER_CONFIG`, the context in that folder stays.
+- **The objects of Devspaces on each Docker engine** where you did not run **Devspaces: Remove Devspaces from This Docker Engine…**. On a remote host, the Monitor can keep running; it ends itself after 30 days without a devspace there. [Remove by hand](#remove-by-hand) has the Docker commands.
+- **The SSH key of Devspaces**, after **Use a Key**: the files `~/.ssh/devspaces_ed25519` and `devspaces_ed25519.pub` on your computer, and the line of the public key in `~/.ssh/authorized_keys` on each remote host; that line ends with `devspaces@` and the name of your computer. Delete the line on each host, then the two files.
+- **What you installed for Devspaces**: QEMU and your membership in the group `kvm` on Linux, WSL 2 on Windows, and the Dev Containers extension, which other tools can use too.
+- **Your settings** `devspaces.…` in `settings.json`, until you remove them.
 
 ### Remove by hand
 
@@ -608,9 +628,8 @@ The objects of version 0.4.0 and older of the first extension have other names: 
 
 ### Docker contexts and your computer
 
-- **Docker contexts.** Devspaces creates no Docker context, except the context `devspaces` of the setting `devspaces.createDockerContext` (see [Other Docker tools](#other-docker-tools)), which turning the setting off removes. Versions 0.1.0 and 0.2.0 did: their **Use a Remote Docker Host…** created a Docker context for each host, named after the host (for example `build-box`), with the description `Devspaces: remote Docker host <host>`, and made it the current context. Later versions do not use or remove these contexts. `docker context ls` lists them. To remove one, first set Docker to the local engine (`docker context use default`, or with Docker Desktop `docker context use desktop-linux`), then run `docker context rm <name>`.
-- **Files.** Devspaces keeps its records, also the list of remote hosts (`remote-docker.json`), in a folder of VS Code: `~/.config/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on Linux, `~/Library/Application Support/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on macOS, and `%APPDATA%\Code\User\globalStorage\nimblescape.nimblescape-devspaces-2` on Windows. For VS Code Insiders, the folder `Code - Insiders` takes the place of `Code`. You can delete this folder after the uninstall.
-- **Settings.** The settings `devspaces.…` stay in your `settings.json` until you remove them.
+- **Docker contexts.** Devspaces creates no Docker context, except the context `devspaces` of the setting `devspaces.createDockerContext` (see [Other Docker tools](#other-docker-tools)), which turning the setting off removes, and so does the uninstall (see [At the next start of VS Code](#at-the-next-start-of-vs-code)). Versions 0.1.0 and 0.2.0 did: their **Use a Remote Docker Host…** created a Docker context for each host, named after the host (for example `build-box`), with the description `Devspaces: remote Docker host <host>`, and made it the current context. Later versions do not use or remove these contexts. `docker context ls` lists them. To remove one, first set Docker to the local engine (`docker context use default`, or with Docker Desktop `docker context use desktop-linux`), then run `docker context rm <name>`.
+- **Files.** Devspaces keeps its records, also the list of remote hosts (`remote-docker.json`), in a folder of VS Code: `~/.config/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on Linux, `~/Library/Application Support/Code/User/globalStorage/nimblescape.nimblescape-devspaces-2` on macOS, and `%APPDATA%\Code\User\globalStorage\nimblescape.nimblescape-devspaces-2` on Windows. For VS Code Insiders, the folder `Code - Insiders` takes the place of `Code`. VS Code deletes this folder at its next start after the uninstall.
 
 ## Build from source
 

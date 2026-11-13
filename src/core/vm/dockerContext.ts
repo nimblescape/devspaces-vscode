@@ -15,6 +15,7 @@ import * as path from 'path';
 import { envValue } from '../docker/dockerCli';
 import { errorMessage } from '../errors';
 import type { RunResult } from '../ports';
+import { errorCode, retryTransient } from '../storage/paths';
 import { isRecord } from '../valueChecks';
 
 export const DOCKER_CONTEXT = 'devspaces';
@@ -110,5 +111,58 @@ export async function syncDockerContext(deps: DockerContextDeps, host: string | 
     return { kind: host === undefined ? 'removed' : state.kind === 'ours' ? 'updated' : 'created' };
   } catch (error) {
     return { kind: 'failed', detail: errorMessage(error) };
+  }
+}
+
+/** The result of removeDockerContextFiles. */
+export type DockerContextFilesResult = { kind: 'removed' | 'missing' | 'taken' | 'current' | 'unreadable' } | { kind: 'failed'; detail: string };
+
+/**
+ * Removes the context `devspaces` from the context store of the Docker CLI in `configDir` without the Docker CLI, as
+ * `docker context rm` does: the folder of its metadata and the folder of its TLS files, both named by the SHA-256 of
+ * the name. For the uninstall hook (src/uninstall/main.ts, R-GEN-008), which has no Docker CLI. Only a context with the
+ * description of Devspaces goes (`taken`: another one stays). It stays while `environmentContext` (DOCKER_CONTEXT) names
+ * it, and while `currentContext` of the `config.json` of the Docker CLI names it, also when DOCKER_CONTEXT names another
+ * one (`current`): without the context, the Docker CLI would fail in every shell that has no DOCKER_CONTEXT. It also
+ * stays while that file exists but cannot be read (`unreadable`), because then nobody can tell. Never throws.
+ */
+export async function removeDockerContextFiles(configDir: string, environmentContext?: string): Promise<DockerContextFilesResult> {
+  const file = dockerContextFile(configDir);
+  const state = readDockerContext(file);
+  if (state.kind === 'missing') return { kind: 'missing' };
+  if (state.kind === 'other') return { kind: 'taken' };
+  try {
+    const current = environmentContext === DOCKER_CONTEXT ? 'ours' : await currentContextOf(configDir);
+    if (current === 'ours') return { kind: 'current' };
+    if (current === 'unknown') return { kind: 'unreadable' };
+    const folder = path.dirname(file);
+    // The metadata first: without it, the Docker CLI lists no context, also when its TLS folder could not be removed.
+    // A virus scanner or the indexer of Windows can hold a file for a short time.
+    await retryTransient(() => fs.promises.rm(folder, { recursive: true, force: true }));
+    await retryTransient(() => fs.promises.rm(path.join(configDir, 'contexts', 'tls', path.basename(folder)), { recursive: true, force: true }));
+    return { kind: 'removed' };
+  } catch (error) {
+    return { kind: 'failed', detail: errorMessage(error) };
+  }
+}
+
+/**
+ * Whether `currentContext` of the `config.json` in `configDir` names the context `devspaces`: `ours` when it does,
+ * `unknown` when the file exists but cannot be read as JSON, `other` else (also without the file).
+ */
+async function currentContextOf(configDir: string): Promise<'ours' | 'unknown' | 'other'> {
+  let text: string;
+  try {
+    text = await fs.promises.readFile(path.join(configDir, 'config.json'), 'utf8');
+  } catch (error) {
+    return errorCode(error) === 'ENOENT' ? 'other' : 'unknown';
+  }
+  // The Docker CLI reads an empty file as a configuration without settings.
+  if (text.trim() === '') return 'other';
+  try {
+    const config: unknown = JSON.parse(text);
+    return isRecord(config) && config.currentContext === DOCKER_CONTEXT ? 'ours' : 'other';
+  } catch {
+    return 'unknown';
   }
 }

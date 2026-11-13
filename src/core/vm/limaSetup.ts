@@ -15,7 +15,7 @@ import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type ProcessRunner } from '../ports';
 import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
 import { downloadVmImage, vmImageFile, type DownloadVmImageOptions } from './vmImage';
-import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, limaSshArgs, type LimaResources } from './limaInstance';
+import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, LIMA_SETUP_LOCK_TIMINGS, limaSetupLockFolder, limaSshArgs, type LimaResources } from './limaInstance';
 import type { LimaVm } from './limaVm';
 
 /** Why the setup cannot run or failed. */
@@ -57,12 +57,6 @@ export type LimaSetupStep =
 
 /** The time limit of `docker info` in the VM after its first start. */
 const DOCKER_TIMEOUT_MS = 3 * 60_000;
-/**
- * The lock of the creation of the VM for all windows (withLockFolder, as the setup of the WSL distribution): its holder
- * refreshes it every 15 seconds, so a lock older than a minute is of a window that ended; another window waits for it
- * one second.
- */
-const LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
 
 export interface LimaSetupDeps {
   vm: LimaVm;
@@ -241,12 +235,12 @@ export class LimaSetup {
     await this.step(async () => {
       try {
         await withLockFolder(
-          path.join(this.deps.vm.paths.root, 'vm-setup.lock'),
+          limaSetupLockFolder(this.deps.vm.paths),
           () => {
             started = true;
             return task();
           },
-          LOCK_TIMINGS,
+          LIMA_SETUP_LOCK_TIMINGS,
         );
       } catch (error) {
         if (!started && error instanceof LockTimeoutError) throw new LimaSetupError('busy', 'Another window sets up the VM of Devspaces now.');

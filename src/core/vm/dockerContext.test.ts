@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunResult } from '../ports';
-import { DOCKER_CONTEXT_DESCRIPTION, dockerConfigDir, dockerContextFile, readDockerContext, syncDockerContext } from './dockerContext';
+import { DOCKER_CONTEXT_DESCRIPTION, dockerConfigDir, dockerContextFile, readDockerContext, removeDockerContextFiles, syncDockerContext } from './dockerContext';
 
 const SOCKET = '/home/ada/.nimblescape/devspaces/vm/devspaces/sock/docker.sock';
 const HOST = `unix://${SOCKET}`;
@@ -107,5 +107,30 @@ describe('the Docker context of the VM of Devspaces', () => {
     expect(await syncDockerContext(deps(), HOST)).toEqual({ kind: 'failed', detail: 'permission denied' });
     expect(await syncDockerContext({ file, docker: () => Promise.reject(new Error('spawn docker ENOENT')) }, HOST)).toEqual({ kind: 'failed', detail: 'spawn docker ENOENT' });
     expect(calls).toHaveLength(1);
+  });
+});
+
+describe('the removal of the Docker context devspaces without the Docker CLI (uninstall hook)', () => {
+  it('removes only its own context with its TLS folder, and never the current one', async () => {
+    const tls = path.join(config, 'contexts', 'tls', path.basename(path.dirname(file)));
+    expect(await removeDockerContextFiles(config)).toEqual({ kind: 'missing' });
+    store({ ...ours(HOST), Metadata: { Description: 'another' } });
+    expect(await removeDockerContextFiles(config)).toEqual({ kind: 'taken' });
+    store(ours(HOST));
+    fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({ currentContext: 'devspaces' }));
+    expect(await removeDockerContextFiles(config)).toEqual({ kind: 'current' });
+    // config.json still names it, so the Docker CLI would fail without DOCKER_CONTEXT.
+    expect(await removeDockerContextFiles(config, 'desktop-linux')).toEqual({ kind: 'current' });
+    fs.writeFileSync(path.join(config, 'config.json'), '{ "currentContext": "default", }');
+    expect(await removeDockerContextFiles(config)).toEqual({ kind: 'unreadable' });
+    fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({ currentContext: 'default' }));
+    expect(await removeDockerContextFiles(config, 'devspaces')).toEqual({ kind: 'current' });
+    // The Docker CLI reads an empty file as a configuration without settings.
+    fs.writeFileSync(path.join(config, 'config.json'), '\n');
+    fs.mkdirSync(tls, { recursive: true });
+    expect(await removeDockerContextFiles(config)).toEqual({ kind: 'removed' });
+    expect(fs.existsSync(path.dirname(file))).toBe(false);
+    expect(fs.existsSync(tls)).toBe(false);
+    expect(calls).toEqual([]);
   });
 });
