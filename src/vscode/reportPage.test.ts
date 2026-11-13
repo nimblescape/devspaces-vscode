@@ -6,8 +6,8 @@
 // resource, so that VS Code opens it as a preview tab or a kept tab; Show Report opens the address as a click does; the
 // page reads when it opens and at Refresh, always as a flow of the user (a login may ask), never while it is hidden; a
 // tab that VS Code opened again at its start reads nothing until Refresh; on the VM of Devspaces it reads the state first
-// and never starts the VM; a result of an older read is dropped; Show Log of the Monitor opens the log as a read-only
-// document.
+// and never starts the VM; a result of an older read is dropped; Show Log of the Monitor, and Show Log of any other
+// container, open the log as a read-only document (containerLogs.ts).
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
@@ -19,13 +19,16 @@ import type { ReportClock, ReportContent } from '../core/hosts/reportModel';
 import { sshPromptsAllowed, sshPromptSignal } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { fakeVscode, openFakeCustomEditor, resetFakeVscode, type FakeWebviewPanel } from './testing/fakeVscode';
-import { MONITOR_LOG_SCHEME, REPORT_VIEW_TYPE, ReportPages, reportUri, type ReportPagesDeps } from './reportPage';
+import { CONTAINER_LOG_SCHEME, ContainerLogTexts, ContainerLogs, monitorLogOf } from './containerLogs';
+import { REPORT_VIEW_TYPE, ReportPages, reportUri, type ReportPagesDeps } from './reportPage';
 import { REPORT_SCHEME, ReportPageTexts, type ReportPageView, type ReportTarget } from './reportPageModel';
 
 const CLOCK: ReportClock = { now: Date.UTC(2026, 10, 12, 6, 52), timeZone: 'Europe/Vienna' };
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
 const monitor: HostObject = { kind: 'container', id: 'm1', name: 'devspaces-monitor', purpose: 'monitor', state: 'running', active: true };
 const nginx: HostObject = { kind: 'image', id: 'sha256:n', name: 'nginx:1.27', purpose: 'notDevspaces' };
+const WEB_ID = '0123456789abcdef'.repeat(4);
+const web: HostObject = { kind: 'container', id: WEB_ID, name: 'shop-web-1', purpose: 'notDevspaces', state: 'running', active: true };
 const row = (host: string, object: HostObject) => ({ hostsNode: 'object', host, object });
 const contentOf = (name: string, monitorLog = false): ReportContent => ({ summary: [{ text: name, tone: 'info' }], sections: [], notices: [], monitorLog });
 
@@ -52,17 +55,22 @@ interface Harness {
   vmReads: number;
   vmState: VmState;
   startVm: ReturnType<typeof vi.fn>;
-  readMonitorLog: ReturnType<typeof vi.fn>;
+  /** The read of a log (ContainerLogs, as extension.ts wires it to the pages). */
+  readLog: ReturnType<typeof vi.fn>;
+  logs: ContainerLogs;
   read: (target: ReportTarget) => Promise<ReportContent>;
 }
 
 function harness(overrides: Partial<ReportPagesDeps> = {}): Harness {
   const h = { reads: [], shown: [], vmReads: 0, vmState: { kind: 'running' } } as unknown as Harness;
-  h.read = async (target) => contentOf(target.object.name, target.object.purpose === 'monitor');
+  h.read = async (target) => ({
+    ...contentOf(target.object.name, target.object.purpose === 'monitor'),
+    ...(target.object.kind === 'container' && target.object.purpose !== 'monitor' ? { containerLog: target.object.id } : {}),
+  });
   h.startVm = vi.fn(async () => {
     h.vmState = { kind: 'running' };
   });
-  h.readMonitorLog = vi.fn(async () => '2026-11-12T06:00:00.000000000Z run started');
+  h.readLog = vi.fn(async () => '2026-11-12T06:00:00.000000000Z run started');
   h.deps = {
     extensionUri: fakeVscode.Uri.file('/extension') as never,
     logger,
@@ -77,11 +85,12 @@ function harness(overrides: Partial<ReportPagesDeps> = {}): Harness {
       h.reads.push({ target, flow: sshPromptsAllowed(), signal: sshPromptSignal() });
       return h.read(target);
     },
-    readMonitorLog: h.readMonitorLog as never,
+    showLog: (log) => h.logs.show(log),
     clock: () => CLOCK,
     allowed: () => ({ actions: true, logs: true }),
     ...overrides,
   };
+  h.logs = new ContainerLogs({ logger, allowed: () => h.deps.allowed().logs, vmHost: LIMA_HOST, vmState: h.deps.vmState, read: h.readLog as never, timeZone: () => CLOCK.timeZone });
   h.pages = new ReportPages(h.deps);
   return h;
 }
@@ -324,18 +333,19 @@ describe('Show Log of the Monitor', () => {
   it('opens the last lines of the log as a read-only document, read as a flow of the user', async () => {
     const h = harness();
     let flow = false;
-    h.readMonitorLog.mockImplementation(async () => {
+    h.readLog.mockImplementation(async () => {
       flow = sshPromptsAllowed();
       return '2026-11-12 07:00:00.000 2026-11-12 07:00:00.000 run started';
     });
-    await open(h, 'lab', monitor);
+    const panel = await open(h, 'lab', monitor);
     await flush();
-    panels()[0].receive({ type: 'showLog' });
+    expect(lastView(panel).buttons[0]).toEqual({ action: 'showLog', label: ReportPageTexts.showMonitorLog });
+    panel.receive({ type: 'showLog' });
     await flush();
-    expect(h.readMonitorLog).toHaveBeenCalledWith('lab', 'Europe/Vienna');
+    expect(h.readLog).toHaveBeenCalledWith('lab', 'devspaces-monitor', 'Europe/Vienna');
     expect(flow).toBe(true);
     const [document] = fakeVscode.window.showTextDocument.mock.calls[0] as [{ uri: { scheme: string; path: string }; languageId: string; getText(): string }, unknown];
-    expect(document.uri).toMatchObject({ scheme: MONITOR_LOG_SCHEME, path: '/lab/devspaces-monitor.log' });
+    expect(document.uri).toMatchObject({ scheme: CONTAINER_LOG_SCHEME, path: '/lab/devspaces-monitor.log' });
     expect(document.languageId).toBe('log');
     expect(document.getText()).toBe('2026-11-12 07:00:00.000 2026-11-12 07:00:00.000 run started\n');
     expect(fakeVscode.window.showTextDocument.mock.calls[0][1]).toEqual({ preview: false });
@@ -343,7 +353,7 @@ describe('Show Log of the Monitor', () => {
 
   it('says that the Monitor wrote nothing yet, and registers its documents only once', async () => {
     const h = harness();
-    h.readMonitorLog.mockResolvedValue('  \n');
+    h.readLog.mockResolvedValue('  \n');
     await open(h, 'lab', monitor);
     await flush();
     panels()[0].receive({ type: 'showLog' });
@@ -352,14 +362,14 @@ describe('Show Log of the Monitor', () => {
     await flush();
     expect(fakeVscode.workspace.registerTextDocumentContentProvider).toHaveBeenCalledTimes(1);
     const [document] = fakeVscode.window.showTextDocument.mock.calls[1] as [{ getText(): string }];
-    expect(document.getText()).toBe(ReportPageTexts.logEmpty);
-    h.pages.dispose();
+    expect(document.getText()).toBe(ContainerLogTexts.empty(monitorLogOf('lab')));
+    h.logs.dispose();
     expect(fakeVscode.contentProviders.size).toBe(0);
   });
 
   it('says why the log could not be read, and opens no document', async () => {
     const h = harness();
-    h.readMonitorLog.mockRejectedValue(new CommandError('docker logs devspaces-monitor', 1, '', 'Error response from daemon: No such container: devspaces-monitor'));
+    h.readLog.mockRejectedValue(new CommandError('docker logs devspaces-monitor', 1, '', 'Error response from daemon: No such container: devspaces-monitor'));
     await open(h, 'lab', monitor);
     await flush();
     panels()[0].receive({ type: 'showLog' });
@@ -367,6 +377,37 @@ describe('Show Log of the Monitor', () => {
     expect(fakeVscode.window.showWarningMessage).toHaveBeenCalledWith(expect.stringMatching(/^The log of the Monitor could not be read: /));
     expect(fakeVscode.window.showTextDocument).not.toHaveBeenCalled();
     expect(fakeVscode.workspace.registerTextDocumentContentProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('Show Log of any other container', () => {
+  it('shows Show Log on the report of a container whose report offers it, and reads its log by its full ID', async () => {
+    const h = harness();
+    const panel = await open(h, 'lab', web);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => [button.action, button.label])).toEqual([
+      ['showLog', ReportPageTexts.showLog],
+      ['refresh', ReportPageTexts.refresh],
+    ]);
+    panel.receive({ type: 'showLog' });
+    await flush();
+    expect(h.readLog).toHaveBeenCalledWith('lab', WEB_ID, 'Europe/Vienna');
+    const [document] = fakeVscode.window.showTextDocument.mock.calls[0] as [{ uri: { scheme: string; path: string } }];
+    expect(document.uri).toMatchObject({ scheme: CONTAINER_LOG_SCHEME, path: '/lab/shop-web-1.log' });
+  });
+
+  it('shows no Show Log on a report that offers no log (an image, or a container whose log driver is none)', async () => {
+    const h = harness();
+    h.read = async (target) => contentOf(target.object.name);
+    const image = await open(h, 'lab', nginx);
+    const container = await open(h, 'lab', web);
+    await flush();
+    expect(lastView(image).buttons.map((button) => button.action)).toEqual(['refresh']);
+    expect(lastView(container).buttons.map((button) => button.action)).toEqual(['refresh']);
+    // An old message of the page reads nothing.
+    container.receive({ type: 'showLog' });
+    await flush();
+    expect(h.readLog).not.toHaveBeenCalled();
   });
 });
 
@@ -379,7 +420,7 @@ describe('the setting devspaces.allowContainerLogs', () => {
     expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['refresh']);
     panel.receive({ type: 'showLog' });
     await flush();
-    expect(h.readMonitorLog).not.toHaveBeenCalled();
+    expect(h.readLog).not.toHaveBeenCalled();
     expect(fakeVscode.window.showTextDocument).not.toHaveBeenCalled();
     allowed = { actions: true, logs: true };
     h.pages.settingsChanged();

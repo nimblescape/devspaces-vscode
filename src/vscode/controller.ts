@@ -71,6 +71,7 @@ import type { WslAfterInstall } from '../core/docker/wslAfterInstall';
 import type { WslSetupCommands } from './wslSetupCommands';
 import type { LimaSetupCommands } from './limaSetupCommands';
 import type { DockerHostsView } from './dockerHostsView';
+import type { ContainerLogs } from './containerLogs';
 import type { ReportPages } from './reportPage';
 import type { UsagePages } from './usagePage';
 import { hostOfArgument, hostOfNode } from './dockerHostsModel';
@@ -207,6 +208,8 @@ export interface ControllerDeps {
   usagePages?: Pick<UsagePages, 'show'>;
   /** The report pages of the objects of the view "Docker Hosts" (R-ENG-010). */
   reportPages?: Pick<ReportPages, 'show'>;
+  /** Show Log of a container row of the view "Docker Hosts" (containerLogs.ts). Without it, the command does nothing. */
+  containerLogs?: Pick<ContainerLogs, 'showRow'>;
   /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
   vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
   /** Open Console of a host row of the view "Docker Hosts" (hostConsole.ts). Without it, the command does nothing. */
@@ -579,6 +582,7 @@ export class Controller implements vscode.Disposable {
       removeDockerObjects: async (argument, selection) => this.deps.dockerHosts?.removeObjects(argument, selection),
       showUtilization: async (argument) => this.deps.usagePages?.show(argument),
       showResourceReport: async (argument) => this.deps.reportPages?.show(argument),
+      showContainerLog: async (argument) => this.deps.containerLogs?.showRow(argument),
       startVm: async () => this.deps.vm?.start(),
       stopVm: async () => this.deps.vm?.stop(),
       removeVm: async () => this.deps.vm?.remove(),
@@ -613,6 +617,7 @@ export class Controller implements vscode.Disposable {
       'removeDockerObjects',
       'showUtilization',
       'showResourceReport',
+      'showContainerLog',
       'startVm',
       'stopVm',
       'removeVm',

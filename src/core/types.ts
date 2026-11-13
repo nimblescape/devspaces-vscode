@@ -508,8 +508,9 @@ export interface ExtensionSettings {
    */
   dockerHostsActions?: DockerHostsActions;
   /**
-   * Show Log of the Monitor on its reports (R-ENG-010), and the log of a container through the Docker pipes of
-   * Devspaces. Off (the default): no Show Log, and the pipes refuse the log of every container. Scope `application`.
+   * Show Log of every container in the view Docker Hosts and on its reports (R-ENG-008, R-ENG-010), and the log of a
+   * container through the Docker pipes of Devspaces. Off (the default): no Show Log, and the pipes refuse the log of
+   * every container. Scope `application`.
    */
   allowContainerLogs?: boolean;
   /** The button Docker Hosts Settings… in the title bar of the view Docker Hosts, which switches both. Default off. */

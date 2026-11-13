@@ -48,8 +48,13 @@ export interface ReportContent {
   sections: ReportSection[];
   /** What could not be read, in words (for example that the reader of the volumes found no image). */
   notices: string[];
-  /** The report offers Show Log of the Monitor. */
+  /** The report offers Show Log of the Monitor: the report of its container or of its volume. */
   monitorLog: boolean;
+  /**
+   * The report of any other container offers Show Log of its log: its full ID. Not for a container whose log driver gives
+   * no log (`none`).
+   */
+  containerLog?: string;
 }
 
 export function cell(text: string, chip?: ReportChip): ReportCell {
@@ -90,7 +95,7 @@ function dateAndTime(at: number, timeZone: string): { date: string; time: string
 /** One formatter per time zone for the times of a log (with seconds and milliseconds). */
 const LOG_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 
-/** A time as `2026-11-12 22:07:25.606` in `timeZone`: the times of the lines of a log (Show Log of the Monitor). */
+/** A time as `2026-11-12 22:07:25.606` in `timeZone`: the times of the lines of a log (Show Log). */
 export function logTimeText(at: number, timeZone: string): string {
   let format = LOG_FORMATTERS.get(timeZone);
   if (format === undefined) {

@@ -100,6 +100,8 @@ export const Commands = {
   // The report page of an object row of the view "Docker Hosts" (reportPage.ts, R-ENG-010): the click on the row and
   // Show Report of its menu (hidden in the Command Palette: it takes a row).
   showResourceReport: 'devspaces.showResourceReport',
+  // Show Log of a container row of the view Docker Hosts (R-ENG-008), while devspaces.allowContainerLogs is on.
+  showContainerLog: 'devspaces.showContainerLog',
   // The VM of Devspaces in its row of the view "Docker Hosts" (vmCommands.ts, R-VM-010), the same on every platform:
   // Start, Stop, Remove, Remove and Set Up Again, and its settings (macOS and Linux).
   startVm: 'devspaces.startVm',

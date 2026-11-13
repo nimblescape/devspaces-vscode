@@ -11,8 +11,9 @@
 // it reads its state first, and a stopped VM shows Start the VM. A tab that VS Code opens again at its start reads
 // nothing until Refresh, because the view has not read the host then. Thin glue: the reads run on the shared shell of
 // the host (readResourceReport, src/core/hosts/reportRead.ts), and what the page shows comes from reportPageModel.ts. A
-// read is a flow of the user, so a first login to a remote host may ask for a password. Show Log of the Monitor opens the
-// last lines of the log of the Monitor as a read-only document.
+// read is a flow of the user, so a first login to a remote host may ask for a password. Show Log of a container, and Show
+// Log of the Monitor on the reports of its container and its volume, open the last lines of the log as a read-only
+// document (containerLogs.ts).
 import { randomBytes } from 'crypto';
 import * as vscode from 'vscode';
 import { errorMessage } from '../core/errors';
@@ -21,7 +22,7 @@ import type { ReportClock, ReportContent } from '../core/hosts/reportModel';
 import { isAbortError, type Logger } from '../core/ports';
 import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
-import { showWarningMessage } from './notifications';
+import { monitorLogOf, type ContainerLog } from './containerLogs';
 import {
   REPORT_SCHEME,
   ReportPageTexts,
@@ -41,8 +42,6 @@ import {
 export const REPORT_VIEW_TYPE = 'devspaces.resourceReport';
 /** Folder of the style sheet and the script of the webview (package: resources/**). */
 const ASSETS = ['resources', 'reportPage'];
-/** The scheme of the read-only documents of Show Log of the Monitor. */
-export const MONITOR_LOG_SCHEME = 'devspaces-monitor-log';
 
 export interface ReportPagesDeps {
   extensionUri: vscode.Uri;
@@ -57,8 +56,8 @@ export interface ReportPagesDeps {
   objectOf: (host: string, kind: HostObjectKind, id: string) => HostObject | undefined;
   /** The report of `target`, read now on the shared shell of its host (readResourceReport). */
   read: (target: ReportTarget, clock: ReportClock) => Promise<ReportContent>;
-  /** The last lines of the log of the Monitor of `host`, with times in `timeZone` (readMonitorLog on the shared shell of the host). */
-  readMonitorLog: (host: string, timeZone: string) => Promise<string>;
+  /** Show Log of a container, or of the Monitor (ContainerLogs.show). */
+  showLog: (log: ContainerLog) => Promise<void>;
   /** Now, and the time zone of this computer, in which the page gives times. */
   clock: () => ReportClock;
   /** What the settings allow now (dockerHostsActions, allowContainerLogs), read at each update of a page. */
@@ -74,10 +73,6 @@ export function reportUri(target: ReportTarget): vscode.Uri {
 export class ReportPages implements vscode.CustomReadonlyEditorProvider, vscode.Disposable {
   private readonly pages = new Set<ReportPage>();
   private readonly registration: vscode.Disposable;
-  private readonly logs = new Map<string, string>();
-  private readonly logChanged = new vscode.EventEmitter<vscode.Uri>();
-  /** The provider of the documents of Show Log of the Monitor, registered at the first Show Log. */
-  private logProvider: vscode.Disposable | undefined;
   private disposed = false;
 
   constructor(private readonly deps: ReportPagesDeps) {
@@ -106,10 +101,7 @@ export class ReportPages implements vscode.CustomReadonlyEditorProvider, vscode.
       panel.webview.html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'"></head><body><p>${ReportPageTexts.notAReport}</p></body></html>`;
       return;
     }
-    const page: ReportPage = new ReportPage(panel, key, this.deps, {
-      disposed: () => this.pages.delete(page),
-      showLog: (host) => this.showLog(host),
-    });
+    const page: ReportPage = new ReportPage(panel, key, this.deps, { disposed: () => this.pages.delete(page) });
     this.pages.add(page);
   }
 
@@ -123,47 +115,11 @@ export class ReportPages implements vscode.CustomReadonlyEditorProvider, vscode.
     for (const page of this.pages) page.settingsChanged();
   }
 
-  /** Show Log of the Monitor: the last lines of its log on `host`, as a read-only document. */
-  private async showLog(host: string): Promise<void> {
-    // Off: Devspaces runs no `docker logs`, on any host (also not on the shell of the view, which no pipe filters).
-    if (!this.deps.allowed().logs) return;
-    let text: string;
-    try {
-      text = await withSshPrompts(() => this.deps.readMonitorLog(host, this.deps.clock().timeZone));
-    } catch (error) {
-      if (isAbortError(error)) return;
-      const detail = errorMessage(error);
-      this.deps.logger.warn(`The log of the Monitor on ${host} could not be read: ${detail}`);
-      void showWarningMessage(ReportPageTexts.logFailed(detail.split('\n')[0].slice(0, 300)));
-      return;
-    }
-    if (this.disposed) return;
-    this.logProvider ??= vscode.workspace.registerTextDocumentContentProvider(MONITOR_LOG_SCHEME, {
-      onDidChange: this.logChanged.event,
-      provideTextDocumentContent: (uri) => this.logs.get(uri.toString()) ?? '',
-    });
-    const uri = vscode.Uri.from({ scheme: MONITOR_LOG_SCHEME, path: `/${host}/devspaces-monitor.log` });
-    this.logs.set(uri.toString(), text.trim() === '' ? ReportPageTexts.logEmpty : `${text}\n`);
-    this.logChanged.fire(uri);
-    try {
-      const opened = await vscode.workspace.openTextDocument(uri);
-      // The colors of a log, where VS Code has the language `log`; without it the plain text.
-      const document = await vscode.languages.setTextDocumentLanguage(opened, 'log').then(undefined, () => opened);
-      await vscode.window.showTextDocument(document, { preview: false });
-    } catch (error) {
-      this.deps.logger.warn(`The log of the Monitor on ${host} could not be opened: ${errorMessage(error)}`);
-    }
-  }
-
   dispose(): void {
     this.disposed = true;
     this.registration.dispose();
     for (const page of [...this.pages]) page.dispose();
     this.pages.clear();
-    this.logProvider?.dispose();
-    this.logProvider = undefined;
-    this.logChanged.dispose();
-    this.logs.clear();
   }
 }
 
@@ -184,7 +140,7 @@ class ReportPage {
     private readonly panel: vscode.WebviewPanel,
     private readonly key: ReportKey,
     private readonly deps: ReportPagesDeps,
-    private readonly events: { disposed: () => void; showLog: (host: string) => Promise<void> },
+    private readonly events: { disposed: () => void },
   ) {
     const assets = vscode.Uri.joinPath(deps.extensionUri, ...ASSETS);
     const webview = panel.webview;
@@ -257,15 +213,25 @@ class ReportPage {
         }
         return;
       // A button that the settings do not allow (now) does nothing: the page may still show it until its next update.
-      case 'showLog':
-        if (this.deps.allowed().logs) void this.events.showLog(this.key.host);
-        else this.deps.logger.info(`Show Log of the Monitor on ${this.key.host} is not run: the setting devspaces.allowContainerLogs is off.`);
+      case 'showLog': {
+        const log = this.log();
+        if (log === undefined) this.deps.logger.info(`Show Log of the report of ${this.key.name} on ${this.key.host} is not run: the report offers no log.`);
+        else if (this.deps.allowed().logs) void this.deps.showLog(log);
+        else this.deps.logger.info(`Show Log of ${log.name} on ${this.key.host} is not run: the setting devspaces.allowContainerLogs is off.`);
         return;
+      }
       case 'startVm':
         if (this.deps.allowed().actions) void this.startVm();
         else this.deps.logger.info('Start the VM of a report page is not run: the setting devspaces.dockerHostsActions allows no actions.');
         return;
     }
+  }
+
+  /** The log that Show Log of the last read opens: of the Monitor (its container or its volume), or of the container. */
+  private log(): ContainerLog | undefined {
+    if (this.content?.monitorLog === true) return monitorLogOf(this.key.host);
+    const container = this.content?.containerLog;
+    return container !== undefined ? { host: this.key.host, container, name: this.target?.object.name ?? this.key.name, monitor: false } : undefined;
   }
 
   /** Start the VM of the banner: the start of the user, then the read. */

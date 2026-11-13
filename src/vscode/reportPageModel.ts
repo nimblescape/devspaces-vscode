@@ -146,7 +146,8 @@ export const ReportPageTexts = {
   reading: 'Reading…',
   read: (at: string) => `Read ${at}`,
   refresh: 'Refresh',
-  showLog: 'Show Log of the Monitor',
+  showLog: 'Show Log',
+  showMonitorLog: 'Show Log of the Monitor',
   startVm: 'Start the VM',
   failed: 'The report could not be read.',
   missing: 'The view Docker Hosts does not show this resource now.',
@@ -156,10 +157,7 @@ export const ReportPageTexts = {
   vmNotRunningReadOnly: 'The report reads nothing while the VM is stopped: a read would start it. Start a devspace, and click Refresh.',
   vmNotSetUp: 'The VM of Devspaces is not set up.',
   vmUnknown: (detail: string | undefined) => `The state of the VM of Devspaces is not known${detail !== undefined ? `: ${detail}` : '.'}`,
-  log: (host: string) => `Log of the Monitor on ${host}`,
-  logEmpty: 'The Monitor wrote nothing to its log yet.',
   notAReport: 'This address is not the address of a report of Devspaces.',
-  logFailed: (detail: string) => `The log of the Monitor could not be read: ${detail}`,
 };
 
 /**
@@ -192,7 +190,8 @@ export function reportPageView(input: {
   const { target, phase, content, allowed } = input;
   const busy = phase.kind === 'reading';
   const buttons: ReportButton[] = [];
-  if (content?.monitorLog === true && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
+  if (content?.monitorLog === true && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showMonitorLog });
+  else if (content?.containerLog !== undefined && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
   buttons.push({ action: 'refresh', label: ReportPageTexts.refresh, primary: true, ...(busy ? { disabled: true } : {}) });
   const status = phase.kind === 'reading' ? ReportPageTexts.reading : phase.kind === 'read' ? ReportPageTexts.read(timeText(phase.at, input.clock)) : '';
   const known = 'object' in target ? target.object : undefined;

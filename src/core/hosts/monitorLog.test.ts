@@ -2,13 +2,26 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// Show Log of the Monitor (docs/requirements.md R-ENG-010): one fixed call that reads the last lines of the log of the
-// container of the Monitor and never follows it; the shared shell knows this call exactly; the output and the errors of
-// the container come in the order of their times, each line with one time; a failure says why.
+// Show Log of a container (docs/requirements.md R-ENG-008, R-ENG-010): one fixed call that reads the last lines of the
+// log of a container (by its full ID, or the Monitor by its name) and never follows it; the shared shell knows this call
+// exactly; the output and the errors of the container come in the order of their times, each line with one time; a
+// failure says why.
 import { describe, expect, it } from 'vitest';
 import { CommandError } from '../errors';
 import type { RunOptions, RunResult } from '../ports';
-import { MONITOR_LOG_LINES, isMonitorLogCall, mergedLogLines, monitorLogArgs, readMonitorLog, readableTimes } from './monitorLog';
+import {
+  CONTAINER_LOG_LINES,
+  containerLogArgs,
+  isContainerLogCall,
+  isNoLogDriverError,
+  mergedLogLines,
+  monitorLogArgs,
+  readContainerLog,
+  readMonitorLog,
+  readableTimes,
+} from './monitorLog';
+
+const ID = 'a'.repeat(32) + '0123456789abcdef0123456789abcdef';
 
 const T = (second: number) => `2026-11-12T07:52:${String(second).padStart(2, '0')}.000000000Z`;
 /** The same time in milliseconds, as the Monitor writes it. */
@@ -27,20 +40,40 @@ function fakeDocker(result: RunResult) {
   };
 }
 
-describe('the call of Show Log of the Monitor', () => {
-  it('reads the last lines of the container devspaces-monitor with their times, and never follows the log', () => {
-    expect(monitorLogArgs()).toEqual(['logs', '--tail', String(MONITOR_LOG_LINES), '--timestamps', 'devspaces-monitor']);
+describe('the call of Show Log', () => {
+  it('reads the last lines of a container by its full ID, or of the Monitor, with their times, and never follows the log', () => {
+    expect(monitorLogArgs()).toEqual(['logs', '--tail', String(CONTAINER_LOG_LINES), '--timestamps', 'devspaces-monitor']);
+    expect(containerLogArgs(ID)).toEqual(['logs', '--tail', String(CONTAINER_LOG_LINES), '--timestamps', ID]);
     expect(monitorLogArgs()).not.toContain('--follow');
     expect(monitorLogArgs()).not.toContain('-f');
   });
 
+  it('refuses any other name of a container: a name, a short ID, an option', () => {
+    for (const name of ['shop-web-1', ID.slice(0, 12), `${ID}0`, ID.toUpperCase(), '--follow', '', `${ID.slice(0, 63)};`]) expect(() => containerLogArgs(name), name).toThrow();
+  });
+
   it('is known exactly: another container, another number of lines, or one more word is another call', () => {
-    expect(isMonitorLogCall(monitorLogArgs())).toBe(true);
-    expect(isMonitorLogCall(['logs', '--tail', String(MONITOR_LOG_LINES), '--timestamps', 'shop-web-1'])).toBe(false);
-    expect(isMonitorLogCall(['logs', '--tail', '100000', '--timestamps', 'devspaces-monitor'])).toBe(false);
-    expect(isMonitorLogCall([...monitorLogArgs(), '--follow'])).toBe(false);
-    expect(isMonitorLogCall(['logs', '--follow', 'devspaces-monitor'])).toBe(false);
-    expect(isMonitorLogCall([])).toBe(false);
+    expect(isContainerLogCall(monitorLogArgs())).toBe(true);
+    expect(isContainerLogCall(containerLogArgs(ID))).toBe(true);
+    expect(isContainerLogCall(['logs', '--tail', String(CONTAINER_LOG_LINES), '--timestamps', 'shop-web-1'])).toBe(false);
+    expect(isContainerLogCall(['logs', '--tail', String(CONTAINER_LOG_LINES), '--timestamps', ID.slice(0, 12)])).toBe(false);
+    expect(isContainerLogCall(['logs', '--tail', '100000', '--timestamps', 'devspaces-monitor'])).toBe(false);
+    expect(isContainerLogCall(['logs', '--tail', String(CONTAINER_LOG_LINES), '--follow', ID])).toBe(false);
+    expect(isContainerLogCall([...monitorLogArgs(), '--follow'])).toBe(false);
+    expect(isContainerLogCall(['logs', '--follow', 'devspaces-monitor'])).toBe(false);
+    expect(isContainerLogCall([])).toBe(false);
+  });
+});
+
+describe('readContainerLog', () => {
+  it('reads the log of a container by its ID, and knows the error of a log driver that gives no log', async () => {
+    const docker = fakeDocker({ exitCode: 0, stdout: `${T(1)} listening on :80\n`, stderr: '', timedOut: false });
+    expect(await readContainerLog(docker, ID, 'UTC')).toBe(`${L(1)} listening on :80`);
+    expect(docker.calls[0].args).toEqual(containerLogArgs(ID));
+    const none = readContainerLog(fakeDocker({ exitCode: 1, stdout: '', stderr: 'Error response from daemon: configured logging driver does not support reading\n', timedOut: false }), ID, 'UTC');
+    await expect(none).rejects.toBeInstanceOf(CommandError);
+    await expect(none).rejects.toSatisfy((error: CommandError) => isNoLogDriverError(error.message));
+    expect(isNoLogDriverError('Error response from daemon: No such container: x')).toBe(false);
   });
 });
 

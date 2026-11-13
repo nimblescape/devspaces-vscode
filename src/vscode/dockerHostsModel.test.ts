@@ -291,6 +291,7 @@ describe('the menus of the view (package.json)', () => {
     actions: string;
     settingsButton?: boolean;
     consoleButton?: boolean;
+    logs?: boolean;
   }
   /** Whether the clauses `config.devspaces.…` of `when` hold with `settings` (the platform clauses are not checked). */
   const configHolds = (when: string, settings: ViewSettings): boolean => {
@@ -300,6 +301,7 @@ describe('the menus of the view (package.json)', () => {
     if (match !== null && !new RegExp(match[1]).test(settings.actions)) return false;
     if (when.includes('config.devspaces.dockerHostsSettingsButton') && settings.settingsButton !== true) return false;
     if (when.includes('config.devspaces.dockerHostsConsoleButton') && settings.consoleButton !== true) return false;
+    if (when.includes('config.devspaces.allowContainerLogs') && settings.logs !== true) return false;
     return true;
   };
   /** The commands of a row with `contextValue` (the clause viewItem and the settings of each `when`): its context menu, or its buttons. */
@@ -327,7 +329,7 @@ describe('the menus of the view (package.json)', () => {
     buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 10, unusedBytes: 10 } }).contextValue,
   ];
   /** The commands that only read: they stay in every mode. */
-  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.refreshDockerHosts'];
+  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.showContainerLog', 'devspaces.refreshDockerHosts'];
 
   it('shows the view "Docker Hosts" below the repositories', () => {
     expect(manifest.contributes.views.devspaces.map((view) => view.id)).toEqual(['devspaces.repositories', DOCKER_HOSTS_VIEW_ID]);
@@ -393,12 +395,29 @@ describe('the menus of the view (package.json)', () => {
       const buttons = commandsOf(contextValue, true, { actions: 'icons' });
       // A click on an object row opens its report: Show Report is no button.
       for (const command of menu.filter((entry) => entry !== 'devspaces.showResourceReport')) expect(buttons, `${contextValue}: ${command}`).toContain(command);
+      expect(commandsOf(contextValue, true, { actions: 'icons', logs: true }), contextValue).not.toContain('devspaces.showContainerLog');
     }
     expect(commandsOf(rows()[4], true, { actions: 'icons' })).toEqual(['devspaces.stop', 'devspaces.delete']);
     expect(commandsOf(rows()[5], true, { actions: 'icons' })).toEqual(['devspaces.stopDockerObject']);
     expect(commandsOf(rows()[7], true, { actions: 'icons' })).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
     expect(titleOf({ actions: 'icons' }, true)).toEqual(['devspaces.useRemoteDockerHost', 'devspaces.refreshDockerHosts']);
     expect(titleOf({ actions: 'icons' }, false)).toEqual([]);
+  });
+
+  it('offers Show Log in the context menu of every container row while the logs are on, in every mode, and never as a button', () => {
+    const containers = rows().filter((contextValue) => contextValue.startsWith('hostsObject;container;'));
+    expect(containers).toHaveLength(4);
+    for (const actions of ['disabled', 'contextMenu', 'icons']) {
+      for (const contextValue of rows()) {
+        const menu = commandsOf(contextValue, false, { actions, logs: true });
+        if (containers.includes(contextValue)) expect(menu.slice(0, 2), contextValue).toEqual(['devspaces.showResourceReport', 'devspaces.showContainerLog']);
+        else expect(menu, contextValue).not.toContain('devspaces.showContainerLog');
+        expect(commandsOf(contextValue, false, { actions, logs: false }), contextValue).not.toContain('devspaces.showContainerLog');
+        expect(commandsOf(contextValue, true, { actions, logs: true }), contextValue).not.toContain('devspaces.showContainerLog');
+      }
+    }
+    // The other objects have no log: an image, a volume, a network.
+    expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue, false, { actions: 'icons', logs: true })).toEqual(['devspaces.showResourceReport']);
   });
 
   it('shows the gear Docker Hosts Settings… with its setting, and Open Console on each host row with an engine with its setting', () => {

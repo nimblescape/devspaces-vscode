@@ -22,7 +22,7 @@ export const DockerHostsSettingsTexts = {
     contextMenu: { label: 'Context Menu', detail: 'The actions are in the context menu of a row.' },
     icons: { label: 'Icons', detail: 'Every action is a button on its row, and in the context menu.' },
   } satisfies Record<DockerHostsActions, { label: string; detail: string }>,
-  logsOn: { label: 'Allow', detail: 'Show Log of the Monitor, and the Docker pipe of Devspaces carries the log of any container.' },
+  logsOn: { label: 'Allow', detail: 'Show Log of every container, and the Docker pipe of Devspaces carries the log of any container.' },
   logsOff: { label: 'Do Not Allow', detail: 'No log of a container: the Docker pipe of Devspaces refuses every log.' },
   current: 'current',
   off: 'The Docker Hosts Settings button is off: turn on the setting devspaces.dockerHostsSettingsButton, or change the settings in the Settings editor.',
