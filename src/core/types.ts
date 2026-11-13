@@ -464,9 +464,10 @@ export interface ExtensionSettings {
   stopMonitorWhenIdle?: boolean;
   /**
    * What an open does when a newer image is available for the existing container of the devspace (running or
-   * stopped). `notify` (default): a modal message that the container is updated now (Continue, or Cancel: the open ends
-   * without connecting); `ask`: a modal question (Update Now, or Later: the existing container starts and the window
-   * connects without the update).
+   * stopped). `yes`: the update without a dialog (a running container is stopped and created again); `notify`
+   * (default): a modal message that the container is updated now (Continue, or Cancel: the open ends without
+   * connecting); `ask`: a modal question (Update Now, or Later: the existing container starts and the window connects
+   * without the update).
    */
   updateContainer?: UpdateContainer;
   /**
@@ -504,7 +505,7 @@ export interface ExtensionSettings {
 }
 
 /** The values of the setting updateContainer. */
-export type UpdateContainer = 'notify' | 'ask';
+export type UpdateContainer = 'yes' | 'notify' | 'ask';
 
 /**
  * What a devspace is built from: one Dev Container configuration of its repository (`configPath`), or the default

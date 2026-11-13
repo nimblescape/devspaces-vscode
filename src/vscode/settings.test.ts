@@ -321,16 +321,17 @@ describe('settings', () => {
     }
   });
 
-  // updateContainer, `ask` or else `notify`; one value per user and computer.
-  it('reads updateContainer: `ask`, anything else is `notify`, and declares it in package.json', () => {
+  // updateContainer, `yes` or `ask` or else `notify`; one value per user and computer.
+  it('reads updateContainer: `yes` and `ask`, anything else is `notify`, and declares it in package.json', () => {
     const read = (value: unknown) => normalizeSettings((key) => (key === 'updateContainer' ? value : undefined)).updateContainer;
+    expect(read('yes')).toBe('yes');
     expect(read('ask')).toBe('ask');
-    for (const value of ['notify', undefined, 'Ask', true, 'never']) expect(read(value), String(value)).toBe('notify');
+    for (const value of ['notify', undefined, 'Ask', 'Yes', true, 'never']) expect(read(value), String(value)).toBe('notify');
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { configuration: { properties: Record<string, { default?: unknown; enum?: unknown; scope?: string; type?: string }> } };
     };
     const properties = manifest.contributes.configuration.properties;
-    expect(properties[`${SETTINGS_SECTION}.updateContainer`]).toMatchObject({ type: 'string', enum: ['notify', 'ask'], default: 'notify', scope: 'application' });
+    expect(properties[`${SETTINGS_SECTION}.updateContainer`]).toMatchObject({ type: 'string', enum: ['yes', 'notify', 'ask'], default: 'notify', scope: 'application' });
     expect(properties[`${SETTINGS_SECTION}.updateRunningContainer`]).toBeUndefined();
   });
 
