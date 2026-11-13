@@ -303,10 +303,10 @@ export interface PipelineUi {
   recreateContainer(repository: string, question: { message: string; detail: string }): Promise<boolean>;
   /**
    * A newer image is available for the existing container of the devspace (`running`: it
-   * runs). The window words it after the setting updateContainer: `notify` gives `update` (Continue) or `cancel`
-   * (Cancel, or a dismissed message: the open ends, nothing is changed and the window is not connected); `ask` gives
-   * `update` (Update Now) or `later` (Later, or a dismissed question: the existing container starts and the window
-   * connects without the update).
+   * runs). The window answers it after the setting updateContainer: `yes` gives `update` without a dialog; `notify`
+   * gives `update` (Continue) or `cancel` (Cancel, or a dismissed message: the open ends, nothing is changed and the
+   * window is not connected); `ask` gives `update` (Update Now) or `later` (Later, or a dismissed question: the existing
+   * container starts and the window connects without the update).
    */
   updateContainer(repository: string, running: boolean): Promise<'update' | 'later' | 'cancel'>;
   /**

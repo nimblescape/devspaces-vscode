@@ -8,7 +8,7 @@ import { errorMessage } from '../core/errors';
 import { HOST_ACCESS_CHECKS_OFF_SETTING, parseHostAccessChecksOff } from '../core/policy/hostAccessChecks';
 import { Actions, Messages } from '../core/messages';
 import type { Logger } from '../core/ports';
-import type { ExtensionSettings } from '../core/types';
+import type { ExtensionSettings, UpdateContainer } from '../core/types';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, normalizeCacheSchedule, parseCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { parseImageReference } from '../core/remoteMonitor/protocol';
 import { DEFAULT_VM_CPUS, DEFAULT_VM_MEMORY_GIB, limaResources } from '../core/vm/limaInstance';
@@ -319,8 +319,8 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     // The Monitor of a remote host runs permanently unless this is true (monitorRunsPermanently); on the VM of Devspaces
     // and on the Docker of the computer it always ends when idle.
     stopMonitorWhenIdle: bool('stopMonitorWhenIdle', DEFAULT_SETTINGS.stopMonitorWhenIdle ?? false),
-    // `ask`, or else the default `notify`.
-    updateContainer: get('updateContainer') === 'ask' ? 'ask' : 'notify',
+    // `yes` or `ask`, or else the default `notify`.
+    updateContainer: updateContainer(get('updateContainer')),
     // The image reference, or '' (none; an invalid value is ignored, warnInvalidDefaultImage names it).
     defaultImage: normalizeDefaultImage(get('defaultImage')) ?? '',
     startWithDefaultImage: bool('startWithDefaultImage', DEFAULT_SETTINGS.startWithDefaultImage ?? true),
@@ -331,6 +331,11 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     vmCpus: wholeNumber(get('vmCpus'), DEFAULT_VM_CPUS),
     createDockerContext: bool('createDockerContext', DEFAULT_SETTINGS.createDockerContext ?? false),
   };
+}
+
+/** The setting updateContainer: `yes` or `ask` as written, anything else the default `notify`. */
+function updateContainer(value: unknown): UpdateContainer {
+  return value === 'yes' || value === 'ask' ? value : 'notify';
 }
 
 /** `value` as a whole number of at least 1 (rounded down), or `fallback` for a value that is no number. */

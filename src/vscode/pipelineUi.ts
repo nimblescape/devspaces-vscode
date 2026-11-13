@@ -130,11 +130,17 @@ export class VsCodePipelineUi implements PipelineUi {
   }
 
   /**
-   * A newer image for the existing container of `repository` (`running`: it runs), after the setting updateContainer. A
-   * dismissed dialog is the answer of its close affordance: Cancel (`notify`) or Later (`ask`).
+   * A newer image for the existing container of `repository` (`running`: it runs), after the setting updateContainer:
+   * `yes` updates without a dialog (the progress names the update, Messages.newerImage). A dismissed dialog is the
+   * answer of its close affordance: Cancel (`notify`) or Later (`ask`).
    */
   async updateContainer(repository: string, running: boolean): Promise<'update' | 'later' | 'cancel'> {
-    const ask = this.updateContainerSetting() === 'ask';
+    const setting = this.updateContainerSetting();
+    if (setting === 'yes') {
+      this.logger.info(`${repository}: its ${running ? 'running' : 'stopped'} container is updated without a question (setting updateContainer: yes).`);
+      return 'update';
+    }
+    const ask = setting === 'ask';
     const accept: vscode.MessageItem = { title: ask ? Actions.updateNow : Actions.continue };
     const decline: vscode.MessageItem = { title: ask ? Actions.later : Actions.cancel, isCloseAffordance: true };
     const message = ask ? Messages.containerUpdateQuestion(repository, running) : Messages.containerUpdateNotice(repository, running);
