@@ -104,10 +104,10 @@ const SYMBOLIC_LINK_GUARD = `[ ! -L ${AUTHORIZED_KEYS} ] || { echo '~/${AUTHORIZ
  * into a copy of the file (`cp -p`: its mode and owner), which then replaces it, so that a failed write (a full disk)
  * leaves the file as it was; then `restorecon` when the host has it, and the end of the subshell.
  */
-const REPLACE_WITH_KEPT = [
-  `cp -p ${AUTHORIZED_KEYS} ${AUTHORIZED_KEYS}.devspaces-$$ && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${AUTHORIZED_KEYS}.devspaces-$$ && mv -f ${AUTHORIZED_KEYS}.devspaces-$$ ${AUTHORIZED_KEYS} || { s=$?; rm -f ${AUTHORIZED_KEYS}.devspaces-$$; exit $s; }`,
-  `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${AUTHORIZED_KEYS} >/dev/null 2>&1 || true; } )`,
-];
+const REPLACE_WITH_KEPT = ((file: string, copy: string) => [
+  `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
+  `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${file} >/dev/null 2>&1 || true; } )`,
+])(AUTHORIZED_KEYS, `${AUTHORIZED_KEYS}.devspaces-$$`);
 
 /** One line for the shell before the relay whose exit code is 0 when `key` is in `~/.ssh/authorized_keys` (no comment). */
 export function authorizedKeyPresentCommand(key: PublicKey): string {

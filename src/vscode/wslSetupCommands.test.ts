@@ -584,12 +584,15 @@ describe('the removal of the distribution for Remove Devspaces from This Compute
     registered('own');
     const forgetDistribution = vi.fn(async () => undefined);
     const beforeRemove = vi.fn();
-    expect(await commands({ forgetDistribution, beforeRemove }).removeForComputer()).toBeUndefined();
+    const distributionGone = vi.fn();
+    expect(await commands({ forgetDistribution, beforeRemove, distributionGone }).removeForComputer()).toBeUndefined();
     expect(setup.locked).toHaveBeenCalledTimes(1);
     expect(beforeRemove).toHaveBeenCalledTimes(1);
     expect(setup.remove).toHaveBeenCalledTimes(1);
     // Not the update of the Docker context and of the task in the background: the next step of the command removes them.
     expect(forgetDistribution).not.toHaveBeenCalled();
+    // Mutation: without it, the window keeps the distribution as its Docker host and serves the pipe of the context.
+    expect(distributionGone).toHaveBeenCalledTimes(1);
     expect(forgetHost).toHaveBeenCalledWith(WSL_HOST);
     expect(window.showWarningMessage).not.toHaveBeenCalled();
     expect(window.showInformationMessage).not.toHaveBeenCalled();
@@ -606,8 +609,9 @@ describe('the removal of the distribution for Remove Devspaces from This Compute
   });
 
   it('says what stays: a distribution that Devspaces did not set up, another window that holds the lock, a refused removal', async () => {
+    const distributionGone = vi.fn();
     registered('foreign');
-    expect(await commands().removeForComputer()).toBe(WslSetupTexts.foreignRemove);
+    expect(await commands({ distributionGone }).removeForComputer()).toBe(WslSetupTexts.foreignRemove);
     expect(setup.remove).not.toHaveBeenCalled();
     expect(forgetHost).not.toHaveBeenCalled();
     registered('own');
@@ -618,8 +622,9 @@ describe('the removal of the distribution for Remove Devspaces from This Compute
     expect(await commands().removeForComputer()).toBe(`${WslSetupTexts.problem('removeFailed')} Access is denied.`);
     expect(forgetHost).not.toHaveBeenCalled();
     setup.remove.mockRejectedValue(new Error('boom'));
-    expect(await commands().removeForComputer()).toBe('The WSL distribution of Devspaces could not be removed: boom');
+    expect(await commands({ distributionGone }).removeForComputer()).toBe('The WSL distribution of Devspaces could not be removed: boom');
     expect(window.showErrorMessage).not.toHaveBeenCalled();
+    expect(distributionGone).not.toHaveBeenCalled();
     // Without the WSL setup of this computer there is nothing to remove.
     expect(await commands({ setup: undefined }).removeForComputer()).toBeUndefined();
   });

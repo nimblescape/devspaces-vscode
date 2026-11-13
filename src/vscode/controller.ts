@@ -1732,8 +1732,9 @@ export class Controller implements vscode.Disposable {
     const others = onEngines.filter((devspace) => !own.includes(devspace));
     const inVm = inventory.vm === undefined ? [] : known.filter((devspace) => isOnDockerHost(devspace, inventory.vm as string));
     const deleted = [...own, ...inVm];
-    // The devspaces that the question names: one of the accounts of Devspaces that is created later is never deleted.
-    const named = new Set(deleted.map((devspace) => devspace.id));
+    // The devspaces of this computer when it asks: one that comes later (of any account, also one that signed in later)
+    // makes the removal leave its host or the VM, so that it is never deleted, and nothing is removed under it.
+    const named = new Set(known.map((devspace) => devspace.id));
     const detail = [
       ...(inventory.listUnreadable !== undefined ? [ControllerTexts.removeComputerListUnreadable] : []),
       ...(inventory.engines.length > 0 ? [ControllerTexts.removeComputerEngines(inventory.engines.map(describeDockerHost), own.length)] : []),
@@ -1843,8 +1844,9 @@ export class Controller implements vscode.Disposable {
 
   /**
    * The removal from the remote Docker host `host` for "Remove Devspaces from This Computer…", as one operation on that
-   * host, without the questions of removeFromCheckedEngine: the devspaces of `accounts` there are deleted, but only
-   * those of `named`, the devspaces that the question named. What stays there (each item is in the log), or undefined
+   * host, without the questions of removeFromCheckedEngine: the devspaces of `accounts` there are deleted. A devspace
+   * there that is not in `named` (the devspaces of this computer when the question asked) makes it remove nothing
+   * there. What stays there (each item is in the log), or undefined
    * when nothing of Devspaces stays except the devspaces that are not deleted (other accounts, other computers).
    */
   private async removeEngineForComputer(
@@ -1861,7 +1863,7 @@ export class Controller implements vscode.Disposable {
       if (target.kind === 'unsupported') return ControllerTexts.computerEngineFailed(engine, unsupportedTargetReason(target));
       const known = await this.deps.registry.list();
       const here = known.filter((devspace) => isOnDockerHost(devspace, host));
-      const refusal = (await this.useRefusal(engine, here)) ?? this.newDevspacesRefusal(`on ${engine}`, availableDevspaces(here, accounts), named);
+      const refusal = (await this.useRefusal(engine, here)) ?? this.newDevspacesRefusal(`on ${engine}`, here, named);
       if (refusal !== undefined) return refusal;
       // As removeFromDockerEngineNow: also no removal mark while another window removes Devspaces from there.
       if ((await this.otherWindowRemoval(host)) !== undefined) return ControllerTexts.removalRunningElsewhere(engine);
@@ -1890,7 +1892,7 @@ export class Controller implements vscode.Disposable {
         // A window that connected to a devspace there, or an operation that began, since the check above (also on a
         // devspace that was created meanwhile): nothing is removed there, as at the start.
         const hereNow = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, host));
-        const refusalNow = (await this.useRefusal(engine, hereNow)) ?? this.newDevspacesRefusal(`on ${engine}`, availableDevspaces(hereNow, accounts), named);
+        const refusalNow = (await this.useRefusal(engine, hereNow)) ?? this.newDevspacesRefusal(`on ${engine}`, hereNow, named);
         if (refusalNow !== undefined) return refusalNow;
         stopped = false;
         // The extension is uninstalled at the end, so no background work of this computer comes back without the mark.
@@ -1915,14 +1917,14 @@ export class Controller implements vscode.Disposable {
    * The removal of the VM of Devspaces for "Remove Devspaces from This Computer…" (ComputerCleanup.removeVm), after the
    * checks of the use again: a window that connected to a devspace in the VM, or an operation that began there, while the
    * remote hosts were removed keeps the VM, because its removal would delete that devspace under it; so does a devspace
-   * in the VM that the question did not name (`named`). What stays, or undefined.
+   * in the VM that came after the question (not in `named`). What stays, or undefined.
    */
   private async removeVmForComputer(cleanup: NonNullable<ControllerDeps['computerCleanup']>, vmHost: string, named: ReadonlySet<string>): Promise<string | undefined> {
     const inVm = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, vmHost));
     return (await this.useRefusal(ControllerTexts.theVm, inVm)) ?? this.newDevspacesRefusal(ControllerTexts.inTheVm, inVm, named) ?? (await cleanup.removeVm());
   }
 
-  /** The refusal for the devspaces of `devspaces` that the question of "Remove Devspaces from This Computer…" did not name. */
+  /** The refusal for the devspaces of `devspaces` that came after the question of "Remove Devspaces from This Computer…". */
   private newDevspacesRefusal(where: string, devspaces: readonly Devspace[], named: ReadonlySet<string>): string | undefined {
     const added = devspaces.filter((devspace) => !named.has(devspace.id));
     if (added.length === 0) return undefined;

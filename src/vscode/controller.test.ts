@@ -4558,12 +4558,11 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
   });
 
-  // Mutation: the devspaces to delete read again on each host without the names of the question, so that a devspace
-  // that another window created after the question is deleted with its changes, without a question.
-  it('removes nothing from a host or the VM where a devspace of the account came after the question, and keeps the key for that host', async () => {
+  // Mutation: the devspaces to delete read again on each host without the devspaces of the question, so that a devspace
+  // that another window created after the question is deleted with its changes, without a question, or loses the
+  // Monitor and the shared volumes under it (no devspace when it asked, so no accounts were read then).
+  it('removes nothing from a host or the VM where a devspace came after the question, and keeps the key for that host', async () => {
     const { order, cleanup } = onComputer({ engines: ['old-box', 'build-box'], keyHosts: ['build-box'] });
-    // A devspace of another account on old-box, so that the accounts of Devspaces are read before the question.
-    await h.registry.add({ ...otherAccountRemote(), dockerHost: 'old-box' });
     // While old-box is removed, another window creates a devspace on build-box and one in the VM, and closes.
     let added = false;
     h.registry.list = ((list) => async () => {

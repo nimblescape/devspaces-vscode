@@ -1370,6 +1370,10 @@ async function activateExtension(
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
       background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
     },
+    distributionGone: () => {
+      wslDistributionKnown(false);
+      contextPipe?.stop();
+    },
   });
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
   // Devspaces.
@@ -1751,8 +1755,12 @@ async function activateExtension(
       // the VM removes; without them, the folder of Devspaces would stay at every run of the command.
       vmExists: async () => {
         if (limaVm !== undefined) return limaVm.exists();
-        if (wslFolder === undefined) return false;
-        return (await readVmState()).kind !== 'notSetUp' || fs.existsSync(wslFolder);
+        if (wslSetupCore === undefined || wslFolder === undefined) return false;
+        if (fs.existsSync(wslFolder)) return true;
+        // Only the registry (no wsl.exe); an error counts as there (ComputerCleanup.inventory).
+        const registration = await wslSetupCore.registration();
+        wslDistributionKnown(registration !== 'none');
+        return registration === 'own';
       },
       removeVm: () => (limaVm !== undefined ? limaSetup.removeForComputer() : wslSetup.removeForComputer()),
       key: sshKeys,

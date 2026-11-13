@@ -170,6 +170,11 @@ export interface WslSetupCommandsDeps {
    */
   forgetDistribution?: () => Promise<void>;
   /**
+   * After removeForComputer: the window forgets the distribution without an update in the background (the Docker host of
+   * Devspaces is read again, and the pipe of the Docker context stops).
+   */
+  distributionGone?: () => void;
+  /**
    * Right before `wsl --unregister`: the connections of this window to the distribution end (its worker, the relay), so
    * that nothing of this window holds or starts it during the removal.
    */
@@ -402,7 +407,7 @@ export class WslSetupCommands {
    * all windows. A distribution that Devspaces did not set up stays. Undefined when the distribution of Devspaces is
    * gone (also when there was none), else what stays, for the message of that command (logged). Never throws. Without
    * forgetDistribution: the next step of that command removes the Docker context and the scheduled task itself
-   * (removeDevspacesFiles), so that no update in the background removes them at the same time.
+   * (removeDevspacesFiles), so that no update in the background removes them at the same time; distributionGone instead.
    */
   async removeForComputer(): Promise<string | undefined> {
     const { setup, folder, logger } = this.deps;
@@ -427,6 +432,7 @@ export class WslSetupCommands {
         return 'gone' as const;
       });
       if (done === undefined) return WslSetupTexts.busyElsewhere;
+      if (done.value === 'gone') this.deps.distributionGone?.();
       if (done.value === 'foreign') {
         logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
         return WslSetupTexts.foreignRemove;
