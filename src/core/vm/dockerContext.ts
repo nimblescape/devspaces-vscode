@@ -15,7 +15,7 @@ import * as path from 'path';
 import { envValue } from '../docker/dockerCli';
 import { errorMessage } from '../errors';
 import type { RunResult } from '../ports';
-import { errorCode } from '../storage/paths';
+import { errorCode, retryTransient } from '../storage/paths';
 import { isRecord } from '../valueChecks';
 
 export const DOCKER_CONTEXT = 'devspaces';
@@ -132,12 +132,14 @@ export async function removeDockerContextFiles(configDir: string, environmentCon
   if (state.kind === 'missing') return { kind: 'missing' };
   if (state.kind === 'other') return { kind: 'taken' };
   try {
-    const current = environmentContext === DOCKER_CONTEXT ? 'ours' : currentContextOf(configDir);
+    const current = environmentContext === DOCKER_CONTEXT ? 'ours' : await currentContextOf(configDir);
     if (current === 'ours') return { kind: 'current' };
     if (current === 'unknown') return { kind: 'unreadable' };
     const folder = path.dirname(file);
-    await fs.promises.rm(path.join(configDir, 'contexts', 'tls', path.basename(folder)), { recursive: true, force: true });
-    await fs.promises.rm(folder, { recursive: true, force: true });
+    // The metadata first: without it, the Docker CLI lists no context, also when its TLS folder could not be removed.
+    // A virus scanner or the indexer of Windows can hold a file for a short time.
+    await retryTransient(() => fs.promises.rm(folder, { recursive: true, force: true }));
+    await retryTransient(() => fs.promises.rm(path.join(configDir, 'contexts', 'tls', path.basename(folder)), { recursive: true, force: true }));
     return { kind: 'removed' };
   } catch (error) {
     return { kind: 'failed', detail: errorMessage(error) };
@@ -148,10 +150,10 @@ export async function removeDockerContextFiles(configDir: string, environmentCon
  * Whether `currentContext` of the `config.json` in `configDir` names the context `devspaces`: `ours` when it does,
  * `unknown` when the file exists but cannot be read as JSON, `other` else (also without the file).
  */
-function currentContextOf(configDir: string): 'ours' | 'unknown' | 'other' {
+async function currentContextOf(configDir: string): Promise<'ours' | 'unknown' | 'other'> {
   let text: string;
   try {
-    text = fs.readFileSync(path.join(configDir, 'config.json'), 'utf8');
+    text = await fs.promises.readFile(path.join(configDir, 'config.json'), 'utf8');
   } catch (error) {
     return errorCode(error) === 'ENOENT' ? 'other' : 'unknown';
   }

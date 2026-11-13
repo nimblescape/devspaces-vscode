@@ -13,7 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { errorMessage } from '../errors';
-import type { Logger, ProcessRunner } from '../ports';
+import type { Logger, ProcessRunner, RunResult } from '../ports';
 import { parseCacheSchedule, type CacheSchedule } from '../remoteMonitor/cacheSettings';
 import { REMOTE_MONITOR_CONTAINER, REMOTE_MONITOR_SCRIPT_PATH, imageSettingsOf, type ImageSettings } from '../remoteMonitor/protocol';
 import { envValue } from './dockerCli';
@@ -362,9 +362,8 @@ export class WslTask {
    * `unknown: <failure>` when the call did not end by itself (time limit, or a signal), because that tells nothing.
    */
   private async exists(sid: string): Promise<'yes' | 'no' | `unknown: ${string}`> {
-    const args = ['/Query', '/TN', wslTaskName(sid)];
-    const result = await this.deps.runner.run(system32Program(this.deps.env, 'schtasks.exe'), args, { timeoutMs: TASK_CALL_TIMEOUT_MS });
-    if (result.timedOut || result.exitCode === null) return `unknown: schtasks ${args[0]} ${failureOf(result)}`;
+    const result = await this.runSchtasks(['/Query', '/TN', wslTaskName(sid)]);
+    if (result.timedOut || result.exitCode === null) return `unknown: schtasks /Query ${failureOf(result)}`;
     return result.exitCode === 0 ? 'yes' : 'no';
   }
 
@@ -380,13 +379,17 @@ export class WslTask {
 
   /** Runs `schtasks.exe` with `args`: undefined when it ended well, else a description of the failure. */
   private async schtasks(args: string[]): Promise<string | undefined> {
-    const result = await this.deps.runner.run(system32Program(this.deps.env, 'schtasks.exe'), args, { timeoutMs: TASK_CALL_TIMEOUT_MS });
+    const result = await this.runSchtasks(args);
     if (result.exitCode === 0 && !result.timedOut) return undefined;
     return `schtasks ${args[0]} ${failureOf(result)}`;
   }
+
+  private runSchtasks(args: string[]): Promise<RunResult> {
+    return this.deps.runner.run(system32Program(this.deps.env, 'schtasks.exe'), args, { timeoutMs: TASK_CALL_TIMEOUT_MS });
+  }
 }
 
-function failureOf(result: { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }): string {
+function failureOf(result: RunResult): string {
   if (result.timedOut) return `did not end within ${TASK_CALL_TIMEOUT_MS / 1000} seconds`;
   if (result.exitCode === null) return 'was ended by a signal';
   const output = (result.stderr || result.stdout).trim();
