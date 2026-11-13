@@ -123,6 +123,11 @@ export const ControllerTexts = {
   computerNewDevspaces: (where: string, count: number, names: string) =>
     `${count === 1 ? 'A devspace was' : 'Devspaces were'} created ${where} after the question: ${names}. Nothing was removed there, so that no devspace is deleted without a question. Run the command again.`,
   inTheVm: 'in the VM of Devspaces',
+  /** Devspaces that the question named for the delete, whose account Devspaces could not use any more during the removal. */
+  computerAccountDevspacesStay: (engine: string, count: number, names: string) =>
+    `${count === 1 ? 'One devspace' : `${count} devspaces`} on ${engine} stayed: ${names}. During the removal, ${count === 1 ? 'its GitHub account was' : 'their GitHub accounts were'} not signed in to Devspaces any more, or could not be read. Run the command again with the account signed in.`,
+  /** An error that no part of "Remove Devspaces from This Computer…" handles: it ends the removal there. */
+  computerRemovalFailed: (detail: string) => `The removal of Devspaces from this computer stopped after an error: ${detail}`,
   computerVmSetUpMeanwhile:
     'The VM of Devspaces was set up after the question, so it stays, and so do its scheduled task, the Docker context devspaces and the folder of Devspaces. Run the command again.',
   uninstallFailed: (detail: string) => `VS Code could not uninstall the extension: ${detail.replace(/\.$/, '')}. Uninstall it in the Extensions view.`,

@@ -16,7 +16,8 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 
 import type { RunOptions, RunResult } from '../core/ports';
 import { NO_KEY_LINE_TEXT } from '../core/sshKey';
-import { ComputerCleanup, ComputerCleanupTexts, type ComputerCleanupDeps } from './computerCleanup';
+import { WslSetupError } from '../core/docker/wslSetup';
+import { ComputerCleanup, ComputerCleanupTexts, computerVmState, type ComputerCleanupDeps } from './computerCleanup';
 import { SshKeyOffer } from './sshKeyOffer';
 
 const BLOB = 'AAAAC3NzaC1lZDI1NTE5AAAAIHgJ3c2oQkQe4m4oY0bJ6qNnV6l0Sx5Jm8m2bq9b3n1d';
@@ -327,5 +328,39 @@ describe('the removal of the SSH key of Devspaces', () => {
     expect(fs.existsSync(keyPath())).toBe(false);
     // Nothing there: nothing to do, no failure.
     expect(await cleanup.removeSshKey([])).toEqual([]);
+  });
+});
+
+describe('the state of the VM for the command', () => {
+  it('Lima: the VM with its lima.yaml, the leftovers of a VM folder without it, else none', async () => {
+    const home = path.join(dir, 'lima');
+    expect(await computerVmState({ limaHome: home })).toBe('none');
+    fs.mkdirSync(path.join(home, 'devspaces'), { recursive: true });
+    expect(await computerVmState({ limaHome: home })).toBe('leftovers');
+    write(path.join(home, 'devspaces', 'lima.yaml'), 'images: []\n');
+    expect(await computerVmState({ limaHome: home })).toBe('vm');
+    // A lima.yaml that cannot be checked (here ELOOP, a symbolic link to itself in its path) counts as the VM.
+    const loop = path.join(dir, 'loop');
+    fs.mkdirSync(loop);
+    fs.symlinkSync(path.join(loop, 'devspaces'), path.join(loop, 'devspaces'));
+    expect(await computerVmState({ limaHome: loop })).toBe('vm');
+  });
+
+  // Mutation: an error of the list of WSL that rejects, so that on Windows without WSL the VM counted as there at each
+  // run (ComputerCleanup counts an error as the VM), also after its removal, and the files of Devspaces always stayed.
+  it('WSL: the distribution of Devspaces, the leftovers of its folder, and none without WSL; another error rejects', async () => {
+    const folder = path.join(dir, 'wsl', 'distribution');
+    const known = vi.fn();
+    const wsl = (registration: () => Promise<'none' | 'own' | 'foreign'>) => ({ wsl: { registration, folder, known } });
+    expect(await computerVmState(wsl(async () => 'own'))).toBe('vm');
+    expect(known).toHaveBeenLastCalledWith(true);
+    expect(await computerVmState(wsl(async () => 'foreign'))).toBe('none');
+    expect(await computerVmState(wsl(async () => Promise.reject(new WslSetupError('wslMissing', 'wsl.exe was not found.'))))).toBe('none');
+    expect(known).toHaveBeenLastCalledWith(false);
+    fs.mkdirSync(folder, { recursive: true });
+    expect(await computerVmState(wsl(async () => 'none'))).toBe('leftovers');
+    expect(await computerVmState(wsl(async () => Promise.reject(new WslSetupError('wslMissing', 'wsl.exe was not found.'))))).toBe('leftovers');
+    await expect(computerVmState(wsl(async () => Promise.reject(new WslSetupError('registryFailed', 'no registry'))))).rejects.toThrow('no registry');
+    expect(await computerVmState({})).toBe('none');
   });
 });

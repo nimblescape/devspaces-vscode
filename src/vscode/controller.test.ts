@@ -4706,18 +4706,52 @@ describe('Remove Devspaces from This Computer…', () => {
   });
 
   // Mutation: the accounts of the question used after an account left Devspaces, so that its devspaces are deleted
-  // although devspaces of an account that is not signed in stay.
-  it('keeps the devspaces of an account that left Devspaces after the question', async () => {
-    const { removal } = onComputer({ vm: undefined });
-    await h.registry.add(ownRemote());
-    removal.engineAnswers.mockImplementation(async () => {
-      h.auth.accounts.mockResolvedValue([]);
-      return true;
+  // although devspaces of an account that is not signed in stay; or such devspaces not named as what stays, so that the
+  // extension is uninstalled while devspaces that the question said it deletes stay without a word (also when the
+  // accounts cannot be read).
+  it('keeps the devspaces of an account that left Devspaces after the question, or whose accounts cannot be read, and names them', async () => {
+    for (const change of ['left', 'unreadable'] as const) {
+      const { removal, cleanup } = onComputer({ vm: undefined });
+      await h.registry.add(ownRemote());
+      removal.engineAnswers.mockImplementation(async () => {
+        if (change === 'left') h.auth.accounts.mockResolvedValue([]);
+        else h.auth.accounts.mockRejectedValue(new Error('VS Code did not answer'));
+        return true;
+      });
+      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+      await run('removeFromComputer');
+      expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+      expect(await h.registry.list()).toHaveLength(1);
+      expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerAccountDevspacesStay('build-box', 1, 'acme/api')}`);
+      expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+      expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    }
+  });
+
+  // Mutation: an error that no part handles thrown out of the command, so that the window does not update the scheduled
+  // task and the Docker context after the removal of the VM, and what stays so far is not logged.
+  it('ends at an error that no part handles, logs what stays so far, updates the task and the context of the VM, and keeps the extension', async () => {
+    const { order, cleanup } = onComputer({ engines: ['build-box', 'old-box'] }, { 'old-box': false });
+    cleanup.removeVm.mockImplementation(async () => {
+      order.push('remove the VM');
+      h.registry.list = vi.fn(async () => {
+        throw new Error('registry.json is damaged');
+      });
+      return undefined;
     });
-    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
     await run('removeFromComputer');
-    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
-    expect(await h.registry.list()).toHaveLength(1);
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM', 'update the task and the context of the VM']);
+    expect(cleanup.removeSshKey).not.toHaveBeenCalled();
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerEngineNotAnswering('old-box')}`);
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerRemovalFailed('registry.json is damaged')}`);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(
+      `${ControllerTexts.computerRemovalFailed('registry.json is damaged')} ${ControllerTexts.removalFromComputerEnded}`,
+      Actions.showDetails,
+    );
   });
 
   // Mutation: a failed uninstall that is not caught ends the command with an error of VS Code and nothing in the log.

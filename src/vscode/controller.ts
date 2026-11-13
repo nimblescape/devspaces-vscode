@@ -1773,6 +1773,8 @@ export class Controller implements vscode.Disposable {
     // The VM was removed, and the files step has not removed its scheduled task and its Docker context yet.
     let vmGone = false;
     let cancelled = false;
+    // An error that no part handles (for example a registry that cannot be read): it ends the removal there.
+    let failure: string | undefined;
     try {
       await runWithProgress({
         title: ControllerTexts.removingComputer,
@@ -1841,14 +1843,18 @@ export class Controller implements vscode.Disposable {
         },
       });
     } catch (error) {
-      if (!isCancellation(error)) throw error;
-      cancelled = true;
+      if (isCancellation(error)) cancelled = true;
+      else {
+        // As a Cancel: what stays so far is logged, and the extension stays installed.
+        failure = ControllerTexts.computerRemovalFailed(errorMessage(error));
+        left.push(failure);
+      }
     } finally {
       this.removingFrom = undefined;
       if (!this.disposed) this.background(this.deps.sidebar.refreshStates(), 'update the sidebar');
     }
-    // A Cancel after the removal of the VM: the window updates its scheduled task and its Docker context in the
-    // background, as after "Remove the VM…".
+    // A Cancel (or an error) after the removal of the VM: the window updates its scheduled task and its Docker context
+    // in the background, as after "Remove the VM…".
     if (vmGone) cleanup.vmGone();
     // The extension stays installed (unless Uninstall Anyway): the background work may come back on those hosts.
     if (left.length > 0 || cancelled) left.push(...unmarked.map((host) => ControllerTexts.removalNotRecorded(describeDockerHost(host))));
@@ -1856,6 +1862,10 @@ export class Controller implements vscode.Disposable {
     if (cancelled) {
       this.logger.warn('The removal of Devspaces from this computer was cancelled before the end; the extension stays installed.');
       this.warnWithLog(ControllerTexts.removalFromComputerEnded);
+      return;
+    }
+    if (failure !== undefined) {
+      this.warnWithLog(`${failure} ${ControllerTexts.removalFromComputerEnded}`);
       return;
     }
     if (left.length > 0) {
@@ -1944,6 +1954,9 @@ export class Controller implements vscode.Disposable {
           hereNow,
           accounts.filter((account) => accountsNow.some((now) => now.id === account.id)),
         );
+        // The devspaces that the question named for the delete and that stay now (an account that left, or accounts
+        // that could not be read): they count as what stays, because the question said that they go.
+        const notDeleted = availableDevspaces(hereNow, accounts).filter((devspace) => !ownNow.includes(devspace));
         this.logger.info(`Removing Devspaces from ${engine}${ownNow.length > 0 ? `, with ${ownNow.length === 1 ? 'one devspace' : `${ownNow.length} devspaces`} of the accounts of Devspaces there` : ''}.`);
         const removed = await this.removeFromEngine(removal, target, ownNow, progress, signal);
         const devspacesStay = ownNow.length < hereNow.length || inventory.unknownDevspaces.length > 0;
@@ -1952,6 +1965,9 @@ export class Controller implements vscode.Disposable {
         if (left > 0) return ControllerTexts.removalLeftItems(left, engine);
         // A background build of the helper image of this window that goes on can make the image there again.
         if (removed.buildNotWaitedFor === true) return ControllerTexts.computerEngineBuildNotWaitedFor(engine);
+        if (notDeleted.length > 0) {
+          return ControllerTexts.computerAccountDevspacesStay(engine, notDeleted.length, listSome(notDeleted.map((devspace) => this.shownName(this.devspaceTarget(devspace)))));
+        }
         this.logger.info(`Devspaces was removed from ${engine}.`);
         return undefined;
       } finally {

@@ -53,7 +53,7 @@ import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmS
 import { readMonitorLog } from '../core/hosts/monitorLog';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
-import { LIMA_INSTANCE, limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { consoleResizeCommand, limaConsoleArgs, sshConsoleArgs, wslConsoleArgs, wslConsoleResizeArgs } from '../core/hosts/hostConsole';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
@@ -97,7 +97,7 @@ import { isHandedOffStop, releaseDevspace } from '../core/session/windowRelease'
 import { readOrCreateComputerId } from '../core/storage/computerId';
 import { DockerEngineRecords } from '../core/storage/dockerEngineRecords';
 import { devspacesUsed } from '../core/storage/firstUse';
-import { StoragePaths, pathState } from '../core/storage/paths';
+import { StoragePaths } from '../core/storage/paths';
 import { ConfigCheckStore } from '../core/storage/configChecks';
 import { bundleHash } from '../core/loader/pipeLoader';
 import { DevspaceRegistry } from '../core/storage/registry';
@@ -111,7 +111,7 @@ import { SessionFiles } from '../core/storage/sessionFiles';
 import type { ExtensionSettings } from '../core/types';
 import { AccountOffers } from './accountOffers';
 import { VsCodeGitHubAuth, watchGitHubEnterpriseSettings } from './auth';
-import { ComputerCleanup } from './computerCleanup';
+import { ComputerCleanup, computerVmState } from './computerCleanup';
 import { ConnectionAdapter } from './connectionAdapter';
 import { installOwnDockerCliWithProgress, OwnDockerCliTexts } from './ownDockerCliWindow';
 import { Controller } from './controller';
@@ -1750,24 +1750,11 @@ async function activateExtension(
       logger,
       state: remoteState,
       vmHost,
-      // The VM: also one that Lima reports as broken (its lima.yaml is there). The leftovers: the folder of a VM that
-      // `limactl create` left without its lima.yaml, or the files of a WSL setup that did not end (the folder of the
-      // distribution without its registration by Devspaces), which only the removal of the VM removes; without them,
-      // the folder of Devspaces would stay at every run of the command. An error counts as the VM (ComputerCleanup).
-      vmState: async () => {
-        if (limaVm !== undefined) {
-          // As LimaSetup.remove: a lima.yaml that cannot be checked counts as the VM.
-          const instance = path.join(limaVm.paths.home, LIMA_INSTANCE);
-          if ((await pathState(path.join(instance, 'lima.yaml'))) !== 'missing') return 'vm';
-          return (await pathState(instance)) === 'missing' ? 'none' : 'leftovers';
-        }
-        if (wslSetupCore === undefined || wslFolder === undefined) return 'none';
-        // The list of WSL and the registry (WslSetup.registration), without the disk walk and the run state of readVmState.
-        const registration = await wslSetupCore.registration();
-        wslDistributionKnown(registration !== 'none');
-        if (registration === 'own') return 'vm';
-        return fs.existsSync(wslFolder) ? 'leftovers' : 'none';
-      },
+      vmState: () =>
+        computerVmState({
+          limaHome: limaVm?.paths.home,
+          wsl: limaVm === undefined && wslSetupCore !== undefined && wslFolder !== undefined ? { registration: () => wslSetupCore.registration(), folder: wslFolder, known: wslDistributionKnown } : undefined,
+        }),
       removeVm: () => (limaVm !== undefined ? limaSetup.removeForComputer() : wslSetup.removeForComputer()),
       vmGone: () => {
         background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');

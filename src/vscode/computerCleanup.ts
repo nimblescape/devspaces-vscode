@@ -8,12 +8,16 @@
 // end the uninstall of the extension. Each step returns what stays, for the last message of the command; each one is
 // logged too. No question: the command asked once before.
 import * as fs from 'fs';
+import * as path from 'path';
+import { isWslSetupError, type WslRegistration } from '../core/docker/wslSetup';
 import { removeDevspacesFiles, type DevspacesFilesDeps } from '../core/devspacesFiles';
 import { errorMessage } from '../core/errors';
 import type { Logger } from '../core/ports';
 import { shellWord } from '../core/relay/startScript';
 import { removeKeyLinesCommand, type PublicKey } from '../core/sshKey';
+import { pathState } from '../core/storage/paths';
 import type { RemoteDockerState, RemoteDockerStateFile } from '../core/storage/remoteDockerState';
+import { LIMA_INSTANCE } from '../core/vm/limaInstance';
 import type { SshKeyOffer } from './sshKeyOffer';
 
 /** What this computer has of Devspaces besides the devspaces, for the question of the command. */
@@ -35,6 +39,38 @@ export interface ComputerInventory {
   keyFile: string | undefined;
   /** The folder of Devspaces outside of VS Code (`~/.nimblescape/devspaces`), when it exists. */
   folder: string | undefined;
+}
+
+/** Where computerVmState looks: the Lima VM on macOS and Linux, the WSL distribution on Windows (at most one of them). */
+export interface ComputerVmPlaces {
+  /** The folder of the Lima instances (LimaVm.paths.home). */
+  limaHome?: string;
+  /** The registration of the distribution (WslSetup.registration), the folder of its setup, and wslDistributionKnown. */
+  wsl?: { registration: () => Promise<WslRegistration>; folder: string; known: (exists: boolean) => void };
+}
+
+/**
+ * ComputerCleanupDeps.vmState, without starting anything. The VM: also one that Lima reports as broken (its lima.yaml
+ * is there, or cannot be checked, as for LimaSetup.remove), or the distribution that Devspaces registered (the list of
+ * WSL and the registry, without the disk walk and the run state of readVmState). The leftovers: the folder of a VM that
+ * `limactl create` left without its lima.yaml, or the folder of the distribution without its registration, which only
+ * the removal of the VM removes; without them, the folder of Devspaces would stay at every run of the command. Without
+ * WSL, no distribution can exist (as for WslSetupCommands.removalCheck). Another error rejects.
+ */
+export async function computerVmState(places: ComputerVmPlaces): Promise<'vm' | 'leftovers' | 'none'> {
+  if (places.limaHome !== undefined) {
+    const instance = path.join(places.limaHome, LIMA_INSTANCE);
+    if ((await pathState(path.join(instance, 'lima.yaml'))) !== 'missing') return 'vm';
+    return (await pathState(instance)) === 'missing' ? 'none' : 'leftovers';
+  }
+  if (places.wsl === undefined) return 'none';
+  const registration = await places.wsl.registration().catch((error: unknown) => {
+    if (isWslSetupError(error) && error.problem === 'wslMissing') return 'none' as const;
+    throw error;
+  });
+  places.wsl.known(registration !== 'none');
+  if (registration === 'own') return 'vm';
+  return (await pathState(places.wsl.folder)) === 'missing' ? 'none' : 'leftovers';
 }
 
 export interface ComputerCleanupDeps {
