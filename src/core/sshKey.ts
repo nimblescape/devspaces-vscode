@@ -100,7 +100,7 @@ export function removeAuthorizedKeyCommand(key: PublicKey, comment: string): str
  * `~/.ssh/authorized_keys` whose first two fields are the type and the key data of `key`, with any comment: the key of
  * Devspaces is its own, so each such line is one that Devspaces added (also on a computer that has another name since).
  * A line with options before the key, and a comment line, stay. As removeAuthorizedKeyCommand: a copy of the file
- * replaces it, a symbolic link is not changed (exit code 3). Its exit code is 0 when the file was replaced. The login
+ * replaces it, a symbolic link is not changed (exit code 3), nor is anything else that is no file (exit code 5). Its exit code is 0 when the file was replaced. The login
  * with the key worked, so a file without such a line (also no file) means that the host allows the key in another way
  * (another file of `AuthorizedKeysFile`, a line with options): exit code NO_KEY_LINE_EXIT with NO_KEY_LINE_TEXT.
  */
@@ -108,7 +108,8 @@ export function removeKeyLinesCommand(key: PublicKey): string {
   const file = AUTHORIZED_KEYS;
   const noLine = `{ echo ${shellWord(NO_KEY_LINE_TEXT)} >&2; exit ${NO_KEY_LINE_EXIT}; }`;
   return [
-    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || ${noLine}; ${SYMBOLIC_LINK_GUARD}`,
+    // A folder in its place: no file that awk reads (gawk would skip it, and the end would say no line).
+    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || ${noLine}; ${SYMBOLIC_LINK_GUARD}; [ -f ${file} ] || { echo '~/${file} is no file' >&2; exit 5; }`,
     // Without the carriage return of a line end of Windows, which a line without a comment has in its second field.
     `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '{ k = $1 " " $2; sub(/\\r$/, "", k) } k == key { found = 1; next } { print } END { exit found ? 0 : ${NO_KEY_LINE_EXIT} }' ${file}); s=$?`,
     `[ $s -ne ${NO_KEY_LINE_EXIT} ] || ${noLine}; [ $s -eq 0 ] || exit $s`,

@@ -4439,10 +4439,14 @@ describe('Remove Devspaces from This Computer…', () => {
   it('with a list of hosts that cannot be read, keeps the key, names it in the question and in what stays, and removes the rest', async () => {
     const { order, cleanup } = onComputer({ listUnreadable: 'EACCES', engines: [], keyHosts: [] });
     await h.registry.add(inVm());
+    await h.registry.add(ownRemote());
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
     await run('removeFromComputer');
     const detail = String((modals()[0]?.[1] as { detail: string }).detail);
     expect(detail.startsWith(ControllerTexts.removeComputerListUnreadable)).toBe(true);
+    // Mutation: the devspaces outside of the VM left out of the question when the list cannot be read.
+    expect(detail).toContain(ControllerTexts.removeComputerStayWithoutList('acme/api (build-box)'));
+    expect(detail).not.toContain('acme/vm (');
     expect(detail).not.toContain('The SSH key of Devspaces');
     expect(cleanup.removeSshKey).not.toHaveBeenCalled();
     expect(order).toEqual(['remove the VM', 'remove the files']);

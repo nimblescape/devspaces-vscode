@@ -114,7 +114,21 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     const unlisted = fakeRunner({ status: '' });
     await expect(setup(unlisted.runner).remove()).resolves.toBe(true);
     expect(fs.existsSync(folder)).toBe(false);
-    expect(unlisted.calls.map((call) => call[1])).toEqual(['list']);
+    // limactl delete first, which stops a VM that runs when Lima still knows it.
+    expect(unlisted.calls.map((call) => call[1])).toEqual(['list', 'delete']);
+  });
+
+  // Mutation: Lima installed under the lock of the setup, so that its download holds the lock of all windows.
+  it('installs Lima for the removal before it takes the lock of the setup', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    const lock = path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock');
+    const locked: boolean[] = [];
+    const { runner } = fakeRunner({ status: 'Stopped' });
+    const vm = new LimaVm({ runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths: limaPaths(home), install: async () => (locked.push(fs.existsSync(lock)), '/lima/bin/limactl') });
+    await expect(setup(runner, { vm }).remove()).resolves.toBe(true);
+    expect(locked).toEqual([false]);
   });
 
   it('removes nothing while another window sets up the VM', async () => {

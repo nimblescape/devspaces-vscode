@@ -180,6 +180,10 @@ ssh-ed25519 ${BLOB}
     expect(remove).toThrow(/is a symbolic link/);
     expect(fs.readFileSync(path.join(home, 'managed'), 'utf8')).toBe(`ssh-ed25519 ${BLOB} devspaces@box
 `);
+    // Mutation: a folder in place of the file named as a host that allows the key in another way.
+    fs.rmSync(file());
+    fs.mkdirSync(file());
+    expect(fails()).toEqual({ status: 5, stderr: '~/.ssh/authorized_keys is no file' });
   });
 
   // Mutation: a line without a comment in a file with line ends of Windows has the carriage return in its second field,

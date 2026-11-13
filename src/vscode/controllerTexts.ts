@@ -106,6 +106,8 @@ export const ControllerTexts = {
   removeComputerSignedOut: 'Your devspaces on the Docker hosts of the list stay, because no GitHub account is signed in to Devspaces. To delete them too, sign in first.',
   removeComputerElsewhere: (devspaces: string) =>
     `Your devspaces on other Docker engines stay, because these engines are not in the list of Devspaces: ${devspaces}. Remove them by hand (Uninstall in the user guide).`,
+  /** After removeComputerListUnreadable: the devspaces of this computer outside of the VM. */
+  removeComputerStayWithoutList: (devspaces: string) => `Your devspaces outside of the VM of Devspaces stay too: ${devspaces}. Remove them by hand (Uninstall in the user guide).`,
   removeComputerEnd: 'Then VS Code uninstalls the extension. Your settings stay. This cannot be undone.',
   removeEverything: 'Remove Everything',
   removingComputer: 'Removing Devspaces from this computer…',

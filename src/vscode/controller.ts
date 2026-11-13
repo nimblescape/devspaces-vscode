@@ -1733,10 +1733,10 @@ export class Controller implements vscode.Disposable {
     const inVm = inventory.vm === undefined || inventory.vmLeftovers ? [] : known.filter((devspace) => isOnDockerHost(devspace, inventory.vm as string));
     const deleted = [...own, ...inVm];
     // The devspaces of this computer on a Docker engine that is neither on the list nor the VM (an older version used it,
-    // or the host left the list): they stay, and the question names them.
-    // Not the records of a VM that is gone: their devspaces went with it.
-    const elsewhere =
-      inventory.listUnreadable !== undefined ? [] : known.filter((devspace) => !onEngines.includes(devspace) && !isVmHost(dockerHostOf(devspace)));
+    // or the host left the list), and without the list all of them outside the VM: they stay, and the question names
+    // them. Not the records of a VM that is gone: their devspaces went with it.
+    const elsewhere = known.filter((devspace) => !onEngines.includes(devspace) && !isVmHost(dockerHostOf(devspace)));
+    const elsewhereText = inventory.listUnreadable !== undefined ? ControllerTexts.removeComputerStayWithoutList : ControllerTexts.removeComputerElsewhere;
     // The devspaces of this computer when it asks: one that comes later (of any account, also one that signed in later)
     // makes the removal leave its host or the VM, so that it is never deleted, and nothing is removed under it.
     const named = new Set(known.map((devspace) => devspace.id));
@@ -1753,7 +1753,7 @@ export class Controller implements vscode.Disposable {
           ? [ControllerTexts.removeOtherAccounts(listSome(others.map((devspace) => this.shownName(this.devspaceTarget(devspace)))))]
           : []),
       ...(elsewhere.length > 0
-        ? [ControllerTexts.removeComputerElsewhere(listSome(elsewhere.map((devspace) => `${this.shownName(this.devspaceTarget(devspace))} (${describeDockerHost(dockerHostOf(devspace))})`)))]
+        ? [elsewhereText(listSome(elsewhere.map((devspace) => `${this.shownName(this.devspaceTarget(devspace))} (${describeDockerHost(dockerHostOf(devspace))})`)))]
         : []),
       ControllerTexts.removeComputerEnd,
     ];
