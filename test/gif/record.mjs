@@ -68,6 +68,8 @@ const SETTINGS = {
   'chat.disableAIFeatures': true,
   'editor.minimap.enabled': false,
   'editor.stickyScroll.enabled': false,
+  // The log of the Monitor in scene 5: its lines are longer than the editor beside the wide side bar.
+  '[log]': { 'editor.wordWrap': 'on' },
   'security.workspace.trust.enabled': false,
   'telemetry.telemetryLevel': 'off',
   'update.mode': 'none',
