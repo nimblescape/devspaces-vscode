@@ -181,6 +181,8 @@ describe('usagePageView', () => {
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'stopped' } }, actions: false })).banner).toEqual({ tone: 'info', message: UsagePageTexts.vmStopped, detail: UsagePageTexts.vmStoppedReadOnlyDetail, buttons: [] });
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'stopped' }, idle: true } })).banner?.message).toBe(UsagePageTexts.vmIdle);
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'notSetUp' } } })).banner).toEqual({ tone: 'info', message: UsagePageTexts.vmNotSetUp, buttons: [] });
+    // While the view is read only, its row has no menu: the repository view sets the VM up.
+    expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'notSetUp' } }, actions: false })).banner).toEqual({ tone: 'info', message: UsagePageTexts.vmNotSetUpReadOnly, buttons: [] });
     expect(usagePageView(input({ phase: { kind: 'vm', state: { kind: 'broken', detail: 'Lima says broken.' } } })).banner).toEqual({
       tone: 'warning',
       message: 'Devspaces cannot use the VM of Devspaces now (it is broken), so this page shows no values.',

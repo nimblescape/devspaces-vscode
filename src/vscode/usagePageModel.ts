@@ -200,6 +200,7 @@ export const UsagePageTexts = {
   vmStoppedDetail: 'Click "Start the VM" to start it and read again. The VM goes to sleep again by itself when nothing uses it.',
   vmStoppedReadOnlyDetail: 'The page reads again when the VM runs, for example when you start a devspace. The VM goes to sleep again by itself when nothing uses it.',
   vmNotSetUp: 'The VM of Devspaces is not set up, so this page shows no values. The menu of its row in the view Docker Hosts sets it up.',
+  vmNotSetUpReadOnly: 'The VM of Devspaces is not set up, so this page shows no values. Set Up Docker for Devspaces in the repository view sets it up.',
   vmUnusable: (state: VmState) =>
     `Devspaces cannot use the VM of Devspaces now (${state.kind === 'broken' ? 'it is broken' : 'its state is not known'}), so this page shows no values.`,
   ended: {
@@ -357,7 +358,7 @@ function statusAndBanner(input: UsagePageInput): Pick<UsagePageView, 'status' | 
               { tone: 'info', message: phase.idle === true ? T.vmIdle : T.vmStopped, detail: T.vmStoppedReadOnlyDetail, buttons: [] }
             : { tone: 'info', message: phase.idle === true ? T.vmIdle : T.vmStopped, detail: T.vmStoppedDetail, buttons: [{ action: 'startVm', label: T.startVm, primary: true }] }
           : state.kind === 'notSetUp'
-            ? { tone: 'info', message: T.vmNotSetUp, buttons: [] }
+            ? { tone: 'info', message: input.actions === false ? T.vmNotSetUpReadOnly : T.vmNotSetUp, buttons: [] }
             : { tone: 'warning', message: T.vmUnusable(state), ...(state.detail !== undefined ? { detail: state.detail } : {}), buttons: [{ action: 'showLog', label: T.showLog }] };
       return { status: { text: T.notReading, tone: 'off' }, banner, stale: true };
     }
