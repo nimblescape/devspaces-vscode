@@ -1998,7 +1998,7 @@ export class Controller implements vscode.Disposable {
       const meanwhile = await cleanup.vmMeanwhile(true);
       if (meanwhile !== undefined) return meanwhile.kind === 'setUp' ? ControllerTexts.computerVmSetUpMeanwhile : ComputerCleanupTexts.vmUnknown(meanwhile.detail);
     }
-    return cleanup.removeVm();
+    return cleanup.removeVm(leftovers);
   }
 
   /** The refusal for the devspaces of `devspaces` that came after the question of "Remove Devspaces from This Computer…". */

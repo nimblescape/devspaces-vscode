@@ -11,6 +11,7 @@ import { Actions } from '../core/messages';
 import { abortError } from '../core/ports';
 import { LimaSetupError, type LimaSetupStep } from '../core/vm/limaSetup';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+import { ControllerTexts } from './controllerTexts';
 import { LimaSetupCommands, LimaSetupTexts, type LimaSetupCommandsDeps } from './limaSetupCommands';
 
 const { window } = fakeVscode;
@@ -287,6 +288,18 @@ describe('the removal of the VM for Remove Devspaces from This Computer… (R-GE
     expect(forgetHost).toHaveBeenCalledWith(LIMA_HOST);
     expect(window.showWarningMessage).not.toHaveBeenCalled();
     expect(window.showInformationMessage).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a VM that was set up after a question that named only the files of a setup counted as gone, so that its
+  // host left the list and its connections were closed.
+  it('keeps a VM that was set up meanwhile when only the files of a setup are to go, and says so', async () => {
+    setup.remove.mockResolvedValueOnce('setUp');
+    const forgetHost = vi.fn(async () => true);
+    const beforeRemove = vi.fn();
+    expect(await commands({ forgetHost, beforeRemove }).removeForComputer(true)).toBe(ControllerTexts.computerVmSetUpMeanwhile);
+    expect(setup.remove).toHaveBeenCalledWith(true);
+    expect(forgetHost).not.toHaveBeenCalled();
+    expect(beforeRemove).not.toHaveBeenCalled();
   });
 
   it('says what stays when the removal fails; a list that cannot be changed is no failure', async () => {

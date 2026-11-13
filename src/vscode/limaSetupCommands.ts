@@ -17,6 +17,7 @@ import type { LinkUri } from '../core/types';
 import { LimaSetupError, type LimaSetup, type LimaSetupProblem, type LimaSetupStep } from '../core/vm/limaSetup';
 import { qemuInstallPlan, type QemuInstallInput } from '../core/vm/qemuInstall';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
+import { ControllerTexts } from './controllerTexts';
 import { withNotificationProgress } from './progress';
 
 /** The texts of the setup of the Lima VM. */
@@ -230,16 +231,17 @@ export class LimaSetupCommands {
    * a question and without a message of its own, in the progress of that command. Undefined when the VM is gone (also
    * when there was none), else what stays, for the message of that command (logged). Never throws. Without afterRemove:
    * the next step of that command removes the Docker context and the scheduled task itself (removeDevspacesFiles), so
-   * that no update in the background removes them at the same time.
+   * that no update in the background removes them at the same time. `onlyLeftovers`: the question named only the files
+   * of a setup, so a VM that was set up meanwhile stays (LimaSetup.remove), and so does its host in the list.
    */
-  async removeForComputer(): Promise<string | undefined> {
+  async removeForComputer(onlyLeftovers = false): Promise<string | undefined> {
     const { setup, logger } = this.deps;
     if (setup === undefined) return undefined;
     if (this.running) return LimaSetupTexts.busy;
     this.running = true;
     try {
-      this.deps.beforeRemove?.();
-      await setup.remove();
+      if (!onlyLeftovers) this.deps.beforeRemove?.();
+      if ((await setup.remove(onlyLeftovers)) === 'setUp') return ControllerTexts.computerVmSetUpMeanwhile;
       await (this.deps.forgetHost?.(LIMA_HOST) ?? Promise.resolve(false)).catch((error: unknown) => {
         // The VM is gone; the list of Devspaces in the storage of VS Code goes with the extension.
         logger.warn(`${LIMA_HOST} could not be removed from the list of Devspaces: ${errorMessage(error)}`);

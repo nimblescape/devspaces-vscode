@@ -4670,6 +4670,7 @@ describe('Remove Devspaces from This Computer…', () => {
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
     await run('removeFromComputer');
     expect(files.order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files', 'uninstall the extension']);
+    expect(files.cleanup.removeVm).toHaveBeenCalledWith(true);
     // Another window removes Devspaces from the VM.
     const other = onComputer({ engines: [], keyHosts: [] });
     h.alive.add(OTHER_PID);

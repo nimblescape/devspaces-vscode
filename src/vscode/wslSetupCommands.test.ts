@@ -12,6 +12,7 @@ import { Actions } from '../core/messages';
 import { DockerSetupTexts } from '../core/docker/dockerSetup';
 import { abortError } from '../core/ports';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+import { ControllerTexts } from './controllerTexts';
 import { WslSetupCommands, WslSetupTexts, type WslSetupCommandsDeps } from './wslSetupCommands';
 
 const { window } = fakeVscode;
@@ -619,6 +620,23 @@ describe('the removal of the distribution for Remove Devspaces from This Compute
     expect(forgetHost).not.toHaveBeenCalled();
     expect(distributionGone).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith('The WSL distribution devspaces was not set up by Devspaces; it is not removed.');
+  });
+
+  // Mutation: a distribution of Devspaces that was set up after a question that named only the files of a setup removed
+  // with every devspace in it.
+  it('keeps a distribution of Devspaces that was set up meanwhile when only the files of a setup are to go, and says so', async () => {
+    const distributionGone = vi.fn();
+    const beforeRemove = vi.fn();
+    registered('own');
+    expect(await commands({ distributionGone, beforeRemove }).removeForComputer(true)).toBe(ControllerTexts.computerVmSetUpMeanwhile);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(beforeRemove).not.toHaveBeenCalled();
+    expect(forgetHost).not.toHaveBeenCalled();
+    expect(distributionGone).not.toHaveBeenCalled();
+    // Only the files of a setup: they go.
+    registered('none');
+    expect(await commands({ distributionGone }).removeForComputer(true)).toBeUndefined();
+    expect(setup.removeLeftovers).toHaveBeenCalledTimes(1);
   });
 
   it('says what stays: another window that holds the lock, a refused removal', async () => {

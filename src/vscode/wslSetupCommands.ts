@@ -29,6 +29,7 @@ import { isAbortError, type Logger } from '../core/ports';
 import type { LinkUri } from '../core/types';
 import { DockerSetupUiTexts } from './dockerSetup';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
+import { ControllerTexts } from './controllerTexts';
 import { withNotificationProgress } from './progress';
 
 /** The part of the bar of the setup that the download fills with its bytes, in percent. */
@@ -410,7 +411,7 @@ export class WslSetupCommands {
    * forgetDistribution: the next step of that command removes the Docker context and the scheduled task itself
    * (removeDevspacesFiles), so that no update in the background removes them at the same time; distributionGone instead.
    */
-  async removeForComputer(): Promise<string | undefined> {
+  async removeForComputer(onlyLeftovers = false): Promise<string | undefined> {
     const { setup, folder, logger } = this.deps;
     if (setup === undefined || folder === undefined) return undefined;
     if (this.running) return WslSetupTexts.busy;
@@ -426,6 +427,9 @@ export class WslSetupCommands {
         }
         if (registration === 'none') {
           await setup.removeLeftovers();
+        } else if (onlyLeftovers) {
+          // The question named only the files of a setup: a distribution that was set up meanwhile stays.
+          return 'setUp' as const;
         } else {
           this.deps.beforeRemove?.();
           // The next step of that command removes what no distribution uses in the folder, and names what stays.
@@ -440,6 +444,10 @@ export class WslSetupCommands {
       if (done === undefined) return WslSetupTexts.busyElsewhere;
       if (done.value === 'gone') this.deps.distributionGone?.();
       if (done.value === 'foreign') logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
+      if (done.value === 'setUp') {
+        logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was set up after the question, so it stays.`);
+        return ControllerTexts.computerVmSetUpMeanwhile;
+      }
       return undefined;
     } catch (error) {
       const text = isWslSetupError(error)

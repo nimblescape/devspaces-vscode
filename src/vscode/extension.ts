@@ -1759,7 +1759,7 @@ async function activateExtension(
               ? { registration: () => wslSetupCore.registration(undefined, true), folder: wslFolder, known: wslDistributionKnown }
               : undefined,
         }),
-      removeVm: () => (limaVm !== undefined ? limaSetup.removeForComputer() : wslSetup.removeForComputer()),
+      removeVm: (onlyLeftovers) => (limaVm !== undefined ? limaSetup.removeForComputer(onlyLeftovers) : wslSetup.removeForComputer(onlyLeftovers)),
       vmGone: () => {
         background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
         background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');

@@ -127,6 +127,24 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
   });
 
+  // Mutation: a VM that another window set up after a question that named only the files of a setup deleted with every
+  // devspace in it, because the check before the lock did not see it yet.
+  it('keeps a VM with its lima.yaml when only the files of a setup are to go, and removes those files', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    let installed = false;
+    const { runner, calls } = fakeRunner({ status: 'Stopped' });
+    const vm = new LimaVm({ runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths: limaPaths(home), install: async () => ((installed = true), '/lima/bin/limactl') });
+    await expect(setup(runner, { vm }).remove(true)).resolves.toBe('setUp');
+    expect(calls).toEqual([]);
+    expect(installed).toBe(false);
+    expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
+    fs.rmSync(path.join(folder, 'lima.yaml'));
+    await expect(setup(runner, { vm }).remove(true)).resolves.toBe(true);
+    expect(fs.existsSync(folder)).toBe(false);
+  });
+
   // Mutation: Lima installed under the lock of the setup, so that its download holds the lock of all windows.
   it('installs Lima for the removal before it takes the lock of the setup', async () => {
     const folder = path.join(limaPaths(home).home, 'devspaces');

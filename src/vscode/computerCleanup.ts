@@ -92,8 +92,11 @@ export interface ComputerCleanupDeps {
    * there (which only the removal of the VM removes).
    */
   vmState: () => Promise<'vm' | 'leftovers' | 'none'>;
-  /** The removal of the VM without a question (LimaSetupCommands/WslSetupCommands.removeForComputer): what stays. */
-  removeVm: () => Promise<string | undefined>;
+  /**
+   * The removal of the VM without a question (LimaSetupCommands/WslSetupCommands.removeForComputer): what stays.
+   * `onlyLeftovers`: the question named only the files of a setup, so a VM that was set up meanwhile stays.
+   */
+  removeVm: (onlyLeftovers: boolean) => Promise<string | undefined>;
   /**
    * After the removal of the VM, when the files step did not run (a Cancel): the window updates the scheduled task and
    * the Docker context in the background, as after "Remove the VM…".
@@ -199,8 +202,8 @@ export class ComputerCleanup {
   }
 
   /** The VM of Devspaces with every devspace in it, its host in the list, its Docker context and its scheduled task. */
-  removeVm(): Promise<string | undefined> {
-    return this.deps.removeVm();
+  removeVm(onlyLeftovers = false): Promise<string | undefined> {
+    return this.deps.removeVm(onlyLeftovers);
   }
 
   /**
@@ -308,12 +311,12 @@ export class ComputerCleanup {
     return this.deps.uninstallExtension();
   }
 
-  /** Removes the line of `key` on `host` with a login that may use only the key; undefined when it went, else why not. */
   /** The record of `host` forgets the key (sshKey). Never throws. */
   private async forgetKey(host: string): Promise<void> {
     await this.deps.state.setSshKey(host, undefined).catch((error: unknown) => this.deps.logger.warn(`The key state of ${host} could not be recorded: ${errorMessage(error)}`));
   }
 
+  /** Removes the line of `key` on `host` with a login that may use only the key; undefined when it went, else why not. */
   private async removeKeyLine(host: string, key: PublicKey): Promise<string | undefined> {
     // In `sh`, whatever the login shell of the account is.
     return this.deps.key.runWithKey(host, `sh -c ${shellWord(removeKeyLinesCommand(key))}`).catch((error: unknown) => errorMessage(error));

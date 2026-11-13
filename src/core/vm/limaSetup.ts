@@ -164,16 +164,18 @@ export class LimaSetup {
    * "Remove the VM…" (R-VM-010): `limactl delete --force`, which deletes the VM with its disk and every devspace in it,
    * under the lock of the setup for all windows, so that no window creates the VM meanwhile. False when the VM did not
    * exist. Not cancelled once it runs: a half deleted VM would help nobody. The folder of a VM without its lima.yaml goes
-   * without Lima. Throws a LimaSetupError.
+   * without Lima. `onlyLeftovers` ("Remove Devspaces from This Computer…" after a question that named only the files of
+   * a setup): a VM with its lima.yaml under the lock (another window set it up meanwhile) stays, and the result is
+   * `setUp`. Throws a LimaSetupError.
    */
-  async remove(): Promise<boolean> {
+  async remove(onlyLeftovers = false): Promise<boolean | 'setUp'> {
     const { vm, logger } = this.deps;
     const folder = path.join(vm.paths.home, LIMA_INSTANCE);
     const config = path.join(folder, 'lima.yaml');
     // Lima (it may be downloaded) before the lock, so that its download does not hold the lock of all windows; only for
     // a VM with its lima.yaml, which Lima knows.
-    const lima = (await pathState(config)) === 'missing' ? undefined : await this.step(() => vm.lima());
-    let removed = false;
+    const lima = onlyLeftovers || (await pathState(config)) === 'missing' ? undefined : await this.step(() => vm.lima());
+    let removed: boolean | 'setUp' = false;
     await this.locked(async () => {
       // Without its lima.yaml, Lima does not know the VM: a `limactl create` that ended before it wrote it leaves only
       // the folder, which `limactl delete` would leave, so Devspaces deletes it itself, also without Lima.
@@ -189,6 +191,11 @@ export class LimaSetup {
           return;
         }
         await deleteFolder('a Lima VM that was not created to the end');
+        return;
+      }
+      if (onlyLeftovers) {
+        logger.info('The Lima VM of Devspaces was set up after the question, so it stays.');
+        removed = 'setUp';
         return;
       }
       // Lima is there already when another window created the VM meanwhile.
