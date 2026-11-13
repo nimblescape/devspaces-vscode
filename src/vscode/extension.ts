@@ -648,8 +648,10 @@ async function activateExtension(
         const vm = limaVm;
         if (ssh === undefined || vm === undefined) return undefined;
         return deferredByteProcess(async (cancel) => {
+          const waited = Date.now();
           await vm.ready(cancel);
           if (cancel.aborted) throw abortError();
+          logger.info(`Open Console: the VM of Devspaces was ready after ${Date.now() - waited} ms.`);
           return runner.startBytes(ssh, limaConsoleArgs(vm.paths, size), { env: limaEnv(noPromptEnv(env), vm.paths) });
         });
       }
@@ -1481,7 +1483,12 @@ async function activateExtension(
   // Its state without a start: no download, no `limactl start`, no `wsl.exe` in the distribution.
   const readVmState = async (): Promise<VmState> => {
     if (limaVm !== undefined) {
-      return limaVmState({ exists: () => limaVm.exists(), limactl: () => presentLima(limaVm.paths.lima, platform, vmArch), paths: limaVm.paths, runner, logger, env });
+      const state = await limaVmState({ exists: () => limaVm.exists(), limactl: () => presentLima(limaVm.paths.lima, platform, vmArch), paths: limaVm.paths, runner, logger, env });
+      // The read is the check of LimaVm.ready (`limactl list`): the next transport to a VM that runs, also a console,
+      // starts without a check of its own, and the next one to a VM that does not run checks it and starts it.
+      if (state.kind === 'running') limaVm.noteRunning();
+      else if (state.kind !== 'unknown') limaVm.forgetRunning();
+      return state;
     }
     if (wslSetupCore !== undefined && wslFolder !== undefined) {
       // The answer of the registry is also the answer whether the distribution exists, for the Docker host (ownVmExists).

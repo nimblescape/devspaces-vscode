@@ -153,8 +153,14 @@ export class HostConsole implements vscode.Pseudoterminal {
       return;
     }
     this.process = process;
+    const startedAt = Date.now();
+    let answered = false;
     process.onStdout(
       (chunk) => {
+        if (!answered) {
+          answered = true;
+          this.deps.logger.info(`Open Console: the console on ${this.host} answered after ${Date.now() - startedAt} ms.`);
+        }
         const hadTty = this.mark.tty !== undefined;
         this.write(this.mark.take(this.decoder.decode(chunk, { stream: true })));
         if (!hadTty && this.mark.tty !== undefined && !sameSize(this.size, this.sizeOnHost)) this.scheduleResize();

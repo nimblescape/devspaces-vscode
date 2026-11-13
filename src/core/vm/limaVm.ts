@@ -111,6 +111,14 @@ export class LimaVm {
     this.runningAt = undefined;
   }
 
+  /**
+   * Notes that a read of the state of the VM found it running (`limactl list`, as the check of ready()), so that a
+   * ready() in the next RUNNING_FOR_MS needs no check of its own.
+   */
+  noteRunning(): void {
+    this.runningAt = this.now();
+  }
+
   private now(): number {
     return (this.deps.now ?? Date.now)();
   }

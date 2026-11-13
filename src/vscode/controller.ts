@@ -1548,8 +1548,8 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * "Remove Devspaces from This Docker Engine…" (the Command Palette and the "…" menu of the view), on the engine of the
-   * Docker host of Devspaces: after a confirmation, the Monitor, the helper containers and images, and the shared volumes
+   * "Remove Devspaces from This Docker Engine…" (only the Command Palette), on the engine of the Docker host of
+   * Devspaces: after a confirmation, the Monitor, the helper containers and images, and the shared volumes
    * of Devspaces (engineRemoval.ts, with the Docker CLI of the extension once the worker of this window ended); and,
    * after a second confirmation, first the devspaces of the signed-in account there (each as Delete does, in the
    * worker, with all its volumes). Devspaces of other accounts and of other computers stay. Refused while a window of
