@@ -1750,19 +1750,21 @@ async function activateExtension(
       logger,
       state: remoteState,
       vmHost,
-      // Also a VM that Lima reports as broken or that cannot be read (its lima.yaml is there), and the files of a WSL
-      // setup that did not end (the folder of the distribution without its registration), which only the removal of
-      // the VM removes; without them, the folder of Devspaces would stay at every run of the command.
-      vmExists: async () => {
-        // Also the folder of a VM that `limactl create` left without its lima.yaml, which LimaSetup.remove removes.
-        if (limaVm !== undefined) return fs.existsSync(path.join(limaVm.paths.home, LIMA_INSTANCE));
-        if (wslSetupCore === undefined || wslFolder === undefined) return false;
-        if (fs.existsSync(wslFolder)) return true;
-        // The list of WSL and the registry (WslSetup.registration), without the disk walk and the run state of
-        // readVmState; an error counts as there (ComputerCleanup.inventory).
+      // The VM: also one that Lima reports as broken (its lima.yaml is there). The leftovers: the folder of a VM that
+      // `limactl create` left without its lima.yaml, or the files of a WSL setup that did not end (the folder of the
+      // distribution without its registration by Devspaces), which only the removal of the VM removes; without them,
+      // the folder of Devspaces would stay at every run of the command. An error counts as the VM (ComputerCleanup).
+      vmState: async () => {
+        if (limaVm !== undefined) {
+          if (await limaVm.exists()) return 'vm';
+          return fs.existsSync(path.join(limaVm.paths.home, LIMA_INSTANCE)) ? 'leftovers' : 'none';
+        }
+        if (wslSetupCore === undefined || wslFolder === undefined) return 'none';
+        // The list of WSL and the registry (WslSetup.registration), without the disk walk and the run state of readVmState.
         const registration = await wslSetupCore.registration();
         wslDistributionKnown(registration !== 'none');
-        return registration === 'own';
+        if (registration === 'own') return 'vm';
+        return fs.existsSync(wslFolder) ? 'leftovers' : 'none';
       },
       removeVm: () => (limaVm !== undefined ? limaSetup.removeForComputer() : wslSetup.removeForComputer()),
       key: sshKeys,

@@ -4258,6 +4258,7 @@ describe('Remove Devspaces from This Computer…', () => {
         listUnreadable: undefined as string | undefined,
         engines,
         vm: LIMA_HOST as string | undefined,
+        vmLeftovers: false,
         keyHosts: ['build-box'],
         keyFile: KEY as string | undefined,
         folder: FOLDER as string | undefined,
@@ -4643,6 +4644,23 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(detail.indexOf('acme/old (old-host)')).toBeLessThan(detail.indexOf(ControllerTexts.removeComputerEnd));
     expect(h.service.deleteInWorker).not.toHaveBeenCalled();
     expect(order.some((step) => step.startsWith('old-host:'))).toBe(false);
+  });
+
+  // Mutation: the records of a VM that is gone named as devspaces on another engine, with a removal by hand; and only the
+  // files of a setup named as the VM with every devspace in it.
+  it('names only the files of an unfinished setup of the VM, and no records of a VM that is gone as devspaces elsewhere', async () => {
+    onComputer({ engines: [], keyHosts: [], vmLeftovers: true });
+    await h.registry.add(inVm());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    const detail = String((modals()[0]?.[1] as { detail: string }).detail);
+    expect(detail.startsWith(ControllerTexts.removeComputerVmLeftovers)).toBe(true);
+    expect(detail).not.toContain('acme/vm');
+    onComputer({ engines: [], keyHosts: [], vm: undefined });
+    await h.registry.add(inVm());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(String((modals()[0]?.[1] as { detail: string }).detail)).not.toContain('acme/vm');
   });
 
   // Mutation: the accounts of the question used after an account left Devspaces, so that its devspaces are deleted

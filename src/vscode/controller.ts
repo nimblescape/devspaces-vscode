@@ -9,7 +9,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { isBlockingBusyMark, isFreshPending, statusNamesDevspace, type WindowMark } from '../core/busy';
 import { attachDiagnostics } from '../core/docker/attachDiagnostics';
-import { LOCAL_DOCKER_TARGET, describeDockerHost, dockerHostOf, devspacesOfHost, hostAccessOf, isNoDockerHostTarget, isOnDockerHost, transportProgramOf, unsupportedTargetReason, type DockerTarget } from '../core/docker/dockerHost';
+import { LOCAL_DOCKER_TARGET, describeDockerHost, dockerHostOf, devspacesOfHost, hostAccessOf, isNoDockerHostTarget, isOnDockerHost, isVmHost, transportProgramOf, unsupportedTargetReason, type DockerTarget } from '../core/docker/dockerHost';
 import { dockerEndpointUnsupported } from '../core/docker/remoteDocker';
 import { engineInventory, inventoryIsEmpty, removalEndedNote, removeEngineInfrastructure, type EngineInventory, type RemovalResult } from '../core/docker/engineRemoval';
 import { operationDockerTarget, outsideOperation, runWithDockerTarget, type DockerTargets } from '../core/docker/dockerTargets';
@@ -1730,18 +1730,20 @@ export class Controller implements vscode.Disposable {
     const onEngines = known.filter((devspace) => inventory.engines.some((host) => isOnDockerHost(devspace, host)));
     const own = availableDevspaces(onEngines, accounts);
     const others = onEngines.filter((devspace) => !own.includes(devspace));
-    const inVm = inventory.vm === undefined ? [] : known.filter((devspace) => isOnDockerHost(devspace, inventory.vm as string));
+    const inVm = inventory.vm === undefined || inventory.vmLeftovers ? [] : known.filter((devspace) => isOnDockerHost(devspace, inventory.vm as string));
     const deleted = [...own, ...inVm];
     // The devspaces of this computer on a Docker engine that is neither on the list nor the VM (an older version used it,
     // or the host left the list): they stay, and the question names them.
-    const elsewhere = inventory.listUnreadable !== undefined ? [] : known.filter((devspace) => !onEngines.includes(devspace) && !inVm.includes(devspace));
+    // Not the records of a VM that is gone: their devspaces went with it.
+    const elsewhere =
+      inventory.listUnreadable !== undefined ? [] : known.filter((devspace) => !onEngines.includes(devspace) && !isVmHost(dockerHostOf(devspace)));
     // The devspaces of this computer when it asks: one that comes later (of any account, also one that signed in later)
     // makes the removal leave its host or the VM, so that it is never deleted, and nothing is removed under it.
     const named = new Set(known.map((devspace) => devspace.id));
     const detail = [
       ...(inventory.listUnreadable !== undefined ? [ControllerTexts.removeComputerListUnreadable] : []),
       ...(inventory.engines.length > 0 ? [ControllerTexts.removeComputerEngines(inventory.engines.map(describeDockerHost), own.length)] : []),
-      ...(inventory.vm !== undefined ? [ControllerTexts.removeComputerVm(inVm.length)] : []),
+      ...(inventory.vm !== undefined ? [inventory.vmLeftovers ? ControllerTexts.removeComputerVmLeftovers : ControllerTexts.removeComputerVm(inVm.length)] : []),
       ...(inventory.listUnreadable === undefined && (inventory.keyFile !== undefined || inventory.keyHosts.length > 0) ? [ControllerTexts.removeComputerKey(inventory.keyHosts)] : []),
       ControllerTexts.removeComputerFiles(inventory.folder),
       ...(deleted.length > 0 ? [ControllerTexts.removeComputerChanges(this.recordedChanges(deleted))] : []),

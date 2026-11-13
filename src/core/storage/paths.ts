@@ -175,6 +175,17 @@ export function errorCode(error: unknown): string | undefined {
   return typeof code === 'string' ? code : undefined;
 }
 
+/** Whether `file` exists: `unknown` when lstat fails for another reason than a missing path (for example EACCES). */
+export async function pathState(file: string): Promise<'present' | 'missing' | 'unknown'> {
+  try {
+    await fs.promises.lstat(file);
+    return 'present';
+  } catch (error) {
+    const code = errorCode(error);
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unknown';
+  }
+}
+
 // Windows returns these codes for a short time while another process holds the file open without delete sharing,
 // for example a virus scanner or the search indexer, also during a rename over the file. On macOS and Linux they are
 // permanent, and a retry only costs a few milliseconds.

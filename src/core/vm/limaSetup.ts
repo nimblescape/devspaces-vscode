@@ -14,7 +14,7 @@ import { findExecutable } from '../docker/dockerCli';
 import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type ProcessRunner } from '../ports';
 import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
-import { errorCode } from '../storage/paths';
+import { pathState } from '../storage/paths';
 import { downloadVmImage, vmImageFile, type DownloadVmImageOptions } from './vmImage';
 import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, LIMA_SETUP_LOCK_TIMINGS, limaSetupLockFolder, limaSshArgs, type LimaResources } from './limaInstance';
 import type { LimaVm } from './limaVm';
@@ -173,13 +173,14 @@ export class LimaSetup {
     await this.locked(async () => {
       // Without its lima.yaml, Lima does not know the VM: a `limactl create` that ended before it wrote it leaves only
       // the folder, which `limactl delete` would leave, so Devspaces deletes it itself, also without Lima.
-      if (await pathMissing(path.join(folder, 'lima.yaml'))) {
-        if (await pathMissing(folder)) {
+      if ((await pathState(path.join(folder, 'lima.yaml'))) === 'missing') {
+        if ((await pathState(folder)) === 'missing') {
           logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
           return;
         }
         logger.info(`Devspaces removes the folder of a Lima VM that was not created to the end (${folder}).`);
         await this.step(() => fs.promises.rm(folder, { recursive: true, force: true }));
+        vm.forgetRunning();
         removed = true;
         return;
       }
@@ -272,15 +273,5 @@ export class LimaSetup {
       if (error instanceof LimaSetupError || isAbortError(error)) throw error;
       throw new LimaSetupError('failed', errorMessage(error));
     }
-  }
-}
-
-/** Whether `file` does not exist (ENOENT); another error of the check counts as there. */
-async function pathMissing(file: string): Promise<boolean> {
-  try {
-    await fs.promises.lstat(file);
-    return false;
-  } catch (error) {
-    return errorCode(error) === 'ENOENT';
   }
 }

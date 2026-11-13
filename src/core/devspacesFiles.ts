@@ -23,7 +23,7 @@ import { WSL_TASK_FOLDER, WslTask } from './docker/wslTask';
 import { errorMessage } from './errors';
 import type { Logger, ProcessRunner } from './ports';
 import { LockTimeoutError, lockTakeoverFolder, withLockFolder, type LockTimings } from './storage/lockFolder';
-import { errorCode, retryTransient } from './storage/paths';
+import { errorCode, pathState, retryTransient } from './storage/paths';
 import { dockerConfigDir, removeDockerContextFiles } from './vm/dockerContext';
 import { LIMA_INSTANCE, LIMA_SETUP_LOCK_TIMINGS, limaPaths, limaSetupLockFolder } from './vm/limaInstance';
 import { VmTask, vmTaskDefinitionFiles, vmTaskPaths } from './vm/vmTask';
@@ -293,17 +293,6 @@ async function removeEmptyFolder(folder: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-/** Whether `file` exists: `unknown` when lstat fails for another reason than a missing path (for example EACCES). */
-async function pathState(file: string): Promise<'present' | 'missing' | 'unknown'> {
-  try {
-    await fs.promises.lstat(file);
-    return 'present';
-  } catch (error) {
-    const code = errorCode(error);
-    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unknown';
   }
 }
 

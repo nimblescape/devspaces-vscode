@@ -27,6 +27,8 @@ export interface ComputerInventory {
   engines: string[];
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), when it exists. */
   vm: string | undefined;
+  /** True when only the files of a setup of the VM that did not end are there (`vm` names the host then too). */
+  vmLeftovers: boolean;
   /** The hosts where Devspaces added the line of its SSH key to `~/.ssh/authorized_keys` (remote-docker.json). */
   keyHosts: string[];
   /** The private key of Devspaces, when its file exists. */
@@ -40,8 +42,11 @@ export interface ComputerCleanupDeps {
   state: Pick<RemoteDockerState, 'readStrict' | 'setSshKey'>;
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), undefined where there is none. */
   vmHost: string | undefined;
-  /** Whether the VM of Devspaces exists, without a start. */
-  vmExists: () => Promise<boolean>;
+  /**
+   * Whether the VM of Devspaces exists, without a start: `leftovers` when only the files of a setup that did not end are
+   * there (which only the removal of the VM removes).
+   */
+  vmState: () => Promise<'vm' | 'leftovers' | 'none'>;
   /** The removal of the VM without a question (LimaSetupCommands/WslSetupCommands.removeForComputer): what stays. */
   removeVm: () => Promise<string | undefined>;
   /**
@@ -94,20 +99,27 @@ export class ComputerCleanup {
       listUnreadable = errorMessage(error);
       logger.warn(`The list of Docker hosts of Devspaces could not be read: ${listUnreadable}`);
     }
-    const vm = (await this.vmExists()) ? vmHost : undefined;
+    const vmState = await this.vmState();
     return {
       listUnreadable,
       engines: (file.remoteHosts ?? []).filter((host) => host !== vmHost),
-      vm,
-      keyHosts: (file.hosts ?? []).filter((record) => record.sshKey === 'installed' && record.host !== vmHost).map((record) => record.host),
+      vm: vmState === 'none' ? undefined : vmHost,
+      vmLeftovers: vmState === 'leftovers',
+      keyHosts: keyHostsOf(file, vmHost),
       keyFile: this.exists(this.deps.key.keyPath) ? this.deps.key.keyPath : undefined,
       folder: this.deps.folder !== undefined && this.exists(this.deps.folder) ? this.deps.folder : undefined,
     };
   }
 
-  /** Whether the VM of Devspaces exists now (as `vm` of inventory). Never throws. */
+  /** Whether the VM of Devspaces exists now (as `vm` of inventory), also only the files of a setup. Never throws. */
   async vmExists(): Promise<boolean> {
-    return this.deps.vmHost !== undefined && (await this.deps.vmExists().catch(() => true));
+    return (await this.vmState()) !== 'none';
+  }
+
+  /** The state of the VM; one that cannot be read counts as there, so that the question names it. */
+  private async vmState(): Promise<'vm' | 'leftovers' | 'none'> {
+    if (this.deps.vmHost === undefined) return 'none';
+    return this.deps.vmState().catch(() => 'vm' as const);
   }
 
   /** The VM of Devspaces with every devspace in it, its host in the list, its Docker context and its scheduled task. */
@@ -146,8 +158,20 @@ export class ComputerCleanup {
         left.push(text);
       }
     }
-    if (keepFor.length > 0) {
-      left.push(ComputerCleanupTexts.keyKeptFor(keepFor, keyPath));
+    // A host that got the line meanwhile (another window): the key stays for it too.
+    const added = await this.installedHosts().then(
+      (installed) => installed.filter((host) => !hosts.includes(host) && !keepFor.includes(host)),
+      (error: unknown) => {
+        logger.warn(`The list of Docker hosts of Devspaces could not be read again: ${errorMessage(error)}`);
+        return undefined;
+      },
+    );
+    if (added === undefined) {
+      left.push(ComputerCleanupTexts.keyKept(keyPath));
+      return left;
+    }
+    if (keepFor.length > 0 || added.length > 0) {
+      left.push(ComputerCleanupTexts.keyKeptFor([...keepFor, ...added], keyPath));
       return left;
     }
     if (left.length > 0) {
@@ -165,6 +189,11 @@ export class ComputerCleanup {
     }
     if (left.length === 0) logger.info(`Devspaces deleted its SSH key ${keyPath}, if it was there.`);
     return left;
+  }
+
+  /** The hosts of the list whose record says that the line of the key is there, now. Throws when the list cannot be read. */
+  private async installedHosts(): Promise<string[]> {
+    return keyHostsOf(await this.deps.state.readStrict(), this.deps.vmHost);
   }
 
   /** The Docker context, the scheduled task and the folder of Devspaces outside of VS Code (removeDevspacesFiles). */
@@ -185,4 +214,9 @@ export class ComputerCleanup {
   private exists(file: string): boolean {
     return (this.deps.exists ?? fs.existsSync)(file);
   }
+}
+
+/** The hosts of `file` whose record says that the line of the key is there, without the VM. */
+function keyHostsOf(file: RemoteDockerStateFile, vmHost: string | undefined): string[] {
+  return (file.hosts ?? []).filter((record) => record.sshKey === 'installed' && record.host !== vmHost).map((record) => record.host);
 }

@@ -60,12 +60,19 @@ interface Programs {
 function setUp(overrides: Partial<ComputerCleanupDeps> & Programs = {}, answer: (call: Call) => RunResult | undefined = () => undefined) {
   const calls: Call[] = [];
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
+  // The list: a record that forgets the key (setSshKey) says so at the next read.
+  const records: { host: string; sshKey?: 'installed' | 'declined' }[] = [
+    { host: 'devspaces-vm', sshKey: 'installed' },
+    { host: 'box', sshKey: 'installed' },
+    { host: 'me@cloud', sshKey: 'declined' },
+    { host: 'old' },
+  ];
   const state = {
-    readStrict: vi.fn(async () => ({
-      remoteHosts: ['devspaces-vm', 'box', 'me@cloud'],
-      hosts: [{ host: 'devspaces-vm', sshKey: 'installed' as const }, { host: 'box', sshKey: 'installed' as const }, { host: 'me@cloud', sshKey: 'declined' as const }, { host: 'old' }],
-    })),
-    setSshKey: vi.fn(async () => undefined),
+    readStrict: vi.fn(async () => ({ remoteHosts: ['devspaces-vm', 'box', 'me@cloud'], hosts: records.map((record) => ({ ...record })) })),
+    setSshKey: vi.fn(async (host: string, value: 'installed' | 'declined' | undefined) => {
+      const record = records.find((entry) => entry.host === host);
+      if (record !== undefined) record.sshKey = value;
+    }),
   };
   const runner = {
     run: vi.fn(async (file: string, args: readonly string[], options?: RunOptions): Promise<RunResult> => {
@@ -108,7 +115,7 @@ function setUp(overrides: Partial<ComputerCleanupDeps> & Programs = {}, answer: 
     logger,
     state,
     vmHost: 'devspaces-vm',
-    vmExists: async () => true,
+    vmState: async () => 'vm' as const,
     removeVm: vi.fn(async () => undefined),
     key,
     folder: path.join(dir, 'local', '.nimblescape', 'devspaces'),
@@ -128,6 +135,7 @@ describe('the inventory for the question of the command', () => {
       listUnreadable: undefined,
       engines: ['box', 'me@cloud'],
       vm: 'devspaces-vm',
+      vmLeftovers: false,
       keyHosts: ['box'],
       keyFile: keyPath(),
       folder: path.join(dir, 'local', '.nimblescape', 'devspaces'),
@@ -138,21 +146,27 @@ describe('the inventory for the question of the command', () => {
   it('leaves out what is not there, names a list that cannot be read instead of counting it as empty, and counts an unknown VM as there', async () => {
     const { cleanup, logger } = setUp({
       state: { readStrict: async () => Promise.reject(new Error('remote-docker.json is not a valid list of Docker hosts')), setSshKey: async () => undefined },
-      vmExists: async () => Promise.reject(new Error('limactl failed')),
+      vmState: async () => Promise.reject(new Error('limactl failed')),
     });
     expect(await cleanup.inventory()).toEqual({
       listUnreadable: 'remote-docker.json is not a valid list of Docker hosts',
       engines: [],
       vm: 'devspaces-vm',
+      vmLeftovers: false,
       keyHosts: [],
       keyFile: undefined,
       folder: undefined,
     });
     expect(logger.warn).toHaveBeenCalledWith('The list of Docker hosts of Devspaces could not be read: remote-docker.json is not a valid list of Docker hosts');
-    const none = setUp({ vmExists: async () => false, vmHost: undefined, folder: undefined });
+    const none = setUp({ vmState: async () => 'none' as const, vmHost: undefined, folder: undefined });
     expect((await none.cleanup.inventory()).vm).toBeUndefined();
     expect((await none.cleanup.inventory()).engines).toEqual(['devspaces-vm', 'box', 'me@cloud']);
     expect((await none.cleanup.inventory()).keyHosts).toEqual(['devspaces-vm', 'box']);
+    // Only the files of a setup that did not end: the VM with leftovers, so that the question names them as such.
+    const leftovers = setUp({ vmState: async () => 'leftovers' as const });
+    expect(await leftovers.cleanup.inventory()).toMatchObject({ vm: 'devspaces-vm', vmLeftovers: true });
+    expect(await leftovers.cleanup.vmExists()).toBe(true);
+    expect(await none.cleanup.vmExists()).toBe(false);
   });
 });
 
@@ -269,9 +283,26 @@ describe('the removal of the SSH key of Devspaces', () => {
     expect(noKeygen.calls).toEqual([]);
   });
 
+  // Mutation: the key deleted after another window added its line on a new host while the command ran.
+  it('keeps the key for a host that got its line while the command ran', async () => {
+    keyFiles();
+    write(authorizedKeys('box'), `${PUBLIC}\n`);
+    const { cleanup, state } = setUp();
+    state.readStrict.mockImplementationOnce(async () => ({ remoteHosts: ['box'], hosts: [{ host: 'box', sshKey: 'installed' as const }] }));
+    state.readStrict.mockImplementationOnce(async () => ({ remoteHosts: ['box', 'new'], hosts: [{ host: 'new', sshKey: 'installed' as const }] }));
+    await cleanup.inventory();
+    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyKeptFor(['new'], keyPath())]);
+    expect(fs.existsSync(keyPath())).toBe(true);
+    // A list that cannot be read again: the key stays.
+    state.readStrict.mockRejectedValueOnce(new Error('EACCES'));
+    expect(await cleanup.removeSshKey([])).toEqual([ComputerCleanupTexts.keyKept(keyPath())]);
+    expect(fs.existsSync(keyPath())).toBe(true);
+  });
+
   it('only deletes the key files when no host has the line', async () => {
     keyFiles();
-    const { cleanup, calls } = setUp();
+    const { cleanup, calls, state } = setUp();
+    await state.setSshKey('box', undefined);
     expect(await cleanup.removeSshKey([])).toEqual([]);
     expect(calls).toEqual([]);
     expect(fs.existsSync(keyPath())).toBe(false);

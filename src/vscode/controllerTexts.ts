@@ -94,6 +94,7 @@ export const ControllerTexts = {
     `On each Docker host of the list (${listSome(engines)}): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and ${devspaces === 0 ? 'no devspace of yours' : devspaces === 1 ? 'your devspace there' : `your ${devspaces} devspaces there`}.`,
   removeComputerVm: (devspaces: number) =>
     `The VM of Devspaces with every devspace in it${devspaces > 0 ? ` (${devspaces === 1 ? 'one devspace' : `${devspaces} devspaces`} of this VS Code)` : ''}, also those of another VS Code on this computer, its images and its volumes.`,
+  removeComputerVmLeftovers: 'The files that a setup of the VM of Devspaces left when it did not end.',
   removeComputerListUnreadable: 'Devspaces could not read its list of Docker hosts, so it stays on the remote hosts of the list, and so does its SSH key.',
   removeComputerKey: (hosts: readonly string[]) =>
     `The SSH key of Devspaces on this computer${hosts.length > 0 ? `, and its line in ~/.ssh/authorized_keys on ${listSome(hosts)}` : ''}.`,
