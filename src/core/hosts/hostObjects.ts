@@ -797,6 +797,39 @@ export async function readHostInventory(
   });
 }
 
+/**
+ * The four short lists of the check of a host (readHostCheck): the ID and the state of each container, the ID and the
+ * tag of each image, the name of each volume, and the ID of each network (GET /containers/json, /images/json, /volumes,
+ * /networks). No sizes, so Docker measures nothing; no `Status`, whose time ("Up 5 minutes") changes every minute.
+ */
+export const HOST_CHECK_ARGS: ReadonlyArray<readonly string[]> = [
+  ['container', 'ls', '--all', '--no-trunc', '--format', '{{.ID}} {{.State}}'],
+  ['image', 'ls', '--no-trunc', '--format', '{{.ID}} {{.Repository}}:{{.Tag}}'],
+  ['volume', 'ls', '--format', '{{.Name}}'],
+  ['network', 'ls', '--no-trunc', '--format', '{{.ID}}'],
+];
+
+/**
+ * The check of a host for the update of the view Docker Hosts (R-ENG-008): one text from the four short lists of
+ * HOST_CHECK_ARGS, each sorted, which changes when an object comes, goes, gets another tag, or a container starts or
+ * stops. Equal texts: the objects of the last read are still there. Only calls that read. Throws CommandError when a
+ * list fails, and an AbortError when `signal` aborts.
+ */
+export async function readHostCheck(docker: Pick<BootstrapDocker, 'run'>, signal?: AbortSignal): Promise<string> {
+  const parts: string[] = [];
+  for (const args of HOST_CHECK_ARGS) {
+    const result = await docker.run(args, { timeoutMs: DOCKER_QUERY_TIMEOUT_MS, ...(signal !== undefined ? { signal } : {}) });
+    if (result.exitCode !== 0 || result.timedOut) throw new CommandError(commandText(args), result.exitCode, result.stdout, result.stderr, result.timedOut);
+    const lines = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+      .sort();
+    parts.push(`${args[0]}\n${lines.join('\n')}`);
+  }
+  return parts.join('\n\n');
+}
+
 /** `docker ps` of the running dev containers and service containers of devspaces (label LABEL_DEVSPACE_ID). */
 export const RUNNING_DEVSPACES_ARGS: readonly string[] = ['ps', '--no-trunc', '--filter', `label=${LABEL_DEVSPACE_ID}`, '--filter', 'status=running', '--format', '{{json .}}'];
 

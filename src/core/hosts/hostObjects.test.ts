@@ -7,6 +7,7 @@
 // sizes, the build cache, which objects the running containers use, and their start, stop and removal without force.
 import { describe, expect, it } from 'vitest';
 import { silentLogger, type Logger, type RunOptions, type RunResult } from '../ports';
+import { isSharedShellCall } from '../docker/bootstrapDocker';
 import { LABEL_IMAGE_KEY, resourceName } from '../names';
 import type { Devspace } from '../types';
 import {
@@ -17,6 +18,7 @@ import {
   isEarlierHelperBuild,
   formatSize,
   helperBaseImageReferences,
+  HOST_CHECK_ARGS,
   IMAGE_TAGS_ARGS,
   imageTagsNowArgs,
   imageUsersNowArgs,
@@ -26,6 +28,7 @@ import {
   normalizedReference,
   parseDockerSize,
   pruneBuildCache,
+  readHostCheck,
   readHostInventory,
   removeHostObjects,
   RUNNING_USES_BATCH,
@@ -778,6 +781,36 @@ describe('readHostInventory', () => {
     const lateNetworks = fakeDocker({ 'system df': ok('{}'), 'network ls': { exitCode: null, stdout: '', stderr: '', timedOut: true } });
     await expect(readHostInventory(lateNetworks, options)).rejects.toMatchObject({ timedOut: true });
     await expect(readHostInventory(fakeDocker({ 'system df': fail('permission denied') }), options)).rejects.toMatchObject({ timedOut: false });
+  });
+});
+
+describe('readHostCheck', () => {
+  const lists = (containers: string, images = 'sha256:a nginx:1\n', volumes = 'pgdata\n', networks = 'n1\n') =>
+    fakeDocker({ 'container ls': ok(containers), 'image ls': ok(images), 'volume ls': ok(volumes), 'network ls': ok(networks) });
+
+  it('reads the four short lists without sizes, each sorted, so the order of Docker does not count', async () => {
+    const docker = lists('c2 running\nc1 exited\n');
+    const check = await readHostCheck(docker);
+    expect(docker.calls).toEqual(HOST_CHECK_ARGS.map((args) => [...args]));
+    expect(docker.calls.flat()).not.toContain('--size');
+    expect(check).toBe('container\nc1 exited\nc2 running\n\nimage\nsha256:a nginx:1\n\nvolume\npgdata\n\nnetwork\nn1');
+    expect(await readHostCheck(lists('c1 exited\r\nc2 running\r\n'))).toBe(check);
+    // Each list only reads, so the shared shell of the host carries it, also on a remote host: no login of its own.
+    expect(HOST_CHECK_ARGS.every((args) => isSharedShellCall(args, false))).toBe(true);
+  });
+
+  it('changes when a container starts or stops, or an object comes, goes or gets another tag', async () => {
+    const before = await readHostCheck(lists('c1 exited\n'));
+    expect(await readHostCheck(lists('c1 running\n'))).not.toBe(before);
+    expect(await readHostCheck(lists('c1 exited\nc2 created\n'))).not.toBe(before);
+    expect(await readHostCheck(lists('c1 exited\n', 'sha256:a nginx:2\n'))).not.toBe(before);
+    expect(await readHostCheck(lists('c1 exited\n', 'sha256:a nginx:1\n', ''))).not.toBe(before);
+    expect(await readHostCheck(lists('c1 exited\n', 'sha256:a nginx:1\n', 'pgdata\n', 'n1\nn2\n'))).not.toBe(before);
+  });
+
+  it('throws when a list fails or ends at its time limit', async () => {
+    await expect(readHostCheck(fakeDocker({ 'volume ls': fail('Cannot connect to the Docker daemon') }))).rejects.toThrow(/Cannot connect/);
+    await expect(readHostCheck(fakeDocker({ 'container ls': { exitCode: null, stdout: '', stderr: '', timedOut: true } }))).rejects.toMatchObject({ timedOut: true });
   });
 });
 

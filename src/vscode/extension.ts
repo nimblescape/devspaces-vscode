@@ -52,7 +52,7 @@ import { LimaSetup } from '../core/vm/limaSetup';
 import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
 import { readMonitorLog } from '../core/hosts/monitorLog';
 import { readResourceReport } from '../core/hosts/reportRead';
-import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
+import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostCheck, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { consoleResizeCommand, limaConsoleArgs, sshConsoleArgs, wslConsoleArgs, wslConsoleResizeArgs } from '../core/hosts/hostConsole';
 import { OomWatch } from '../core/vm/oomKills';
@@ -1581,8 +1581,9 @@ async function activateExtension(
     shells.close(vmHost);
   };
   // The view "Docker Hosts" (R-ENG-008): the VM of Devspaces and the remote hosts of the list, each with all containers,
-  // networks, images and volumes there and its build cache. A host is read only when the user opens its row or clicks
-  // Refresh. All Docker calls of the view run on the one shared shell of the host (`onHostShell` above).
+  // networks, images and volumes there and its build cache. A host is read when the user opens its row or clicks
+  // Refresh, and again when the check of the update every 30 seconds changed (readHostCheck: four short lists without
+  // sizes). All Docker calls of the view run on the one shared shell of the host (`onHostShell` above).
   const dockerHosts = new DockerHostsView({
     logger,
     showLog: () => logger.show(),
@@ -1594,6 +1595,14 @@ async function activateExtension(
     },
     vmState: readVmState,
     read: readInventory,
+    check: (host, signal, options = {}) => {
+      if (options.openLoginOnly !== true) return onHostShell(host, () => readHostCheck(docker, signal));
+      const refused = new AbortController();
+      return onHostShell(host, () => readHostCheck(docker, AbortSignal.any([signal, refused.signal])), refused);
+    },
+    // Windows: while the keeper of the window stops the distribution (its idle script ended), the update calls nothing
+    // there, so that its shared shell closes and WSL can stop the distribution.
+    vmStopping: () => vmHost === WSL_HOST && keeper.stopping(WSL_DISTRIBUTION),
     stopContainer: (host, object, signal) => onHostShell(host, () => stopHostContainer(docker, object, logger, signal)),
     startContainer: (host, object, signal) => onHostShell(host, () => startHostContainer(docker, object, logger, signal)),
     pruneBuildCache: (host, signal) => onHostShell(host, () => pruneBuildCache(docker, logger, signal)),
@@ -1606,6 +1615,8 @@ async function activateExtension(
   context.subscriptions.push(
     dockerHosts,
     hostsTree,
+    // The update of the open hosts every 30 seconds while the view is visible and the window has the focus.
+    dockerHosts.watch(hostsTree),
     // The check mark of the Docker host of Devspaces follows a change in another window too; each operation reads the
     // Docker host, so only a change shows the hosts again.
     {
