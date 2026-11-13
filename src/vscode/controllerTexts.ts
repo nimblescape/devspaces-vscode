@@ -116,6 +116,11 @@ export const ControllerTexts = {
   /** The VM of Devspaces in the messages of "Remove Devspaces from This Computer…" (its devspaces in use). */
   theVm: 'the VM of Devspaces',
   computerVmFailed: (detail: string) => `The VM of Devspaces could not be removed: ${detail}`,
+  /** `where`: "on <engine>" or "in the VM of Devspaces"; `names`: the devspaces that the question did not name. */
+  computerNewDevspaces: (where: string, count: number, names: string) =>
+    `${count === 1 ? 'A devspace was' : 'Devspaces were'} created ${where} after the question: ${names}. Nothing was removed there, so that no devspace is deleted without a question. Run the command again.`,
+  inTheVm: 'in the VM of Devspaces',
+  uninstallFailed: (detail: string) => `VS Code could not uninstall the extension: ${detail.replace(/\.$/, '')}. Uninstall it in the Extensions view.`,
   removedFromComputer: 'Devspaces was removed from this computer. VS Code uninstalls the extension now.',
   removalFromComputerLeft: (count: number) =>
     `Devspaces could not remove everything from this computer: ${count === 1 ? 'one thing stays' : `${count} things stay`}. The details name each one. The extension stays installed, so that you can run the command again.`,

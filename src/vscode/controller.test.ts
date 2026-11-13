@@ -4542,6 +4542,96 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(order.slice(-2)).toEqual(['remove the key and its line on no host, keep them for build-box', 'remove the files']);
   });
 
+  // Mutation: a Cancel during the last part that is not checked after it, so that the extension is uninstalled.
+  it('Cancel while the files are removed keeps the extension installed', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    const progress = cancellableProgress();
+    cleanup.removeFiles.mockImplementation(async () => {
+      order.push('remove the files');
+      progress.cancel();
+      return [];
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files']);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
+  });
+
+  // Mutation: the devspaces to delete read again on each host without the names of the question, so that a devspace
+  // that another window created after the question is deleted with its changes, without a question.
+  it('removes nothing from a host or the VM where a devspace of the account came after the question, and keeps the key for that host', async () => {
+    const { order, cleanup } = onComputer({ engines: ['old-box', 'build-box'], keyHosts: ['build-box'] });
+    // A devspace of another account on old-box, so that the accounts of Devspaces are read before the question.
+    await h.registry.add({ ...otherAccountRemote(), dockerHost: 'old-box' });
+    // While old-box is removed, another window creates a devspace on build-box and one in the VM, and closes.
+    let added = false;
+    h.registry.list = ((list) => async () => {
+      if (!added && operationDockerTarget()?.host === 'old-box') {
+        added = true;
+        await h.registry.add(ownRemote());
+        await h.registry.add(inVm());
+      }
+      return list();
+    })(h.registry.list.bind(h.registry));
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(added).toBe(true);
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(order.filter((step) => step.startsWith('build-box:'))).toEqual([]);
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerNewDevspaces('on build-box', 1, 'acme/api')}`);
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerNewDevspaces(ControllerTexts.inTheVm, 1, 'acme/vm')}`);
+    expect(cleanup.removeSshKey).toHaveBeenCalledWith([], ['build-box']);
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: without the check of another window's removal, a host with nothing to remove gets the removal mark and
+  // counts as removed while that window still removes Devspaces from there.
+  it('leaves a host that another window removes Devspaces from, also when nothing of Devspaces is there', async () => {
+    const { removal, cleanup } = onComputer({ vm: undefined });
+    h.alive.add(OTHER_PID);
+    await h.sessionFiles.writeWindowStatus({ windowId: OTHER_WINDOW_ID, pid: OTHER_PID, devspaceId: null, state: 'active', updatedAt: iso(NOW - 5000) });
+    await h.engineRecords.startRemoval('build-box', { windowId: OTHER_WINDOW_ID, pid: OTHER_PID, since: iso(NOW - 30_000) }, NOW - 30_000, () => true);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(removal.engineAnswers).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.removalRunningElsewhere('build-box')}`);
+    expect(cleanup.removeSshKey).toHaveBeenCalledWith([], ['build-box']);
+  });
+
+  // Mutation: a removal that sets the host of the removal only for the part that runs lets a Refresh restore the
+  // devspaces from the volumes of a host while the VM is removed.
+  it('restores from the volumes of no engine while it runs', async () => {
+    const { cleanup } = onComputer();
+    let refreshed: Promise<unknown> | undefined;
+    cleanup.removeVm.mockImplementation(async () => {
+      refreshed = run('refresh');
+      await refreshed;
+      return undefined;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(refreshed).toBeDefined();
+    expect(h.service.reconcileInWorker).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The devspaces are not restored from the volumes on build-box: Devspaces is being removed from there.');
+  });
+
+  // Mutation: a failed uninstall that is not caught ends the command with an error of VS Code and nothing in the log.
+  it('says so when VS Code cannot uninstall the extension', async () => {
+    const { cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.uninstallExtension.mockRejectedValueOnce(new Error('The extension is not installed in this profile.'));
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(h.logger.warn).toHaveBeenCalledWith('VS Code could not uninstall the extension: The extension is not installed in this profile.');
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(
+      'VS Code could not uninstall the extension: The extension is not installed in this profile. Uninstall it in the Extensions view.',
+      Actions.showDetails,
+    );
+  });
+
   it('is a command of package.json, in the Command Palette and last in the "…" menu of the repository view', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };

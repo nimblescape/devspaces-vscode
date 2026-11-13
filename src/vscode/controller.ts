@@ -485,8 +485,7 @@ export class Controller implements vscode.Disposable {
   /**
    * The engine that "Remove Devspaces from This Docker Engine…" removes Devspaces from now (its Docker host, and its name:
    * describeDockerHost): no other operation of this window starts meanwhile, and no restore from the volumes there.
-   * "Remove Devspaces from This Computer…" sets it without a host ("this computer"), and with the host of each remote
-   * host while it removes Devspaces from there.
+   * "Remove Devspaces from This Computer…" sets it without a host ("this computer"): then no restore runs on any engine.
    */
   private removingFrom: { host?: string; engine: string } | undefined;
   /** The VS Code command list.select failed on Enter (rowEnter); logged once per window. */
@@ -1096,7 +1095,7 @@ export class Controller implements vscode.Disposable {
    */
   private async restoreRefusedWhileRemoving(host: string, tell: boolean): Promise<boolean> {
     const engine = describeDockerHost(host);
-    if (this.removingFrom?.host === host) {
+    if (this.removingFrom !== undefined && (this.removingFrom.host ?? host) === host) {
       this.logger.info(`The devspaces are not restored from the volumes on ${engine}: Devspaces is being removed from there.`);
       if (tell) this.inform(ControllerTexts.removalRunning(engine));
       return true;
@@ -1733,6 +1732,8 @@ export class Controller implements vscode.Disposable {
     const others = onEngines.filter((devspace) => !own.includes(devspace));
     const inVm = inventory.vm === undefined ? [] : known.filter((devspace) => isOnDockerHost(devspace, inventory.vm as string));
     const deleted = [...own, ...inVm];
+    // The devspaces that the question names: one of the accounts of Devspaces that is created later is never deleted.
+    const named = new Set(deleted.map((devspace) => devspace.id));
     const detail = [
       ...(inventory.listUnreadable !== undefined ? [ControllerTexts.removeComputerListUnreadable] : []),
       ...(inventory.engines.length > 0 ? [ControllerTexts.removeComputerEngines(inventory.engines.map(describeDockerHost), own.length)] : []),
@@ -1775,7 +1776,7 @@ export class Controller implements vscode.Disposable {
           for (const host of inventory.engines) {
             if (stopped()) return;
             progress.detail(ControllerTexts.removing(describeDockerHost(host)));
-            const failure = await this.removeEngineForComputer(removal, host, accounts, progress, signal).catch((error: unknown) => {
+            const failure = await this.removeEngineForComputer(removal, host, accounts, named, progress, signal).catch((error: unknown) => {
               if (isCancellation(error)) throw error;
               return ControllerTexts.computerEngineFailed(describeDockerHost(host), errorMessage(error));
             });
@@ -1787,7 +1788,7 @@ export class Controller implements vscode.Disposable {
           const vm = inventory.vm;
           if (vm !== undefined) {
             progress.detail(ControllerTexts.removingComputerVm);
-            const vmLeft = await this.removeVmForComputer(cleanup, vm).catch((error: unknown) => {
+            const vmLeft = await this.removeVmForComputer(cleanup, vm, named).catch((error: unknown) => {
               if (isCancellation(error)) throw error;
               return ControllerTexts.computerVmFailed(errorMessage(error));
             });
@@ -1803,6 +1804,8 @@ export class Controller implements vscode.Disposable {
           if (stopped()) return;
           progress.detail(ControllerTexts.removingComputerFiles);
           left.push(...(await cleanup.removeFiles()));
+          // A Cancel during the last part keeps the extension installed too.
+          stopped();
         },
       });
     } catch (error) {
@@ -1830,98 +1833,100 @@ export class Controller implements vscode.Disposable {
       this.logger.info('Devspaces was removed from this computer; VS Code uninstalls the extension now.');
       this.inform(ControllerTexts.removedFromComputer);
     }
-    await cleanup.uninstallExtension();
+    try {
+      await cleanup.uninstallExtension();
+    } catch (error) {
+      this.logger.warn(`VS Code could not uninstall the extension: ${errorMessage(error)}`);
+      this.warnWithLog(ControllerTexts.uninstallFailed(errorMessage(error)));
+    }
   }
 
   /**
    * The removal from the remote Docker host `host` for "Remove Devspaces from This Computer…", as one operation on that
-   * host, without the questions of removeFromCheckedEngine: the devspaces of `accounts` there are deleted. What stays
-   * there (each item is in the log), or undefined when nothing of Devspaces stays except the devspaces that are not
-   * deleted (other accounts, other computers).
+   * host, without the questions of removeFromCheckedEngine: the devspaces of `accounts` there are deleted, but only
+   * those of `named`, the devspaces that the question named. What stays there (each item is in the log), or undefined
+   * when nothing of Devspaces stays except the devspaces that are not deleted (other accounts, other computers).
    */
   private async removeEngineForComputer(
     removal: EngineRemovalDeps,
     host: string,
     accounts: readonly GitHubAccount[],
+    named: ReadonlySet<string>,
     progress: ProgressReporter,
     signal: AbortSignal,
   ): Promise<string | undefined> {
-    // While it runs, no restore from the volumes there in this window (restoreRefusedWhileRemoving).
-    const outer = this.removingFrom;
-    this.removingFrom = { host, engine: ControllerTexts.thisComputer };
-    try {
-      return await this.withHost(host, async () => {
-        const engine = describeDockerHost(host);
-        const target = await this.operationTarget();
-        if (target.kind === 'unsupported') return ControllerTexts.computerEngineFailed(engine, unsupportedTargetReason(target));
-        const known = await this.deps.registry.list();
-        const here = known.filter((devspace) => isOnDockerHost(devspace, host));
-        const refusal = await this.useRefusal(engine, here);
-        if (refusal !== undefined) return refusal;
-        progress.detail(ControllerTexts.removeLooking(engine));
-        if (!(await removal.engineAnswers(target, signal))) return ControllerTexts.computerEngineNotAnswering(engine);
-        let inventory: EngineInventory;
-        try {
-          inventory = await engineInventory(removal.docker, { computerId: removal.computerId(), knownDevspaces: new Set(known.map((devspace) => devspace.id)), signal });
-        } catch (error) {
-          if (isCancellation(error)) throw error;
-          this.logger.warn(`What Devspaces has on ${engine} could not be listed: ${errorMessage(error)}`);
-          return ControllerTexts.removeListFailed(engine);
-        }
-        const own = availableDevspaces(here, accounts);
-        if (inventoryIsEmpty(inventory) && own.length === 0) {
-          // The extension is uninstalled at the end, so no background work of this computer comes back without the mark.
-          if (!(await this.markRemoved(host))) this.logger.warn(ControllerTexts.removalNotRecorded(engine));
-          this.logger.info(`Devspaces has nothing on ${engine} to remove.`);
-          return undefined;
-        }
-        const start = await this.startRemoval(host);
-        if (start.kind === 'other') return ControllerTexts.removalRunningElsewhere(engine);
-        // Until the check below passed, nothing was removed: a stop brings back the record from before.
-        let stopped = true;
-        try {
-          // A window that connected to a devspace there, or an operation that began, since the check above (also on a
-          // devspace that was created meanwhile): nothing is removed there, as at the start.
-          const hereNow = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, host));
-          const refusalNow = await this.useRefusal(engine, hereNow);
-          if (refusalNow !== undefined) return refusalNow;
-          stopped = false;
-          // The extension is uninstalled at the end, so no background work of this computer comes back without the mark.
-          if (start.kind === 'notRecorded') this.logger.warn(ControllerTexts.removalNotRecorded(engine));
-          this.logger.info(`Removing Devspaces from ${engine}${own.length > 0 ? `, with ${own.length === 1 ? 'one devspace' : `${own.length} devspaces`} of the accounts of Devspaces there` : ''}.`);
-          const removed = await this.removeFromEngine(removal, target, own, progress, signal);
-          const devspacesStay = own.length < here.length || inventory.unknownDevspaces.length > 0;
-          const { left } = engineRemovalLeft(removed, devspacesStay);
-          if (removed.result.ended !== undefined) return ControllerTexts.removalEnded(engine);
-          if (left > 0) return ControllerTexts.removalLeftItems(left, engine);
-          // A background build of the helper image of this window that goes on can make the image there again.
-          if (removed.buildNotWaitedFor === true) return ControllerTexts.computerEngineBuildNotWaitedFor(engine);
-          this.logger.info(`Devspaces was removed from ${engine}.`);
-          return undefined;
-        } finally {
-          if (start.kind === 'started') await this.endRemoval(host, start.removal, stopped ? start.before : undefined);
-        }
-      });
-    } finally {
-      this.removingFrom = outer;
-    }
+    return this.withHost(host, async () => {
+      const engine = describeDockerHost(host);
+      const target = await this.operationTarget();
+      if (target.kind === 'unsupported') return ControllerTexts.computerEngineFailed(engine, unsupportedTargetReason(target));
+      const known = await this.deps.registry.list();
+      const here = known.filter((devspace) => isOnDockerHost(devspace, host));
+      const refusal = (await this.useRefusal(engine, here)) ?? this.newDevspacesRefusal(`on ${engine}`, availableDevspaces(here, accounts), named);
+      if (refusal !== undefined) return refusal;
+      // As removeFromDockerEngineNow: also no removal mark while another window removes Devspaces from there.
+      if ((await this.otherWindowRemoval(host)) !== undefined) return ControllerTexts.removalRunningElsewhere(engine);
+      progress.detail(ControllerTexts.removeLooking(engine));
+      if (!(await removal.engineAnswers(target, signal))) return ControllerTexts.computerEngineNotAnswering(engine);
+      let inventory: EngineInventory;
+      try {
+        inventory = await engineInventory(removal.docker, { computerId: removal.computerId(), knownDevspaces: new Set(known.map((devspace) => devspace.id)), signal });
+      } catch (error) {
+        if (isCancellation(error)) throw error;
+        this.logger.warn(`What Devspaces has on ${engine} could not be listed: ${errorMessage(error)}`);
+        return ControllerTexts.removeListFailed(engine);
+      }
+      const own = availableDevspaces(here, accounts);
+      if (inventoryIsEmpty(inventory) && own.length === 0) {
+        // The extension is uninstalled at the end, so no background work of this computer comes back without the mark.
+        if (!(await this.markRemoved(host))) this.logger.warn(ControllerTexts.removalNotRecorded(engine));
+        this.logger.info(`Devspaces has nothing on ${engine} to remove.`);
+        return undefined;
+      }
+      const start = await this.startRemoval(host);
+      if (start.kind === 'other') return ControllerTexts.removalRunningElsewhere(engine);
+      // Until the check below passed, nothing was removed: a stop brings back the record from before.
+      let stopped = true;
+      try {
+        // A window that connected to a devspace there, or an operation that began, since the check above (also on a
+        // devspace that was created meanwhile): nothing is removed there, as at the start.
+        const hereNow = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, host));
+        const refusalNow = (await this.useRefusal(engine, hereNow)) ?? this.newDevspacesRefusal(`on ${engine}`, availableDevspaces(hereNow, accounts), named);
+        if (refusalNow !== undefined) return refusalNow;
+        stopped = false;
+        // The extension is uninstalled at the end, so no background work of this computer comes back without the mark.
+        if (start.kind === 'notRecorded') this.logger.warn(ControllerTexts.removalNotRecorded(engine));
+        this.logger.info(`Removing Devspaces from ${engine}${own.length > 0 ? `, with ${own.length === 1 ? 'one devspace' : `${own.length} devspaces`} of the accounts of Devspaces there` : ''}.`);
+        const removed = await this.removeFromEngine(removal, target, own, progress, signal);
+        const devspacesStay = own.length < here.length || inventory.unknownDevspaces.length > 0;
+        const { left } = engineRemovalLeft(removed, devspacesStay);
+        if (removed.result.ended !== undefined) return ControllerTexts.removalEnded(engine);
+        if (left > 0) return ControllerTexts.removalLeftItems(left, engine);
+        // A background build of the helper image of this window that goes on can make the image there again.
+        if (removed.buildNotWaitedFor === true) return ControllerTexts.computerEngineBuildNotWaitedFor(engine);
+        this.logger.info(`Devspaces was removed from ${engine}.`);
+        return undefined;
+      } finally {
+        if (start.kind === 'started') await this.endRemoval(host, start.removal, stopped ? start.before : undefined);
+      }
+    });
   }
 
   /**
    * The removal of the VM of Devspaces for "Remove Devspaces from This Computer…" (ComputerCleanup.removeVm), after the
    * checks of the use again: a window that connected to a devspace in the VM, or an operation that began there, while the
-   * remote hosts were removed keeps the VM, because its removal would delete that devspace under it. Meanwhile no
-   * restore from the volumes of the VM runs in this window. What stays, or undefined.
+   * remote hosts were removed keeps the VM, because its removal would delete that devspace under it; so does a devspace
+   * in the VM that the question did not name (`named`). What stays, or undefined.
    */
-  private async removeVmForComputer(cleanup: NonNullable<ControllerDeps['computerCleanup']>, vmHost: string): Promise<string | undefined> {
-    const outer = this.removingFrom;
-    this.removingFrom = { host: vmHost, engine: ControllerTexts.thisComputer };
-    try {
-      const inVm = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, vmHost));
-      return (await this.useRefusal(ControllerTexts.theVm, inVm)) ?? (await cleanup.removeVm());
-    } finally {
-      this.removingFrom = outer;
-    }
+  private async removeVmForComputer(cleanup: NonNullable<ControllerDeps['computerCleanup']>, vmHost: string, named: ReadonlySet<string>): Promise<string | undefined> {
+    const inVm = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, vmHost));
+    return (await this.useRefusal(ControllerTexts.theVm, inVm)) ?? this.newDevspacesRefusal(ControllerTexts.inTheVm, inVm, named) ?? (await cleanup.removeVm());
+  }
+
+  /** The refusal for the devspaces of `devspaces` that the question of "Remove Devspaces from This Computer…" did not name. */
+  private newDevspacesRefusal(where: string, devspaces: readonly Devspace[], named: ReadonlySet<string>): string | undefined {
+    const added = devspaces.filter((devspace) => !named.has(devspace.id));
+    if (added.length === 0) return undefined;
+    return ControllerTexts.computerNewDevspaces(where, added.length, listSome(added.map((devspace) => this.shownName(this.devspaceTarget(devspace)))));
   }
 
   /**

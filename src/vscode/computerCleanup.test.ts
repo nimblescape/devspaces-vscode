@@ -244,12 +244,17 @@ describe('the removal of the SSH key of Devspaces', () => {
     keyFiles();
     write(authorizedKeys('box'), `${PUBLIC}\n`);
     const failing = setUp({}, (call) => (call.file === '/usr/bin/ssh-keygen' ? { exitCode: 1, stdout: '', stderr: 'invalid format', timedOut: false } : undefined));
-    expect(await failing.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyUnreadable(keyPath(), `the key ${keyPath()} could not be read: invalid format`)]);
+    expect(await failing.cleanup.removeSshKey(['box'], ['me@cloud'])).toEqual([
+      ComputerCleanupTexts.keyUnreadable(keyPath(), `the key ${keyPath()} could not be read: invalid format`, ['box', 'me@cloud']),
+    ]);
+    expect(ComputerCleanupTexts.keyUnreadable(keyPath(), 'ssh-keygen was not found on this computer.', ['box', 'me@cloud'])).toBe(
+      `The SSH key of Devspaces ${keyPath()} could not be read (ssh-keygen was not found on this computer), so its line stays in ~/.ssh/authorized_keys on box, me@cloud. Remove the line that ends with "devspaces@" and the name of this computer there.`,
+    );
     expect(failing.calls.map((call) => call.file)).toEqual(['/usr/bin/ssh-keygen']);
     expect(fs.readFileSync(authorizedKeys('box'), 'utf8')).toBe(`${PUBLIC}\n`);
     expect(fs.existsSync(keyPath())).toBe(true);
     const noKeygen = setUp({ sshKeygenPath: () => undefined });
-    expect(await noKeygen.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyUnreadable(keyPath(), 'ssh-keygen was not found on this computer.')]);
+    expect(await noKeygen.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyUnreadable(keyPath(), 'ssh-keygen was not found on this computer.', ['box'])]);
     expect(noKeygen.calls).toEqual([]);
   });
 

@@ -76,12 +76,7 @@ export function authorizedKeysCommand(key: PublicKey, comment: string): string {
 export function removeAuthorizedKeyCommand(key: PublicKey, comment: string): string {
   const file = AUTHORIZED_KEYS;
   const line = shellWord(`${key.type} ${key.blob} ${comment}`);
-  const copy = `${file}.devspaces-$$`;
-  return [
-    `( cd || exit; [ ! -L ${file} ] || { echo '~/${file} is a symbolic link' >&2; exit 3; }; kept=$(grep -vxF -- ${line} ${file}); [ $? -le 1 ] || exit`,
-    `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
-    `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${file} >/dev/null 2>&1 || true; } )`,
-  ].join('; ');
+  return [`( cd || exit; ${SYMBOLIC_LINK_GUARD}; kept=$(grep -vxF -- ${line} ${file}); [ $? -le 1 ] || exit`, ...REPLACE_WITH_KEPT].join('; ');
 }
 
 /**
@@ -94,14 +89,25 @@ export function removeAuthorizedKeyCommand(key: PublicKey, comment: string): str
  */
 export function removeKeyLinesCommand(key: PublicKey): string {
   const file = AUTHORIZED_KEYS;
-  const copy = `${file}.devspaces-$$`;
   return [
-    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || exit 0; [ ! -L ${file} ] || { echo '~/${file} is a symbolic link' >&2; exit 3; }`,
+    `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || exit 0; ${SYMBOLIC_LINK_GUARD}`,
     `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '($1 " " $2) != key' ${file}) || exit`,
-    `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
-    `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${file} >/dev/null 2>&1 || true; } )`,
+    ...REPLACE_WITH_KEPT,
   ].join('; ');
 }
+
+/** The step of removeAuthorizedKeyCommand and removeKeyLinesCommand that changes no file that is a symbolic link (exit code 3). */
+const SYMBOLIC_LINK_GUARD = `[ ! -L ${AUTHORIZED_KEYS} ] || { echo '~/${AUTHORIZED_KEYS} is a symbolic link' >&2; exit 3; }`;
+
+/**
+ * The last steps of removeAuthorizedKeyCommand and removeKeyLinesCommand, after the lines to keep are in `$kept`: they go
+ * into a copy of the file (`cp -p`: its mode and owner), which then replaces it, so that a failed write (a full disk)
+ * leaves the file as it was; then `restorecon` when the host has it, and the end of the subshell.
+ */
+const REPLACE_WITH_KEPT = [
+  `cp -p ${AUTHORIZED_KEYS} ${AUTHORIZED_KEYS}.devspaces-$$ && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${AUTHORIZED_KEYS}.devspaces-$$ && mv -f ${AUTHORIZED_KEYS}.devspaces-$$ ${AUTHORIZED_KEYS} || { s=$?; rm -f ${AUTHORIZED_KEYS}.devspaces-$$; exit $s; }`,
+  `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${AUTHORIZED_KEYS} >/dev/null 2>&1 || true; } )`,
+];
 
 /** One line for the shell before the relay whose exit code is 0 when `key` is in `~/.ssh/authorized_keys` (no comment). */
 export function authorizedKeyPresentCommand(key: PublicKey): string {

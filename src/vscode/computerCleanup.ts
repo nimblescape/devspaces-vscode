@@ -68,7 +68,8 @@ export const ComputerCleanupTexts = {
     `The SSH key of Devspaces stays on this computer (${keyPath}), and so does its line on ${hosts.join(', ')}, where something of Devspaces stays, so that a new run of the command can still log in there with it.`,
   listUnreadable: (detail: string) =>
     `The list of Docker hosts of Devspaces could not be read (${detail}), so Devspaces stays on the remote hosts of the list, and so does its SSH key with its line there. Run the command again when the list can be read, or remove them by hand (Uninstall in the user guide).`,
-  keyUnreadable: (keyPath: string, detail: string) => `The SSH key of Devspaces ${keyPath} could not be read, so its line stays on the hosts: ${detail}`,
+  keyUnreadable: (keyPath: string, detail: string, hosts: readonly string[]) =>
+    `The SSH key of Devspaces ${keyPath} could not be read (${detail.replace(/\.$/, '')}), so its line stays in ~/.ssh/authorized_keys on ${hosts.join(', ')}. Remove the line that ends with "devspaces@" and the name of this computer there.`,
   keyFileLeft: (file: string, detail: string) => `The file ${file} could not be deleted: ${detail}`,
 };
 
@@ -121,7 +122,7 @@ export class ComputerCleanup {
       // key would remove other lines and leave the line of the key.
       const key = await this.deps.key.publicKey().catch((error: unknown) => ({ error }));
       if ('error' in key) {
-        const text = ComputerCleanupTexts.keyUnreadable(keyPath, errorMessage(key.error));
+        const text = ComputerCleanupTexts.keyUnreadable(keyPath, errorMessage(key.error), [...hosts, ...keepFor]);
         logger.warn(text);
         return [text];
       }
