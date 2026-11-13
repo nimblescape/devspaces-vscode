@@ -1792,12 +1792,12 @@ export class Controller implements vscode.Disposable {
           for (const host of inventory.engines) {
             if (stopped()) return;
             progress.detail(ControllerTexts.removing(describeDockerHost(host)));
-            const failure = await this.removeEngineForComputer(removal, host, accounts, named, unmarked, progress, signal).catch((error: unknown) => {
+            const hostLeft = await this.removeEngineForComputer(removal, host, accounts, named, unmarked, progress, signal).catch((error: unknown) => {
               if (isCancellation(error)) throw error;
               return ControllerTexts.computerEngineFailed(describeDockerHost(host), errorMessage(error));
             });
-            if (failure === undefined) continue;
-            left.push(failure);
+            if (hostLeft === undefined) continue;
+            left.push(hostLeft);
             hostsLeft.push(host);
           }
           if (stopped()) return;
@@ -1805,7 +1805,7 @@ export class Controller implements vscode.Disposable {
           let vmStays = false;
           if (vm !== undefined) {
             progress.detail(ControllerTexts.removingComputerVm);
-            const vmLeft = await this.removeVmForComputer(cleanup, vm, named).catch((error: unknown) => {
+            const vmLeft = await this.removeVmForComputer(cleanup, vm, named, inventory.vmLeftovers).catch((error: unknown) => {
               if (isCancellation(error)) throw error;
               return ControllerTexts.computerVmFailed(errorMessage(error));
             });
@@ -1985,11 +1985,20 @@ export class Controller implements vscode.Disposable {
    * The removal of the VM of Devspaces for "Remove Devspaces from This Computer…" (ComputerCleanup.removeVm), after the
    * checks of the use again: a window that connected to a devspace in the VM, or an operation that began there, while the
    * remote hosts were removed keeps the VM, because its removal would delete that devspace under it; so does a devspace
-   * in the VM that came after the question (not in `named`). What stays, or undefined.
+   * in the VM that came after the question (not in `named`), and a removal of Devspaces from the VM in another window.
+   * When the question named only the files of a setup (`leftovers`), a VM that was set up meanwhile (also by another
+   * VS Code, with its devspaces) stays. What stays, or undefined.
    */
-  private async removeVmForComputer(cleanup: NonNullable<ControllerDeps['computerCleanup']>, vmHost: string, named: ReadonlySet<string>): Promise<string | undefined> {
+  private async removeVmForComputer(cleanup: NonNullable<ControllerDeps['computerCleanup']>, vmHost: string, named: ReadonlySet<string>, leftovers: boolean): Promise<string | undefined> {
     const inVm = (await this.deps.registry.list()).filter((devspace) => isOnDockerHost(devspace, vmHost));
-    return (await this.useRefusal(ControllerTexts.theVm, inVm)) ?? this.newDevspacesRefusal(ControllerTexts.inTheVm, inVm, named) ?? (await cleanup.removeVm());
+    const refusal = (await this.useRefusal(ControllerTexts.theVm, inVm)) ?? this.newDevspacesRefusal(ControllerTexts.inTheVm, inVm, named);
+    if (refusal !== undefined) return refusal;
+    if ((await this.otherWindowRemoval(vmHost)) !== undefined) return ControllerTexts.removalRunningElsewhere(ControllerTexts.theVm);
+    if (leftovers) {
+      const meanwhile = await cleanup.vmMeanwhile(true);
+      if (meanwhile !== undefined) return meanwhile.kind === 'setUp' ? ControllerTexts.computerVmSetUpMeanwhile : ComputerCleanupTexts.vmUnknown(meanwhile.detail);
+    }
+    return cleanup.removeVm();
   }
 
   /** The refusal for the devspaces of `devspaces` that came after the question of "Remove Devspaces from This Computer…". */

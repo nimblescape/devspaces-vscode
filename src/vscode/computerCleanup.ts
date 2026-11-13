@@ -14,7 +14,7 @@ import { removeDevspacesFiles, type DevspacesFilesDeps } from '../core/devspaces
 import { errorMessage } from '../core/errors';
 import type { Logger } from '../core/ports';
 import { shellWord } from '../core/relay/startScript';
-import { removeKeyLinesCommand, type PublicKey } from '../core/sshKey';
+import { NO_KEY_LINE_TEXT, removeKeyLinesCommand, type PublicKey } from '../core/sshKey';
 import { pathState } from '../core/storage/paths';
 import type { RemoteDockerState, RemoteDockerStateFile } from '../core/storage/remoteDockerState';
 import { LIMA_INSTANCE } from '../core/vm/limaInstance';
@@ -51,17 +51,19 @@ export interface ComputerVmPlaces {
 
 /**
  * ComputerCleanupDeps.vmState, without starting anything. The VM: also one that Lima reports as broken (its lima.yaml
- * is there, or cannot be checked, as for LimaSetup.remove), or the distribution that Devspaces registered (the list of
+ * is there), or the distribution that Devspaces registered (the list of
  * WSL and the registry, without the disk walk and the run state of readVmState). The leftovers: the folder of a VM that
  * `limactl create` left without its lima.yaml, or the folder of the distribution without its registration, which only
  * the removal of the VM removes; without them, the folder of Devspaces would stay at every run of the command. Without
- * WSL, no distribution can exist (as for WslSetupCommands.removalCheck). Another error rejects.
+ * WSL, no distribution can exist (as for WslSetupCommands.removalCheck). Another error rejects, also a path that cannot
+ * be checked (ComputerCleanup counts that as the VM for the question).
  */
 export async function computerVmState(places: ComputerVmPlaces): Promise<'vm' | 'leftovers' | 'none'> {
   if (places.limaHome !== undefined) {
     const instance = path.join(places.limaHome, LIMA_INSTANCE);
-    if ((await pathState(path.join(instance, 'lima.yaml'))) !== 'missing') return 'vm';
-    return (await pathState(instance)) === 'missing' ? 'none' : 'leftovers';
+    const config = await known(path.join(instance, 'lima.yaml'));
+    if (config === 'present') return 'vm';
+    return (await known(instance)) === 'missing' ? 'none' : 'leftovers';
   }
   if (places.wsl === undefined) return 'none';
   const registration = await places.wsl.registration().catch((error: unknown) => {
@@ -70,7 +72,14 @@ export async function computerVmState(places: ComputerVmPlaces): Promise<'vm' | 
   });
   places.wsl.known(registration !== 'none');
   if (registration === 'own') return 'vm';
-  return (await pathState(places.wsl.folder)) === 'missing' ? 'none' : 'leftovers';
+  return (await known(places.wsl.folder)) === 'missing' ? 'none' : 'leftovers';
+}
+
+/** pathState, but a path that cannot be checked rejects, so that it is no VM that was set up, nor none. */
+async function known(file: string): Promise<'present' | 'missing'> {
+  const state = await pathState(file);
+  if (state === 'unknown') throw new Error(`${file} cannot be checked`);
+  return state;
 }
 
 export interface ComputerCleanupDeps {
@@ -118,8 +127,12 @@ export const ComputerCleanupTexts = {
     `The SSH key of Devspaces ${keyPath} could not be read (${detail.replace(/\.$/, '')}), so its line stays in ~/.ssh/authorized_keys on ${hosts.join(', ')}. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
   vmUnknown: (detail: string) =>
     `Devspaces could not tell whether the VM of Devspaces exists now (${detail.replace(/\.$/, '')}), so its scheduled task, the Docker context devspaces and the folder of Devspaces stay. Run the command again.`,
-  keyRefused: (host: string, keyPath: string) =>
-    `${host} does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has it, remove it by hand. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
+  /** `key`: the type and the key data of the public key, because the key files go after this. */
+  keyRefused: (host: string, key: string) =>
+    `${host} does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has a line with the key "${key}", remove it by hand.`,
+  /** `key`: as for keyRefused. */
+  keyElsewhere: (host: string, key: string) =>
+    `Devspaces found no line of its SSH key in ~/.ssh/authorized_keys on ${host}, although the login worked: the host may allow the key in another way (another file, or a line with options), or the login used another key of yours (IdentityFile in ~/.ssh/config). If ${host} has a line with the key "${key}", remove it by hand.`,
   /** The removal by hand of the lines of the key, with any comment (also from a former name of this computer). */
   removeLinesByHand: (keyPath: string) =>
     `Remove each line there with the public key of ${keyPath}.pub; its comment is "devspaces@" and the name of this computer, or a former name of it.`,
@@ -218,11 +231,14 @@ export class ComputerCleanup {
           continue;
         }
         // A host that refuses the login with the key (its line went, or the account changed; the text of `ssh`, not that
-        // of a file step there): no later run can log in there with it, so the key does not stay for it, and the record
-        // forgets it, so that the next run does not try again.
-        if (/Permission denied \(/.test(failure)) {
-          const text = ComputerCleanupTexts.keyRefused(host, keyPath);
-          logger.warn(`${text} (${failure.replace(/\.$/, '')})`);
+        // of a file step there), and a host without a line of the key in that file although the login worked (another
+        // file, a line with options, or another key of the user from ~/.ssh/config): no later run removes a line there,
+        // so the key does not stay for it, and the record forgets it, so that the next run does not try again.
+        const refused = /Permission denied \(/.test(failure);
+        if (refused || failure === NO_KEY_LINE_TEXT) {
+          const keyText = `${key.type} ${key.blob}`;
+          const text = refused ? ComputerCleanupTexts.keyRefused(host, keyText) : ComputerCleanupTexts.keyElsewhere(host, keyText);
+          logger.warn(refused ? `${text} (${failure.replace(/\.$/, '')})` : text);
           left.push(text);
           await forget();
           continue;

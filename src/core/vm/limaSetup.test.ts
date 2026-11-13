@@ -116,6 +116,15 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     expect(fs.existsSync(folder)).toBe(false);
     // limactl delete first, which stops a VM that runs when Lima still knows it.
     expect(unlisted.calls.map((call) => call[1])).toEqual(['list', 'delete']);
+    // Mutation: the folder deleted after a failed limactl delete, under a VM that may still run.
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    const failing = fakeRunner({ status: '' });
+    const runner: ProcessRunner = {
+      run: async (file, args, options) => (args[0] === 'delete' ? { exitCode: 1, stdout: '', stderr: 'FATA[0000] instance "devspaces" is running', timedOut: false } : failing.runner.run(file, args, options)),
+    };
+    await expect(setup(runner).remove()).rejects.toThrow(/running/);
+    expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
   });
 
   // Mutation: Lima installed under the lock of the setup, so that its download holds the lock of all windows.

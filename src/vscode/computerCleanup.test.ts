@@ -15,7 +15,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
 import type { RunOptions, RunResult } from '../core/ports';
-import { NO_KEY_LINE_TEXT } from '../core/sshKey';
 import { WslSetupError } from '../core/docker/wslSetup';
 import { ComputerCleanup, ComputerCleanupTexts, computerVmState, type ComputerCleanupDeps } from './computerCleanup';
 import { SshKeyOffer } from './sshKeyOffer';
@@ -236,13 +235,15 @@ describe('the removal of the SSH key of Devspaces', () => {
     const { cleanup, state, logger } = setUp({}, (call) =>
       call.file === '/usr/bin/ssh' && call.args.at(-2) === 'box' ? { exitCode: 255, stdout: '', stderr: 'box: Permission denied (publickey).\n', timedOut: false } : undefined,
     );
-    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyRefused('box', keyPath())]);
+    const keyText = `ssh-ed25519 ${BLOB}`;
+    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyRefused('box', keyText)]);
     expect(state.setSshKey.mock.calls).toEqual([['box', undefined]]);
     expect(fs.existsSync(keyPath())).toBe(false);
     expect(fs.existsSync(`${keyPath()}.pub`)).toBe(false);
-    expect(logger.warn).toHaveBeenCalledWith(`${ComputerCleanupTexts.keyRefused('box', keyPath())} (box: Permission denied (publickey))`);
+    expect(logger.warn).toHaveBeenCalledWith(`${ComputerCleanupTexts.keyRefused('box', keyText)} (box: Permission denied (publickey))`);
     expect(logger.info).toHaveBeenCalledWith(`Devspaces deleted its SSH key ${keyPath()}, if it was there.`);
-    expect(ComputerCleanupTexts.keyRefused('box', keyPath())).toContain('box does not accept the SSH key of Devspaces any more');
+    // The key data itself, because the .pub file is gone after this.
+    expect(ComputerCleanupTexts.keyRefused('box', keyText)).toContain(`box does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has a line with the key "${keyText}"`);
   });
 
   // Mutation: the key deleted while its line stays on a host where something of Devspaces stays, so that a new run of
@@ -268,12 +269,17 @@ describe('the removal of the SSH key of Devspaces', () => {
     expect(fs.existsSync(keyPath())).toBe(true);
   });
 
-  it('keeps the key when the host allows it without a line in ~/.ssh/authorized_keys (another file), and names that', async () => {
+  // Mutation: a host without a line of the key in ~/.ssh/authorized_keys although the login worked that keeps the key,
+  // so that every run kept it: no run removes a line in another file, or a line with options, and the login may have
+  // used another key of the user from ~/.ssh/config.
+  it('deletes the key when the host allows a login without a line in ~/.ssh/authorized_keys, forgets the key there, and names the key data', async () => {
     keyFiles();
     const { cleanup, state } = setUp();
-    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyLineLeft('box', NO_KEY_LINE_TEXT, keyPath()), ComputerCleanupTexts.keyKept(keyPath())]);
-    expect(state.setSshKey).not.toHaveBeenCalled();
-    expect(fs.existsSync(keyPath())).toBe(true);
+    const keyText = `ssh-ed25519 ${BLOB}`;
+    expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyElsewhere('box', keyText)]);
+    expect(state.setSshKey.mock.calls).toEqual([['box', undefined]]);
+    expect(fs.existsSync(keyPath())).toBe(false);
+    expect(ComputerCleanupTexts.keyElsewhere('box', keyText)).toContain(`or the login used another key of yours (IdentityFile in ~/.ssh/config). If box has a line with the key "${keyText}", remove it by hand.`);
   });
 
   it('names why a line stays: a timeout, no ssh, a host that is no SSH alias or address, a symbolic link', async () => {
@@ -357,11 +363,12 @@ describe('the state of the VM for the command', () => {
     expect(await computerVmState({ limaHome: home })).toBe('leftovers');
     write(path.join(home, 'devspaces', 'lima.yaml'), 'images: []\n');
     expect(await computerVmState({ limaHome: home })).toBe('vm');
-    // A lima.yaml that cannot be checked (here ELOOP, a symbolic link to itself in its path) counts as the VM.
+    // A lima.yaml that cannot be checked (here ELOOP, a symbolic link to itself in its path) rejects: no VM that was set
+    // up meanwhile, nor none; ComputerCleanup counts it as the VM for the question.
     const loop = path.join(dir, 'loop');
     fs.mkdirSync(loop);
     fs.symlinkSync(path.join(loop, 'devspaces'), path.join(loop, 'devspaces'));
-    expect(await computerVmState({ limaHome: loop })).toBe('vm');
+    await expect(computerVmState({ limaHome: loop })).rejects.toThrow('lima.yaml cannot be checked');
   });
 
   // Mutation: an error of the list of WSL that rejects, so that on Windows without WSL the VM counted as there at each

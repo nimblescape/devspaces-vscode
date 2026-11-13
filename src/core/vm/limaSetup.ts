@@ -195,14 +195,15 @@ export class LimaSetup {
       const instance = lima ?? (await this.step(() => vm.lima()));
       const status = await this.step(() => instance.status());
       // A folder with its lima.yaml that Lima does not list: `limactl delete --force` may still know it (it stops a VM
-      // that runs); what it leaves, Devspaces deletes itself, because the files step of "Remove Devspaces from This
-      // Computer…" keeps the folder of Devspaces while it is there.
+      // that runs), and when it fails, the VM stays with its error, because it may still run. What a successful delete
+      // leaves, Devspaces deletes itself, because the files step of "Remove Devspaces from This Computer…" keeps the
+      // folder of Devspaces while it is there.
       if (status === 'missing') {
         if ((await pathState(folder)) === 'missing') {
           logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
           return;
         }
-        await instance.delete().catch((error: unknown) => logger.warn(`limactl delete did not remove the Lima VM of Devspaces that Lima does not list: ${errorMessage(error)}`));
+        await this.step(() => instance.delete());
         if ((await pathState(folder)) === 'missing') {
           vm.forgetRunning();
           removed = true;

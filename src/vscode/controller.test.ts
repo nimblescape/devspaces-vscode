@@ -4654,6 +4654,34 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
   });
 
+  // Mutation: a VM that was set up while the question named only the files of a setup removed with every devspace in
+  // it (also those of another VS Code), or the VM removed while another window removes Devspaces from it.
+  it('keeps a VM that was set up while the question named only the files of a setup, and one that another window removes Devspaces from', async () => {
+    const leftovers = onComputer({ engines: [], keyHosts: [], vmLeftovers: true });
+    leftovers.cleanup.vmMeanwhile.mockResolvedValue({ kind: 'setUp' });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(leftovers.cleanup.vmMeanwhile).toHaveBeenCalledWith(true);
+    expect(leftovers.cleanup.removeVm).not.toHaveBeenCalled();
+    expect(leftovers.cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
+    // Only the files of a setup, still: they go.
+    const files = onComputer({ engines: [], keyHosts: [], vmLeftovers: true });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(files.order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files', 'uninstall the extension']);
+    // Another window removes Devspaces from the VM.
+    const other = onComputer({ engines: [], keyHosts: [] });
+    h.alive.add(OTHER_PID);
+    await h.sessionFiles.writeWindowStatus({ windowId: OTHER_WINDOW_ID, pid: OTHER_PID, devspaceId: null, state: 'active', updatedAt: iso(NOW - 5000) });
+    await h.engineRecords.startRemoval(LIMA_HOST, { windowId: OTHER_WINDOW_ID, pid: OTHER_PID, since: iso(NOW - 30_000) }, NOW - 30_000, () => true);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(other.cleanup.removeVm).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.removalRunningElsewhere(ControllerTexts.theVm)}`);
+    expect(other.cleanup.removeFiles).not.toHaveBeenCalled();
+  });
+
   // Mutation: a state of the VM that cannot be read after its removal named as a VM that was set up meanwhile, or the
   // files removed then (also the task and the context of a VM that another VS Code may have set up).
   it('keeps the files when the state of the VM cannot be read after its removal, says so, and updates the task and the context in the background', async () => {
