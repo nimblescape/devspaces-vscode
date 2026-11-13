@@ -4631,6 +4631,35 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
   });
 
+  // Mutation: the devspaces of this computer on an engine that is not in the list left out of the question, so that the
+  // extension is uninstalled while they stay without a word.
+  it('names the devspaces on Docker engines that are not in the list as devspaces that stay', async () => {
+    const { order } = onComputer({ engines: ['build-box'], vm: undefined });
+    await h.registry.add(devspace({ id: OTHER_ENV_ID, repository: 'acme/old', containerName: 'devspaces-acme-old-1', volumeName: 'devspaces-acme-old-1', dockerHost: 'old-host' }));
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    const detail = String((modals()[0]?.[1] as { detail: string }).detail);
+    expect(detail).toContain(ControllerTexts.removeComputerElsewhere('acme/old (old-host)'));
+    expect(detail.indexOf('acme/old (old-host)')).toBeLessThan(detail.indexOf(ControllerTexts.removeComputerEnd));
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(order.some((step) => step.startsWith('old-host:'))).toBe(false);
+  });
+
+  // Mutation: the accounts of the question used after an account left Devspaces, so that its devspaces are deleted
+  // although devspaces of an account that is not signed in stay.
+  it('keeps the devspaces of an account that left Devspaces after the question', async () => {
+    const { removal } = onComputer({ vm: undefined });
+    await h.registry.add(ownRemote());
+    removal.engineAnswers.mockImplementation(async () => {
+      h.auth.accounts.mockResolvedValue([]);
+      return true;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(await h.registry.list()).toHaveLength(1);
+  });
+
   // Mutation: a failed uninstall that is not caught ends the command with an error of VS Code and nothing in the log.
   it('says so when VS Code cannot uninstall the extension', async () => {
     const { cleanup } = onComputer({ engines: [], keyHosts: [] });

@@ -103,6 +103,8 @@ export const ControllerTexts = {
   removeComputerChanges: (changes: string) =>
     `Each devspace is deleted with its container and all its volumes, also the clone of the repository. Changes that you did not push are lost. Recorded changes: ${changes}.`,
   removeComputerSignedOut: 'Your devspaces on the Docker hosts of the list stay, because no GitHub account is signed in to Devspaces. To delete them too, sign in first.',
+  removeComputerElsewhere: (devspaces: string) =>
+    `Your devspaces on other Docker engines stay, because these engines are not in the list of Devspaces: ${devspaces}. Remove them by hand (Uninstall in the user guide).`,
   removeComputerEnd: 'Then VS Code uninstalls the extension. Your settings stay. This cannot be undone.',
   removeEverything: 'Remove Everything',
   removingComputer: 'Removing Devspaces from this computer…',

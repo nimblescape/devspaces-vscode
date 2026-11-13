@@ -1732,6 +1732,9 @@ export class Controller implements vscode.Disposable {
     const others = onEngines.filter((devspace) => !own.includes(devspace));
     const inVm = inventory.vm === undefined ? [] : known.filter((devspace) => isOnDockerHost(devspace, inventory.vm as string));
     const deleted = [...own, ...inVm];
+    // The devspaces of this computer on a Docker engine that is neither on the list nor the VM (an older version used it,
+    // or the host left the list): they stay, and the question names them.
+    const elsewhere = inventory.listUnreadable !== undefined ? [] : known.filter((devspace) => !onEngines.includes(devspace) && !inVm.includes(devspace));
     // The devspaces of this computer when it asks: one that comes later (of any account, also one that signed in later)
     // makes the removal leave its host or the VM, so that it is never deleted, and nothing is removed under it.
     const named = new Set(known.map((devspace) => devspace.id));
@@ -1747,6 +1750,9 @@ export class Controller implements vscode.Disposable {
         : others.length > 0
           ? [ControllerTexts.removeOtherAccounts(listSome(others.map((devspace) => this.shownName(this.devspaceTarget(devspace)))))]
           : []),
+      ...(elsewhere.length > 0
+        ? [ControllerTexts.removeComputerElsewhere(listSome(elsewhere.map((devspace) => `${this.shownName(this.devspaceTarget(devspace))} (${describeDockerHost(dockerHostOf(devspace))})`)))]
+        : []),
       ControllerTexts.removeComputerEnd,
     ];
     const confirmed = await showWarningMessage(ControllerTexts.removeComputerQuestion, { modal: true, detail: detail.join(' ') }, ControllerTexts.removeEverything);
@@ -1912,8 +1918,13 @@ export class Controller implements vscode.Disposable {
         stopped = false;
         // The extension is uninstalled at the end, so no background work of this computer comes back without the mark.
         if (start.kind === 'notRecorded') this.logger.warn(ControllerTexts.removalNotRecorded(engine));
-        // Without a devspace that another window deleted meanwhile.
-        const ownNow = availableDevspaces(hereNow, accounts);
+        // Without a devspace that another window deleted meanwhile, and without the devspaces of an account that left
+        // Devspaces since the question: they stay, as the devspaces of every account that is not signed in.
+        const accountsNow = await this.readAccounts();
+        const ownNow = availableDevspaces(
+          hereNow,
+          accounts.filter((account) => accountsNow.some((now) => now.id === account.id)),
+        );
         this.logger.info(`Removing Devspaces from ${engine}${ownNow.length > 0 ? `, with ${ownNow.length === 1 ? 'one devspace' : `${ownNow.length} devspaces`} of the accounts of Devspaces there` : ''}.`);
         const removed = await this.removeFromEngine(removal, target, ownNow, progress, signal);
         const devspacesStay = ownNow.length < hereNow.length || inventory.unknownDevspaces.length > 0;
