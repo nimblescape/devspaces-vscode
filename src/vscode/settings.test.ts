@@ -55,8 +55,8 @@ describe('settings', () => {
       openInNewWindow: false,
       // On every engine.
       stopAfterMinutes: 10,
-      // The update of an existing container is announced (notify) by default.
-      updateContainer: 'notify',
+      // The update of an existing container runs without a dialog (yes) by default.
+      updateContainer: 'yes',
       // The schedule of the whole background run of the Monitor, a cron expression: daily at 06:07.
       cacheUpdateSchedule: '7 6 * * *',
       // True by default: the local monitor ends when idle.
@@ -339,17 +339,17 @@ describe('settings', () => {
     }
   });
 
-  // updateContainer, `yes` or `ask` or else `notify`; one value per user and computer.
-  it('reads updateContainer: `yes` and `ask`, anything else is `notify`, and declares it in package.json', () => {
+  // updateContainer, `notify` or `ask` or else `yes`; one value per user and computer.
+  it('reads updateContainer: `notify` and `ask`, anything else is `yes`, and declares it in package.json', () => {
     const read = (value: unknown) => normalizeSettings((key) => (key === 'updateContainer' ? value : undefined)).updateContainer;
-    expect(read('yes')).toBe('yes');
+    expect(read('notify')).toBe('notify');
     expect(read('ask')).toBe('ask');
-    for (const value of ['notify', undefined, 'Ask', 'Yes', true, 'never']) expect(read(value), String(value)).toBe('notify');
+    for (const value of ['yes', undefined, 'Ask', 'Notify', true, 'never']) expect(read(value), String(value)).toBe('yes');
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { configuration: { properties: Record<string, { default?: unknown; enum?: unknown; scope?: string; type?: string }> } };
     };
     const properties = manifest.contributes.configuration.properties;
-    expect(properties[`${SETTINGS_SECTION}.updateContainer`]).toMatchObject({ type: 'string', enum: ['yes', 'notify', 'ask'], default: 'notify', scope: 'application' });
+    expect(properties[`${SETTINGS_SECTION}.updateContainer`]).toMatchObject({ type: 'string', enum: ['yes', 'notify', 'ask'], default: 'yes', scope: 'application' });
     expect(properties[`${SETTINGS_SECTION}.updateRunningContainer`]).toBeUndefined();
   });
 

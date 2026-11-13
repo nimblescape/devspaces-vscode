@@ -62,8 +62,8 @@ describe('VsCodePipelineUi', () => {
   });
 
   for (const running of [true, false]) {
-    it(`notify (the default) announces the update of a ${running ? 'running' : 'stopped'} container: Continue, or Cancel (also when dismissed)`, async () => {
-      const ui = new VsCodePipelineUi({} as VsCodeGitHubAuth, silentLogger, vi.fn());
+    it(`notify announces the update of a ${running ? 'running' : 'stopped'} container: Continue, or Cancel (also when dismissed)`, async () => {
+      const ui = new VsCodePipelineUi({} as VsCodeGitHubAuth, silentLogger, vi.fn(), undefined, () => 'notify');
       window.showInformationMessage.mockImplementationOnce(async (_message, _options, accept) => accept);
       await expect(ui.updateContainer('acme/api', running)).resolves.toBe('update');
       const [message, options, ...items] = window.showInformationMessage.mock.calls[0];
@@ -76,7 +76,9 @@ describe('VsCodePipelineUi', () => {
       await expect(ui.updateContainer('acme/api', running)).resolves.toBe('cancel');
     });
 
-    it(`yes updates a ${running ? 'running' : 'stopped'} container without a dialog`, async () => {
+    it(`yes (the default) updates a ${running ? 'running' : 'stopped'} container without a dialog`, async () => {
+      // Without the setting, the default `yes`.
+      await expect(new VsCodePipelineUi({} as VsCodeGitHubAuth, silentLogger, vi.fn()).updateContainer('acme/api', running)).resolves.toBe('update');
       let setting: 'yes' | 'notify' | 'ask' = 'yes';
       const ui = new VsCodePipelineUi({} as VsCodeGitHubAuth, silentLogger, vi.fn(), undefined, () => setting);
       await expect(ui.updateContainer('acme/api', running)).resolves.toBe('update');

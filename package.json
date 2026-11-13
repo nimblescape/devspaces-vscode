@@ -1188,7 +1188,7 @@
             "notify",
             "ask"
           ],
-          "default": "notify",
+          "default": "yes",
           "markdownDescription": "What a start does when a newer image is available for the existing container of a devspace. The update creates the container again; your files in the workspace are kept.\n\n[The update at a start in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-update-at-a-start)",
           "enumDescriptions": [
             "Update the container without a dialog. A running container is stopped and created again.",

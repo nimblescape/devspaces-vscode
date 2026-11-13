@@ -24,8 +24,8 @@ export class VsCodePipelineUi implements PipelineUi {
     private readonly logger: Logger,
     private readonly showLog: () => void,
     private readonly clock: Clock = systemClock,
-    // The setting updateContainer, read at each question.
-    private readonly updateContainerSetting: () => UpdateContainer = () => 'notify',
+    // The setting updateContainer, read at each question (default `yes`).
+    private readonly updateContainerSetting: () => UpdateContainer = () => 'yes',
   ) {}
 
   // The questions are modal: the pipeline waits for the answer, and a notification that moves to the notification
