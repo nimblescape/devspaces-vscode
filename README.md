@@ -60,7 +60,7 @@ A repository that you open is code that you run: open only repositories that you
 | --- | --- | --- |
 | `devspaces.defaultImage` | `""` | An image that every repository can start from, also one without a Dev Container configuration. |
 | `devspaces.stopOnClose` | `true` | Stop a devspace 5 minutes after its last window closes. |
-| `devspaces.updateContainer` | `notify` | What a start does when a newer image is available: `yes` (update without a dialog), `notify` (Continue or Cancel) or `ask` (Update Now or Later). |
+| `devspaces.updateContainer` | `yes` | What a start does when a newer image is available: `yes` (update without a dialog), `notify` (Continue or Cancel) or `ask` (Update Now or Later). |
 | `devspaces.cacheUpdateSchedule` | `7 6 * * *` | When the background updates run: a cron expression in your time zone, or minutes. |
 | `devspaces.owners` | `[]` | The organizations and accounts whose repositories the view lists. Empty: all. |
 

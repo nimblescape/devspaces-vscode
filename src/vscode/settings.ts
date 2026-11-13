@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   stopAfterMinutes: 10,
   cacheUpdateSchedule: DEFAULT_CACHE_UPDATE_SCHEDULE,
   stopMonitorWhenIdle: false,
-  updateContainer: 'notify',
+  updateContainer: 'yes',
   defaultImage: '',
   startWithDefaultImage: true,
   confirmOpenFromLink: true,
@@ -323,7 +323,7 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     // The Monitor of a remote host runs permanently unless this is true (monitorRunsPermanently); on the VM of Devspaces
     // and on the Docker of the computer it always ends when idle.
     stopMonitorWhenIdle: bool('stopMonitorWhenIdle', DEFAULT_SETTINGS.stopMonitorWhenIdle ?? false),
-    // `yes` or `ask`, or else the default `notify`.
+    // `notify` or `ask`, or else the default `yes`.
     updateContainer: updateContainer(get('updateContainer')),
     // The image reference, or '' (none; an invalid value is ignored, warnInvalidDefaultImage names it).
     defaultImage: normalizeDefaultImage(get('defaultImage')) ?? '',
@@ -342,9 +342,9 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
   };
 }
 
-/** The setting updateContainer: `yes` or `ask` as written, anything else the default `notify`. */
+/** The setting updateContainer: `notify` or `ask` as written, anything else the default `yes`. */
 function updateContainer(value: unknown): UpdateContainer {
-  return value === 'yes' || value === 'ask' ? value : 'notify';
+  return value === 'notify' || value === 'ask' ? value : 'yes';
 }
 
 /** Whether the setting dockerHostsActions allows the actions of the view Docker Hosts (`contextMenu` or `icons`). */

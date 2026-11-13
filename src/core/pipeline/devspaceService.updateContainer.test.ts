@@ -2,9 +2,10 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// An open with a newer image for the existing container of the devspace (running or stopped) announces the update
-// (setting updateContainer `notify`: Continue or Cancel) or asks (`ask`: Update Now or Later); a first build, a missing
-// image and a rebuild stay without the question. The image check of a running container is never skipped for a recent
+// An open with a newer image for the existing container of the devspace (running or stopped) gives the update to the
+// window first, which updates without a dialog (setting updateContainer `yes`, the default), announces it (`notify`:
+// Continue or Cancel) or asks (`ask`: Update Now or Later); a first build, a missing image and a rebuild stay without
+// the question. The image check of a running container is never skipped for a recent
 // check; the Monitor's registry answer covers that case (devspaceService.registryAnswers.test.ts).
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { UserFacingError } from '../errors';

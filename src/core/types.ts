@@ -464,8 +464,8 @@ export interface ExtensionSettings {
   stopMonitorWhenIdle?: boolean;
   /**
    * What an open does when a newer image is available for the existing container of the devspace (running or
-   * stopped). `yes`: the update without a dialog (a running container is stopped and created again); `notify`
-   * (default): a modal message that the container is updated now (Continue, or Cancel: the open ends without
+   * stopped). `yes` (default): the update without a dialog (a running container is stopped and created again);
+   * `notify`: a modal message that the container is updated now (Continue, or Cancel: the open ends without
    * connecting); `ask`: a modal question (Update Now, or Later: the existing container starts and the window connects
    * without the update).
    */

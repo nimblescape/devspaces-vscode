@@ -1073,7 +1073,7 @@ async function activateExtension(
     // The setting `owners` is the scan scope; GitHub is asked only about these owners.
     { scope: () => getSettings().owners },
   );
-  const ui = new VsCodePipelineUi(auth, logger, () => logger.show(), systemClock, () => getSettings().updateContainer ?? 'notify');
+  const ui = new VsCodePipelineUi(auth, logger, () => logger.show(), systemClock, () => getSettings().updateContainer ?? 'yes');
   const sessionCoordinator: SessionCoordinator = new SessionCoordinator({
     paths,
     sessionFiles,
