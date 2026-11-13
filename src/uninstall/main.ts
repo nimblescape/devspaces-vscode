@@ -50,9 +50,6 @@ export interface UninstallDeps {
   wslFolder?: string;
 }
 
-/** Whether the VM of Devspaces, or what is left of it, is in the folder of Devspaces; `unknown` keeps the folder too. */
-type VmPresence = 'present' | 'absent' | 'unknown';
-
 /** The folder of Devspaces outside of VS Code, its lock of the setup of the VM, and whether a VM of Devspaces is in it. */
 interface DevspacesFolder {
   root: string;
@@ -60,11 +57,13 @@ interface DevspacesFolder {
   lock: string;
   /** The timings of the setup for its lock: the hook waits for a held lock as long as a window does (one second). */
   lockTimings: LockTimings;
-  vm: () => Promise<VmPresence>;
+  /**
+   * Why the folder stays, for the log: the VM of Devspaces, or what is left of it, is in it, or the hook cannot tell.
+   * Undefined when no VM is in it.
+   */
+  staysBecause: () => Promise<string | undefined>;
   /** The names in `root` that stay although no VM is there. */
   keep: () => Promise<string[]>;
-  /** The name of the VM in the log, in the middle of a sentence. */
-  vmName: string;
 }
 
 /** Runs the three steps of the hook. Never rejects. */
@@ -164,11 +163,13 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
       lock: limaSetupLockFolder(paths),
       lockTimings: LIMA_SETUP_LOCK_TIMINGS,
       // Also a VM that `limactl create` left half done: only `limactl delete` removes it.
-      vm: async () => presence(await pathState(path.join(paths.home, LIMA_INSTANCE))),
+      staysBecause: async () => {
+        const state = await pathState(path.join(paths.home, LIMA_INSTANCE));
+        return state === 'missing' ? undefined : state === 'present' ? 'The VM of Devspaces exists' : 'Devspaces cannot tell whether the VM of Devspaces exists';
+      },
       // A task that step 2 could not unload (launchctl, systemctl) finds no program anymore, so it starts nothing, and it
       // is gone at the next login, because its definition file is gone. A task of Task Scheduler stays until it is deleted.
       keep: async () => [],
-      vmName: 'the VM of Devspaces',
     };
   }
   if (deps.platform !== 'win32') return undefined;
@@ -188,19 +189,22 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
     root,
     lock: wslSetupLockFolder(wslFolder),
     lockTimings: WSL_SETUP_LOCK_TIMINGS,
-    // The virtual disk of a distribution of Devspaces is in a folder `disk` (or `disk-2` and so on) of the folder `wsl`;
-    // the registry of WSL names the folder of the disk of every distribution (also when its file has another name).
-    vm: async () => {
+    // The registry of WSL names the folder of the disk of every distribution. The virtual disk of a distribution of
+    // Devspaces is in a folder `disk` (or `disk-2` and so on) of the folder `wsl`; one without a distribution is left
+    // by a setup that did not end, and it stays too, because the hook cannot ask.
+    staysBecause: async () => {
       const folder = await pathState(wslFolder);
-      if (folder !== 'present') return presence(folder);
-      const disk = await holdsFileWith(wslFolder, WSL_DISK_EXTENSION).catch(() => undefined);
-      if (disk !== false) return disk === true ? 'present' : 'unknown';
+      if (folder === 'missing') return undefined;
+      const unknown = 'Devspaces cannot tell whether the WSL distribution of Devspaces exists';
+      if (folder === 'unknown') return unknown;
       const users = await setup.folderUsers();
-      return users === undefined ? 'unknown' : users.length > 0 ? 'present' : 'absent';
+      if (users !== undefined && users.length > 0) return 'The WSL distribution of Devspaces exists';
+      const disk = await holdsFileWith(wslFolder, WSL_DISK_EXTENSION).catch(() => undefined);
+      if (disk === true) return `A virtual disk of WSL (${WSL_DISK_EXTENSION}) is in the folder ${wslFolder}`;
+      return disk === undefined || users === undefined ? unknown : undefined;
     },
     // The record of a task that step 2 could not remove: without it, a later install of Devspaces cannot remove the task.
     keep: async () => ((await pathState(task.file)) === 'missing' ? [] : [WSL_TASK_FOLDER]),
-    vmName: 'the WSL distribution of Devspaces',
   };
 }
 
@@ -218,10 +222,9 @@ async function removeDevspacesFolder(deps: UninstallDeps): Promise<void> {
     await withLockFolder(
       folder.lock,
       async () => {
-        const vm = await folder.vm();
-        if (vm !== 'absent') {
-          const what = vm === 'present' ? `${capitalized(folder.vmName)} exists` : `Devspaces cannot tell whether ${folder.vmName} exists`;
-          logger.info(`${what}, so the folder ${folder.root} stays. The user guide says how to delete it (Uninstall).`);
+        const reason = await folder.staysBecause();
+        if (reason !== undefined) {
+          logger.info(`${reason}, so the folder ${folder.root} stays. The user guide says how to delete it (Uninstall).`);
           return;
         }
         // The lock, and the guard of a takeover of a stale lock that a window of another VS Code may hold now.
@@ -258,7 +261,8 @@ async function removeDevspacesFolder(deps: UninstallDeps): Promise<void> {
 /** Removes `folder` when it is empty. False when it is not empty or cannot be removed. */
 async function removeEmptyFolder(folder: string): Promise<boolean> {
   try {
-    await fs.promises.rmdir(folder);
+    // A virus scanner or the indexer of Windows can hold an entry that was just removed for a short time.
+    await retryTransient(() => fs.promises.rmdir(folder));
     return true;
   } catch {
     return false;
@@ -276,13 +280,6 @@ async function pathState(file: string): Promise<'present' | 'missing' | 'unknown
   }
 }
 
-function presence(state: 'present' | 'missing' | 'unknown'): VmPresence {
-  return state === 'missing' ? 'absent' : state;
-}
-
-function capitalized(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
 
 /** True when `folder` or a folder in it holds a file whose name ends with `extension` (any case). */
 async function holdsFileWith(folder: string, extension: string): Promise<boolean> {

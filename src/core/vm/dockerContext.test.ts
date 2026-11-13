@@ -125,6 +125,8 @@ describe('the removal of the Docker context devspaces without the Docker CLI (un
     expect(await removeDockerContextFiles(config)).toEqual({ kind: 'unreadable' });
     fs.writeFileSync(path.join(config, 'config.json'), JSON.stringify({ currentContext: 'default' }));
     expect(await removeDockerContextFiles(config, 'devspaces')).toEqual({ kind: 'current' });
+    // The Docker CLI reads an empty file as a configuration without settings.
+    fs.writeFileSync(path.join(config, 'config.json'), '\n');
     fs.mkdirSync(tls, { recursive: true });
     expect(await removeDockerContextFiles(config)).toEqual({ kind: 'removed' });
     expect(fs.existsSync(path.dirname(file))).toBe(false);

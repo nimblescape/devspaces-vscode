@@ -326,7 +326,8 @@ export class WslTask {
     const sid = await this.userSid();
     const bytes = wslTaskFileBytes(wslTaskXml({ sid, program, settings, triggers: wslTaskTriggers(schedule) }));
     const before = await fs.promises.readFile(this.file).catch(() => undefined);
-    if (before !== undefined && before.equals(bytes) && (await this.exists(sid))) return;
+    // A /Query without an answer counts as a missing task here: /Create /F registers it again, which does no harm.
+    if (before !== undefined && before.equals(bytes) && (await this.exists(sid)) === 'yes') return;
     await fs.promises.mkdir(this.deps.folder, { recursive: true });
     // Registered from a file of its own, which becomes the record only when Task Scheduler took it: a failure leaves the
     // record of the task that is registered (the next update tries again), and another window never registers half a file.
@@ -345,7 +346,10 @@ export class WslTask {
     // Without its record, this computer registered no task (or the user removed the file by hand): no call of Windows.
     if (!fs.existsSync(this.file)) return;
     const sid = await this.userSid();
-    if (await this.exists(sid)) {
+    const exists = await this.exists(sid);
+    // Without an answer, the record stays, so that the next removal can still delete the task.
+    if (exists.startsWith('unknown')) throw new Error(exists.slice('unknown: '.length));
+    if (exists === 'yes') {
       const deleted = await this.schtasks(['/Delete', '/TN', wslTaskName(sid), '/F']);
       if (deleted !== undefined) throw new Error(deleted);
     }
@@ -354,14 +358,14 @@ export class WslTask {
   }
 
   /**
-   * Whether the task of the user exists (`schtasks /Query`: exit code 0). Throws when the call did not end by itself
-   * (time limit, or ended by a signal), because that tells nothing, and a removal must then keep the record of the task.
+   * Whether the task of the user exists (`schtasks /Query`): `yes` with exit code 0, `no` with another exit code, and
+   * `unknown: <failure>` when the call did not end by itself (time limit, or a signal), because that tells nothing.
    */
-  private async exists(sid: string): Promise<boolean> {
+  private async exists(sid: string): Promise<'yes' | 'no' | `unknown: ${string}`> {
     const args = ['/Query', '/TN', wslTaskName(sid)];
     const result = await this.deps.runner.run(system32Program(this.deps.env, 'schtasks.exe'), args, { timeoutMs: TASK_CALL_TIMEOUT_MS });
-    if (result.timedOut || result.exitCode === null) throw new Error(`schtasks ${args[0]} ${failureOf(result)}`);
-    return result.exitCode === 0;
+    if (result.timedOut || result.exitCode === null) return `unknown: schtasks ${args[0]} ${failureOf(result)}`;
+    return result.exitCode === 0 ? 'yes' : 'no';
   }
 
   /** The SID of the Windows user of this process (`whoami /user`), once per window. */
@@ -384,6 +388,7 @@ export class WslTask {
 
 function failureOf(result: { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }): string {
   if (result.timedOut) return `did not end within ${TASK_CALL_TIMEOUT_MS / 1000} seconds`;
+  if (result.exitCode === null) return 'was ended by a signal';
   const output = (result.stderr || result.stdout).trim();
   return `ended with exit code ${result.exitCode}${output ? `: ${output.slice(-500)}` : ''}`;
 }

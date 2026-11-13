@@ -155,6 +155,8 @@ function currentContextOf(configDir: string): 'ours' | 'unknown' | 'other' {
   } catch (error) {
     return errorCode(error) === 'ENOENT' ? 'other' : 'unknown';
   }
+  // The Docker CLI reads an empty file as a configuration without settings.
+  if (text.trim() === '') return 'other';
   try {
     const config: unknown = JSON.parse(text);
     return isRecord(config) && config.currentContext === DOCKER_CONTEXT ? 'ours' : 'other';

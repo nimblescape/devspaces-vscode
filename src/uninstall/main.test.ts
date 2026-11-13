@@ -262,13 +262,22 @@ describe('the uninstall hook on Windows', () => {
   });
 
   it('keeps the WSL distribution and its folder, and deletes only the task', async () => {
-    const { deps, lines, run } = setUp('win32', windowsAnswers());
+    const wslFolder = path.join(home, 'AppData', 'Local', 'nimblescape', 'devspaces', 'wsl');
+    const { deps, lines, run } = setUp('win32', windowsAnswers({ folders: { devspaces: path.join(wslFolder, 'disk') } }));
     const root = windowsFiles(deps, { disk: true });
     await run();
     expect(fs.existsSync(path.join(root, 'task', 'task.xml'))).toBe(false);
     expect(fs.existsSync(path.join(deps.wslFolder!, 'disk', 'ext4.vhdx'))).toBe(true);
     expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
     expect(lines()).toContain(`The WSL distribution of Devspaces exists, so the folder ${root} stays. The user guide says how to delete it (Uninstall).`);
+  });
+
+  it('keeps a virtual disk that no distribution uses, left by a setup that did not end', async () => {
+    const { deps, lines, run } = setUp('win32', windowsAnswers());
+    const root = windowsFiles(deps, { disk: true });
+    await run();
+    expect(fs.existsSync(path.join(deps.wslFolder!, 'disk', 'ext4.vhdx'))).toBe(true);
+    expect(lines()).toContain(`A virtual disk of WSL (.vhdx) is in the folder ${deps.wslFolder!}, so the folder ${root} stays. The user guide says how to delete it (Uninstall).`);
   });
 
   it('keeps the folder when the registry names a distribution with its disk there, also without a .vhdx file', async () => {
