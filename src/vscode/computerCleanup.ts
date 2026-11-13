@@ -116,6 +116,8 @@ export const ComputerCleanupTexts = {
     `The list of Docker hosts of Devspaces could not be read (${detail}), so Devspaces stays on the remote hosts of the list, and so does its SSH key with its line there. Run the command again when the list can be read, or remove them by hand (Uninstall in the user guide).`,
   keyUnreadable: (keyPath: string, detail: string, hosts: readonly string[]) =>
     `The SSH key of Devspaces ${keyPath} could not be read (${detail.replace(/\.$/, '')}), so its line stays in ~/.ssh/authorized_keys on ${hosts.join(', ')}. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
+  vmUnknown: (detail: string) =>
+    `Devspaces could not tell whether the VM of Devspaces exists now (${detail.replace(/\.$/, '')}), so its scheduled task, the Docker context devspaces and the folder of Devspaces stay. Run the command again.`,
   keyRefused: (host: string, keyPath: string) =>
     `${host} does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has it, remove it by hand. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
   /** The removal by hand of the lines of the key, with any comment (also from a former name of this computer). */
@@ -154,14 +156,21 @@ export class ComputerCleanup {
     };
   }
 
-  /** Whether the VM of Devspaces exists now (as `vm` of inventory), also only the files of a setup. Never throws. */
-  async vmExists(): Promise<boolean> {
-    return (await this.vmState()) !== 'none';
-  }
-
-  /** Whether the VM of Devspaces itself exists now (not only the files of a setup). Never throws. */
-  async vmSetUp(): Promise<boolean> {
-    return (await this.vmState()) === 'vm';
+  /**
+   * After the VM step, before the files step: a VM that another window or another VS Code set up meanwhile (`setUp`),
+   * or a state that cannot be read now (`unknown`, with why); both keep the scheduled task, the Docker context and the
+   * folder. `removed`: the VM step removed the VM, so only the VM itself counts; else there was none at the question,
+   * and the files of a setup that runs count too (as `vm` of inventory). Undefined: none. Never throws.
+   */
+  async vmMeanwhile(removed: boolean): Promise<{ kind: 'setUp' } | { kind: 'unknown'; detail: string } | undefined> {
+    if (this.deps.vmHost === undefined) return undefined;
+    try {
+      const state = await this.deps.vmState();
+      return (removed ? state === 'vm' : state !== 'none') ? { kind: 'setUp' } : undefined;
+    } catch (error) {
+      this.deps.logger.warn(`Whether the VM of Devspaces exists could not be read: ${errorMessage(error)}`);
+      return { kind: 'unknown', detail: errorMessage(error) };
+    }
   }
 
   vmGone(): void {

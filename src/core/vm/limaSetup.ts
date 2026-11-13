@@ -173,21 +173,30 @@ export class LimaSetup {
     await this.locked(async () => {
       // Without its lima.yaml, Lima does not know the VM: a `limactl create` that ended before it wrote it leaves only
       // the folder, which `limactl delete` would leave, so Devspaces deletes it itself, also without Lima.
+      const deleteFolder = async (why: string): Promise<void> => {
+        logger.info(`Devspaces removes the folder of ${why} (${folder}).`);
+        await this.step(() => fs.promises.rm(folder, { recursive: true, force: true }));
+        vm.forgetRunning();
+        removed = true;
+      };
       if ((await pathState(path.join(folder, 'lima.yaml'))) === 'missing') {
         if ((await pathState(folder)) === 'missing') {
           logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
           return;
         }
-        logger.info(`Devspaces removes the folder of a Lima VM that was not created to the end (${folder}).`);
-        await this.step(() => fs.promises.rm(folder, { recursive: true, force: true }));
-        vm.forgetRunning();
-        removed = true;
+        await deleteFolder('a Lima VM that was not created to the end');
         return;
       }
       const instance = await this.step(() => vm.lima());
       const status = await this.step(() => instance.status());
+      // A folder with its lima.yaml that Lima does not list: `limactl delete` does not know it either, and the files
+      // step of "Remove Devspaces from This Computer…" keeps the folder of Devspaces while it is there.
       if (status === 'missing') {
-        logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
+        if ((await pathState(folder)) === 'missing') {
+          logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
+          return;
+        }
+        await deleteFolder('a Lima VM that Lima does not list');
         return;
       }
       logger.info(`Devspaces removes the Lima VM of Devspaces with its disk (${folder}).`);

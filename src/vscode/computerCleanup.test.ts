@@ -167,8 +167,26 @@ describe('the inventory for the question of the command', () => {
     // Only the files of a setup that did not end: the VM with leftovers, so that the question names them as such.
     const leftovers = setUp({ vmState: async () => 'leftovers' as const });
     expect(await leftovers.cleanup.inventory()).toMatchObject({ vm: 'devspaces-vm', vmLeftovers: true });
-    expect(await leftovers.cleanup.vmExists()).toBe(true);
-    expect(await none.cleanup.vmExists()).toBe(false);
+  });
+
+  // Mutation: a state of the VM that cannot be read after the removal counted as a VM that was set up meanwhile, so that
+  // the last message said something that is not true; or the files of a setup that runs left out before the files step.
+  it('after the VM step: a VM set up meanwhile, also the files of a setup when there was none, and a state that cannot be read', async () => {
+    const leftovers = setUp({ vmState: async () => 'leftovers' as const });
+    expect(await leftovers.cleanup.vmMeanwhile(false)).toEqual({ kind: 'setUp' });
+    expect(await leftovers.cleanup.vmMeanwhile(true)).toBeUndefined();
+    const vm = setUp();
+    expect(await vm.cleanup.vmMeanwhile(true)).toEqual({ kind: 'setUp' });
+    const none = setUp({ vmState: async () => 'none' as const });
+    expect(await none.cleanup.vmMeanwhile(false)).toBeUndefined();
+    expect(await none.cleanup.vmMeanwhile(true)).toBeUndefined();
+    const unreadable = setUp({ vmState: async () => Promise.reject(new Error('reg.exe export ended with exit code 1.')) });
+    expect(await unreadable.cleanup.vmMeanwhile(true)).toEqual({ kind: 'unknown', detail: 'reg.exe export ended with exit code 1.' });
+    expect(ComputerCleanupTexts.vmUnknown('reg.exe export ended with exit code 1.')).toContain('exists now (reg.exe export ended with exit code 1), so its scheduled task');
+    expect(unreadable.logger.warn).toHaveBeenCalledWith('Whether the VM of Devspaces exists could not be read: reg.exe export ended with exit code 1.');
+    // The question names a VM whose state cannot be read.
+    expect((await unreadable.cleanup.inventory()).vm).toBe('devspaces-vm');
+    expect(await setUp({ vmHost: undefined }).cleanup.vmMeanwhile(false)).toBeUndefined();
   });
 });
 

@@ -4264,8 +4264,7 @@ describe('Remove Devspaces from This Computer…', () => {
         folder: FOLDER as string | undefined,
         ...inventory,
       })),
-      vmExists: vi.fn(async () => false),
-      vmSetUp: vi.fn(async () => false),
+      vmMeanwhile: vi.fn(async (_removed: boolean): Promise<{ kind: 'setUp' } | { kind: 'unknown'; detail: string } | undefined> => undefined),
       vmGone: vi.fn(() => void order.push('update the task and the context of the VM')),
       removeVm: vi.fn(async () => {
         order.push('remove the VM');
@@ -4626,9 +4625,10 @@ describe('Remove Devspaces from This Computer…', () => {
   // Mutation: the files removed under a VM that another VS Code set up while the remote hosts were removed.
   it('keeps a VM that was set up after the question, with its files, and says so', async () => {
     const { order, cleanup } = onComputer({ engines: [], keyHosts: [], vm: undefined });
-    cleanup.vmExists.mockResolvedValue(true);
+    cleanup.vmMeanwhile.mockResolvedValue({ kind: 'setUp' });
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
     await run('removeFromComputer');
+    expect(cleanup.vmMeanwhile).toHaveBeenCalledWith(false);
     expect(order).toEqual(['remove the key and its line on no host']);
     expect(cleanup.removeVm).not.toHaveBeenCalled();
     expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
@@ -4639,14 +4639,51 @@ describe('Remove Devspaces from This Computer…', () => {
   // VS Code set up again after its removal were removed under it.
   it('keeps the files when the VM was set up again after its removal, and says so', async () => {
     const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
-    cleanup.vmSetUp.mockResolvedValue(true);
+    cleanup.vmMeanwhile.mockResolvedValue({ kind: 'setUp' });
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
     await run('removeFromComputer');
+    expect(cleanup.vmMeanwhile).toHaveBeenCalledWith(true);
     expect(order).toEqual(['remove the VM', 'remove the key and its line on no host']);
     expect(cleanup.removeFiles).not.toHaveBeenCalled();
     expect(cleanup.vmGone).not.toHaveBeenCalled();
     expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a state of the VM that cannot be read after its removal named as a VM that was set up meanwhile, or the
+  // files removed then (also the task and the context of a VM that another VS Code may have set up).
+  it('keeps the files when the state of the VM cannot be read after its removal, says so, and updates the task and the context in the background', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.vmMeanwhile.mockResolvedValue({ kind: 'unknown', detail: 'wsl.exe did not answer.' });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host', 'update the task and the context of the VM']);
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ComputerCleanupTexts.vmUnknown('wsl.exe did not answer.')}`);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: the removal from a remote host run on the Docker host that is current, when the operation has no target
+  // of that host.
+  it('removes nothing from a remote host when its work would run on another Docker host', async () => {
+    const { cleanup, removal } = onComputer({ vm: undefined, keyHosts: [] });
+    recreateHarness({
+      dockerTargets: {
+        resolve: async () => remoteDockerTarget('other-box'),
+        current: async () => remoteDockerTarget('other-box'),
+        withOperation: <T,>(fn: () => Promise<T>) => runWithDockerTarget(remoteDockerTarget('other-box'), fn),
+        ofHost: async () => undefined,
+      } as unknown as ControllerDeps['dockerTargets'],
+      engineRemoval: removal as unknown as ControllerDeps['engineRemoval'],
+      computerCleanup: cleanup,
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(removal.engineAnswers).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(
+      `Stays on this computer: ${ControllerTexts.computerEngineFailed('build-box', 'Devspaces works on other-box now, not there.')}`,
+    );
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
   });
 
   // Mutation: a removal mark that could not be written named in what stays also when everything else went (the

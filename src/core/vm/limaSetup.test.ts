@@ -85,9 +85,6 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     await expect(setup(existing.runner).remove()).resolves.toBe(true);
     expect(existing.calls.map((call) => call.slice(0, 4).join(' '))).toEqual(['limactl list --json', 'limactl delete --force devspaces']);
     expect(fs.existsSync(path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock'))).toBe(false);
-    const unlisted = fakeRunner({ status: '' });
-    await expect(setup(unlisted.runner).remove()).resolves.toBe(false);
-    expect(unlisted.calls.map((call) => call[1])).toEqual(['list']);
     // Without the folder of the VM, no Lima is needed (it is not installed for that).
     fs.rmSync(folder, { recursive: true });
     let installed = false;
@@ -101,8 +98,9 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     expect(installed).toBe(false);
   });
 
-  // Mutation: a folder of the VM without its lima.yaml that stays, so that the folder of Devspaces stays at every run.
-  it('removes the folder of a VM that limactl create left without its lima.yaml, and never a folder with a lima.yaml that Lima does not list', async () => {
+  // Mutation: a folder of the VM without its lima.yaml, or with a lima.yaml that Lima does not list, that stays, so that
+  // the folder of Devspaces stays at every run of "Remove Devspaces from This Computer…".
+  it('removes the folder of a VM that limactl create left without its lima.yaml, and a folder with a lima.yaml that Lima does not list', async () => {
     const folder = path.join(limaPaths(home).home, 'devspaces');
     fs.mkdirSync(path.join(folder, 'cidata'), { recursive: true });
     // Also when Lima cannot be installed (offline).
@@ -114,8 +112,9 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     fs.mkdirSync(folder, { recursive: true });
     fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
     const unlisted = fakeRunner({ status: '' });
-    await expect(setup(unlisted.runner).remove()).resolves.toBe(false);
-    expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
+    await expect(setup(unlisted.runner).remove()).resolves.toBe(true);
+    expect(fs.existsSync(folder)).toBe(false);
+    expect(unlisted.calls.map((call) => call[1])).toEqual(['list']);
   });
 
   it('removes nothing while another window sets up the VM', async () => {

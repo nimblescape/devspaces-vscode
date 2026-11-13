@@ -260,7 +260,7 @@ export interface ControllerDeps {
    * the extension (computerCleanup.ts); the controller removes Devspaces from the remote Docker hosts itself. Without
    * it (or without engineRemoval), the command does nothing.
    */
-  computerCleanup?: Pick<ComputerCleanup, 'inventory' | 'vmExists' | 'vmSetUp' | 'removeVm' | 'vmGone' | 'removeSshKey' | 'removeFiles' | 'uninstallExtension'>;
+  computerCleanup?: Pick<ComputerCleanup, 'inventory' | 'vmMeanwhile' | 'removeVm' | 'vmGone' | 'removeSshKey' | 'removeFiles' | 'uninstallExtension'>;
   /** The VS Code setting `workbench.list.openMode` (double-click on a row, rowActivation.ts). Default: `readListOpenMode`. */
   listOpenMode?: () => ListOpenMode;
   /** True in an Extension Development Host (a debug run of this extension): the reopen rule is relaxed. */
@@ -1825,11 +1825,14 @@ export class Controller implements vscode.Disposable {
           // The scheduled task and the Docker context of a VM that stays go on serving it while the extension stays
           // installed; after Uninstall Anyway, the uninstall step at the next start of VS Code removes them.
           // A VM that another window or another VS Code set up after the question (also again after its removal) stays,
-          // and so do they.
-          if (!vmStays && (vm === undefined ? await cleanup.vmExists() : vmGone && (await cleanup.vmSetUp()))) {
-            left.push(ControllerTexts.computerVmSetUpMeanwhile);
+          // and so do they; so do they while the state of the VM cannot be read.
+          const meanwhile = !vmStays && (vm === undefined || vmGone) ? await cleanup.vmMeanwhile(vmGone) : undefined;
+          if (meanwhile !== undefined) {
+            left.push(meanwhile.kind === 'setUp' ? ControllerTexts.computerVmSetUpMeanwhile : ComputerCleanupTexts.vmUnknown(meanwhile.detail));
             vmStays = true;
-            vmGone = false;
+            // The window that set the VM up serves its task and its context; for a state that cannot be read, the
+            // update in the background reads it again.
+            if (meanwhile.kind === 'setUp') vmGone = false;
           }
           if (vmStays) {
             this.logger.info('The scheduled task, the Docker context and the folder of Devspaces stay with the VM.');
@@ -1909,6 +1912,8 @@ export class Controller implements vscode.Disposable {
       const engine = describeDockerHost(host);
       const target = await this.operationTarget();
       if (target.kind === 'unsupported') return ControllerTexts.computerEngineFailed(engine, unsupportedTargetReason(target));
+      // Never the Docker host of another target (withHost runs on the current one without Docker targets).
+      if (target.host !== host) return ControllerTexts.computerEngineFailed(engine, `Devspaces works on ${describeDockerHost(target.host)} now, not there.`);
       const known = await this.deps.registry.list();
       const here = known.filter((devspace) => isOnDockerHost(devspace, host));
       const refusal = (await this.useRefusal(engine, here)) ?? this.newDevspacesRefusal(`on ${engine}`, here, named);
