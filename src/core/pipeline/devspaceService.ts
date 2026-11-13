@@ -2484,8 +2484,8 @@ export class DevspaceService extends OperationBase {
     let build = needsBuild({ ...input, check, containerExists });
     let updateAvailable = check.kind === 'checked' && !check.upToDate && !skipUpdate;
     // The update of an existing container, running or stopped (only an update: not a rebuild, not a first build, not a
-    // missing image), is announced (`notify`: Continue or Cancel) or asked (`ask`: Update Now or Later), before
-    // anything is changed.
+    // missing image), goes to the window before anything is changed: it updates without a dialog (`yes`), announces it
+    // (`notify`: Continue or Cancel) or asks (`ask`: Update Now or Later).
     let postponed = false;
     if (build && updateAvailable && !forced && record !== undefined && imagePresent && existing !== undefined) {
       const answer = await this.deps.ui.updateContainer(ctx.env.repository, existing.running);

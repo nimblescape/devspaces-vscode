@@ -423,7 +423,7 @@ async function question(host: HostSide, call: string, args: unknown[]): Promise<
       return ui.recreateContainer(repository, { message: value.message, detail: value.detail });
     }
     // The repository (QUESTIONS_WITH_REPOSITORY: the one of the operation) and whether the container runs, nothing
-    // else; the window words the question after its own setting updateContainer.
+    // else; the window answers after its own setting updateContainer (`yes`: without a dialog).
     case 'updateContainer': {
       const [repository] = strings(args, 1);
       const running = args[1];
