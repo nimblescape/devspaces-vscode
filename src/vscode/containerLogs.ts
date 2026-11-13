@@ -14,6 +14,7 @@ import { isAbortError, type Logger } from '../core/ports';
 import { REMOTE_MONITOR_CONTAINER } from '../core/remoteMonitor/protocol';
 import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
+import { stripControlSequences } from './logger';
 import { showInformationMessage, showWarningMessage } from './notifications';
 import { reportTargetOfArgument } from './reportPageModel';
 
@@ -112,7 +113,9 @@ export class ContainerLogs implements vscode.Disposable {
       provideTextDocumentContent: (uri) => this.texts.get(uri.toString()) ?? '',
     });
     const uri = vscode.Uri.from({ scheme: CONTAINER_LOG_SCHEME, path: `/${log.host}/${log.name}.log` });
-    this.texts.set(uri.toString(), text.trim() === '' ? ContainerLogTexts.empty(log) : `${text}\n`);
+    // Without the colors and the other control sequences of a terminal, which a text document shows as they are.
+    const shown = stripControlSequences(text);
+    this.texts.set(uri.toString(), shown.trim() === '' ? ContainerLogTexts.empty(log) : `${shown}\n`);
     this.changed.fire(uri);
     try {
       const opened = await vscode.workspace.openTextDocument(uri);

@@ -61,6 +61,19 @@ describe('Show Log of a container row', () => {
     expect(fakeVscode.contentProviders.size).toBe(0);
   });
 
+  it('shows the log without the colors and the other control sequences of a terminal', async () => {
+    const h = harness();
+    h.read.mockResolvedValue('2026-11-13 22:00:00.000 \u001b[32minfo\u001b[0m ready\n2026-11-13 22:00:01.000 \u001b]0;title\u0007done');
+    await h.logs.showRow(row('lab', web));
+    const [document] = fakeVscode.window.showTextDocument.mock.calls[0] as [{ getText(): string }];
+    expect(document.getText()).toBe('2026-11-13 22:00:00.000 info ready\n2026-11-13 22:00:01.000 done\n');
+    // A log of control sequences only is an empty log.
+    h.read.mockResolvedValue('\u001b[0m\u001b[2J');
+    await h.logs.showRow(row('lab', web));
+    const [again] = fakeVscode.window.showTextDocument.mock.calls[1] as [{ getText(): string }];
+    expect(again.getText()).toBe('The container shop-web-1 wrote nothing to its log yet.');
+  });
+
   it('names the Monitor in its texts, and reads nothing for a row that is no container or has no full ID', async () => {
     const h = harness();
     h.read.mockRejectedValue(new CommandError('docker logs x', 1, '', 'Error response from daemon: No such container: x'));
