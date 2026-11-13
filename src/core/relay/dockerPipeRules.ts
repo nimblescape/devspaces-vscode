@@ -11,7 +11,6 @@
 // the build image (buildxImage.ts), and remove Devspaces from the engine. The lists
 // come from the Docker calls of both, measured in CI (test/vscode/attach/remote.test.ts fails on a refused request).
 // Only the method and the path are checked, not the query or the body. No `vscode`.
-import { REMOTE_MONITOR_CONTAINER } from '../remoteMonitor/protocol';
 import type { DockerRequest, DockerRequestRule } from './dockerRequests';
 
 /** A container, an exec, a volume or a network in a path: its ID or its name, without a slash. */
@@ -75,8 +74,9 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('POST', `/containers/${NAME}/kill`),
   endpoint('POST', `/containers/${NAME}/stop`),
   endpoint('DELETE', `/containers/${NAME}`),
-  // Show Log of the Monitor on its report (monitorLog.ts): the log of the container of the Monitor, of no other container.
-  endpoint('GET', `/containers/${REMOTE_MONITOR_CONTAINER}/logs`),
+  // Show Log of the Monitor on its report (monitorLog.ts): `docker logs devspaces-monitor` inspects the container first and
+  // then asks for the log by the ID of the container, so the pipe lets through the log of any container.
+  endpoint('GET', `/containers/${NAME}/logs`),
   endpoint('GET', '/images/json'),
   endpoint('GET', `/images/${IMAGE}/json`),
   endpoint('POST', '/images/create'),

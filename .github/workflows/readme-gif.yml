@@ -10,8 +10,8 @@
 # installs the VSIX files of the extension and of the test sign-in
 # (scripts/install-attach-extensions.mjs), and records the six scenes with
 # test/gif/record.mjs: the sign-in, the start of the devspace, the view Docker
-# Hosts, the reports of a volume and of the devspace container, the report of
-# the Monitor, and the utilization page. The repository list comes from the
+# Hosts, the reports of a volume and of the devspace container, the report and
+# the log of the Monitor, and the utilization page. The repository list comes from the
 # fake GitHub API of test/gif/fakeGitHub.mjs, because the test account has no
 # real GitHub access. The job uploads the GIF, the video of the take, a
 # screenshot of each scene and the logs as the artifact "readme-gif"; it gets no
