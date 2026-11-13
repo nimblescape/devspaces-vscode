@@ -2,10 +2,11 @@
 // © 2026 Hannes Stauss (scalarion@nimblescape.com)
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
-// The view "Docker Hosts" (R-ENG-008): a host is read only when the user opens it or clicks Refresh, never a VM that does
-// not run; Remove… asks once and removes no object of a devspace of this computer and no running container; Start of a
+// The view "Docker Hosts" (R-ENG-008): a host is read when the user opens it or clicks Refresh, and again when the check
+// of the update every 30 seconds changed (only open hosts, while the view is visible and the window has the focus, never
+// with questions), never a VM that does not run; Remove… asks once and removes no object of a devspace of this computer and no running container; Start of a
 // container that is not of Devspaces; Remove Unused Build Cache… asks once.
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
 
@@ -14,7 +15,7 @@ import type { HostInventory, HostObject, ObjectResult } from '../core/hosts/host
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import type { BuildCacheRow, GroupRow, HostRow, HostsNode, MessageRow, ObjectRow } from './dockerHostsModel';
-import { DockerHostsCommandTexts, DockerHostsView, type DockerHostsDeps } from './dockerHostsView';
+import { DockerHostsCommandTexts, DockerHostsView, UPDATE_INTERVAL_MS, type DockerHostsDeps, type HostsTree } from './dockerHostsView';
 import { fakeVscode, resetFakeVscode, type ThemeIcon, type TreeItem } from './testing/fakeVscode';
 
 const { window } = fakeVscode;
@@ -455,5 +456,182 @@ describe('DockerHostsView: the objects that are not of Devspaces, the networks a
     await provider.pruneBuildCache(await buildCacheRowOf(provider, 'lab'));
     await settle();
     expect(window.showWarningMessage).toHaveBeenLastCalledWith(DockerHostsCommandTexts.pruneFailed('lab', 'a prune operation is already running'), 'Show details');
+  });
+});
+
+describe('DockerHostsView: the update every 30 seconds', () => {
+  const { EventEmitter } = fakeVscode;
+  let check: Mock<NonNullable<DockerHostsDeps['check']>>;
+  let checkText: string;
+  let vmStopping: boolean;
+  let tree: HostsTree & { visible: boolean; expand(row: HostRow): void; collapse(row: HostRow): void; show(visible: boolean): void };
+
+  function watched(): DockerHostsView {
+    const provider = new DockerHostsView({
+      logger,
+      showLog: vi.fn(),
+      vmHost: LIMA_HOST,
+      hostList: async () => ({ hosts, selected }),
+      vmState: async () => vmState,
+      read,
+      check,
+      vmStopping: () => vmStopping,
+      stopContainer,
+      startContainer,
+      pruneBuildCache,
+      removeObjects,
+      removeFromList,
+    });
+    provider.onDidChangeTreeData((node) => fired.push(node));
+    provider.watch(tree);
+    return provider;
+  }
+
+  /** The user opens the row of `host`: the read of the user, and the tree view says that the row is open. */
+  async function open(provider: DockerHostsView, host: string): Promise<HostRow> {
+    const row = await hostRow(provider, host);
+    await provider.getChildren(row);
+    tree.expand(row);
+    return row;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    checkText = 'A';
+    vmStopping = false;
+    check = vi.fn(async () => checkText);
+    const expands = new EventEmitter<{ element: HostsNode }>();
+    const collapses = new EventEmitter<{ element: HostsNode }>();
+    const visibility = new EventEmitter<{ visible: boolean }>();
+    tree = {
+      visible: true,
+      onDidExpandElement: expands.event as HostsTree['onDidExpandElement'],
+      onDidCollapseElement: collapses.event as HostsTree['onDidCollapseElement'],
+      onDidChangeVisibility: visibility.event as HostsTree['onDidChangeVisibility'],
+      expand: (row) => expands.fire({ element: row }),
+      collapse: (row) => collapses.fire({ element: row }),
+      show: (visible) => {
+        tree.visible = visible;
+        visibility.fire({ visible });
+      },
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('checks each open host every 30 seconds and reads it again only when the check changed', async () => {
+    const provider = watched();
+    const row = await open(provider, 'lab');
+    // The read of the user checks first, on the same login.
+    expect(check.mock.calls.map((call) => call[0])).toEqual(['lab']);
+    expect(read).toHaveBeenCalledTimes(1);
+    fired = [];
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(check.mock.calls[1][2]).toEqual({});
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(fired).toEqual([]);
+    // A container started: the read again, in the background, and the row of the host shows it without another read.
+    checkText = 'B';
+    read.mockImplementationOnce(async () => fullInventory());
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(fired).toEqual([row]);
+    expect((await objectRowsOf(provider, 'lab')).map((object) => object.object.name)).toContain('shop-web-1');
+    expect(read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(4);
+    expect(read).toHaveBeenCalledTimes(2);
+    // A closed host is not checked.
+    tree.collapse(row);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(4);
+  });
+
+  it('checks nothing while the view is hidden or 2 minutes after the window lost the focus; a show or the focus checks at once', async () => {
+    const provider = watched();
+    await open(provider, 'lab');
+    tree.show(false);
+    await vi.advanceTimersByTimeAsync(3 * UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(1);
+    tree.show(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(check).toHaveBeenCalledTimes(2);
+    // Without the focus: the checks go on for 2 minutes, then they pause until the focus comes back.
+    fakeVscode.fireWindowState(false);
+    await vi.advanceTimersByTimeAsync(4 * UPDATE_INTERVAL_MS);
+    const beforePause = check.mock.calls.length;
+    expect(beforePause).toBe(5);
+    await vi.advanceTimersByTimeAsync(4 * UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(beforePause);
+    fakeVscode.fireWindowState(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(check).toHaveBeenCalledTimes(beforePause + 1);
+  });
+
+  it('never calls a VM that does not run or that stops now, shows the hosts again when the state of the VM changed, and reads the VM when it runs again', async () => {
+    const provider = watched();
+    await open(provider, LIMA_HOST);
+    expect(read).toHaveBeenCalledTimes(1);
+    vmStopping = true;
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(1);
+    vmStopping = false;
+    vmState = { kind: 'stopped' };
+    fired = [];
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(1);
+    // The rows of the hosts show again (the VM row follows its state, its objects show the stopped row).
+    expect(fired).toEqual([undefined]);
+    expect(((await provider.getChildren(await hostRow(provider, LIMA_HOST))) as MessageRow[]).map((child) => child.message)).toEqual(['vmStopped']);
+    vmState = { kind: 'running', memoryGiB: 4, cpus: 2 };
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect((await provider.getChildren(await hostRow(provider, LIMA_HOST))).map((child) => child.hostsNode)).toEqual(['group', 'group', 'group', 'group', 'buildCache']);
+  });
+
+  it('asks nothing, and after a failed update of a remote host uses only a login that is open until a read of the user works', async () => {
+    const prompts: boolean[] = [];
+    const provider = watched();
+    const row = await open(provider, 'lab');
+    check.mockImplementation(async () => {
+      prompts.push(sshPromptsAllowed());
+      throw new Error('Permission denied (publickey,password).');
+    });
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(prompts).toEqual([false, false]);
+    expect(check.mock.calls.slice(1).map((call) => call[2])).toEqual([{}, { openLoginOnly: true }]);
+    // Logged once, and the rows of the last read stay.
+    expect(logger.info.mock.calls.filter(([text]) => String(text).startsWith('The update of the view Docker Hosts could not read lab'))).toHaveLength(1);
+    expect((await objectRowsOf(provider, 'lab')).length).toBeGreaterThan(0);
+    // Refresh: a read of the user (with its questions) works, and the update may log in again.
+    check.mockImplementation(async () => checkText);
+    provider.refresh(row);
+    await provider.getChildren(row);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check.mock.calls.at(-1)?.[2]).toEqual({});
+  });
+
+  it('drops the read of the update when a Refresh or an action of the user came in the meantime', async () => {
+    const provider = watched();
+    const row = await open(provider, 'lab');
+    checkText = 'B';
+    let finish: (value: HostInventory) => void = () => undefined;
+    read.mockImplementationOnce(() => new Promise<HostInventory>((resolve) => (finish = resolve)));
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    // The user clicks Refresh on the row while the update reads: the read of the user wins.
+    provider.refresh(row);
+    await provider.getChildren(row);
+    expect(read).toHaveBeenCalledTimes(3);
+    fired = [];
+    finish(fullInventory());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fired).toEqual([]);
+    expect((await objectRowsOf(provider, 'lab')).map((object) => object.object.name)).not.toContain('shop-web-1');
   });
 });

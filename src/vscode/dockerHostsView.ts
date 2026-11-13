@@ -4,14 +4,19 @@
 
 // The view "Docker Hosts" (`devspaces.hosts`, docs/requirements.md R-ENG-008) below the repository view: the VM of
 // Devspaces first, then each remote host of the list, with all containers, networks, images and volumes there (those of
-// Devspaces with their purpose) and their management. A host is read only when the user opens it in the view, and again at Refresh, never in the background
-// (R-SEC-004): the rows of a host keep what its last read found, and a change of the view (another Docker host, a host
-// that leaves the list, the state of the VM) reads no host again. A read never starts the VM: a stopped VM shows a row
-// that starts it. Opening a remote host and each action (with its progress notification) are flows of the user, so a
-// password login may ask there (R-ENG-003). All Docker calls of the view run on the one shared shell of the host (extension.ts, `onShell`): one login
-// per host for the reads and the actions, not one connection per call. A check
-// mark shows the Docker host of Devspaces; a click on a host row only opens or closes it, because the Docker host of
-// Devspaces is chosen only in the first row of the repository view. The objects of a devspace of this computer get the
+// Devspaces with their purpose) and their management. A host is read when the user opens it in the view, and again at
+// Refresh (R-SEC-004): the rows of a host keep what its last read found. Every UPDATE_INTERVAL_MS, while the view is
+// visible and the window has the focus (or lost it less than FOCUS_PAUSE_MS ago), the view checks each open host with
+// four short lists without sizes (readHostCheck) and reads it again only when they changed; it also shows the hosts
+// again when the list, the Docker host of Devspaces or the state of the VM changed. A read never starts the VM: a
+// stopped VM shows a row that starts it, and the update reads the state of the VM first and leaves a VM alone that does
+// not run or that stops now (Windows, vmStopping). Opening a remote host and each action (with its progress
+// notification) are flows of the user, so a password login may ask there (R-ENG-003); the update asks nothing, and
+// after an update that failed on a remote host it uses only a login that is open, until a read of the user works. All
+// Docker calls of the view run on the one shared shell of the host (extension.ts, `onShell`): one login per host for
+// the reads, the checks and the actions, not one connection per call. A check mark shows the Docker host of Devspaces;
+// a click on a host row only opens or closes it, because the Docker host of Devspaces is chosen only in the first row
+// of the repository view. The objects of a devspace of this computer get the
 // commands of the devspace (Stop, Delete…); every other object gets Stop (a running container), Start (a stopped
 // container that is not of Devspaces) or Remove… (never with force), after one question, also for several selected
 // rows. The rows come from dockerHostsModel.ts.
@@ -41,6 +46,10 @@ import { showInformationMessage, showWarningMessage } from './notifications';
 import { withNotificationProgress } from './progress';
 import { reportUri } from './reportPage';
 import { colorTreeItem } from './rowColors';
+import { FOCUS_PAUSE_MS } from './usagePage';
+
+/** How often the view checks its open hosts (R-ENG-008). */
+export const UPDATE_INTERVAL_MS = 30_000;
 
 /** User-visible texts of the commands of the view (plain language). */
 export const DockerHostsCommandTexts = {
@@ -112,8 +121,22 @@ export interface DockerHostsDeps {
   hostList: () => Promise<{ hosts: string[]; selected: string | undefined }>;
   /** The state of the VM, read without a start (vmState.ts). */
   vmState: () => Promise<VmState>;
-  /** Reads the objects of Devspaces on `host` (readHostInventory within an operation on it). */
-  read: (host: string, signal: AbortSignal) => Promise<HostInventory>;
+  /**
+   * Reads the objects of Devspaces on `host` (readHostInventory within an operation on it). `openLoginOnly`: only on a
+   * login of the host that is open, else an AbortError (the update after a failed update).
+   */
+  read: (host: string, signal: AbortSignal, options?: { openLoginOnly?: boolean }) => Promise<HostInventory>;
+  /**
+   * The check of `host` (readHostCheck within an operation on it), with the same `openLoginOnly`. Without it, the view
+   * reads a host only at an open and at Refresh.
+   */
+  check?: (host: string, signal: AbortSignal, options?: { openLoginOnly?: boolean }) => Promise<string>;
+  /** Windows: the VM stops now for this window (WslKeeper.stopping), so the update makes no Docker call to it. */
+  vmStopping?: () => boolean;
+  /** Only for the tests: UPDATE_INTERVAL_MS, FOCUS_PAUSE_MS and the clock. */
+  updateIntervalMs?: number;
+  focusPauseMs?: number;
+  now?: () => number;
   /** `docker container stop` of `object` on `host`. */
   stopContainer: (host: string, object: HostObject, signal: AbortSignal) => Promise<ObjectResult>;
   /** `docker container start` of `object` on `host`. */
@@ -126,8 +149,14 @@ export interface DockerHostsDeps {
   removeFromList: (host: string) => Promise<void>;
 }
 
-/** What the last read of a host found. `notRead`: the VM runs now, but was stopped at the last read. */
-type HostEntry = { kind: 'inventory'; inventory: HostInventory } | { kind: 'stopped' } | { kind: 'notRead' } | { kind: 'failed'; detail: string };
+/**
+ * What the last read of a host found, with the check (readHostCheck) from right before it. `notRead`: the VM runs now,
+ * but was stopped at the last read.
+ */
+type HostEntry = { kind: 'inventory'; inventory: HostInventory; check?: string } | { kind: 'stopped' } | { kind: 'notRead' } | { kind: 'failed'; detail: string };
+
+/** The parts of the tree view of the provider that its update follows (DockerHostsView.watch). */
+export type HostsTree = Pick<vscode.TreeView<HostsNode>, 'visible' | 'onDidExpandElement' | 'onDidCollapseElement' | 'onDidChangeVisibility'>;
 
 export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vscode.Disposable {
   private readonly changeEmitter = new vscode.EventEmitter<HostsNode | undefined>();
@@ -144,12 +173,69 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
    */
   private readonly session = Math.random().toString(36).slice(2, 10);
   private disposed = false;
+  /** The host rows that are open in the tree view (watch): only they are updated. */
+  private readonly expanded = new Set<string>();
+  /**
+   * The remote hosts whose update failed: their update uses only a login that is open, until a read of the user works,
+   * so that a host that needs a password gets no login without questions every UPDATE_INTERVAL_MS.
+   */
+  private readonly openLoginOnly = new Set<string>();
+  /** The hosts whose failed update is logged: once, until an update or a read of the user works. */
+  private readonly updateFailed = new Set<string>();
+  /** Ends the calls of the update when the view ends (an abort also ends the shared shell of the host). */
+  private readonly updateAbort = new AbortController();
+  private updateTimer: ReturnType<typeof setTimeout> | undefined;
+  private updating = false;
+  private lastUpdate = Number.NEGATIVE_INFINITY;
+  private treeVisible: () => boolean = () => false;
+  /** When the window lost the focus; undefined while it has it. */
+  private focusLostAt: number | undefined;
 
   constructor(private readonly deps: DockerHostsDeps) {}
 
   dispose(): void {
     this.disposed = true;
+    if (this.updateTimer !== undefined) clearTimeout(this.updateTimer);
+    this.updateTimer = undefined;
+    this.updateAbort.abort();
     this.changeEmitter.dispose();
+  }
+
+  /**
+   * Starts the update of the open hosts every UPDATE_INTERVAL_MS (R-ENG-008) for `tree`, the tree view of this provider:
+   * it follows the host rows that the tree opens and closes, its visibility, and the focus of the window. A show of the
+   * view, and the focus after a pause, update at once when the last update is older than UPDATE_INTERVAL_MS.
+   */
+  watch(tree: HostsTree): vscode.Disposable {
+    this.treeVisible = () => tree.visible;
+    this.focusLostAt = vscode.window.state.focused ? undefined : this.now();
+    const subscriptions = [
+      tree.onDidExpandElement(({ element }) => {
+        if (element.hostsNode === 'host') this.expanded.add(element.host);
+      }),
+      tree.onDidCollapseElement(({ element }) => {
+        if (element.hostsNode === 'host') this.expanded.delete(element.host);
+      }),
+      tree.onDidChangeVisibility(({ visible }) => {
+        if (visible) this.updateSoon();
+      }),
+      vscode.window.onDidChangeWindowState(({ focused }) => {
+        if (!focused) {
+          this.focusLostAt ??= this.now();
+          return;
+        }
+        this.focusLostAt = undefined;
+        this.updateSoon();
+      }),
+    ];
+    this.scheduleUpdate(this.interval());
+    return {
+      dispose: () => {
+        for (const subscription of subscriptions) subscription.dispose();
+        if (this.updateTimer !== undefined) clearTimeout(this.updateTimer);
+        this.updateTimer = undefined;
+      },
+    };
   }
 
   getTreeItem(node: HostsNode): vscode.TreeItem {
@@ -432,9 +518,17 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     const abort = new AbortController();
     try {
       this.deps.logger.info(`The view Docker Hosts reads ${row.host}.`);
-      // A flow of the user: a password login to a remote host may ask in VS Code.
-      const inventory = await vscode.window.withProgress({ location: { viewId: DOCKER_HOSTS_VIEW_ID } }, () => withSshPrompts(() => this.deps.read(row.host, abort.signal), abort.signal));
-      entry = { kind: 'inventory', inventory };
+      // A flow of the user: a password login to a remote host may ask in VS Code. The check comes first, so that a change
+      // during the read shows at the next update.
+      entry = await vscode.window.withProgress({ location: { viewId: DOCKER_HOSTS_VIEW_ID } }, () =>
+        withSshPrompts(async (): Promise<HostEntry> => {
+          const check = await this.userCheck(row.host, abort.signal);
+          const inventory = await this.deps.read(row.host, abort.signal);
+          return { kind: 'inventory', inventory, ...(check !== undefined ? { check } : {}) };
+        }, abort.signal),
+      );
+      this.openLoginOnly.delete(row.host);
+      this.updateFailed.delete(row.host);
     } catch (error) {
       const detail = errorMessage(error);
       this.deps.logger.warn(`${DockerHostsCommandTexts.readFailed(row.host)} ${detail}`);
@@ -442,6 +536,129 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     }
     this.entries.set(row.host, entry);
     return entry;
+  }
+
+  /**
+   * The check before a read of the user (undefined without a check). It fails as the read would, on the same login, so a
+   * failed check is the failed read: a login that the user cancelled does not ask a second time for the read.
+   */
+  private userCheck(host: string, signal: AbortSignal): Promise<string | undefined> {
+    return this.deps.check === undefined ? Promise.resolve(undefined) : this.deps.check(host, signal);
+  }
+
+  // -------------------------------------------------------------------------------------------------------------------
+  // The update every UPDATE_INTERVAL_MS (watch).
+
+  private interval(): number {
+    return this.deps.updateIntervalMs ?? UPDATE_INTERVAL_MS;
+  }
+
+  private now(): number {
+    return (this.deps.now ?? Date.now)();
+  }
+
+  /** The window lost the focus FOCUS_PAUSE_MS ago or longer. */
+  private paused(): boolean {
+    return this.focusLostAt !== undefined && this.now() - this.focusLostAt >= (this.deps.focusPauseMs ?? FOCUS_PAUSE_MS);
+  }
+
+  private scheduleUpdate(delay: number): void {
+    if (this.disposed) return;
+    if (this.updateTimer !== undefined) clearTimeout(this.updateTimer);
+    this.updateTimer = setTimeout(() => {
+      this.updateTimer = undefined;
+      void this.update();
+    }, delay);
+  }
+
+  /** An update now, when the last one is older than UPDATE_INTERVAL_MS (the view shows again, the window got the focus). */
+  private updateSoon(): void {
+    if (this.updateTimer !== undefined && this.now() - this.lastUpdate >= this.interval()) this.scheduleUpdate(0);
+  }
+
+  /**
+   * One update: the rows of the hosts, then each open host that the view has read (in parallel, each on its own shared
+   * shell). Nothing while the view is hidden or the window pauses. The next update comes UPDATE_INTERVAL_MS after its end.
+   */
+  private async update(): Promise<void> {
+    if (this.disposed || this.updating) return;
+    if (!this.treeVisible() || this.paused() || this.deps.check === undefined) {
+      this.scheduleUpdate(this.interval());
+      return;
+    }
+    this.updating = true;
+    this.lastUpdate = this.now();
+    try {
+      const vmState = await this.updateHostRows();
+      await Promise.all([...this.expanded].map((host) => this.updateHost(host, vmState)));
+    } catch (error) {
+      this.deps.logger.warn(`The update of the view Docker Hosts failed: ${errorMessage(error)}`);
+    } finally {
+      this.updating = false;
+      this.scheduleUpdate(this.interval());
+    }
+  }
+
+  /**
+   * The rows of the hosts: another list, Docker host of Devspaces, or state of the VM (its kind, memory and CPUs, not the
+   * size of its disk, which grows while it runs) shows the hosts again. Returns the state of the VM of now.
+   */
+  private async updateHostRows(): Promise<VmState | undefined> {
+    const vmState = this.deps.vmHost === undefined ? undefined : await this.deps.vmState();
+    let list: { hosts: string[]; selected: string | undefined };
+    try {
+      list = await this.deps.hostList();
+    } catch {
+      // hostRows logs it at the next show.
+      return vmState;
+    }
+    const key = (rows: readonly HostRow[]): string => JSON.stringify(rows.map((row) => [row.host, row.selected, row.vmState?.kind, row.vmState?.memoryGiB, row.vmState?.cpus]));
+    if (key(hostRows({ vmHost: this.deps.vmHost, vmState, hosts: list.hosts, selected: list.selected })) !== key([...this.rows.values()])) this.changed();
+    return vmState;
+  }
+
+  /**
+   * The update of the open host `host`: its check, and its read when the check differs from the one of its last read (or
+   * when the last read failed, or found the VM stopped). Never a Docker call to a VM that does not run or that stops now.
+   * A read of the user, a Refresh or an action in the meantime wins: the result of the update is then dropped.
+   */
+  private async updateHost(host: string, vmState: VmState | undefined): Promise<void> {
+    const row = this.rows.get(host);
+    let before = this.entries.get(host);
+    const check = this.deps.check;
+    if (row === undefined || before === undefined || check === undefined || this.reads.has(host) || this.disposed) return;
+    if (row.vm && (vmState?.kind !== 'running' || this.deps.vmStopping?.() === true)) return;
+    if (before.kind === 'stopped') {
+      // The VM runs again: what followVm would set at the next show, so that this show does not drop the read below.
+      before = { kind: 'notRead' };
+      this.entries.set(host, before);
+    }
+    const options = this.openLoginOnly.has(host) ? { openLoginOnly: true } : {};
+    try {
+      const now = await check(host, this.updateAbort.signal, options);
+      if (this.entries.get(host) !== before || this.reads.has(host) || this.disposed) return;
+      if (before.kind === 'inventory' && before.check === now) {
+        this.updateFailed.delete(host);
+        return;
+      }
+      const why = before.kind === 'inventory' ? 'its objects changed' : before.kind === 'failed' ? 'its last read failed' : 'the VM runs again';
+      this.deps.logger.info(`The view Docker Hosts reads ${host} again: ${why}.`);
+      const inventory = await this.deps.read(host, this.updateAbort.signal, options);
+      if (this.entries.get(host) !== before || this.disposed) return;
+      this.entries.set(host, { kind: 'inventory', inventory, check: now });
+      this.updateFailed.delete(host);
+      this.changeEmitter.fire(this.rows.get(host));
+    } catch (error) {
+      if (this.disposed) return;
+      // A remote host may need a password: no new login without questions every UPDATE_INTERVAL_MS. A login to the VM
+      // never asks.
+      if (!row.vm) this.openLoginOnly.add(host);
+      if (this.updateFailed.has(host)) return;
+      this.updateFailed.add(host);
+      this.deps.logger.info(
+        `The update of the view Docker Hosts could not read ${host}${row.vm ? '' : '; it uses only a login of the host that is open until the next read by an open or Refresh'}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   private inform(text: string): void {
