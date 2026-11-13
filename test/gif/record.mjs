@@ -32,6 +32,8 @@ const PORT = 9222;
 const EXTENSION_ID = 'nimblescape.nimblescape-devspaces-2';
 /** The longest wait for the window of the devspace: the build of its image, the container, and the VS Code Server. */
 const OPEN_TIMEOUT_MS = 8 * 60_000;
+/** The width of the side bar on the screen, so that the rows of Docker Hosts show the names of the demo devspace whole. */
+const SIDE_BAR_WIDTH = 600;
 /** The longest wait for the first background run of the Monitor and its move to the new build of its helper image. */
 const MONITOR_TIMEOUT_MS = 6 * 60_000;
 
@@ -296,7 +298,7 @@ async function setUp(ui) {
 }
 
 /**
- * The drag of the edge of the side bar makes it 560 pixels wide. The window of the devspace (another workspace) starts
+ * The drag of the edge of the side bar makes it SIDE_BAR_WIDTH pixels wide. The window of the devspace (another workspace) starts
  * with the default width again.
  */
 async function widenSideBar(ui) {
@@ -306,7 +308,7 @@ async function widenSideBar(ui) {
   });
   jump(edge.x + 2, edge.y);
   xdo('mousedown', 1);
-  await move(560, edge.y, 300);
+  await move(SIDE_BAR_WIDTH, edge.y, 300);
   xdo('mouseup', 1);
   jump(SCREEN.width - 40, SCREEN.height - 20);
   await wait(1000);
@@ -410,7 +412,7 @@ async function openedDevspace(ui) {
 }
 
 /** The take: returns the marks of its scenes and of its cut, in ms since the start of the recording. */
-async function take(ui, video) {
+async function take(ui, video, seed) {
   const recording = record(video);
   const scenes = [];
   const cuts = [];
@@ -425,6 +427,8 @@ async function take(ui, video) {
     shots.push(file);
     log(`Rows: ${JSON.stringify(await ui.rows().catch(() => []))}`);
     log(`Containers: ${containers()}`);
+    const notifications = await ui.evaluate(() => [...document.querySelectorAll('.notification-list-item-message')].map((m) => m.textContent.trim())).catch(() => []);
+    if (notifications.length > 0) log(`Notifications: ${JSON.stringify(notifications)}`);
   };
   try {
     await wait(500);
@@ -475,9 +479,10 @@ async function take(ui, video) {
     await click(await ui.find({ row: 'devspaces-vscode', pane: 1, under: 'Volumes' }));
     await ui.find({ tab: 'devspaces-vscode', preview: true, ready: true }, 60_000);
     await wait(3500);
-    const devspace = { row: 'devspaces-demo-school-web-basics', prefix: true, pane: 1, under: 'Containers' };
+    // The devspace container has the name of the volume of the devspace.
+    const devspace = { row: seed.volumeName, pane: 1, under: 'Containers' };
     await click(await ui.find(devspace));
-    await ui.find({ tab: (await ui.evaluate(locateLabel, devspace)) ?? '', preview: true, ready: true }, 60_000);
+    await ui.find({ tab: seed.volumeName, preview: true, ready: true }, 60_000);
     await wait(3000);
     await click(await ui.find(devspace), { count: 2 });
     await wait(3000);
@@ -488,6 +493,8 @@ async function take(ui, video) {
     await ui.find({ tab: 'devspaces-monitor', ready: true }, 60_000);
     await wait(3500);
     await click(await ui.find({ webview: 'Show Log of the Monitor' }, 30_000));
+    // The log opens as a read-only document; a warning instead would be in the GIF.
+    await ui.find({ tab: 'devspaces-monitor.log' }, 30_000);
     await move(SCREEN.width - 40, SCREEN.height - 20, 600);
     await wait(3500);
     await shot('5');
@@ -505,11 +512,18 @@ async function take(ui, video) {
   return { scenes, cuts, shots };
 }
 
-/** The label of the row of `spec` (locate), run in the workbench page. */
-function locateLabel(spec) {
-  const panes = [...document.querySelectorAll('.part.sidebar .pane')].filter((pane) => pane.getBoundingClientRect().height > 0);
-  const labels = [...(panes[spec.pane ?? 0]?.querySelectorAll('.monaco-list-row .label-name') ?? [])].map((l) => l.textContent.trim());
-  return labels.find((label) => (spec.prefix ? label.startsWith(spec.row) : label === spec.row));
+/**
+ * The logs of Devspaces and of Dev Containers of each window (its output channels in the folder logs of the user data)
+ * into OUT, as extension-<n>-<name>.log, for the artifact of the run.
+ */
+function keepExtensionLogs() {
+  try {
+    const files = fs.readdirSync(path.join(OUT, 'user-data', 'logs'), { recursive: true }).filter((file) => /devspaces|dev containers|remote-containers/i.test(file) && file.endsWith('.log'));
+    files.forEach((file, index) => fs.copyFileSync(path.join(OUT, 'user-data', 'logs', file), path.join(OUT, `extension-${index + 1}-${path.basename(file).replace(/[^\w.-]+/g, '-')}`)));
+    log(`Extension logs: ${files.join(', ')}`);
+  } catch (error) {
+    log(`The extension logs were not copied: ${error.message}`);
+  }
 }
 
 async function main() {
@@ -540,15 +554,17 @@ async function main() {
   try {
     await setUp(ui);
     const video = path.join(OUT, 'take.mkv');
-    const marks = await take(ui, video);
+    const marks = await take(ui, video, seed);
     fs.writeFileSync(`${video}.marks.json`, JSON.stringify(marks, null, 1));
     const gif = writeGif(video, marks, CAPTIONS, GIF);
     log(`${gif.file}: ${(gif.bytes / 1e6).toFixed(1)} MB, ${gif.seconds.toFixed(1)} s (the take ${gif.takeSeconds.toFixed(1)} s).`);
   } catch (error) {
     screenshot(path.join(OUT, 'failure.png'));
     log(`Rows at the failure: ${JSON.stringify(await ui.rows().catch(() => []))}`);
+    log(`Containers at the failure: ${containers()}`);
     throw error;
   } finally {
+    keepExtensionLogs();
     vscode.kill();
     xvfb.kill();
     server.close();

@@ -45,6 +45,7 @@ import { findDockerCli } from '../../../src/core/docker/dockerCli';
 import { sshEndpoint } from '../../../src/core/docker/dockerHost';
 import { DEVCONTAINER_CLI_VERSION, helperImageTag } from '../../../src/core/helper/helperImage';
 import { HelperImages } from '../../../src/core/helper/helperImages';
+import { namePair } from '../../../src/core/namePairs';
 import { LABEL_DEVSPACE_ID, LABEL_HELPER, LABEL_OWNER_ID, LABEL_REPOSITORY, WORKSPACES_ROOT, newDevspaceId, repositoryFolder, resourceName } from '../../../src/core/names';
 import type { Logger } from '../../../src/core/ports';
 import { NodeProcessRunner } from '../../../src/core/process';
@@ -137,7 +138,9 @@ const ENGINE_HOST_START = `${SSH_HOST_SETUP}exec /usr/sbin/sshd -D -e
 /** The run `gif`: the engine host and its container (prepareGif), and the demo repository of the GIF. */
 const GIF_HOST = 'school-server';
 const GIF_HOST_CONTAINER = 'school-server-ssh';
-const GIF_REPOSITORY = 'demo-school/web-basics';
+const GIF_REPOSITORY = 'school/web-basics';
+/** The longest name pair of the devspace of the GIF (`<adjective>-<scientist>`), so that the view shows its names whole. */
+const GIF_NAME_PAIR_LENGTH = 10;
 /** The image of the devspace of the GIF, built once before the GIF, so that its build at the start takes seconds. */
 const GIF_WARM_IMAGE = 'devspaces-gif-warm:1';
 /** The repository of the GIF: a small web page with a devcontainer.json that names two extensions. */
@@ -299,8 +302,13 @@ const ATTACH_FILES: Record<string, string> = {
  * test account owns it) and the repository `repository` with the files `files`, written by a container of the helper
  * image.
  */
-async function seedDevspace(docker: BootstrapDocker, helperTag: string, repository = REPOSITORY, files = ATTACH_FILES): Promise<{ devspaceId: string; name: string; folder: string }> {
-  const devspaceId = newDevspaceId();
+async function seedDevspace(
+  docker: BootstrapDocker,
+  helperTag: string,
+  repository = REPOSITORY,
+  files = ATTACH_FILES,
+  devspaceId = newDevspaceId(),
+): Promise<{ devspaceId: string; name: string; folder: string }> {
   const name = resourceName(repository, devspaceId);
   const folder = repositoryFolder(repository);
   await docker.runChecked(['volume', 'create', '--label', `${LABEL_DEVSPACE_ID}=${devspaceId}`, '--label', `${LABEL_REPOSITORY}=${repository}`, '--label', `${LABEL_OWNER_ID}=${TEST_ACCOUNT_ID}`, name]);
@@ -400,13 +408,17 @@ async function prepareEngineHost(local: BootstrapDocker, dockerPath: string, hos
 /**
  * The run `gif`: the README GIF (test/gif/record.mjs). The engine host has the name GIF_HOST, as a server of a school,
  * and the devspace is the demo repository GIF_REPOSITORY with a small web page, without container. Its image is built
- * once here, so that the build at the start in the GIF finds its layers in the cache. The folder /var/lib/docker of the
- * engine host (a volume of its image docker:dind, which its engine does not use) is a tmpfs, so that the view Docker
- * Hosts shows no volume without a name.
+ * once here, so that the build at the start in the GIF finds its layers in the cache. The engine host gets the Docker
+ * data folder of the runner, read-only: the utilization page reads the disk of that folder on the host, and the volume
+ * of its image docker:dind at that folder would show in the view Docker Hosts as a volume without a name. The ID of the
+ * devspace has a short name pair (GIF_NAME_PAIR_LENGTH).
  */
 async function prepareGif(docker: BootstrapDocker, dockerPath: string, started: number): Promise<Record<string, unknown>> {
-  await prepareEngineHost(docker, dockerPath, GIF_HOST, GIF_HOST_CONTAINER, ['--mount', 'type=tmpfs,destination=/var/lib/docker']);
-  const { devspaceId, name, folder } = await seedDevspace(docker, await helperImage(docker, started), GIF_REPOSITORY, GIF_FILES);
+  const dataFolder = (await docker.runChecked(['info', '--format', '{{.DockerRootDir}}'])).trim();
+  await prepareEngineHost(docker, dockerPath, GIF_HOST, GIF_HOST_CONTAINER, ['--mount', `type=bind,source=${dataFolder},target=${dataFolder},readonly`]);
+  let shortId = newDevspaceId();
+  while (namePair(shortId).length > GIF_NAME_PAIR_LENGTH) shortId = newDevspaceId();
+  const { devspaceId, name, folder } = await seedDevspace(docker, await helperImage(docker, started), GIF_REPOSITORY, GIF_FILES, shortId);
   await docker.runChecked(['build', '-t', GIF_WARM_IMAGE, '-'], { input: DOCKERFILE, timeoutMs: 300_000 });
   return { gif: { repository: GIF_REPOSITORY, volumeName: name, folder, devspaceId, remoteHost: GIF_HOST, computerId: newComputerId(), accountId: TEST_ACCOUNT_ID } };
 }
