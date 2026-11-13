@@ -13,8 +13,8 @@
 //
 // The six scenes: the sign-in, after which the view lists the demo repositories; the start of the demo devspace (the
 // wait for its container is cut out); the view Docker Hosts with the objects of the host; the report of a volume and of
-// the devspace container in a preview tab, which a double-click keeps; the report and the log of the Monitor; and the
-// utilization page of the host. The output folder test/gif/output/ gets the GIF, the video of the take with its marks,
+// the devspace container in a preview tab, which a double-click keeps; the report of the Monitor with its last runs; and
+// the utilization page of the host. The output folder test/gif/output/ gets the GIF, the video of the take with its marks,
 // a screenshot of each scene and the logs.
 /* global document, window -- The functions that Workbench.evaluate runs in the page of the window use them. */
 import { execFileSync, spawn } from 'node:child_process';
@@ -43,7 +43,7 @@ const CAPTIONS = [
   'Start: Devspaces builds the container and connects the window (the wait is shortened)',
   'Docker Hosts: the containers, images, volumes and networks of each host',
   'A click opens the report of an object in a preview tab; a double-click keeps it',
-  'The report of the Monitor lists its runs; Show Log of the Monitor opens its log',
+  'The report of the Monitor: its schedule, and what its last runs updated and cleaned',
   'Show Utilization: CPU, memory and disk of the host and of each container',
 ];
 
@@ -173,7 +173,7 @@ class Workbench {
     let last;
     for (;;) {
       try {
-        const rect = spec.webview ? await this.webviewRect(spec.webview) : await this.evaluate(locate, spec);
+        const rect = await this.evaluate(locate, spec);
         if (rect) return rect;
       } catch (error) {
         last = error;
@@ -181,40 +181,6 @@ class Workbench {
       if (Date.now() > deadline) throw new Error(`Not found within ${timeoutMs / 1000} s: ${JSON.stringify(spec)}${last ? ` (${last.message})` : ''}`);
       await wait(200);
     }
-  }
-
-  /** The rectangle of the button with the text `text` in a webview of the window: its frame, its page and the button. */
-  async webviewRect(text) {
-    for (const target of (await targets(PORT)).filter((t) => t.type === 'iframe' && t.url.startsWith('vscode-webview://'))) {
-      const id = new URL(target.url).searchParams.get('id');
-      const frame = await Cdp.connect(target.webSocketDebuggerUrl);
-      try {
-        const inner = await frame.evaluate((wanted) => {
-          const active = document.getElementById('active-frame');
-          const button = [...(active?.contentDocument?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === wanted && b.getBoundingClientRect().width > 0);
-          if (!active || !button) return undefined;
-          const a = active.getBoundingClientRect();
-          const b = button.getBoundingClientRect();
-          return { x: a.x + b.x, y: a.y + b.y, width: b.width, height: b.height };
-        }, text);
-        if (!inner) continue;
-        const outer = await this.evaluate((wanted) => {
-          const element = [...document.querySelectorAll('iframe')].find((f) => {
-            try {
-              return new URL(f.src).searchParams.get('id') === wanted && f.getBoundingClientRect().width > 0;
-            } catch {
-              return false;
-            }
-          });
-          const r = element?.getBoundingClientRect();
-          return r ? { x: r.x, y: r.y, zoom: window.devicePixelRatio } : undefined;
-        }, id);
-        if (outer) return { x: (outer.x + inner.x) * outer.zoom, y: (outer.y + inner.y) * outer.zoom, width: inner.width * outer.zoom, height: inner.height * outer.zoom };
-      } finally {
-        frame.close();
-      }
-    }
-    return undefined;
   }
 
   /** The texts of the rows of the side bar, for the log. */
@@ -487,16 +453,12 @@ async function take(ui, video, seed) {
     await click(await ui.find(devspace), { count: 2 });
     await wait(3000);
     await shot('4');
-    // 5: the report and the log of the Monitor.
+    // 5: the report of the Monitor.
     scene(5);
     await click(await ui.find({ row: 'devspaces-monitor', pane: 1, under: 'Containers' }));
     await ui.find({ tab: 'devspaces-monitor', ready: true }, 60_000);
-    await wait(3500);
-    await click(await ui.find({ webview: 'Show Log of the Monitor' }, 30_000));
-    // The log opens as a read-only document; a warning instead would be in the GIF.
-    await ui.find({ tab: 'devspaces-monitor.log' }, 30_000);
     await move(SCREEN.width - 40, SCREEN.height - 20, 600);
-    await wait(3500);
+    await wait(5000);
     await shot('5');
     // 6: the utilization page of the host.
     scene(6);
@@ -504,7 +466,7 @@ async function take(ui, video, seed) {
     await move(host.x + host.width / 2, host.y + host.height / 2, 500);
     await click(await ui.find({ row: 'school-server', pane: 1, rowAction: 'Show Utilization' }), { ms: 300 });
     await move(SCREEN.width - 40, SCREEN.height - 20, 600);
-    await wait(6500);
+    await wait(8000);
     await shot('6');
   } finally {
     await recording.stop();
