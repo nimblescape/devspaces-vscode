@@ -184,7 +184,7 @@ describe('the removal of the SSH key of Devspaces', () => {
     const { cleanup, state } = setUp({}, (call) =>
       call.file === '/usr/bin/ssh' && call.args.at(-2) === 'box' ? { exitCode: 255, stdout: '', stderr: 'box: Permission denied (publickey).\n', timedOut: false } : undefined,
     );
-    expect(await cleanup.removeSshKey(['box', 'me@cloud'])).toEqual([ComputerCleanupTexts.keyLineLeft('box', 'box: Permission denied (publickey).'), ComputerCleanupTexts.keyKept(keyPath())]);
+    expect(await cleanup.removeSshKey(['box', 'me@cloud'])).toEqual([ComputerCleanupTexts.keyLineLeft('box', 'box: Permission denied (publickey).', keyPath()), ComputerCleanupTexts.keyKept(keyPath())]);
     expect(state.setSshKey.mock.calls).toEqual([['me@cloud', undefined]]);
     expect(fs.existsSync(keyPath())).toBe(true);
     expect(fs.existsSync(`${keyPath()}.pub`)).toBe(true);
@@ -216,24 +216,24 @@ describe('the removal of the SSH key of Devspaces', () => {
   it('names why a line stays: a timeout, no ssh, a host that is no SSH alias or address, a symbolic link', async () => {
     keyFiles();
     const timedOut = setUp({}, (call) => (call.file === '/usr/bin/ssh' ? { exitCode: null, stdout: '', stderr: '', timedOut: true } : undefined));
-    expect((await timedOut.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh did not answer within 30 seconds'));
-    expect(ComputerCleanupTexts.keyLineLeft('box', 'ssh did not answer within 30 seconds.')).toContain('on box (ssh did not answer within 30 seconds). Remove');
+    expect((await timedOut.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh did not answer within 30 seconds', keyPath()));
+    expect(ComputerCleanupTexts.keyLineLeft('box', 'ssh did not answer within 30 seconds.', keyPath())).toContain('on box (ssh did not answer within 30 seconds). Remove');
     const noSsh = setUp({ sshPath: () => undefined });
-    expect((await noSsh.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh was not found, or the host is no SSH alias or address'));
+    expect((await noSsh.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh was not found, or the host is no SSH alias or address', keyPath()));
     const option = setUp();
-    expect((await option.cleanup.removeSshKey(['-oProxyCommand=x']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('-oProxyCommand=x', 'ssh was not found, or the host is no SSH alias or address'));
+    expect((await option.cleanup.removeSshKey(['-oProxyCommand=x']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('-oProxyCommand=x', 'ssh was not found, or the host is no SSH alias or address', keyPath()));
     // ssh that cannot be started.
     const missing = setUp({}, (call) => {
       if (call.file === '/usr/bin/ssh') throw Object.assign(new Error('spawn /usr/bin/ssh ENOENT'), { code: 'ENOENT' });
       return undefined;
     });
-    expect((await missing.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'spawn /usr/bin/ssh ENOENT'));
+    expect((await missing.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'spawn /usr/bin/ssh ENOENT', keyPath()));
     expect(option.calls.some((call) => call.file === '/usr/bin/ssh')).toBe(false);
     write(path.join(remoteHome('box'), 'managed'), `${PUBLIC}\n`);
     fs.mkdirSync(path.dirname(authorizedKeys('box')), { recursive: true });
     fs.symlinkSync(path.join(remoteHome('box'), 'managed'), authorizedKeys('box'));
     const link = setUp();
-    expect((await link.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', '~/.ssh/authorized_keys is a symbolic link'));
+    expect((await link.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', '~/.ssh/authorized_keys is a symbolic link', keyPath()));
     expect(fs.readFileSync(path.join(remoteHome('box'), 'managed'), 'utf8')).toBe(`${PUBLIC}\n`);
     expect(fs.existsSync(keyPath())).toBe(true);
   });
@@ -248,7 +248,7 @@ describe('the removal of the SSH key of Devspaces', () => {
       ComputerCleanupTexts.keyUnreadable(keyPath(), `the key ${keyPath()} could not be read: invalid format`, ['box', 'me@cloud']),
     ]);
     expect(ComputerCleanupTexts.keyUnreadable(keyPath(), 'ssh-keygen was not found on this computer.', ['box', 'me@cloud'])).toBe(
-      `The SSH key of Devspaces ${keyPath()} could not be read (ssh-keygen was not found on this computer), so its line stays in ~/.ssh/authorized_keys on box, me@cloud. Remove the line that ends with "devspaces@" and the name of this computer there.`,
+      `The SSH key of Devspaces ${keyPath()} could not be read (ssh-keygen was not found on this computer), so its line stays in ~/.ssh/authorized_keys on box, me@cloud. Remove each line there with the public key of ${keyPath()}.pub; its comment is "devspaces@" and the name of this computer, or a former name of it.`,
     );
     expect(failing.calls.map((call) => call.file)).toEqual(['/usr/bin/ssh-keygen']);
     expect(fs.readFileSync(authorizedKeys('box'), 'utf8')).toBe(`${PUBLIC}\n`);

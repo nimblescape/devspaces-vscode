@@ -53,7 +53,7 @@ import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmS
 import { readMonitorLog } from '../core/hosts/monitorLog';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
-import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { LIMA_INSTANCE, limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { consoleResizeCommand, limaConsoleArgs, sshConsoleArgs, wslConsoleArgs, wslConsoleResizeArgs } from '../core/hosts/hostConsole';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
@@ -1754,7 +1754,8 @@ async function activateExtension(
       // setup that did not end (the folder of the distribution without its registration), which only the removal of
       // the VM removes; without them, the folder of Devspaces would stay at every run of the command.
       vmExists: async () => {
-        if (limaVm !== undefined) return limaVm.exists();
+        // Also the folder of a VM that `limactl create` left without its lima.yaml, which LimaSetup.remove removes.
+        if (limaVm !== undefined) return fs.existsSync(path.join(limaVm.paths.home, LIMA_INSTANCE));
         if (wslSetupCore === undefined || wslFolder === undefined) return false;
         if (fs.existsSync(wslFolder)) return true;
         // The list of WSL and the registry (WslSetup.registration), without the disk walk and the run state of

@@ -171,6 +171,15 @@ export class LimaSetup {
     await this.locked(async () => {
       const status = await this.step(() => instance.status());
       if (status === 'missing') {
+        // The folder of a VM without its lima.yaml (a `limactl create` that ended before it wrote it): Lima does not know
+        // it, so `limactl delete` would leave it, and the folder of Devspaces would stay for it.
+        const folder = path.join(vm.paths.home, LIMA_INSTANCE);
+        if ((await pathMissing(path.join(folder, 'lima.yaml'))) && !(await pathMissing(folder))) {
+          logger.info(`Devspaces removes the folder of a Lima VM that was not created to the end (${folder}).`);
+          await this.step(() => fs.promises.rm(folder, { recursive: true, force: true }));
+          removed = true;
+          return;
+        }
         logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
         return;
       }
@@ -257,5 +266,15 @@ export class LimaSetup {
       if (error instanceof LimaSetupError || isAbortError(error)) throw error;
       throw new LimaSetupError('failed', errorMessage(error));
     }
+  }
+}
+
+/** Whether `file` does not exist (ENOENT); another error of the check counts as there. */
+async function pathMissing(file: string): Promise<boolean> {
+  try {
+    await fs.promises.lstat(file);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT';
   }
 }

@@ -1787,6 +1787,7 @@ export class Controller implements vscode.Disposable {
           }
           if (stopped()) return;
           const vm = inventory.vm;
+          let vmStays = false;
           if (vm !== undefined) {
             progress.detail(ControllerTexts.removingComputerVm);
             const vmLeft = await this.removeVmForComputer(cleanup, vm, named).catch((error: unknown) => {
@@ -1794,6 +1795,7 @@ export class Controller implements vscode.Disposable {
               return ControllerTexts.computerVmFailed(errorMessage(error));
             });
             if (vmLeft !== undefined) left.push(vmLeft);
+            vmStays = vmLeft !== undefined;
           }
           if (stopped()) return;
           // Without the list, the hosts with the line are not known, so the key stays (listUnreadable says so).
@@ -1804,6 +1806,12 @@ export class Controller implements vscode.Disposable {
             left.push(...(await cleanup.removeSshKey(inventory.keyHosts.filter((host) => !keep.includes(host)), keep)));
           }
           if (stopped()) return;
+          // The scheduled task and the Docker context of a VM that stays go on serving it while the extension stays
+          // installed; after Uninstall Anyway, the uninstall step at the next start of VS Code removes them.
+          if (vmStays) {
+            this.logger.info('The scheduled task, the Docker context and the folder of Devspaces stay with the VM.');
+            return;
+          }
           progress.detail(ControllerTexts.removingComputerFiles);
           left.push(...(await cleanup.removeFiles()));
           // A Cancel during the last part keeps the extension installed too.

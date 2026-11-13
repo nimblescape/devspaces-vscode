@@ -91,7 +91,8 @@ export function removeKeyLinesCommand(key: PublicKey): string {
   const file = AUTHORIZED_KEYS;
   return [
     `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || exit 0; ${SYMBOLIC_LINK_GUARD}`,
-    `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '($1 " " $2) != key' ${file}) || exit`,
+    // Without the carriage return of a line end of Windows, which a line without a comment has in its second field.
+    `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '{ k = $1 " " $2; sub(/\\r$/, "", k) } k != key' ${file}) || exit`,
     ...REPLACE_WITH_KEPT,
   ].join('; ');
 }

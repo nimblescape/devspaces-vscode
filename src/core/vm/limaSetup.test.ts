@@ -87,6 +87,21 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
     expect(missing.calls.map((call) => call[1])).toEqual(['list']);
   });
 
+  // Mutation: a folder of the VM without its lima.yaml that stays, so that the folder of Devspaces stays at every run.
+  it('removes the folder of a VM that limactl create left without its lima.yaml, and never a folder with a lima.yaml that Lima does not list', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(path.join(folder, 'cidata'), { recursive: true });
+    const halfDone = fakeRunner({ status: '' });
+    await expect(setup(halfDone.runner).remove()).resolves.toBe(true);
+    expect(fs.existsSync(folder)).toBe(false);
+    expect(halfDone.calls.map((call) => call[1])).toEqual(['list']);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    const unlisted = fakeRunner({ status: '' });
+    await expect(setup(unlisted.runner).remove()).resolves.toBe(false);
+    expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
+  });
+
   it('removes nothing while another window sets up the VM', async () => {
     const { runner, calls } = fakeRunner({ status: 'Stopped' });
     fs.mkdirSync(path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock'), { recursive: true });

@@ -4406,13 +4406,8 @@ describe('Remove Devspaces from This Computer…', () => {
       fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
       for (const choice of choices) fakeVscode.window.showWarningMessage.mockResolvedValueOnce(choice);
       await run('removeFromComputer');
-      // The removal goes on after an engine that does not answer.
-      expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual([
-        'remove the VM',
-        'remove the key and its line on build-box',
-        'remove the files',
-        ...(uninstalled ? ['uninstall the extension'] : []),
-      ]);
+      // The removal goes on after an engine that does not answer; the files stay with the VM that stays.
+      expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM', 'remove the key and its line on build-box', ...(uninstalled ? ['uninstall the extension'] : [])]);
       const ends = fakeVscode.window.showWarningMessage.mock.calls.filter((call) => call[0] === ControllerTexts.removalFromComputerLeft(2));
       expect(ends).toHaveLength(choices.length);
       expect(ends.every((call) => call[1] === Actions.showDetails && call[2] === ControllerTexts.uninstallAnyway)).toBe(true);
@@ -4453,8 +4448,8 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
   });
 
-  // Mutation: an error of the removal of the VM that ends the command, so that the key and the files stay without a word.
-  it('names an error of the removal of the VM as what stays, and removes the key and the files after it', async () => {
+  // Mutation: an error of the removal of the VM that ends the command, so that the key stays without a word.
+  it('names an error of the removal of the VM as what stays, removes the key after it, and keeps the files with the VM', async () => {
     const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
     cleanup.removeVm.mockImplementation(async () => {
       order.push('remove the VM');
@@ -4462,7 +4457,7 @@ describe('Remove Devspaces from This Computer…', () => {
     });
     fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
     await run('removeFromComputer');
-    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files']);
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host']);
     expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmFailed('limactl crashed')}`);
     expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
   });
@@ -4520,7 +4515,10 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(cleanup.removeVm).not.toHaveBeenCalled();
     const refusal = 'Close the windows of your devspaces on the VM of Devspaces first: acme/vm. Nothing was removed.';
     expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${refusal}`);
-    expect(order.slice(-2)).toEqual(['remove the key and its line on build-box', 'remove the files']);
+    // Mutation: the files removed with a VM that stays, so that its scheduled task and its Docker context go under it.
+    expect(order.at(-1)).toBe('remove the key and its line on build-box');
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The scheduled task, the Docker context and the folder of Devspaces stay with the VM.');
     expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
     expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
   });

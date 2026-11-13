@@ -157,6 +157,15 @@ ssh-ed25519 ${BLOB}
 `);
   });
 
+  // Mutation: a line without a comment in a file with line ends of Windows has the carriage return in its second field,
+  // so that it stays while the key is deleted.
+  it('removes the lines of the key from a file with line ends of Windows, also a line without a comment', () => {
+    fs.mkdirSync(path.join(home, '.ssh'), { mode: 0o700 });
+    fs.writeFileSync(file(), `ssh-ed25519 AAAAother ann@desk\r\nssh-ed25519 ${BLOB}\r\nssh-ed25519 ${BLOB} devspaces@box\r\nssh-ed25519 ${BLOB}x\r\n`);
+    execFileSync('sh', ['-c', removeKeyLinesCommand(KEY)], { env: { HOME: home, PATH: process.env.PATH }, cwd: os.tmpdir(), stdio: 'pipe' });
+    expect(fs.readFileSync(file(), 'utf8')).toBe(`ssh-ed25519 AAAAother ann@desk\r\nssh-ed25519 ${BLOB}x\r\n`);
+  });
+
   it('fails when the file cannot be written', () => {
     fs.mkdirSync(path.join(home, '.ssh', 'authorized_keys'), { recursive: true });
     expect(() => runCommand()).toThrow();
