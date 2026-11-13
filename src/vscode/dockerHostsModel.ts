@@ -100,6 +100,7 @@ export const DockerHostsTexts = {
   selected: 'Docker host of Devspaces: the repository view and Start use it.',
   chooseInRepositoryView: 'The first row of the repository view chooses the Docker host of Devspaces.',
   setUpInMenu: 'The menu of this row sets up the VM of Devspaces with Docker Engine.',
+  setUpInRepositoryView: 'Set Up Docker for Devspaces in the repository view sets up the VM of Devspaces with Docker Engine.',
   vmTooltip: (host: string, state: VmState | undefined): string[] => {
     const lines = [`${host}: the VM of Devspaces with Docker Engine on this computer. ${DockerHostsTexts.vmState(state)}.`];
     const facts: string[] = [];
@@ -120,6 +121,8 @@ export const DockerHostsTexts = {
   none: 'none',
   vmStopped: 'Start the VM to see its containers, images, volumes and networks',
   vmStoppedTooltip: 'The VM of Devspaces is stopped. Devspaces does not start it to read it. Click to start it.',
+  vmStoppedReadOnly: 'The VM is stopped: its containers, images, volumes and networks show while it runs',
+  vmStoppedReadOnlyTooltip: 'The VM of Devspaces is stopped. Devspaces does not start it to read it. It starts with a devspace there.',
   vmNotRead: 'Click to read the containers, images, volumes and networks',
   vmNotReadTooltip: 'The VM of Devspaces runs now. Click to read what is in it.',
   vmUnknown: 'The state of the VM is not known',
@@ -212,8 +215,8 @@ export function objectActions(row: ObjectRow): { stopDevspace: boolean; deleteDe
   return { stopDevspace: false, deleteDevspace: false, stop: running, start, remove: !running && object.builtIn !== true };
 }
 
-/** The row of a host. */
-export function hostRowLook(row: HostRow): RowLook {
+/** The row of a host. `actions`: the setting dockerHostsActions allows the actions of the view (the tooltip of Set Up). */
+export function hostRowLook(row: HostRow, actions = true): RowLook {
   const flags = ['hostsHost', row.vm ? 'vm' : 'remote'];
   let description: string;
   let collapsible: RowLook['collapsible'] = 'collapsed';
@@ -240,7 +243,7 @@ export function hostRowLook(row: HostRow): RowLook {
     flags.push('selected');
     tooltip.push(DockerHostsTexts.selected);
   } else if (row.vm && row.vmState?.kind === 'notSetUp') {
-    tooltip.push(DockerHostsTexts.setUpInMenu);
+    tooltip.push(actions ? DockerHostsTexts.setUpInMenu : DockerHostsTexts.setUpInRepositoryView);
   } else {
     tooltip.push(DockerHostsTexts.chooseInRepositoryView);
   }
@@ -351,12 +354,16 @@ export function objectColor(object: HostObject): RowColor | undefined {
   return active ? undefined : 'inactive';
 }
 
-/** The row of a note. */
-export function messageRowLook(row: MessageRow): RowLook {
+/**
+ * The row of a note. `actions`: the setting dockerHostsActions allows the actions of the view; without them, the row of
+ * the stopped VM only says that it is stopped, and a click on it starts nothing.
+ */
+export function messageRowLook(row: MessageRow, actions = true): RowLook {
   const id = `message:${row.host}:${row.message}`;
   switch (row.message) {
     case 'vmStopped':
-      return { id, label: DockerHostsTexts.vmStopped, tooltip: DockerHostsTexts.vmStoppedTooltip, contextValue: 'hostsMessage', icon: 'play', collapsible: 'none', command: { command: Commands.startVm, title: 'Start the VM' } };
+      if (!actions) return { id, label: DockerHostsTexts.vmStoppedReadOnly, tooltip: DockerHostsTexts.vmStoppedReadOnlyTooltip, contextValue: 'hostsMessage', icon: 'debug-pause', collapsible: 'none' };
+      return { id, label: DockerHostsTexts.vmStopped, tooltip: DockerHostsTexts.vmStoppedTooltip, contextValue: 'hostsMessage', icon: 'play', collapsible: 'none', command: { command: Commands.startVm, title: 'Start the VM', arguments: [row] } };
     case 'vmNotRead':
       return { id, label: DockerHostsTexts.vmNotRead, tooltip: DockerHostsTexts.vmNotReadTooltip, contextValue: 'hostsMessage', icon: 'refresh', collapsible: 'none', command: { command: Commands.refreshDockerHosts, title: 'Refresh', arguments: [{ hostsNode: 'host', host: row.host }] } };
     case 'vmUnknown':
@@ -375,11 +382,11 @@ export function messageRowLook(row: MessageRow): RowLook {
   }
 }
 
-/** The look of any row. */
-export function rowLook(node: HostsNode): RowLook {
+/** The look of any row. `actions`: the setting dockerHostsActions allows the actions of the view (messageRowLook). */
+export function rowLook(node: HostsNode, actions = true): RowLook {
   switch (node.hostsNode) {
     case 'host':
-      return hostRowLook(node);
+      return hostRowLook(node, actions);
     case 'group':
       return groupRowLook(node);
     case 'buildCache':
@@ -387,7 +394,7 @@ export function rowLook(node: HostsNode): RowLook {
     case 'object':
       return objectRowLook(node);
     case 'message':
-      return messageRowLook(node);
+      return messageRowLook(node, actions);
   }
 }
 

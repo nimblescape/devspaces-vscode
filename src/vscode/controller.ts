@@ -74,10 +74,11 @@ import type { ReportPages } from './reportPage';
 import type { UsagePages } from './usagePage';
 import { hostOfArgument, hostOfNode } from './dockerHostsModel';
 import type { VmCommands } from './vmCommands';
+import type { HostConsoles } from './hostConsole';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import type { SessionCoordinator } from './sessionCoordinator';
 import { RowActivationTracker, activatedRow, type ListOpenMode } from './rowActivation';
-import { CONFIRM_OPEN_FROM_LINK_SETTING, SETTINGS_SECTION, hostAccessChecksOffValue, readListOpenMode } from './settings';
+import { CONFIRM_OPEN_FROM_LINK_SETTING, SETTINGS_SECTION, dockerHostsActionsAllowed, hostAccessChecksOffValue, openSetting, readListOpenMode } from './settings';
 import type { Sidebar } from './sidebar';
 import type { DevspaceStatusBar } from './statusBar';
 import { pickRepository, showSwitcher, SwitcherTexts } from './switcher';
@@ -205,6 +206,10 @@ export interface ControllerDeps {
   reportPages?: Pick<ReportPages, 'show'>;
   /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
   vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
+  /** Open Console of a host row of the view "Docker Hosts" (hostConsole.ts). Without it, the command does nothing. */
+  hostConsoles?: Pick<HostConsoles, 'open'>;
+  /** The gear Docker Hosts Settings… of the view "Docker Hosts" (dockerHostsSettings.ts). Without it, the command does nothing. */
+  dockerHostsSettings?: () => Promise<void>;
   /**
    * The record of the installation of WSL (Windows): the first window after the restart of Windows goes on with the
    * setup of Docker for Devspaces (goOnAfterWslInstall).
@@ -567,6 +572,8 @@ export class Controller implements vscode.Disposable {
       removeVm: async () => this.deps.vm?.remove(),
       resetVm: async () => this.deps.vm?.reset(),
       vmSettings: async () => this.deps.vm?.settings(),
+      openConsole: async (argument) => this.deps.hostConsoles?.open(argument),
+      dockerHostsSettings: async () => this.deps.dockerHostsSettings?.(),
     };
     // Each command is one operation: on the Docker host of the devspace that it names (a row, the status bar item), else
     // on the Docker host that is current when it starts (withCommandTarget); the commands that change the host read it
@@ -597,14 +604,44 @@ export class Controller implements vscode.Disposable {
       'removeVm',
       'resetVm',
       'vmSettings',
+      'openConsole',
+      'dockerHostsSettings',
     ]);
     // The commands of the engine that a host row of the view "Docker Hosts" passes: on that host, whatever host
     // Devspaces uses now.
     const hostCommands = new Set<CommandName>(['updateImagesNow', 'removeFromDockerEngine']);
+    // The commands that change something from a row of the view "Docker Hosts" (R-ENG-008). While the setting
+    // devspaces.dockerHostsActions is Disabled, the view shows none of them; a run with a row of the view (a key binding,
+    // a button of a row that VS Code drew before the change) does nothing and says why. The Command Palette and the
+    // repository view pass no row of the view, so their commands stay.
+    const hostsViewActions = new Set<CommandName>([
+      'stop',
+      'delete',
+      'updateImagesNow',
+      'removeFromDockerEngine',
+      'useRemoteDockerHost',
+      'removeDockerHostFromList',
+      'stopDockerObject',
+      'startDockerObject',
+      'pruneBuildCache',
+      'removeDockerObjects',
+      'setUpLimaVm',
+      'setUpWslDistribution',
+      'startVm',
+      'stopVm',
+      'removeVm',
+      'resetVm',
+      'vmSettings',
+    ]);
     const run = async (name: CommandName, argument: unknown, selection: unknown): Promise<void> => {
       // Enter on a row whose command is another command of Devspaces (the Sign in row, the Docker host row) ends with
       // that command: a click on a repository row right after it only selects that row (rowActivation.ts).
       if (name !== 'rowEnter' && name !== 'rowActivated') this.rowActivations.forgetEnter();
+      if (hostsViewActions.has(name) && hostOfNode(argument) !== undefined && !dockerHostsActionsAllowed(this.deps.settings())) {
+        this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.dockerHostsActions is Disabled.`);
+        this.informHostsViewReadOnly();
+        return;
+      }
       const host = hostCommands.has(name) ? hostOfArgument(argument) : undefined;
       try {
         if (ownTarget.has(name)) await handlers[name](argument, selection);
@@ -4220,6 +4257,16 @@ export class Controller implements vscode.Disposable {
     await this.deps.sidebar
       .render()
       .catch((error: unknown) => this.logger.warn(`The sidebar could not be updated: ${errorMessage(error)}`));
+  }
+
+  /** A row of the view Docker Hosts asked for an action while the view is read only: why, and the setting to change. */
+  private informHostsViewReadOnly(): void {
+    showInformationMessage(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings).then(
+      (choice) => {
+        if (choice === ControllerTexts.openSettings) void openSetting('dockerHostsActions');
+      },
+      (error: unknown) => this.logger.error('Could not show the message.', error),
+    );
   }
 
   private inform(message: string): void {

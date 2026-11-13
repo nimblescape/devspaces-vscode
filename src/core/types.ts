@@ -502,7 +502,25 @@ export interface ExtensionSettings {
    * when true, removed when false (the default). Ignored on Windows for now. Scope `machine`.
    */
   createDockerContext?: boolean;
+  /**
+   * The actions of the view Docker Hosts (R-ENG-008): `disabled` (the default) shows none, the view only reads;
+   * `contextMenu` shows them in the context menu of a row; `icons` also as buttons on each row. Scope `application`.
+   */
+  dockerHostsActions?: DockerHostsActions;
+  /**
+   * Show Log of the Monitor on its reports (R-ENG-010), and the log of a container through the Docker pipes of
+   * Devspaces. Off (the default): no Show Log, and the pipes refuse the log of every container. Scope `application`.
+   */
+  allowContainerLogs?: boolean;
+  /** The button Docker Hosts Settings… in the title bar of the view Docker Hosts, which switches both. Default off. */
+  dockerHostsSettingsButton?: boolean;
+  /** The button Open Console on each host row of the view Docker Hosts: a shell on that host. Default off. */
+  dockerHostsConsoleButton?: boolean;
 }
+
+/** The values of the setting dockerHostsActions. */
+export const DOCKER_HOSTS_ACTIONS = ['disabled', 'contextMenu', 'icons'] as const;
+export type DockerHostsActions = (typeof DOCKER_HOSTS_ACTIONS)[number];
 
 /** The values of the setting updateContainer. */
 export type UpdateContainer = 'yes' | 'notify' | 'ask';

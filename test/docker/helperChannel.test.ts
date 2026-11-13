@@ -434,7 +434,7 @@ describe('the helper channel with the real Docker engine', () => {
         log.warn(message);
       },
     });
-    hostPipes = new HostPipes({ logger: pipeLog, platform: process.platform, base: () => folder, relayConnection: (host) => connections.get(host), dialStdio: () => undefined });
+    hostPipes = new HostPipes({ logger: pipeLog, platform: process.platform, base: () => folder, relayConnection: (host) => connections.get(host), dialStdio: () => undefined, allowContainerLogs: () => false });
     const pipes = hostPipes;
     const viaPipe = new BootstrapDocker(byteRunner, run.dockerPath, env, log, process.platform, { dockerPipe: (pipeTarget) => pipes.dockerHost(pipeTarget.host) });
     const context = fs.mkdtempSync(path.join(os.tmpdir(), 'host-pipe-build-'));
@@ -510,6 +510,7 @@ describe('the helper channel with the real Docker engine', () => {
       platform: process.platform,
       base: () => pipeFolder,
       relayConnection: (host) => connections.get(host),
+      allowContainerLogs: () => false,
       dialStdio: (host) => byteRunner.startBytes(fakeWsl, wslCommandArgs(host.slice('wsl:'.length), ['docker', 'system', 'dial-stdio']), { env: wslEnv(env) }),
     });
     const extensionDocker = new BootstrapDocker(byteRunner, run.dockerPath, env, log, process.platform, {

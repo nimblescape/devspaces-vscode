@@ -311,6 +311,22 @@ describe('UsagePages', () => {
     expect(lastView(panel).status.tone).toBe('live');
   });
 
+  // The setting devspaces.dockerHostsActions (R-ENG-008): Start the VM is an action of the view.
+  it('offers no Start the VM while the view is read only, starts nothing for an old message, and shows it again after the change', async () => {
+    vmState = { kind: 'stopped' };
+    let actions = false;
+    const made = pages(LIMA_HOST, { actionsAllowed: () => actions });
+    const panel = await open(made, LIMA_HOST);
+    expect(lastView(panel).banner).toMatchObject({ message: UsagePageTexts.vmStopped, detail: UsagePageTexts.vmStoppedReadOnlyDetail, buttons: [] });
+    panel.receive({ type: 'startVm' });
+    await flush();
+    expect(startVm).not.toHaveBeenCalled();
+    expect(shells.logins).toEqual([]);
+    actions = true;
+    made.settingsChanged();
+    expect(lastView(panel).banner).toMatchObject({ buttons: [{ action: 'startVm' }] });
+  });
+
   it('does not log in to a WSL distribution that stops now', async () => {
     stopping = true;
     const panel = await open(pages(WSL_HOST), WSL_HOST);

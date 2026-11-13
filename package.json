@@ -416,7 +416,8 @@
       {
         "command": "devspaces.setUpWslDistribution",
         "title": "Set Up Docker for Devspaces in WSL…",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(tools)"
       },
       {
         "command": "devspaces.removeWslDistribution",
@@ -426,7 +427,8 @@
       {
         "command": "devspaces.setUpLimaVm",
         "title": "Set Up Docker for Devspaces in Its VM…",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(tools)"
       },
       {
         "command": "devspaces.resetWslDistribution",
@@ -446,12 +448,14 @@
       {
         "command": "devspaces.updateImagesNow",
         "title": "Update All Images Now",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "devspaces.removeFromDockerEngine",
         "title": "Remove Devspaces from This Docker Engine…",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(clear-all)"
       },
       {
         "command": "devspaces.refreshDockerHosts",
@@ -462,13 +466,20 @@
       {
         "command": "devspaces.removeDockerHostFromList",
         "title": "Remove from the List",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(close)"
       },
       {
         "command": "devspaces.showUtilization",
         "title": "Show Utilization",
         "category": "Devspaces",
         "icon": "$(pulse)"
+      },
+      {
+        "command": "devspaces.openConsole",
+        "title": "Open Console",
+        "category": "Devspaces",
+        "icon": "$(terminal)"
       },
       {
         "command": "devspaces.showResourceReport",
@@ -515,17 +526,26 @@
       {
         "command": "devspaces.removeVm",
         "title": "Remove the VM…",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(trash)"
       },
       {
         "command": "devspaces.resetVm",
         "title": "Remove and Set Up the VM Again…",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "devspaces.vmSettings",
         "title": "Settings of the VM",
-        "category": "Devspaces"
+        "category": "Devspaces",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "devspaces.dockerHostsSettings",
+        "title": "Docker Hosts Settings…",
+        "category": "Devspaces",
+        "icon": "$(gear)"
       }
     ],
     "submenus": [
@@ -626,6 +646,10 @@
           "when": "false"
         },
         {
+          "command": "devspaces.openConsole",
+          "when": "false"
+        },
+        {
           "command": "devspaces.showResourceReport",
           "when": "false"
         },
@@ -652,18 +676,32 @@
         {
           "command": "devspaces.vmSettings",
           "when": "isMac || isLinux"
+        },
+        {
+          "command": "devspaces.dockerHostsSettings",
+          "when": "false"
         }
       ],
       "view/title": [
         {
           "command": "devspaces.useRemoteDockerHost",
-          "when": "view == devspaces.hosts",
+          "when": "view == devspaces.hosts && config.devspaces.dockerHostsActions == icons",
           "group": "navigation@1"
+        },
+        {
+          "command": "devspaces.useRemoteDockerHost",
+          "when": "view == devspaces.hosts && config.devspaces.dockerHostsActions == contextMenu",
+          "group": "1_hosts@1"
         },
         {
           "command": "devspaces.refreshDockerHosts",
           "when": "view == devspaces.hosts",
           "group": "navigation@2"
+        },
+        {
+          "command": "devspaces.dockerHostsSettings",
+          "when": "view == devspaces.hosts && config.devspaces.dockerHostsSettingsButton",
+          "group": "navigation@3"
         },
         {
           "command": "devspaces.selectOwners",
@@ -723,9 +761,74 @@
       ],
       "view/item/context": [
         {
+          "command": "devspaces.setUpLimaVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmNotSetUp(;|$)/ && (isMac || isLinux) && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@1"
+        },
+        {
+          "command": "devspaces.setUpWslDistribution",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmNotSetUp(;|$)/ && isWindows && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@1"
+        },
+        {
+          "command": "devspaces.stopVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStop(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@1"
+        },
+        {
+          "command": "devspaces.vmSettings",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && (isMac || isLinux) && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@6"
+        },
+        {
+          "command": "devspaces.updateImagesNow",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@3"
+        },
+        {
+          "command": "devspaces.removeFromDockerEngine",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@4"
+        },
+        {
+          "command": "devspaces.removeDockerHostFromList",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;remote(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@5"
+        },
+        {
+          "command": "devspaces.removeVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@7"
+        },
+        {
+          "command": "devspaces.resetVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@8"
+        },
+        {
+          "command": "devspaces.stop",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStopDevspace(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@0"
+        },
+        {
+          "command": "devspaces.delete",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canDeleteDevspace(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@2"
+        },
+        {
+          "command": "devspaces.stopDockerObject",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStop(;|$)/ && config.devspaces.dockerHostsActions == icons",
+          "group": "inline@0"
+        },
+        {
           "command": "devspaces.showUtilization",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/",
           "group": "inline@0"
+        },
+        {
+          "command": "devspaces.openConsole",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsConsoleButton",
+          "group": "inline@1"
         },
         {
           "command": "devspaces.refreshDockerHosts",
@@ -734,32 +837,32 @@
         },
         {
           "command": "devspaces.startVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStart(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStart(;|$)/ && config.devspaces.dockerHostsActions == icons",
           "group": "inline@1"
         },
         {
           "command": "devspaces.setUpLimaVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmNotSetUp(;|$)/ && (isMac || isLinux)",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmNotSetUp(;|$)/ && (isMac || isLinux) && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_vm@1"
         },
         {
           "command": "devspaces.setUpWslDistribution",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmNotSetUp(;|$)/ && isWindows",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmNotSetUp(;|$)/ && isWindows && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_vm@1"
         },
         {
           "command": "devspaces.startVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStart(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStart(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_vm@2"
         },
         {
           "command": "devspaces.stopVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStop(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmCanStop(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_vm@3"
         },
         {
           "command": "devspaces.vmSettings",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && (isMac || isLinux)",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && (isMac || isLinux) && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_vm@4"
         },
         {
@@ -769,42 +872,42 @@
         },
         {
           "command": "devspaces.updateImagesNow",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "2_engine@1"
         },
         {
           "command": "devspaces.removeFromDockerEngine",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "3_remove@1"
         },
         {
           "command": "devspaces.removeDockerHostFromList",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;remote(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;remote(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "3_remove@2"
         },
         {
           "command": "devspaces.removeVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "4_removeVm@1"
         },
         {
           "command": "devspaces.resetVm",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsHost;.*;vmSetUp(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "4_removeVm@2"
         },
         {
           "command": "devspaces.startDockerObject",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/ && config.devspaces.dockerHostsActions == icons",
           "group": "inline@1"
         },
         {
           "command": "devspaces.pruneBuildCache",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsBuildCache;.*canPrune(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsBuildCache;.*canPrune(;|$)/ && config.devspaces.dockerHostsActions == icons",
           "group": "inline@1"
         },
         {
           "command": "devspaces.removeDockerObjects",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canRemove(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canRemove(;|$)/ && config.devspaces.dockerHostsActions == icons",
           "group": "inline@2"
         },
         {
@@ -814,32 +917,32 @@
         },
         {
           "command": "devspaces.stop",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStopDevspace(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStopDevspace(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_actions@1"
         },
         {
           "command": "devspaces.delete",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canDeleteDevspace(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canDeleteDevspace(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_actions@2"
         },
         {
           "command": "devspaces.stopDockerObject",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStop(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStop(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_actions@1"
         },
         {
           "command": "devspaces.startDockerObject",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canStart(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_actions@1"
         },
         {
           "command": "devspaces.pruneBuildCache",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsBuildCache;.*canPrune(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsBuildCache;.*canPrune(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_actions@1"
         },
         {
           "command": "devspaces.removeDockerObjects",
-          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canRemove(;|$)/",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;canRemove(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
           "group": "1_actions@2"
         },
         {
@@ -1203,6 +1306,44 @@
           "scope": "machine",
           "default": false,
           "markdownDescription": "Create the Docker context `devspaces` for the VM of Devspaces, for other Docker tools. It never becomes the current context; turning this off removes it. It gives full access: manage devspaces only with Devspaces.\n\nIt works while the VM runs (macOS, Linux) or while a window of Devspaces is open (Windows).\n\n[Other Docker tools in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#other-docker-tools)"
+        },
+        "devspaces.dockerHostsActions": {
+          "order": 23,
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "disabled",
+            "contextMenu",
+            "icons"
+          ],
+          "default": "disabled",
+          "markdownDescription": "The actions of the view Docker Hosts: Stop, Start, Remove… and Delete… of its objects, the actions of the hosts and of the VM of Devspaces, and the **+** that adds a remote host. In every mode, a click on an object opens its report, and **Refresh** and **Show Utilization** work.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)",
+          "enumDescriptions": [
+            "No actions: the view only shows the hosts and their objects.",
+            "The actions only in the context menu of a row (right-click), and the + in the menu … of the view.",
+            "The actions as buttons on each row and in its context menu, and the + in the title bar of the view."
+          ]
+        },
+        "devspaces.allowContainerLogs": {
+          "order": 24,
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "Allow **Show Log of the Monitor** on its reports in the view Docker Hosts. Off: the reports have no Show Log, and the Docker pipes of Devspaces refuse the log of every container.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
+        },
+        "devspaces.dockerHostsSettingsButton": {
+          "order": 25,
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "Show the button **Docker Hosts Settings…** (a gear) in the title bar of the view Docker Hosts. It switches `#devspaces.dockerHostsActions#` and `#devspaces.allowContainerLogs#` in your user settings.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
+        },
+        "devspaces.dockerHostsConsoleButton": {
+          "order": 26,
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "Show the button **Open Console** (a terminal) on each host row of the view Docker Hosts. It opens a terminal with a shell on that host itself, not in a container: over SSH for a remote host, through `wsl.exe` for the WSL distribution of Devspaces, and over the SSH of Lima for its VM.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
         }
       }
     }

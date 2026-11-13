@@ -343,15 +343,16 @@ export function hostEndpoint(host: string): string {
  * SSH_ASKPASS asks in VS Code (sshAskpass.ts); `-x` forwards no X11 to the DISPLAY of its environment (ASKPASS_DISPLAY).
  * `identity`: the key of Devspaces for a host that has it (sshKey.ts), with `-i`; `identityOnly` adds that the login may
  * use only this key, on a connection of its own, not one that a ControlMaster of the SSH config shares (the check of the
- * key offer). The destination comes after `--`, so it can never be an option.
+ * key offer). `terminal`: a terminal on the host (`-tt`, also when the standard input here is no terminal) instead of
+ * none, for the console of a host (hostConsole.ts). The destination comes after `--`, so it can never be an option.
  */
 export function sshCommandArgs(
   target: SshAddress,
   remoteCommand: string,
   connectTimeoutSeconds = 15,
-  options: { prompts?: boolean; identity?: string; identityOnly?: boolean } = {},
+  options: { prompts?: boolean; identity?: string; identityOnly?: boolean; terminal?: boolean } = {},
 ): string[] {
-  const args = [...(options.prompts === true ? ['-x'] : ['-o', 'BatchMode=yes']), '-o', `ConnectTimeout=${connectTimeoutSeconds}`, '-T'];
+  const args = [...(options.prompts === true ? ['-x'] : ['-o', 'BatchMode=yes']), '-o', `ConnectTimeout=${connectTimeoutSeconds}`, options.terminal === true ? '-tt' : '-T'];
   if (options.identity !== undefined) {
     args.push('-i', options.identity);
     if (options.identityOnly === true) {

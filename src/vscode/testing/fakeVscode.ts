@@ -184,6 +184,8 @@ export async function openFakeCustomEditor(viewType: string, uri: { path: string
 
 export interface FakeTerminal {
   name?: string;
+  /** The terminal of an extension (vscode.Pseudoterminal), when it has one. */
+  pty?: unknown;
   shown: number;
   lines: string[];
   show(): void;
@@ -401,9 +403,10 @@ export function resetFakeVscode(): void {
     fakeVscode.outputChannels.push(channel);
     return channel;
   });
-  window.createTerminal.mockImplementation((options: { name?: string }) => {
+  window.createTerminal.mockImplementation((options: { name?: string; pty?: unknown }) => {
     const terminal: FakeTerminal = {
       name: options.name,
+      ...(options.pty !== undefined ? { pty: options.pty } : {}),
       shown: 0,
       lines: [],
       show() {

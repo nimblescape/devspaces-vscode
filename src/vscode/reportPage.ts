@@ -32,6 +32,7 @@ import {
   reportPageView,
   reportTargetOfArgument,
   type ReportKey,
+  type ReportPermissions,
   type ReportPhase,
   type ReportTarget,
 } from './reportPageModel';
@@ -60,6 +61,8 @@ export interface ReportPagesDeps {
   readMonitorLog: (host: string, timeZone: string) => Promise<string>;
   /** Now, and the time zone of this computer, in which the page gives times. */
   clock: () => ReportClock;
+  /** What the settings allow now (dockerHostsActions, allowContainerLogs), read at each update of a page. */
+  allowed: () => ReportPermissions;
 }
 
 /** The address of the report of `target`. */
@@ -115,8 +118,15 @@ export class ReportPages implements vscode.CustomReadonlyEditorProvider, vscode.
     for (const page of this.pages) page.vmChanged();
   }
 
+  /** The setting dockerHostsActions or allowContainerLogs changed: each visible page shows its buttons again, without a read. */
+  settingsChanged(): void {
+    for (const page of this.pages) page.settingsChanged();
+  }
+
   /** Show Log of the Monitor: the last lines of its log on `host`, as a read-only document. */
   private async showLog(host: string): Promise<void> {
+    // Off: Devspaces runs no `docker logs`, on any host (also not on the shell of the view, which no pipe filters).
+    if (!this.deps.allowed().logs) return;
     let text: string;
     try {
       text = await withSshPrompts(() => this.deps.readMonitorLog(host, this.deps.clock().timeZone));
@@ -209,6 +219,11 @@ class ReportPage {
     if (!this.disposed && this.phase.kind === 'vm' && this.key.host === this.deps.vmHost) void this.read();
   }
 
+  /** The settings of its buttons changed: the page shows them again, without a read. */
+  settingsChanged(): void {
+    this.post();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -241,11 +256,14 @@ class ReportPage {
           this.post();
         }
         return;
+      // A button that the settings do not allow (now) does nothing: the page may still show it until its next update.
       case 'showLog':
-        void this.events.showLog(this.key.host);
+        if (this.deps.allowed().logs) void this.events.showLog(this.key.host);
+        else this.deps.logger.info(`Show Log of the Monitor on ${this.key.host} is not run: the setting devspaces.allowContainerLogs is off.`);
         return;
       case 'startVm':
-        void this.startVm();
+        if (this.deps.allowed().actions) void this.startVm();
+        else this.deps.logger.info('Start the VM of a report page is not run: the setting devspaces.dockerHostsActions allows no actions.');
         return;
     }
   }
@@ -299,6 +317,7 @@ class ReportPage {
       phase: this.phase,
       ...(this.content !== undefined ? { content: this.content } : {}),
       clock: this.deps.clock(),
+      allowed: this.deps.allowed(),
     });
     this.panel.webview.postMessage({ type: 'view', view }).then(undefined, (error: unknown) => {
       this.deps.logger.warn(`The report page of ${this.key.name} could not be updated: ${errorMessage(error)}`);

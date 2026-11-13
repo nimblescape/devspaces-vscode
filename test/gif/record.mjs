@@ -68,7 +68,9 @@ const SETTINGS = {
   'chat.disableAIFeatures': true,
   'editor.minimap.enabled': false,
   'editor.stickyScroll.enabled': false,
-  // The log of the Monitor in scene 5: its lines are longer than the editor beside the wide side bar.
+  // Scene 5 shows the log of the Monitor: Show Log is there only with this setting (off by default). Its lines are longer
+  // than the editor beside the wide side bar.
+  'devspaces.allowContainerLogs': true,
   '[log]': { 'editor.wordWrap': 'on' },
   'security.workspace.trust.enabled': false,
   'telemetry.telemetryLevel': 'off',

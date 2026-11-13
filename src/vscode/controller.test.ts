@@ -706,16 +706,17 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 52 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
+    // 54 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, and the commands of the rows
-    // of the view "Docker Hosts". The last one that was added is Show Report of an object row of the view "Docker
+    // of the view "Docker Hosts". The last ones that were added are Open Console of a host row and the gear Docker Hosts
+    // Settings… of the view "Docker Hosts" (R-ENG-008), before them Show Report of an object row of the view "Docker
     // Hosts" (R-ENG-010), before it Show Utilization of a host row (R-ENG-009), before it Start of a container and Remove Unused Build Cache… of the view (R-ENG-008), and
     // before them the view itself and the management of the VM of Devspaces in it (R-VM-010). The last one that was removed is "Use as Docker Host" of a host row of the view "Docker Hosts": the
     // Docker host of Devspaces is chosen only in the first row of the repository view (R-ENG-008); before it the
     // installation and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
-    expect(declared).toHaveLength(52);
+    expect(declared).toHaveLength(54);
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use as Docker Host');
     expect(declared).toEqual(
@@ -4184,6 +4185,7 @@ describe('Remove Devspaces from This Docker Engine…', () => {
       command: 'devspaces.removeFromDockerEngine',
       title: 'Remove Devspaces from This Docker Engine…',
       category: 'Devspaces',
+      icon: '$(clear-all)',
     });
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromDockerEngine)).toBe(false);
     expect(manifest.contributes.menus['view/title'].find((entry) => entry.command === Commands.removeFromDockerEngine)).toEqual({
@@ -6283,9 +6285,13 @@ describe('the Docker host of Devspaces', () => {
     };
     const title = manifest.contributes.menus['view/title'];
     // The first row of the list chooses the Docker host; the title bar of the repositories has no icon of the Docker
-    // host. The "+" of the view "Docker Hosts" adds a remote host.
+    // host. The "+" of the view "Docker Hosts" adds a remote host: a button of its title bar with the setting
+    // dockerHostsActions = icons, in its "…" menu with contextMenu, and nowhere while the view is read only (R-ENG-008).
     const hostTitle = title.filter((entry) => entry.command === 'devspaces.useRemoteDockerHost' || entry.command === 'devspaces.chooseDockerHost');
-    expect(hostTitle).toEqual([{ command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts', group: 'navigation@1' }]);
+    expect(hostTitle).toEqual([
+      { command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts && config.devspaces.dockerHostsActions == icons', group: 'navigation@1' },
+      { command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts && config.devspaces.dockerHostsActions == contextMenu', group: '1_hosts@1' },
+    ]);
     const icons = Object.fromEntries(manifest.contributes.commands.map((command) => [command.command, command.icon]));
     expect(icons['devspaces.useRemoteDockerHost']).toBe('$(add)');
     expect(icons['devspaces.chooseDockerHost']).toBeUndefined();
@@ -6338,6 +6344,7 @@ describe('the Docker host of Devspaces', () => {
     h.controller.dispose();
     fs.rmSync(h.root, { recursive: true, force: true });
     h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, updateImagesNow: update, startDocker: vi.fn(async () => {}) });
+    h.settings.dockerHostsActions = 'icons';
     current = remoteDockerTarget('build-box');
     fakeVscode.window.showErrorMessage.mockResolvedValueOnce(Actions.tryAgain);
     await run('updateImagesNow', { hostsNode: 'host', host: 'lab', vm: false, selected: false });
@@ -6353,6 +6360,7 @@ describe('the Docker host of Devspaces', () => {
     h.controller.dispose();
     fs.rmSync(h.root, { recursive: true, force: true });
     h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm });
+    h.settings.dockerHostsActions = 'contextMenu';
     const clicked = { hostsNode: 'object', host: 'lab', object: { kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume' } };
     const handler = h.commands.get(Commands.removeDockerObjects);
     await handler?.(clicked, [clicked]);
@@ -6369,6 +6377,7 @@ describe('the Docker host of Devspaces', () => {
     h.controller.dispose();
     fs.rmSync(h.root, { recursive: true, force: true });
     h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts });
+    h.settings.dockerHostsActions = 'icons';
     await h.registry.add(remoteDevspace());
     const seen: Array<string | undefined> = [];
     h.service.stop.mockImplementation(async () => {
@@ -6378,6 +6387,60 @@ describe('the Docker host of Devspaces', () => {
     expect(h.service.stop).toHaveBeenCalledWith(REMOTE_ENV_ID);
     expect(seen).toEqual(['build-box']);
     expect(dockerHosts.invalidate).toHaveBeenCalledWith('build-box');
+  });
+
+  // The setting devspaces.dockerHostsActions (R-ENG-008): while it is Disabled (the default), a changing command with a
+  // row of the view does nothing and says why; the same command without a row (the Command Palette, the repository
+  // view) runs, and so do the commands that only read (Refresh, Show Utilization, Show Report).
+  it('runs no changing command of a row of the view "Docker Hosts" while the view is read only, and says why', async () => {
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const vm = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), remove: vi.fn(async () => {}), reset: vi.fn(async () => {}), settings: vi.fn(async () => {}) };
+    const update = vi.fn(async () => {});
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm, updateImagesNow: update });
+    await h.registry.add(remoteDevspace());
+    const hostRow = { hostsNode: 'host', host: 'lab', vm: false, selected: false };
+    const vmRow = { hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'running' } };
+    const objectRow = { hostsNode: 'object', host: 'lab', object: { kind: 'container', id: 'c', name: 'c', purpose: 'notDevspaces', state: 'running' } };
+    const devspaceRow = { hostsNode: 'object', host: 'build-box', devspaceId: REMOTE_ENV_ID, object: { kind: 'container', id: 'c', name: 'c', purpose: 'devspace', state: 'running' } };
+    const stoppedVmRow = { hostsNode: 'message', host: LIMA_HOST, message: 'vmStopped' };
+    for (const value of [undefined, 'disabled', 'buttons'] as const) {
+      h.settings.dockerHostsActions = value as ExtensionSettings['dockerHostsActions'];
+      fakeVscode.window.showInformationMessage.mockClear();
+      await run('updateImagesNow', hostRow);
+      await run('removeDockerHostFromList', hostRow);
+      await run('stopDockerObject', objectRow);
+      await run('removeDockerObjects', objectRow);
+      await run('stop', devspaceRow);
+      await run('delete', devspaceRow);
+      for (const command of ['startVm', 'stopVm', 'removeVm', 'resetVm', 'vmSettings', 'setUpLimaVm'] as const) await run(command, vmRow);
+      await run('startVm', stoppedVmRow);
+      expect(update).not.toHaveBeenCalled();
+      expect(dockerHosts.removeFromList).not.toHaveBeenCalled();
+      expect(dockerHosts.stopObject).not.toHaveBeenCalled();
+      expect(dockerHosts.removeObjects).not.toHaveBeenCalled();
+      expect(h.service.stop).not.toHaveBeenCalled();
+      expect([vm.start, vm.stop, vm.remove, vm.reset, vm.settings].map((mock) => mock.mock.calls.length)).toEqual([0, 0, 0, 0, 0]);
+      expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledTimes(13);
+      expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings);
+    }
+    expect(dockerHosts.invalidate).not.toHaveBeenCalled();
+    // Reading stays.
+    await run('refreshDockerHosts', hostRow);
+    expect(dockerHosts.refresh).toHaveBeenCalledWith(hostRow);
+    // Without a row of the view (the Command Palette), the commands run.
+    await run('startVm');
+    await run('updateImagesNow');
+    expect(vm.start).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledTimes(1);
+    // Open Settings opens the setting.
+    h.settings.dockerHostsActions = 'disabled';
+    fakeVscode.window.showInformationMessage.mockResolvedValueOnce(ControllerTexts.openSettings);
+    await run('stopVm', vmRow);
+    await settle(() => fakeVscode.commands.executeCommand.mock.calls.some((call) => call[0] === 'workbench.action.openSettings'), 'the Settings editor');
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', '@id:devspaces.dockerHostsActions');
+    expect(vm.stop).not.toHaveBeenCalled();
   });
 
   it('runs every other command as one operation on the host that is current when it starts', async () => {

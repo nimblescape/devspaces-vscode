@@ -79,6 +79,7 @@ function harness(overrides: Partial<ReportPagesDeps> = {}): Harness {
     },
     readMonitorLog: h.readMonitorLog as never,
     clock: () => CLOCK,
+    allowed: () => ({ actions: true, logs: true }),
     ...overrides,
   };
   h.pages = new ReportPages(h.deps);
@@ -292,6 +293,24 @@ describe('the report page on the VM of Devspaces', () => {
     expect(h.vmReads).toBe(2);
   });
 
+  // The setting devspaces.dockerHostsActions (R-ENG-008): while the view is read only, the page offers no Start the VM,
+  // and a message of an old page that asks for it starts nothing.
+  it('offers no Start the VM while the view is read only, starts nothing for an old message, and shows it again after the change', async () => {
+    let allowed = { actions: false, logs: false };
+    const h = harness({ allowed: () => allowed });
+    h.vmState = { kind: 'stopped' };
+    const panel = await open(h, LIMA_HOST, monitor);
+    await flush();
+    expect(lastView(panel).banner).toEqual({ message: ReportPageTexts.vmNotRunning, detail: ReportPageTexts.vmNotRunningReadOnly, buttons: [] });
+    panel.receive({ type: 'startVm' });
+    await flush();
+    expect(h.startVm).not.toHaveBeenCalled();
+    allowed = { actions: true, logs: false };
+    h.pages.settingsChanged();
+    expect(lastView(panel).banner?.buttons).toEqual([{ action: 'startVm', label: 'Start the VM', primary: true }]);
+    expect(h.reads).toHaveLength(0);
+  });
+
   it('never reads the state of the VM for another host', async () => {
     const h = harness();
     await open(h, 'lab', monitor);
@@ -348,6 +367,25 @@ describe('Show Log of the Monitor', () => {
     expect(fakeVscode.window.showWarningMessage).toHaveBeenCalledWith(expect.stringMatching(/^The log of the Monitor could not be read: /));
     expect(fakeVscode.window.showTextDocument).not.toHaveBeenCalled();
     expect(fakeVscode.workspace.registerTextDocumentContentProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('the setting devspaces.allowContainerLogs', () => {
+  it('shows no Show Log while the logs are off, reads no log for an old message, and shows the button after the change', async () => {
+    let allowed = { actions: true, logs: false };
+    const h = harness({ allowed: () => allowed });
+    const panel = await open(h, 'lab', monitor);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['refresh']);
+    panel.receive({ type: 'showLog' });
+    await flush();
+    expect(h.readMonitorLog).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showTextDocument).not.toHaveBeenCalled();
+    allowed = { actions: true, logs: true };
+    h.pages.settingsChanged();
+    expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['showLog', 'refresh']);
+    // The change sends the view again without a new read.
+    expect(h.reads).toHaveLength(1);
   });
 });
 

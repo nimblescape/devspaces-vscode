@@ -43,6 +43,7 @@ function pipes(deps: Partial<HostPipesDeps> & Pick<HostPipesDeps, 'base'>): Host
     platform: 'linux',
     relayConnection: () => undefined,
     dialStdio: () => undefined,
+    allowContainerLogs: () => false,
     randomId: () => ID,
     ...deps,
   });
@@ -288,6 +289,7 @@ describe('HostPipes', () => {
       base: () => folder,
       relayConnection: () => echoRelay(),
       dialStdio: () => undefined,
+      allowContainerLogs: () => false,
     });
     cleanups.push(() => hostPipes.dispose());
     await hostPipes.serve('build-box');

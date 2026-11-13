@@ -92,7 +92,7 @@ const content: ReportContent = {
   ],
 };
 const view = (overrides: Partial<Parameters<typeof reportPageView>[0]> = {}): ReportPageView =>
-  reportPageView({ target: { host: LIMA_HOST, object: monitor }, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK, ...overrides });
+  reportPageView({ target: { host: LIMA_HOST, object: monitor }, vm: true, phase: { kind: 'read', at: CLOCK.now }, content, clock: CLOCK, allowed: { actions: true, logs: true }, ...overrides });
 
 describe('the script of the report page', () => {
   it('asks for the view at the start', () => {

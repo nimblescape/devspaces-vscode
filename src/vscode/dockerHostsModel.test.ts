@@ -26,6 +26,7 @@ import {
   objectRows,
   rowLook,
   type HostRow,
+  type MessageRow,
   type ObjectRow,
 } from './dockerHostsModel';
 
@@ -247,7 +248,18 @@ describe('buildCacheRowLook', () => {
 
 describe('messageRowLook', () => {
   it('starts a stopped VM from its row, and reads a VM that runs again', () => {
-    expect(messageRowLook({ hostsNode: 'message', host: LIMA_HOST, message: 'vmStopped' }).command).toEqual({ command: Commands.startVm, title: 'Start the VM' });
+    const stopped: MessageRow = { hostsNode: 'message', host: LIMA_HOST, message: 'vmStopped' };
+    expect(messageRowLook(stopped).command).toEqual({ command: Commands.startVm, title: 'Start the VM', arguments: [stopped] });
+    // While the view is read only (the setting dockerHostsActions), the row of a VM that is not set up names the setup of
+    // the repository view, and the row of a stopped VM only says that it is stopped.
+    const notSetUp: HostRow = { hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'notSetUp' } };
+    expect(rowLook(notSetUp).tooltip).toContain(DockerHostsTexts.setUpInMenu);
+    expect(rowLook(notSetUp, false).tooltip).toContain(DockerHostsTexts.setUpInRepositoryView);
+    expect(rowLook(notSetUp, false).tooltip).not.toContain(DockerHostsTexts.setUpInMenu);
+    expect(messageRowLook(stopped, false)).toMatchObject({ label: DockerHostsTexts.vmStoppedReadOnly, tooltip: DockerHostsTexts.vmStoppedReadOnlyTooltip, icon: 'debug-pause' });
+    expect(messageRowLook(stopped, false).command).toBeUndefined();
+    expect(rowLook(stopped, false).command).toBeUndefined();
+    expect(rowLook(stopped).command?.command).toBe(Commands.startVm);
     expect(messageRowLook({ hostsNode: 'message', host: LIMA_HOST, message: 'vmNotRead' }).command).toEqual({
       command: Commands.refreshDockerHosts,
       title: 'Refresh',
@@ -274,14 +286,48 @@ describe('the menus of the view (package.json)', () => {
     };
   };
   const items = manifest.contributes.menus['view/item/context'].filter((item) => item.when?.startsWith(`view == ${DOCKER_HOSTS_VIEW_ID} `));
-  /** The commands of a row with `contextValue` (only the clause viewItem of each `when`): its context menu, or its buttons. */
-  const commandsOf = (contextValue: string, buttons = false): string[] =>
+  /** The settings of the view in a `when`: devspaces.dockerHostsActions, and the buttons of the title bar and of a host row. */
+  interface ViewSettings {
+    actions: string;
+    settingsButton?: boolean;
+    consoleButton?: boolean;
+  }
+  /** Whether the clauses `config.devspaces.…` of `when` hold with `settings` (the platform clauses are not checked). */
+  const configHolds = (when: string, settings: ViewSettings): boolean => {
+    const equal = /config\.devspaces\.dockerHostsActions == (\w+)/.exec(when);
+    if (equal !== null && equal[1] !== settings.actions) return false;
+    const match = /config\.devspaces\.dockerHostsActions =~ \/(.+?)\//.exec(when);
+    if (match !== null && !new RegExp(match[1]).test(settings.actions)) return false;
+    if (when.includes('config.devspaces.dockerHostsSettingsButton') && settings.settingsButton !== true) return false;
+    if (when.includes('config.devspaces.dockerHostsConsoleButton') && settings.consoleButton !== true) return false;
+    return true;
+  };
+  /** The commands of a row with `contextValue` (the clause viewItem and the settings of each `when`): its context menu, or its buttons. */
+  const commandsOf = (contextValue: string, buttons = false, settings: ViewSettings = { actions: 'contextMenu' }): string[] =>
     items
       .filter((item) => {
         const regex = /viewItem =~ \/(.+?)\//.exec(item.when ?? '');
-        return regex !== null && new RegExp(regex[1]).test(contextValue) && (item.group?.startsWith('inline') ?? false) === buttons;
+        return regex !== null && new RegExp(regex[1]).test(contextValue) && (item.group?.startsWith('inline') ?? false) === buttons && configHolds(item.when ?? '', settings);
       })
       .map((item) => item.command ?? '');
+  /** The commands of the title bar of the view: its buttons, or its "…" menu. */
+  const titleOf = (settings: ViewSettings, buttons: boolean): string[] =>
+    manifest.contributes.menus['view/title']
+      .filter((item) => item.when?.startsWith(`view == ${DOCKER_HOSTS_VIEW_ID}`) && (item.group?.startsWith('navigation') ?? false) === buttons && configHolds(item.when, settings))
+      .map((item) => item.command ?? '');
+  const rows = (): string[] => [
+    hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind: 'stopped' } }).contextValue,
+    hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'running' } }).contextValue,
+    hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'notSetUp' } }).contextValue,
+    hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false }).contextValue,
+    objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue,
+    objectRowLook(objectRow(container('running'))).contextValue,
+    objectRowLook(objectRow(container('exited'))).contextValue,
+    objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue,
+    buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 10, unusedBytes: 10 } }).contextValue,
+  ];
+  /** The commands that only read: they stay in every mode. */
+  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.refreshDockerHosts'];
 
   it('shows the view "Docker Hosts" below the repositories', () => {
     expect(manifest.contributes.views.devspaces.map((view) => view.id)).toEqual(['devspaces.repositories', DOCKER_HOSTS_VIEW_ID]);
@@ -304,13 +350,59 @@ describe('the menus of the view (package.json)', () => {
     expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue)).toEqual([]);
   });
 
-  it('offers Stop of a container only in the context menu, never as a button on the row', () => {
-    const devspace = objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue;
-    expect(commandsOf(devspace)).toContain('devspaces.stop');
-    expect(commandsOf(devspace, true)).toEqual([]);
-    const other = objectRowLook(objectRow(container('running'))).contextValue;
-    expect(commandsOf(other)).toContain('devspaces.stopDockerObject');
-    expect(commandsOf(other, true)).toEqual([]);
-    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue, true)).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
+  // The setting devspaces.dockerHostsActions (R-ENG-008).
+  it('offers no action while the view is read only (Disabled, the default): only the commands that read', () => {
+    for (const contextValue of rows()) {
+      for (const buttons of [false, true]) {
+        for (const command of commandsOf(contextValue, buttons, { actions: 'disabled' })) expect(READING, `${contextValue}: ${command}`).toContain(command);
+      }
+    }
+    expect(commandsOf(rows()[3], true, { actions: 'disabled' })).toEqual(['devspaces.showUtilization', 'devspaces.refreshDockerHosts']);
+    expect(titleOf({ actions: 'disabled' }, true)).toEqual(['devspaces.refreshDockerHosts']);
+    expect(titleOf({ actions: 'disabled' }, false)).toEqual([]);
+    // A value that is not known counts as Disabled.
+    expect(commandsOf(rows()[5], false, { actions: 'buttons' })).toEqual(['devspaces.showResourceReport']);
+  });
+
+  it('offers the actions only in the context menu with Context Menu: no button changes a host, and the + is in the "…" menu', () => {
+    for (const contextValue of rows()) {
+      for (const command of commandsOf(contextValue, true, { actions: 'contextMenu' })) expect(READING, `${contextValue}: ${command}`).toContain(command);
+    }
+    const devspace = rows()[4];
+    expect(commandsOf(devspace, false, { actions: 'contextMenu' })).toContain('devspaces.stop');
+    expect(commandsOf(rows()[5], false, { actions: 'contextMenu' })).toContain('devspaces.stopDockerObject');
+    expect(titleOf({ actions: 'contextMenu' }, true)).toEqual(['devspaces.refreshDockerHosts']);
+    expect(titleOf({ actions: 'contextMenu' }, false)).toEqual(['devspaces.useRemoteDockerHost']);
+  });
+
+  it('offers every action of the context menu also as a button with Icons, Stop included, and the + in the title bar', () => {
+    for (const contextValue of rows()) {
+      const menu = commandsOf(contextValue, false, { actions: 'icons' });
+      expect(menu, contextValue).toEqual(commandsOf(contextValue, false, { actions: 'contextMenu' }));
+      const buttons = commandsOf(contextValue, true, { actions: 'icons' });
+      // A click on an object row opens its report: Show Report is no button.
+      for (const command of menu.filter((entry) => entry !== 'devspaces.showResourceReport')) expect(buttons, `${contextValue}: ${command}`).toContain(command);
+    }
+    expect(commandsOf(rows()[4], true, { actions: 'icons' })).toEqual(['devspaces.stop', 'devspaces.delete']);
+    expect(commandsOf(rows()[5], true, { actions: 'icons' })).toEqual(['devspaces.stopDockerObject']);
+    expect(commandsOf(rows()[7], true, { actions: 'icons' })).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
+    expect(titleOf({ actions: 'icons' }, true)).toEqual(['devspaces.useRemoteDockerHost', 'devspaces.refreshDockerHosts']);
+    expect(titleOf({ actions: 'icons' }, false)).toEqual([]);
+  });
+
+  it('shows the gear Docker Hosts Settings… with its setting, and Open Console on each host row with an engine with its setting', () => {
+    expect(titleOf({ actions: 'disabled', settingsButton: true }, true)).toEqual(['devspaces.refreshDockerHosts', 'devspaces.dockerHostsSettings']);
+    expect(titleOf({ actions: 'disabled', settingsButton: false }, true)).not.toContain('devspaces.dockerHostsSettings');
+    const [stoppedVm, runningVm, notSetUp, remote] = rows();
+    for (const host of [stoppedVm, runningVm, remote]) {
+      expect(commandsOf(host, true, { actions: 'disabled', consoleButton: true })).toContain('devspaces.openConsole');
+      expect(commandsOf(host, true, { actions: 'disabled', consoleButton: false })).not.toContain('devspaces.openConsole');
+    }
+    expect(commandsOf(notSetUp, true, { actions: 'icons', consoleButton: true })).not.toContain('devspaces.openConsole');
+    expect(commandsOf(remote, true, { actions: 'disabled', consoleButton: true })).toEqual(['devspaces.showUtilization', 'devspaces.openConsole', 'devspaces.refreshDockerHosts']);
+    // The two commands are not in the Command Palette: the settings are changed in the Settings editor.
+    const palette = manifest.contributes.menus.commandPalette;
+    expect(palette).toContainEqual({ command: 'devspaces.dockerHostsSettings', when: 'false' });
+    expect(palette).toContainEqual({ command: 'devspaces.openConsole', when: 'false' });
   });
 });

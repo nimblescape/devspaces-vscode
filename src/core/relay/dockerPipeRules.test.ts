@@ -5,7 +5,7 @@
 // The allow-lists of the Docker pipes: the requests that CI measured (Dev Containers in the window of a devspace on an
 // SSH host, and Devspaces itself) go through, and the requests that neither needs are refused.
 import { describe, expect, it } from 'vitest';
-import { extensionPipeRule, windowPipeRule } from './dockerPipeRules';
+import { CONTAINER_LOGS_OFF, extensionPipeRule, windowPipeRule } from './dockerPipeRules';
 
 const NO_HEADERS = new Map<string, string>();
 const ID = 'f'.repeat(64);
@@ -100,20 +100,35 @@ describe('the filter of the Docker pipe of the extension', () => {
     'POST /grpc',
     'POST /build/prune',
     // The report page of the view (R-ENG-010): the reader of the shared volumes (`docker run --rm`, as the build
-    // container), and Show Log of the Monitor: the Docker CLI inspects the container first and then asks for the log by
-    // its ID, so the log of any container goes through.
-    'GET /containers/devspaces-monitor/logs',
-    `GET /containers/${ID}/logs`,
-    'GET /containers/shop-web-1/logs',
+    // container).
   ])('lets %s through, which Devspaces needs', (line) => {
-    expect(allowed(extensionPipeRule, line)).toBe(true);
+    expect(allowed(extensionPipeRule(() => false), line)).toBe(true);
+  });
+
+  // Show Log (R-ENG-010): the Docker CLI inspects the container first and then asks for the log by its ID, so the log
+  // of any container goes through, but only while the setting devspaces.allowContainerLogs is on.
+  it.each(['GET /containers/devspaces-monitor/logs', `GET /containers/${ID}/logs`, 'GET /containers/shop-web-1/logs'])('lets %s through only while the logs are on', (line) => {
+    expect(allowed(extensionPipeRule(() => true), line)).toBe(true);
+    const [method, path] = line.split(' ');
+    expect(extensionPipeRule(() => false)({ method, path }, NO_HEADERS)).toBe(CONTAINER_LOGS_OFF);
+  });
+
+  it('reads the setting at each request, so a change counts at once', () => {
+    let logs = false;
+    const rule = extensionPipeRule(() => logs);
+    const request = { method: 'GET', path: '/containers/devspaces-monitor/logs' };
+    expect(rule(request, NO_HEADERS)).toBe(CONTAINER_LOGS_OFF);
+    logs = true;
+    expect(rule(request, NO_HEADERS)).toBeUndefined();
+    logs = false;
+    expect(rule(request, NO_HEADERS)).toBe(CONTAINER_LOGS_OFF);
   });
 
   it.each([`POST /containers/${ID}/exec`, `POST /exec/${ID}/start`, `PUT /containers/${ID}/archive`, `POST /containers/${ID}/restart`, `GET /containers/${ID}/logs/extra`, 'POST /images/load', 'POST /volumes/create', 'GET /events', 'POST /networks/create', `POST /networks/${ID}/disconnect`, 'POST /networks/prune'])(
     'refuses %s, which it does not need',
     (line) => {
       const [method, path] = line.split(' ');
-      expect(extensionPipeRule({ method, path }, NO_HEADERS)).toBe('Devspaces does not need it');
+      expect(extensionPipeRule(() => true)({ method, path }, NO_HEADERS)).toBe('Devspaces does not need it');
     },
   );
 });

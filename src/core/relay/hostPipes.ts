@@ -12,7 +12,8 @@
 // an operation there (BootstrapDocker, servePipe), and every Docker call of the extension there uses it: each
 // connection runs its own `wsl.exe … docker system dial-stdio`, or `ssh … lima-devspaces sudo -n docker system
 // dial-stdio`, which needs no login, so the pipe never depends on a connection of the relay. The pipe
-// lets through only the requests that the Docker calls of the extension need (extensionPipeRule, dockerPipeRules.ts).
+// lets through only the requests that the Docker calls of the extension need (extensionPipeRule, dockerPipeRules.ts), the log
+// of a container only while the setting allowContainerLogs is on.
 // No `vscode`.
 import { randomBytes } from 'crypto';
 import type { Duplex } from 'stream';
@@ -43,6 +44,8 @@ export interface HostPipesDeps {
    * undefined without the program of the transport or for a host that has none (hostAccessOf).
    */
   dialStdio(host: string): StartedByteProcess | undefined;
+  /** The setting allowContainerLogs now: the pipes let through the log of a container only while it is on. */
+  allowContainerLogs(): boolean;
   /** Only for the tests: the id of the next pipe (16 hexadecimal digits). */
   randomId?: () => string;
   /** Only for the tests: the clock of WSL_PIPE_RETRY_MS (default Date.now). */
@@ -176,7 +179,7 @@ export class HostPipes {
       try {
         // A new random address for each pipe: no other window and no other user knows it beforehand.
         const address = dockerPipeAddress((this.deps.randomId ?? (() => randomBytes(8).toString('hex')))(), platform, platform === 'win32' ? '' : this.deps.base());
-        const pipe = await DockerPipe.listen({ address, connect, requests: extensionPipeRule, logger, name, platform, inUseWaitMs: 0 });
+        const pipe = await DockerPipe.listen({ address, connect, requests: extensionPipeRule(() => this.deps.allowContainerLogs()), logger, name, platform, inUseWaitMs: 0 });
         this.vmFailedAt.delete(host);
         if (this.disposed) pipe.close();
         else entry.pipe = pipe;

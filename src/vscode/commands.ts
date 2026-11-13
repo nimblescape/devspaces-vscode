@@ -90,6 +90,9 @@ export const Commands = {
   // The utilization page of a host row of the view "Docker Hosts" (usagePage.ts, R-ENG-009): one page per host in the
   // editor (hidden in the Command Palette: it takes a row).
   showUtilization: 'devspaces.showUtilization',
+  // A shell on the host of a host row of the view "Docker Hosts" (hostConsole.ts, R-ENG-008), shown with the setting
+  // devspaces.dockerHostsConsoleButton (hidden in the Command Palette: it takes a row).
+  openConsole: 'devspaces.openConsole',
   // The report page of an object row of the view "Docker Hosts" (reportPage.ts, R-ENG-010): the click on the row and
   // Show Report of its menu (hidden in the Command Palette: it takes a row).
   showResourceReport: 'devspaces.showResourceReport',
@@ -100,6 +103,10 @@ export const Commands = {
   removeVm: 'devspaces.removeVm',
   resetVm: 'devspaces.resetVm',
   vmSettings: 'devspaces.vmSettings',
+  // The gear in the title bar of the view "Docker Hosts" (dockerHostsSettings.ts, R-ENG-008), shown with the setting
+  // devspaces.dockerHostsSettingsButton: a quick pick for the settings dockerHostsActions and allowContainerLogs
+  // (hidden in the Command Palette: the settings are changed in the Settings editor).
+  dockerHostsSettings: 'devspaces.dockerHostsSettings',
 } as const;
 
 export type CommandName = keyof typeof Commands;

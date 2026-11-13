@@ -92,6 +92,12 @@ export type ReportPhase = { kind: 'reading' } | { kind: 'read'; at: number } | {
 /** What a button of the page asks the extension. */
 export type ReportAction = 'refresh' | 'showLog' | 'startVm';
 
+/** What the settings allow on a report page now: Start the VM (dockerHostsActions), and Show Log (allowContainerLogs). */
+export interface ReportPermissions {
+  actions: boolean;
+  logs: boolean;
+}
+
 /** A message of the webview: `ready` (the page started, also after it was hidden), or a button. */
 export interface ReportRequest {
   type: 'ready' | ReportAction;
@@ -147,6 +153,7 @@ export const ReportPageTexts = {
   missingDetail: 'VS Code may have opened this tab again at its start, before the view read the host, or the resource is gone. Open its host in the view Docker Hosts, then click Refresh.',
   vmNotRunning: 'The VM of Devspaces does not run.',
   vmNotRunningDetail: 'The report reads nothing while the VM is stopped: a read would start it. Start the VM, or start a devspace, and click Refresh.',
+  vmNotRunningReadOnly: 'The report reads nothing while the VM is stopped: a read would start it. Start a devspace, and click Refresh.',
   vmNotSetUp: 'The VM of Devspaces is not set up.',
   vmUnknown: (detail: string | undefined) => `The state of the VM of Devspaces is not known${detail !== undefined ? `: ${detail}` : '.'}`,
   log: (host: string) => `Log of the Monitor on ${host}`,
@@ -173,11 +180,19 @@ function kindLine(target: ReportTarget | ReportKey, vm: boolean): string {
  * What the page shows for `target` in `phase`, with the content of the last read. `target` is the key of the address
  * while the view does not show the resource (`missing`).
  */
-export function reportPageView(input: { target: ReportTarget | ReportKey; vm: boolean; phase: ReportPhase; content?: ReportContent; clock: ReportClock }): ReportPageView {
-  const { target, phase, content } = input;
+export function reportPageView(input: {
+  target: ReportTarget | ReportKey;
+  vm: boolean;
+  phase: ReportPhase;
+  content?: ReportContent;
+  clock: ReportClock;
+  /** What the settings allow now: the actions of the view (Start the VM), and the logs of containers (Show Log). */
+  allowed: ReportPermissions;
+}): ReportPageView {
+  const { target, phase, content, allowed } = input;
   const busy = phase.kind === 'reading';
   const buttons: ReportButton[] = [];
-  if (content?.monitorLog === true) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
+  if (content?.monitorLog === true && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
   buttons.push({ action: 'refresh', label: ReportPageTexts.refresh, primary: true, ...(busy ? { disabled: true } : {}) });
   const status = phase.kind === 'reading' ? ReportPageTexts.reading : phase.kind === 'read' ? ReportPageTexts.read(timeText(phase.at, input.clock)) : '';
   const known = 'object' in target ? target.object : undefined;
@@ -192,17 +207,20 @@ export function reportPageView(input: { target: ReportTarget | ReportKey; vm: bo
     ...(content !== undefined ? { content } : {}),
   };
   if (phase.kind === 'failed') view.banner = { message: ReportPageTexts.failed, detail: phase.message, buttons: [] };
-  if (phase.kind === 'vm') view.banner = vmBanner(phase.state);
+  if (phase.kind === 'vm') view.banner = vmBanner(phase.state, allowed.actions);
   if (phase.kind === 'missing') view.banner = { message: ReportPageTexts.missing, detail: ReportPageTexts.missingDetail, buttons: [] };
   return view;
 }
 
-function vmBanner(state: VmState): NonNullable<ReportPageView['banner']> {
+function vmBanner(state: VmState, actions: boolean): NonNullable<ReportPageView['banner']> {
   switch (state.kind) {
     case 'notSetUp':
       return { message: ReportPageTexts.vmNotSetUp, buttons: [] };
     case 'stopped':
-      return { message: ReportPageTexts.vmNotRunning, detail: ReportPageTexts.vmNotRunningDetail, buttons: [{ action: 'startVm', label: ReportPageTexts.startVm, primary: true }] };
+      // Start the VM is an action of the view: only while the setting dockerHostsActions allows them.
+      return actions
+        ? { message: ReportPageTexts.vmNotRunning, detail: ReportPageTexts.vmNotRunningDetail, buttons: [{ action: 'startVm', label: ReportPageTexts.startVm, primary: true }] }
+        : { message: ReportPageTexts.vmNotRunning, detail: ReportPageTexts.vmNotRunningReadOnly, buttons: [] };
     default:
       return { message: ReportPageTexts.vmUnknown(state.detail), buttons: [] };
   }
