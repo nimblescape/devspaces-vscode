@@ -98,7 +98,7 @@ export function removeKeyLinesCommand(key: PublicKey): string {
   return [
     `( cd || exit; [ -e ${file} ] || [ -L ${file} ] || exit 0; [ ! -L ${file} ] || { echo '~/${file} is a symbolic link' >&2; exit 3; }`,
     `kept=$(awk -v key=${shellWord(`${key.type} ${key.blob}`)} '($1 " " $2) != key' ${file}) || exit`,
-    `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
+    `cp -p ${file} ${copy} && { [ -z "$kept" ] || printf '%s\\n' "$kept"; } > ${copy} && mv -f ${copy} ${file} || { s=$?; rm -f ${copy}; exit $s; }`,
     `{ ! command -v restorecon >/dev/null 2>&1 || restorecon -F ${file} >/dev/null 2>&1 || true; } )`,
   ].join('; ');
 }

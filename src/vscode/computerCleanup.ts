@@ -8,17 +8,13 @@
 // end the uninstall of the extension. Each step returns what stays, for the last message of the command; each one is
 // logged too. No question: the command asked once before.
 import * as fs from 'fs';
-import { sshCommandArgs, sshTargetOf } from '../core/docker/dockerHost';
-import { noPromptEnv } from '../core/docker/remoteDocker';
 import { removeDevspacesFiles, type DevspacesFilesDeps } from '../core/devspacesFiles';
 import { errorMessage } from '../core/errors';
-import type { Logger, ProcessRunner } from '../core/ports';
+import type { Logger } from '../core/ports';
 import { shellWord } from '../core/relay/startScript';
-import { parsePublicKey, removeKeyLinesCommand, type PublicKey } from '../core/sshKey';
+import { removeKeyLinesCommand, type PublicKey } from '../core/sshKey';
 import type { RemoteDockerState } from '../core/storage/remoteDockerState';
-
-/** The longest time of a login to a host for the removal of the line of the key, and of `ssh-keygen -y`. */
-const KEY_STEP_TIMEOUT_MS = 30_000;
+import type { SshKeyOffer } from './sshKeyOffer';
 
 /** What this computer has of Devspaces besides the devspaces, for the question of the command. */
 export interface ComputerInventory {
@@ -36,8 +32,6 @@ export interface ComputerInventory {
 
 export interface ComputerCleanupDeps {
   logger: Logger;
-  runner: ProcessRunner;
-  env: NodeJS.ProcessEnv;
   state: Pick<RemoteDockerState, 'remoteHosts' | 'read' | 'setSshKey'>;
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), undefined where there is none. */
   vmHost: string | undefined;
@@ -45,11 +39,11 @@ export interface ComputerCleanupDeps {
   vmExists: () => Promise<boolean>;
   /** The removal of the VM without a question (LimaSetupCommands/WslSetupCommands.removeForComputer): what stays. */
   removeVm: () => Promise<string | undefined>;
-  /** The private key of Devspaces (devspacesKeyPath). */
-  keyPath: string;
-  /** The `ssh` and the `ssh-keygen` of this computer (findExecutable), or undefined. */
-  sshPath: () => string | undefined;
-  sshKeygenPath: () => string | undefined;
+  /**
+   * The SSH key of Devspaces (SshKeyOffer): its file, its public key from the private key (`ssh-keygen -y`), and a
+   * command on a host with a login without questions that may use only that key.
+   */
+  key: Pick<SshKeyOffer, 'keyPath' | 'publicKey' | 'runWithKey'>;
   /** The folder of Devspaces outside of VS Code, or undefined where there is none. */
   folder: string | undefined;
   /** The deps of the steps of the uninstall hook in this window (removeDevspacesFiles), without the logger. */
@@ -63,7 +57,7 @@ export interface ComputerCleanupDeps {
 /** User-visible texts of the steps (plain language). */
 export const ComputerCleanupTexts = {
   keyLineLeft: (host: string, detail: string) =>
-    `The line of the SSH key of Devspaces could not be removed from ~/.ssh/authorized_keys on ${host} (${detail}). Remove the line that ends with "devspaces@" and the name of this computer there.`,
+    `The line of the SSH key of Devspaces could not be removed from ~/.ssh/authorized_keys on ${host} (${detail.replace(/\.$/, '')}). Remove the line that ends with "devspaces@" and the name of this computer there.`,
   keyKept: (keyPath: string) => `The SSH key of Devspaces stays on this computer (${keyPath}), so that a new run of the command can still log in with it.`,
   keyUnreadable: (keyPath: string, detail: string) => `The SSH key of Devspaces ${keyPath} could not be read, so its line stays on the hosts: ${detail}`,
   keyFileLeft: (file: string, detail: string) => `The file ${file} could not be deleted: ${detail}`,
@@ -88,7 +82,7 @@ export class ComputerCleanup {
       engines: list.filter((host) => host !== vmHost),
       vm,
       keyHosts: (records.hosts ?? []).filter((record) => record.sshKey === 'installed').map((record) => record.host),
-      keyFile: this.exists(this.deps.keyPath) ? this.deps.keyPath : undefined,
+      keyFile: this.exists(this.deps.key.keyPath) ? this.deps.key.keyPath : undefined,
       folder: this.deps.folder !== undefined && this.exists(this.deps.folder) ? this.deps.folder : undefined,
     };
   }
@@ -104,10 +98,13 @@ export class ComputerCleanup {
    * so that a new run of the command can log in with it. What stays. Never throws.
    */
   async removeSshKey(hosts: readonly string[]): Promise<string[]> {
-    const { logger, keyPath } = this.deps;
+    const { logger } = this.deps;
+    const { keyPath } = this.deps.key;
     const left: string[] = [];
     if (hosts.length > 0) {
-      const key = await this.publicKey().catch((error: unknown) => ({ error }));
+      // From the private key itself, never from the .pub file: the login uses the private key, so a .pub file of another
+      // key would remove other lines and leave the line of the key.
+      const key = await this.deps.key.publicKey().catch((error: unknown) => ({ error }));
       if ('error' in key) {
         const text = ComputerCleanupTexts.keyUnreadable(keyPath, errorMessage(key.error));
         logger.warn(text);
@@ -153,37 +150,8 @@ export class ComputerCleanup {
 
   /** Removes the line of `key` on `host` with a login that may use only the key; undefined when it went, else why not. */
   private async removeKeyLine(host: string, key: PublicKey): Promise<string | undefined> {
-    const ssh = this.deps.sshPath();
-    const target = sshTargetOf(host);
-    if (ssh === undefined) return 'ssh was not found on this computer';
-    if (target === undefined) return 'the host is no SSH alias or address';
     // In `sh`, whatever the login shell of the account is.
-    const command = `sh -c ${shellWord(removeKeyLinesCommand(key))}`;
-    try {
-      const result = await this.deps.runner.run(ssh, sshCommandArgs(target, command, undefined, { identity: this.deps.keyPath, identityOnly: true }), {
-        env: noPromptEnv(this.deps.env),
-        timeoutMs: KEY_STEP_TIMEOUT_MS,
-      });
-      if (result.timedOut) return `ssh did not answer within ${KEY_STEP_TIMEOUT_MS / 1000} seconds`;
-      return result.exitCode === 0 ? undefined : result.stderr.trim() || `ssh failed with exit code ${result.exitCode}`;
-    } catch (error) {
-      return errorMessage(error);
-    }
-  }
-
-  /** The public key of the key file of Devspaces: from the private key (`ssh-keygen -y`), else from its `.pub` file. */
-  private async publicKey(): Promise<PublicKey> {
-    const { keyPath, runner, env } = this.deps;
-    const keygen = this.deps.sshKeygenPath();
-    if (keygen !== undefined && this.exists(keyPath)) {
-      const read = await runner.run(keygen, ['-y', '-f', keyPath], { env: noPromptEnv(env), timeoutMs: KEY_STEP_TIMEOUT_MS });
-      const key = read.exitCode === 0 ? parsePublicKey(read.stdout) : undefined;
-      if (key !== undefined) return key;
-    }
-    const text = await fs.promises.readFile(`${keyPath}.pub`, 'utf8');
-    const key = parsePublicKey(text);
-    if (key === undefined) throw new Error(`${keyPath}.pub holds no Ed25519 public key`);
-    return key;
+    return this.deps.key.runWithKey(host, `sh -c ${shellWord(removeKeyLinesCommand(key))}`).catch((error: unknown) => errorMessage(error));
   }
 
   private exists(file: string): boolean {

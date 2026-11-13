@@ -110,6 +110,10 @@ export const ControllerTexts = {
   removingComputerFiles: 'Removing the files of Devspaces.',
   computerEngineNotAnswering: (engine: string) => `Devspaces cannot reach ${engine}, so its objects of Devspaces and your devspaces there stay.`,
   computerEngineFailed: (engine: string, detail: string) => `Devspaces could not be removed from ${engine}: ${detail}`,
+  computerEngineBuildNotWaitedFor: (engine: string) =>
+    `The removal from ${engine} did not wait for the end of a background build of the helper image in this window; if that build makes the image again, run the command again.`,
+  /** The VM of Devspaces in the messages of "Remove Devspaces from This Computer…" (its devspaces in use). */
+  theVm: 'the VM of Devspaces',
   removedFromComputer: 'Devspaces was removed from this computer. VS Code uninstalls the extension now.',
   removalFromComputerLeft: (count: number) =>
     `Devspaces could not remove everything from this computer: ${count === 1 ? 'one thing stays' : `${count} things stay`}. The details name each one. The extension stays installed, so that you can run the command again.`,

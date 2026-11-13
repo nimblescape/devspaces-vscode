@@ -4425,6 +4425,62 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
   });
 
+  // Mutation: a Cancel that is checked only after the remote hosts lets the key and the files go, and uninstalls.
+  it('Cancel while the VM is removed ends before the key and the files, and logs what stays so far', async () => {
+    const { order, cleanup } = onComputer({ engines: ['build-box', 'old-box'] }, { 'old-box': false });
+    const progress = cancellableProgress();
+    cleanup.removeVm.mockImplementation(async () => {
+      order.push('remove the VM');
+      progress.cancel();
+      return undefined;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM']);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
+    // The host that did not answer before the Cancel is in the log.
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerEngineNotAnswering('old-box')}`);
+  });
+
+  // Mutation: without the check before the VM, a window that opened a devspace in the VM while the remote hosts were
+  // removed loses it with the VM.
+  it('keeps the VM when a window connected to a devspace in it during the removal of the remote hosts', async () => {
+    const { order, cleanup } = onComputer();
+    await h.registry.add(ownRemote());
+    await h.registry.add(inVm());
+    h.service.deleteInWorker.mockImplementation(async (id: string) => {
+      order.push(`delete ${id}`);
+      await h.registry.remove(id);
+      otherWindowConnected(VM_ID);
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    const refusal = 'Close the windows of your devspaces on the VM of Devspaces first: acme/vm. Nothing was removed.';
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${refusal}`);
+    expect(order.slice(-2)).toEqual(['remove the key and its line on build-box', 'remove the files']);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: without the check after the mark, the Monitor and the shared volumes go under a window that began to use
+  // a devspace there while Docker was asked what Devspaces has there.
+  it('removes nothing from a host where a window connected to a devspace while the removal looked there, and brings its record back', async () => {
+    const { order, removal } = onComputer({ vm: undefined });
+    await h.registry.add(ownRemote());
+    removal.engineAnswers.mockImplementation(async () => {
+      otherWindowConnected(ENV_ID);
+      return true;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order.filter((step) => step.startsWith('build-box:'))).toEqual([]);
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain('Stays on this computer: Close the windows of your devspaces on build-box first: acme/api. Nothing was removed.');
+  });
+
   it('is a command of package.json, in the Command Palette and last in the "…" menu of the repository view', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };

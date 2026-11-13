@@ -1744,15 +1744,18 @@ async function activateExtension(
     // the shell of the user), and the uninstall of the extension by VS Code.
     computerCleanup: new ComputerCleanup({
       logger,
-      runner,
-      env,
       state: remoteState,
       vmHost,
-      vmExists: async () => (await readVmState()).kind !== 'notSetUp',
+      // Also a VM that Lima reports as broken or that cannot be read (its lima.yaml is there), and the files of a WSL
+      // setup that did not end (the folder of the distribution without its registration), which only the removal of
+      // the VM removes; without them, the folder of Devspaces would stay at every run of the command.
+      vmExists: async () => {
+        if (limaVm !== undefined) return limaVm.exists();
+        if (wslFolder === undefined) return false;
+        return (await readVmState()).kind !== 'notSetUp' || fs.existsSync(wslFolder);
+      },
       removeVm: () => (limaVm !== undefined ? limaSetup.removeForComputer() : wslSetup.removeForComputer()),
-      keyPath: sshKeys.keyPath,
-      sshPath,
-      sshKeygenPath: () => findExecutable('ssh-keygen', env, platform),
+      key: sshKeys,
       folder: limaVm?.paths.root ?? (wslFolder !== undefined ? path.win32.dirname(wslFolder) : undefined),
       files: { runner, platform, env, homeDir: os.homedir(), uid: () => os.userInfo().uid },
       uninstallExtension: async () => {

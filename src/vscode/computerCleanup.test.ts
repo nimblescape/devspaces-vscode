@@ -3,15 +3,20 @@
 // Licensed under the MIT License. See LICENSE in the repository root for details.
 
 // The steps of "Remove Devspaces from This Computer…" besides the Docker engines (R-GEN-009): the inventory for the
-// question, and the removal of the SSH key of Devspaces with its line on each host. `ssh` is a fake that runs the remote
-// command with `sh` in a temporary home folder of "the host"; `ssh-keygen` is a fake too.
+// question, and the removal of the SSH key of Devspaces with its line on each host, through the SshKeyOffer of the
+// window. `ssh` is a fake that runs the remote command with `sh` in a temporary home folder of "the host"; `ssh-keygen`
+// is a fake too.
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode);
+
 import type { RunOptions, RunResult } from '../core/ports';
 import { ComputerCleanup, ComputerCleanupTexts, type ComputerCleanupDeps } from './computerCleanup';
+import { SshKeyOffer } from './sshKeyOffer';
 
 const BLOB = 'AAAAC3NzaC1lZDI1NTE5AAAAIHgJ3c2oQkQe4m4oY0bJ6qNnV6l0Sx5Jm8m2bq9b3n1d';
 const PUBLIC = `ssh-ed25519 ${BLOB} devspaces@desk`;
@@ -46,7 +51,12 @@ interface Call {
   options?: RunOptions;
 }
 
-function setUp(overrides: Partial<ComputerCleanupDeps> = {}, answer: (call: Call) => RunResult | undefined = () => undefined) {
+interface Programs {
+  sshPath?: () => string | undefined;
+  sshKeygenPath?: () => string | undefined;
+}
+
+function setUp(overrides: Partial<ComputerCleanupDeps> & Programs = {}, answer: (call: Call) => RunResult | undefined = () => undefined) {
   const calls: Call[] = [];
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
   const state = {
@@ -76,21 +86,32 @@ function setUp(overrides: Partial<ComputerCleanupDeps> = {}, answer: (call: Call
       throw new Error(`unexpected ${file}`);
     }),
   };
+  const { sshPath, sshKeygenPath, ...rest } = overrides;
+  const key = new SshKeyOffer({
+    home: path.join(dir, 'local'),
+    platform: 'linux',
+    computerName: 'desk',
+    wrapperFolder: path.join(dir, 'wrapper'),
+    runner,
+    sshPath: sshPath ?? (() => '/usr/bin/ssh'),
+    sshKeygenPath: sshKeygenPath ?? (() => '/usr/bin/ssh-keygen'),
+    env: { PATH: '/usr/bin', HOME: path.join(dir, 'local') },
+    state: { sshKeyNow: () => undefined, setSshKey: async () => undefined },
+    dialogs: {} as never,
+    logger,
+  });
+  expect(key.keyPath).toBe(keyPath());
   const deps: ComputerCleanupDeps = {
     logger,
-    runner,
-    env: { PATH: '/usr/bin', HOME: path.join(dir, 'local') },
     state,
     vmHost: 'devspaces-vm',
     vmExists: async () => true,
     removeVm: vi.fn(async () => undefined),
-    keyPath: keyPath(),
-    sshPath: () => '/usr/bin/ssh',
-    sshKeygenPath: () => '/usr/bin/ssh-keygen',
+    key,
     folder: path.join(dir, 'local', '.nimblescape', 'devspaces'),
     files: { runner, platform: 'linux', env: {}, homeDir: path.join(dir, 'local'), uid: () => 1000 },
     uninstallExtension: vi.fn(async () => undefined),
-    ...overrides,
+    ...rest,
   };
   return { cleanup: new ComputerCleanup(deps), calls, logger, state, deps };
 }
@@ -161,10 +182,17 @@ describe('the removal of the SSH key of Devspaces', () => {
     keyFiles();
     const timedOut = setUp({}, (call) => (call.file === '/usr/bin/ssh' ? { exitCode: null, stdout: '', stderr: '', timedOut: true } : undefined));
     expect((await timedOut.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh did not answer within 30 seconds'));
+    expect(ComputerCleanupTexts.keyLineLeft('box', 'ssh did not answer within 30 seconds.')).toContain('on box (ssh did not answer within 30 seconds). Remove');
     const noSsh = setUp({ sshPath: () => undefined });
-    expect((await noSsh.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh was not found on this computer'));
+    expect((await noSsh.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'ssh was not found, or the host is no SSH alias or address'));
     const option = setUp();
-    expect((await option.cleanup.removeSshKey(['-oProxyCommand=x']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('-oProxyCommand=x', 'the host is no SSH alias or address'));
+    expect((await option.cleanup.removeSshKey(['-oProxyCommand=x']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('-oProxyCommand=x', 'ssh was not found, or the host is no SSH alias or address'));
+    // ssh that cannot be started.
+    const missing = setUp({}, (call) => {
+      if (call.file === '/usr/bin/ssh') throw Object.assign(new Error('spawn /usr/bin/ssh ENOENT'), { code: 'ENOENT' });
+      return undefined;
+    });
+    expect((await missing.cleanup.removeSshKey(['box']))[0]).toBe(ComputerCleanupTexts.keyLineLeft('box', 'spawn /usr/bin/ssh ENOENT'));
     expect(option.calls.some((call) => call.file === '/usr/bin/ssh')).toBe(false);
     write(path.join(remoteHome('box'), 'managed'), `${PUBLIC}\n`);
     fs.mkdirSync(path.dirname(authorizedKeys('box')), { recursive: true });
@@ -175,18 +203,19 @@ describe('the removal of the SSH key of Devspaces', () => {
     expect(fs.existsSync(keyPath())).toBe(true);
   });
 
-  it('reads the public key from the .pub file when ssh-keygen fails, and logs in nowhere when there is no key to read', async () => {
+  // Mutation: a fallback to the .pub file removes the lines of the key of that file, which need not be the private key
+  // that the login uses, and then deletes the key while its line stays.
+  it('reads the public key only from the private key, and logs in nowhere and keeps the key when that fails', async () => {
     keyFiles();
-    const fallback = setUp({}, (call) => (call.file === '/usr/bin/ssh-keygen' ? { exitCode: 1, stdout: '', stderr: 'bad passphrase', timedOut: false } : undefined));
     write(authorizedKeys('box'), `${PUBLIC}\n`);
-    expect(await fallback.cleanup.removeSshKey(['box'])).toEqual([]);
-    expect(fs.readFileSync(authorizedKeys('box'), 'utf8')).toBe('');
-    // Neither the private key nor its .pub file.
-    const missing = setUp({ sshKeygenPath: () => undefined });
-    const left = await missing.cleanup.removeSshKey(['box']);
-    expect(left).toHaveLength(1);
-    expect(left[0]).toMatch(/^The SSH key of Devspaces .* could not be read, so its line stays on the hosts: .*ENOENT/);
-    expect(missing.calls).toEqual([]);
+    const failing = setUp({}, (call) => (call.file === '/usr/bin/ssh-keygen' ? { exitCode: 1, stdout: '', stderr: 'invalid format', timedOut: false } : undefined));
+    expect(await failing.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyUnreadable(keyPath(), `the key ${keyPath()} could not be read: invalid format`)]);
+    expect(failing.calls.map((call) => call.file)).toEqual(['/usr/bin/ssh-keygen']);
+    expect(fs.readFileSync(authorizedKeys('box'), 'utf8')).toBe(`${PUBLIC}\n`);
+    expect(fs.existsSync(keyPath())).toBe(true);
+    const noKeygen = setUp({ sshKeygenPath: () => undefined });
+    expect(await noKeygen.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyUnreadable(keyPath(), 'ssh-keygen was not found on this computer.')]);
+    expect(noKeygen.calls).toEqual([]);
   });
 
   it('only deletes the key files when no host has the line', async () => {

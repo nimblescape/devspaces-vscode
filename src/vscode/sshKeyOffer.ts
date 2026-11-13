@@ -182,7 +182,7 @@ export class SshKeyOffer {
       if (result.exitCode !== 0) throw new Error(`~/.ssh/authorized_keys on ${host} could not be changed: ${result.stderr.trim() || `exit code ${result.exitCode}`}`);
       if (result.stdout.trim() === AUTHORIZED_KEY_ADDED) added = key;
       logger.info(`The public key of Devspaces is in ~/.ssh/authorized_keys of the account on ${host}${added ? ' now' : ' already'}.`);
-      const detail = await this.checkLogin(host);
+      const detail = await this.runWithKey(host, 'true');
       if (detail !== undefined) throw new Error(`a login with the key failed: ${detail}`);
       await state.setSshKey(host, 'installed');
       logger.info(`Devspaces logs in to ${host} with its key ${this.keyPath} from now on.`);
@@ -265,8 +265,8 @@ export class SshKeyOffer {
     return this.publicKey();
   }
 
-  /** The public key of the key file of Devspaces. */
-  private async publicKey(): Promise<PublicKey> {
+  /** The public key of the key file of Devspaces (also for "Remove Devspaces from This Computer…", computerCleanup.ts). */
+  async publicKey(): Promise<PublicKey> {
     const keygen = this.options.sshKeygenPath();
     if (keygen === undefined) throw new Error('ssh-keygen was not found on this computer.');
     // The public key from the private key itself, so a missing or other .pub file does not count.
@@ -276,12 +276,16 @@ export class SshKeyOffer {
     return key;
   }
 
-  /** A login to `host` without questions that may use only the key of Devspaces: undefined when it works, else why not. */
-  private async checkLogin(host: string): Promise<string | undefined> {
+  /**
+   * `command` on `host` with a login without questions that may use only the key of Devspaces (`true` for the test of the
+   * key; the removal of its line for "Remove Devspaces from This Computer…"): undefined when it exits with 0, else why
+   * not. Rejects when `ssh` cannot be started.
+   */
+  async runWithKey(host: string, command: string): Promise<string | undefined> {
     const ssh = this.options.sshPath();
     const target = sshTargetOf(host);
     if (ssh === undefined || target === undefined) return 'ssh was not found, or the host is no SSH alias or address.';
-    const result = await this.options.runner.run(ssh, sshCommandArgs(target, 'true', undefined, { identity: this.keyPath, identityOnly: true }), {
+    const result = await this.options.runner.run(ssh, sshCommandArgs(target, command, undefined, { identity: this.keyPath, identityOnly: true }), {
       env: noPromptEnv(this.options.env),
       timeoutMs: KEY_STEP_TIMEOUT_MS,
     });

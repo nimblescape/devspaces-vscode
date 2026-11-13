@@ -417,7 +417,8 @@ export class WslSetupCommands {
           await setup.removeLeftovers();
         } else {
           this.deps.beforeRemove?.();
-          await setup.remove();
+          // The next step of that command removes what no distribution uses in the folder, and names what stays.
+          if (!(await setup.remove())) logger.warn(`The WSL distribution ${WSL_DISTRIBUTION} was removed, but its folder ${folder} stays.`);
         }
         await this.deps.forgetHost(WSL_HOST).catch((error: unknown) => {
           // The distribution is gone; the list of Devspaces in the storage of VS Code goes with the extension.
