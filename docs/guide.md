@@ -331,7 +331,7 @@ When a newer image is available and the devspace has a container, running or sto
 
 - **Continue** updates the container. **Cancel** ends the start: nothing changes, and the window does not connect.
 - With `ask`, the buttons are **Update Now** and **Later**. **Later** opens the current container without the update; the next start asks again.
-- With `yes`, no dialog comes: the start updates the container at once. A running container is stopped and created again, and another window that is connected to it loses its connection. The progress notification says "A newer image is available. The devspace is updated. Your files are kept."
+- With `yes`, no dialog comes: the start updates the container at once, as after **Continue**, also when the container runs: it is stopped and created again. The progress notification says "A newer image is available. The devspace is updated. Your files are kept."
 
 A first start, a missing image, and **Rebuild** never ask.
 
