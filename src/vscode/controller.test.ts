@@ -4313,7 +4313,7 @@ describe('Remove Devspaces from This Computer…', () => {
           detail:
             'On each Docker host of the list (build-box): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and your devspace there. The devspaces of other computers there stay, but their operations that run then can fail. ' +
             'The VM of Devspaces with every devspace in it (one devspace of this VS Code), also those of another VS Code on this computer, its images and its volumes. ' +
-            'The SSH key of Devspaces on this computer, and its line in ~/.ssh/authorized_keys on build-box. ' +
+            'The SSH key of Devspaces on this computer, and its line in ~/.ssh/authorized_keys on build-box (not on a host where something of Devspaces stays). ' +
             `The scheduled task that starts the VM, the Docker context devspaces, and the folder ${FOLDER}. ` +
             'Each devspace is deleted with its container and all its volumes, also the clone of the repository. Changes that you did not push are lost. Recorded changes: acme/api (2 uncommitted · 1 unpushed). ' +
             'The devspaces of GitHub accounts that are not signed in to Devspaces stay: acme/web. ' +

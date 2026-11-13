@@ -97,7 +97,7 @@ export const ControllerTexts = {
   removeComputerVmLeftovers: 'The files that a setup of the VM of Devspaces left when it did not end.',
   removeComputerListUnreadable: 'Devspaces could not read its list of Docker hosts, so it stays on the remote hosts of the list, and so does its SSH key.',
   removeComputerKey: (hosts: readonly string[]) =>
-    `The SSH key of Devspaces on this computer${hosts.length > 0 ? `, and its line in ~/.ssh/authorized_keys on ${listSome(hosts)}` : ''}.`,
+    `The SSH key of Devspaces on this computer${hosts.length > 0 ? `, and its line in ~/.ssh/authorized_keys on ${listSome(hosts)} (not on a host where something of Devspaces stays)` : ''}.`,
   removeComputerFiles: (folder: string | undefined) =>
     `The scheduled task that starts the VM, the Docker context devspaces${folder !== undefined ? `, and the folder ${folder}` : ''}.`,
   /** `changes`: the recorded changes of the devspaces that are deleted (recordedChanges), or "none". */

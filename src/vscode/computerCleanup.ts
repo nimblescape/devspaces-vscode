@@ -123,6 +123,8 @@ export const ComputerCleanupTexts = {
     `The SSH key of Devspaces stays on this computer (${keyPath}), and so does its line on ${hosts.join(', ')}, where something of Devspaces stays, so that a new run of the command can still log in there with it.`,
   listUnreadable: (detail: string) =>
     `The list of Docker hosts of Devspaces could not be read (${detail}), so Devspaces stays on the remote hosts of the list, and so does its SSH key with its line there. Run the command again when the list can be read, or remove them by hand (Uninstall in the user guide).`,
+  keyGone: (keyPath: string, hosts: readonly string[]) =>
+    `The SSH key of Devspaces ${keyPath} is gone, so Devspaces cannot log in with it to remove its line in ~/.ssh/authorized_keys on ${hosts.join(', ')}. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
   keyUnreadable: (keyPath: string, detail: string, hosts: readonly string[]) =>
     `The SSH key of Devspaces ${keyPath} could not be read (${detail.replace(/\.$/, '')}), so its line stays in ~/.ssh/authorized_keys on ${hosts.join(', ')}. ${ComputerCleanupTexts.removeLinesByHand(keyPath)}`,
   vmUnknown: (detail: string) =>
@@ -217,14 +219,21 @@ export class ComputerCleanup {
       // key would remove other lines and leave the line of the key.
       const key = await this.deps.key.publicKey().catch((error: unknown) => ({ error }));
       if ('error' in key) {
+        // A key that is gone (deleted by hand): no run can log in with it any more, so the records of `hosts` forget it,
+        // so that the next run does not name it again; its lines stay for the removal by hand.
+        if ((await pathState(keyPath)) === 'missing') {
+          const text = ComputerCleanupTexts.keyGone(keyPath, [...hosts, ...keepFor]);
+          logger.warn(text);
+          for (const host of hosts) await this.forgetKey(host);
+          return [text];
+        }
         const text = ComputerCleanupTexts.keyUnreadable(keyPath, errorMessage(key.error), [...hosts, ...keepFor]);
         logger.warn(text);
         return [text];
       }
       for (const host of hosts) {
         const failure = await this.removeKeyLine(host, key);
-        const forget = (): Promise<void> =>
-          this.deps.state.setSshKey(host, undefined).catch((error: unknown) => logger.warn(`The key state of ${host} could not be recorded: ${errorMessage(error)}`));
+        const forget = (): Promise<void> => this.forgetKey(host);
         if (failure === undefined) {
           logger.info(`The line of the SSH key of Devspaces was removed from ~/.ssh/authorized_keys on ${host}.`);
           await forget();
@@ -300,6 +309,11 @@ export class ComputerCleanup {
   }
 
   /** Removes the line of `key` on `host` with a login that may use only the key; undefined when it went, else why not. */
+  /** The record of `host` forgets the key (sshKey). Never throws. */
+  private async forgetKey(host: string): Promise<void> {
+    await this.deps.state.setSshKey(host, undefined).catch((error: unknown) => this.deps.logger.warn(`The key state of ${host} could not be recorded: ${errorMessage(error)}`));
+  }
+
   private async removeKeyLine(host: string, key: PublicKey): Promise<string | undefined> {
     // In `sh`, whatever the login shell of the account is.
     return this.deps.key.runWithKey(host, `sh -c ${shellWord(removeKeyLinesCommand(key))}`).catch((error: unknown) => errorMessage(error));

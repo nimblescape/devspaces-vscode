@@ -333,6 +333,17 @@ describe('the removal of the SSH key of Devspaces', () => {
     const noKeygen = setUp({ sshKeygenPath: () => undefined });
     expect(await noKeygen.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyUnreadable(keyPath(), 'ssh-keygen was not found on this computer.', ['box'])]);
     expect(noKeygen.calls).toEqual([]);
+    expect(noKeygen.state.setSshKey).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a key that the user deleted by hand named as a key that cannot be read at every run, so that the command
+  // never ended without something that stays, because the records still named its hosts.
+  it('forgets the key for its hosts when the key is gone, and names its lines to remove by hand', async () => {
+    const { cleanup, state, calls } = setUp({}, (call) => (call.file === '/usr/bin/ssh-keygen' ? { exitCode: 1, stdout: '', stderr: 'No such file or directory', timedOut: false } : undefined));
+    expect(await cleanup.removeSshKey(['box'], ['me@cloud'])).toEqual([ComputerCleanupTexts.keyGone(keyPath(), ['box', 'me@cloud'])]);
+    expect(state.setSshKey.mock.calls).toEqual([['box', undefined]]);
+    expect(calls.filter((call) => call.file === '/usr/bin/ssh')).toEqual([]);
+    expect(ComputerCleanupTexts.keyGone(keyPath(), ['box'])).toContain(`${keyPath()} is gone, so Devspaces cannot log in with it to remove its line in ~/.ssh/authorized_keys on box. Remove each line`);
   });
 
   // Mutation: the key deleted after another window added its line on a new host while the command ran.
