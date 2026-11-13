@@ -54,6 +54,24 @@ describe('the report of a resource', () => {
     expect(report).toMatchObject({ summary: [], notices: [], monitorLog: false });
   });
 
+  it('offers Show Log on the report of every container whose log driver keeps a log, by its full ID; the Monitor has its own', () => {
+    const id = '0123456789abcdef'.repeat(4);
+    const web: HostObject = { kind: 'container', id, name: 'shop-web-1', purpose: 'notDevspaces', state: 'running' };
+    const details = (logDriver?: string): Parameters<typeof resourceReport>[0]['details'] => ({ kind: 'container', labels: new Map(), env: new Map(), mounts: [], ports: [], networks: [], ...(logDriver !== undefined ? { logDriver } : {}) });
+    expect(resourceReport({ object: web, details: details('json-file'), computer: COMPUTER, clock: CLOCK })).toMatchObject({ monitorLog: false, containerLog: id });
+    // Without the facts of Docker, the button stays: Docker says why when the log cannot be read.
+    expect(resourceReport({ object: web, computer: COMPUTER, clock: CLOCK }).containerLog).toBe(id);
+    // The log driver none keeps no log: no Show Log, and the facts say why.
+    const none = resourceReport({ object: web, details: details('none'), computer: COMPUTER, clock: CLOCK });
+    expect(none.containerLog).toBeUndefined();
+    expect(JSON.stringify(none.sections)).toContain('none (Docker keeps no log of it)');
+    // The Monitor: Show Log of the Monitor, by its name. An image, a volume or a network has no log.
+    const monitor = resourceReport({ object: { kind: 'container', id, name: 'devspaces-monitor', purpose: 'monitor' }, computer: COMPUTER, clock: CLOCK });
+    expect(monitor).toMatchObject({ monitorLog: true });
+    expect(monitor.containerLog).toBeUndefined();
+    expect(resourceReport({ object: { kind: 'image', id: `sha256:${id}`, name: 'nginx:1.27', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK }).containerLog).toBeUndefined();
+  });
+
   it('says what could not be read', () => {
     const notices = (volumes: Parameters<typeof resourceReport>[0]['volumes'], detailsProblem?: string): string[] =>
       resourceReport({ object: shared('devspaces-monitor'), volumes, computer: COMPUTER, clock: CLOCK, ...(detailsProblem !== undefined ? { detailsProblem } : {}) }).notices;

@@ -493,6 +493,12 @@
         "icon": "$(preview)"
       },
       {
+        "command": "devspaces.showContainerLog",
+        "title": "Show Log",
+        "category": "Devspaces",
+        "icon": "$(output)"
+      },
+      {
         "command": "devspaces.stopDockerObject",
         "title": "Stop",
         "category": "Devspaces",
@@ -656,6 +662,10 @@
         },
         {
           "command": "devspaces.showResourceReport",
+          "when": "false"
+        },
+        {
+          "command": "devspaces.showContainerLog",
           "when": "false"
         },
         {
@@ -899,6 +909,11 @@
           "command": "devspaces.showResourceReport",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;/",
           "group": "0_report@1"
+        },
+        {
+          "command": "devspaces.showContainerLog",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;container;/ && config.devspaces.allowContainerLogs",
+          "group": "0_report@2"
         },
         {
           "command": "devspaces.stop",
@@ -1314,7 +1329,7 @@
           "type": "boolean",
           "scope": "application",
           "default": false,
-          "markdownDescription": "Allow **Show Log of the Monitor** on its reports in the view Docker Hosts. Off: the reports have no Show Log, and the Docker pipes of Devspaces refuse the log of every container.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
+          "markdownDescription": "Allow **Show Log** of every container in the view Docker Hosts: in the menu of each container row and on the report of a container, also of a container that is not of Devspaces, and **Show Log of the Monitor** on its reports. Off: no Show Log, and the Docker pipes of Devspaces refuse the log of every container.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
         },
         "devspaces.dockerHostsSettingsButton": {
           "order": 25,

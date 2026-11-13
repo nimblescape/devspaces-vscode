@@ -50,7 +50,7 @@ import { presentLima } from '../core/vm/lima';
 import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
-import { readMonitorLog } from '../core/hosts/monitorLog';
+import { readContainerLog } from '../core/hosts/monitorLog';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostCheck, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
@@ -120,6 +120,7 @@ import { dockerAdapterOptions } from './dockerAdapterOptions';
 import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerHostsView } from './dockerHostsView';
 import { ReportPages } from './reportPage';
+import { ContainerLogs } from './containerLogs';
 import { HostConsoles } from './hostConsole';
 import { chooseDockerHostsSettings } from './dockerHostsSettings';
 import { UsagePages } from './usagePage';
@@ -1555,6 +1556,19 @@ async function activateExtension(
       currentHelperTag = undefined;
       return undefined;
     }));
+  // Show Log of a container of the view Docker Hosts and of its reports (R-ENG-008, R-ENG-010): never a log while the
+  // setting devspaces.allowContainerLogs is off (the view and the pages show no Show Log then, and the Docker pipe of the
+  // extension refuses the log too; this covers the shared shell of the host, which has no such filter), and never on a
+  // VM that does not run.
+  const containerLogs = new ContainerLogs({
+    logger,
+    allowed: () => settings.allowContainerLogs === true,
+    vmHost,
+    vmState: readVmState,
+    read: (host, container, timeZone) => (settings.allowContainerLogs === true ? onHostShell(host, () => readContainerLog(docker, container, timeZone)) : Promise.reject(new Error(CONTAINER_LOGS_OFF))),
+    timeZone: () => usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
+  });
+  context.subscriptions.push(containerLogs);
   const reportPages = new ReportPages({
     extensionUri: context.extensionUri,
     logger,
@@ -1571,9 +1585,7 @@ async function activateExtension(
       return onHostShell(target.host, () => readResourceReport(docker, { object: target.object, ...(helperTag !== undefined ? { currentHelperTag: helperTag } : {}), computer, clock }));
     },
     objectOf: (host, kind, id) => hostsView?.objectOf(host, kind, id),
-    // Never a log while the setting devspaces.allowContainerLogs is off: the page shows no Show Log then, and the Docker
-    // pipe of the extension refuses the log too; this covers the shared shell of the host, which has no such filter.
-    readMonitorLog: (host, timeZone) => (settings.allowContainerLogs === true ? onHostShell(host, () => readMonitorLog(docker, timeZone)) : Promise.reject(new Error(CONTAINER_LOGS_OFF))),
+    showLog: (log) => containerLogs.show(log),
     clock: () => ({ now: Date.now(), timeZone: usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) }),
     allowed: () => ({ actions: dockerHostsActionsAllowed(settings), logs: settings.allowContainerLogs === true }),
   });
@@ -1721,6 +1733,7 @@ async function activateExtension(
     dockerHosts,
     usagePages,
     reportPages,
+    containerLogs,
     vm: vmCommands,
     hostConsoles,
     dockerHostsSettings: () => chooseDockerHostsSettings({ logger, settings: () => settings }),

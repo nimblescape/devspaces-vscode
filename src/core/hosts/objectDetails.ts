@@ -57,6 +57,8 @@ export interface ContainerDetails {
   finishedAt?: string;
   exitCode?: number;
   restartPolicy?: string;
+  /** Its log driver (`json-file`, `local`, `none`, …): `none` keeps no log that Show Log could read. */
+  logDriver?: string;
   /** Its environment variables of KEPT_ENV. */
   env: Map<string, string>;
   mounts: MountDetail[];
@@ -175,6 +177,7 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
       const state = isRecord(value.State) ? value.State : {};
       const host = isRecord(value.HostConfig) ? value.HostConfig : {};
       const restart = isRecord(host.RestartPolicy) ? nonEmptyText(host.RestartPolicy.Name) : undefined;
+      const logDriver = isRecord(host.LogConfig) ? nonEmptyText(host.LogConfig.Type) : undefined;
       const network = isRecord(value.NetworkSettings) ? value.NetworkSettings : {};
       const exitCode = typeof state.ExitCode === 'number' ? state.ExitCode : undefined;
       return {
@@ -188,6 +191,7 @@ export function parseObjectDetails(kind: HostObjectKind, value: unknown): Object
         ...optional('finishedAt', nonEmptyText(state.FinishedAt)),
         ...optional('exitCode', exitCode),
         ...optional('restartPolicy', restart),
+        ...optional('logDriver', logDriver),
         env: keptEnv(config.Env),
         mounts: parseMounts(value.Mounts),
         ports: parsePorts(network.Ports),
@@ -337,6 +341,7 @@ export function dockerFactsSections(object: HostObject, details: ObjectDetails |
       const finished = state !== undefined && ENDED_STATES.includes(state) ? dockerTimeText(container?.finishedAt, clock) : undefined;
       push(finished !== undefined ? fact('Last end', `${finished}${container?.exitCode !== undefined ? ` · exit code ${container.exitCode}` : ''}`) : undefined);
       push(restartFact(container?.restartPolicy));
+      push(container?.logDriver !== undefined ? fact('Log driver', container.logDriver === 'none' ? 'none (Docker keeps no log of it)' : container.logDriver) : undefined);
       push(composeFact(container?.labels ?? new Map(), 'service'));
       push(container !== undefined && container.ports.length > 0 ? fact('Ports', listText(container.ports)) : undefined);
       const networks = container?.networks ?? object.networks ?? [];

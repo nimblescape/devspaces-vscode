@@ -92,9 +92,9 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
 ];
 
 /**
- * Show Log of the Monitor on its report (monitorLog.ts): `docker logs devspaces-monitor` inspects the container first and
- * then asks for the log by the ID of the container, so the pipe of the extension lets through the log of any container,
- * but only while the setting allowContainerLogs is on (extensionPipeRule).
+ * Show Log of a container of the view Docker Hosts and its reports (monitorLog.ts): `docker logs` inspects the container
+ * first and then asks for the log by the ID of the container, so the pipe of the extension lets through the log of any
+ * container, but only while the setting allowContainerLogs is on (extensionPipeRule).
  */
 export const CONTAINER_LOGS_ENDPOINT: Endpoint = endpoint('GET', `/containers/${NAME}/logs`);
 

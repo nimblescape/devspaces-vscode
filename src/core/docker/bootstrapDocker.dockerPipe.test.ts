@@ -9,7 +9,7 @@
 // for the local Docker, the calls go as before.
 import { describe, expect, it, vi } from 'vitest';
 import { silentLogger, type Logger, type ProcessRunner, type RunOptions, type RunResult, type StartedProcess } from '../ports';
-import { monitorLogArgs } from '../hosts/monitorLog';
+import { containerLogArgs, monitorLogArgs } from '../hosts/monitorLog';
 import { volumeReaderArgs } from '../hosts/volumeReader';
 import { BootstrapDocker, isSharedShellCall, isShellCall } from './bootstrapDocker';
 import { LOCAL_DOCKER_TARGET, WSL_HOST, remoteDockerTarget, type DockerTarget } from './dockerHost';
@@ -529,10 +529,13 @@ describe('isSharedShellCall', () => {
     }
   });
 
-  it('takes the log of the Monitor exactly as monitorLogArgs makes it, no other docker logs', () => {
+  it('takes the log of a container exactly as containerLogArgs makes it, no other docker logs', () => {
+    const id = '0123456789abcdef'.repeat(4);
     for (const vm of [false, true]) {
       expect(isSharedShellCall(monitorLogArgs(), vm)).toBe(true);
+      expect(isSharedShellCall(containerLogArgs(id), vm)).toBe(true);
       expect(isSharedShellCall(['logs', '--follow', 'devspaces-monitor'], vm)).toBe(false);
+      expect(isSharedShellCall(['logs', '--follow', id], vm)).toBe(false);
       expect(isSharedShellCall(['logs', 'shop-web-1'], vm)).toBe(false);
     }
   });

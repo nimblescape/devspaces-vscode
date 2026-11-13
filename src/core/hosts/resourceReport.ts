@@ -19,6 +19,7 @@ import { devspaceReport, isDevspaceObject } from './devspaceReport';
 import { helperReport, isHelperContainer } from './helperReport';
 import { imageReport, imageReportNeedsRecords, isImageReportObject } from './imageReport';
 import type { HostObject } from './hostObjects';
+import { isLogContainer } from './monitorLog';
 import { monitorRecords, type MonitorRecords } from './monitorRecords';
 import { monitorContainerReport, monitorVolumeReport, type ReportComputer, type ReportDevspace } from './monitorReport';
 import { dockerFactsSections, type ObjectDetails } from './objectDetails';
@@ -128,10 +129,15 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
   }
   const notices = [...readNotices(input.volumes, object.kind === 'volume'), ...(own?.notices ?? [])];
   if (input.detailsProblem !== undefined) notices.push(`Docker could not give the facts of this object: ${input.detailsProblem}`);
+  const monitorLog = own?.monitorLog ?? false;
+  // Show Log of every other container, by its full ID; not when Docker says that its log driver keeps no log.
+  const logDriver = details?.kind === 'container' ? details.logDriver : undefined;
+  const containerLog = object.kind === 'container' && !monitorLog && logDriver !== 'none' && isLogContainer(object.id) ? object.id : undefined;
   return {
     summary: own?.summary ?? [],
     sections: [...(own?.sections ?? []), ...dockerFactsSections(object, details, clock)],
     notices,
-    monitorLog: own?.monitorLog ?? false,
+    monitorLog,
+    ...optional('containerLog', containerLog),
   };
 }
