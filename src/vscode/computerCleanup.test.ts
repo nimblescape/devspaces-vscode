@@ -16,6 +16,7 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 
 import type { RunOptions, RunResult } from '../core/ports';
 import { WslSetupError } from '../core/docker/wslSetup';
+import { NO_KEY_LINE_TEXT } from '../core/sshKey';
 import { ComputerCleanup, ComputerCleanupTexts, computerVmState, type ComputerCleanupDeps } from './computerCleanup';
 import { SshKeyOffer } from './sshKeyOffer';
 
@@ -278,6 +279,13 @@ describe('the removal of the SSH key of Devspaces', () => {
     const keyText = `ssh-ed25519 ${BLOB}`;
     expect(await cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyElsewhere('box', keyText)]);
     expect(state.setSshKey.mock.calls).toEqual([['box', undefined]]);
+    expect(fs.existsSync(keyPath())).toBe(false);
+    // Also after a banner of the host.
+    keyFiles();
+    const banner = setUp({}, (call) =>
+      call.file === '/usr/bin/ssh' ? { exitCode: 4, stdout: '', stderr: `Authorized use only.\n${NO_KEY_LINE_TEXT}\n`, timedOut: false } : undefined,
+    );
+    expect(await banner.cleanup.removeSshKey(['box'])).toEqual([ComputerCleanupTexts.keyElsewhere('box', keyText)]);
     expect(fs.existsSync(keyPath())).toBe(false);
     expect(ComputerCleanupTexts.keyElsewhere('box', keyText)).toContain(`or the login used another key of yours (IdentityFile in ~/.ssh/config). If box has a line with the key "${keyText}", remove it by hand.`);
   });

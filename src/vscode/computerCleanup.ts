@@ -235,7 +235,8 @@ export class ComputerCleanup {
         // file, a line with options, or another key of the user from ~/.ssh/config): no later run removes a line there,
         // so the key does not stay for it, and the record forgets it, so that the next run does not try again.
         const refused = /Permission denied \(/.test(failure);
-        if (refused || failure === NO_KEY_LINE_TEXT) {
+        // Its own line in what ssh wrote: a host can write a banner or other lines before it.
+        if (refused || failure.split('\n').some((line) => line.trim() === NO_KEY_LINE_TEXT)) {
           const keyText = `${key.type} ${key.blob}`;
           const text = refused ? ComputerCleanupTexts.keyRefused(host, keyText) : ComputerCleanupTexts.keyElsewhere(host, keyText);
           logger.warn(refused ? `${text} (${failure.replace(/\.$/, '')})` : text);

@@ -91,7 +91,7 @@ export const ControllerTexts = {
   thisComputer: 'this computer',
   removeComputerQuestion: 'Remove Devspaces from this computer?',
   removeComputerEngines: (engines: readonly string[], devspaces: number) =>
-    `On each Docker host of the list (${listSome(engines)}): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and ${devspaces === 0 ? 'no devspace of yours' : devspaces === 1 ? 'your devspace there' : `your ${devspaces} devspaces there`}.`,
+    `On each Docker host of the list (${listSome(engines)}): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and ${devspaces === 0 ? 'no devspace of yours' : devspaces === 1 ? 'your devspace there' : `your ${devspaces} devspaces there`}. The devspaces of other computers there stay, but their operations that run then can fail.`,
   removeComputerVm: (devspaces: number) =>
     `The VM of Devspaces with every devspace in it${devspaces > 0 ? ` (${devspaces === 1 ? 'one devspace' : `${devspaces} devspaces`} of this VS Code)` : ''}, also those of another VS Code on this computer, its images and its volumes.`,
   removeComputerVmLeftovers: 'The files that a setup of the VM of Devspaces left when it did not end.',

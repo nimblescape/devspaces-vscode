@@ -4311,7 +4311,7 @@ describe('Remove Devspaces from This Computer…', () => {
         {
           modal: true,
           detail:
-            'On each Docker host of the list (build-box): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and your devspace there. ' +
+            'On each Docker host of the list (build-box): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and your devspace there. The devspaces of other computers there stay, but their operations that run then can fail. ' +
             'The VM of Devspaces with every devspace in it (one devspace of this VS Code), also those of another VS Code on this computer, its images and its volumes. ' +
             'The SSH key of Devspaces on this computer, and its line in ~/.ssh/authorized_keys on build-box. ' +
             `The scheduled task that starts the VM, the Docker context devspaces, and the folder ${FOLDER}. ` +
