@@ -1577,6 +1577,9 @@ export class Controller implements vscode.Disposable {
     const known = await this.deps.registry.list();
     const here = known.filter((devspace) => isOnDockerHost(devspace, target.host));
     if (await this.removalRefusedByUse(engine, here)) return;
+    // A removal that began in this window during the checks above (also "Remove Devspaces from This Computer…") keeps
+    // its guard: nothing is awaited between this check and the guard below.
+    if (this.refusedWhileRemoving('Remove Devspaces')) return;
     // From here on, also while it looks for what Devspaces has there and asks, a second run and the operations of the
     // window are refused (refusedWhileRemoving).
     this.removingFrom = { kind: 'engine', host: target.host, engine };

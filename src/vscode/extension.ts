@@ -53,7 +53,7 @@ import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmS
 import { readMonitorLog } from '../core/hosts/monitorLog';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
-import { limaDockerSocket, limaEnv, limaPaths, limaResources, type LimaResources } from '../core/vm/limaInstance';
+import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
 import { consoleResizeCommand, limaConsoleArgs, sshConsoleArgs, wslConsoleArgs, wslConsoleResizeArgs } from '../core/hosts/hostConsole';
 import { OomWatch } from '../core/vm/oomKills';
 import { readVmArch } from '../core/vm/vmArch';
@@ -1765,8 +1765,7 @@ async function activateExtension(
         background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
       },
       key: sshKeys,
-      // The folder that removeDevspacesFiles removes: on macOS and Linux also without the Lima VM (for example without KVM).
-      folder: limaVm?.paths.root ?? (platform === 'darwin' || platform === 'linux' ? limaPaths(os.homedir()).root : wslFolder !== undefined ? path.win32.dirname(wslFolder) : undefined),
+      folder: limaVm?.paths.root ?? (wslFolder !== undefined ? path.win32.dirname(wslFolder) : undefined),
       files: { runner, platform, env, homeDir: os.homedir(), uid: () => os.userInfo().uid },
       uninstallExtension: async () => {
         await vscode.commands.executeCommand('workbench.extensions.uninstallExtension', context.extension.id);

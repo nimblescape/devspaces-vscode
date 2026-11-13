@@ -3490,6 +3490,23 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     );
   });
 
+  // Mutation: the guard of a removal that began in this window during the checks of this one overwritten, and then
+  // cleared at the end of this one while the other one still runs.
+  it('keeps the guard of a removal that began in this window during its checks, and removes nothing', async () => {
+    const fake = removalFake();
+    onBuildBox(fake);
+    const computerRemoval = { kind: 'computer', engine: ControllerTexts.thisComputer };
+    const list = h.registry.list.bind(h.registry);
+    h.registry.list = async () => {
+      (h.controller as unknown as { removingFrom: unknown }).removingFrom = computerRemoval;
+      return list();
+    };
+    await run('removeFromDockerEngine');
+    expect(fake.deps.engineAnswers).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
+    expect((h.controller as unknown as { removingFrom: unknown }).removingFrom).toBe(computerRemoval);
+  });
+
   it('a Start of the user clears the mark of its engine; while the removal runs, the operations of the window are refused', async () => {
     const fake = removalFake();
     onBuildBox(fake);
