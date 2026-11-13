@@ -35,6 +35,8 @@ const FIRST_USE_AND_LOGINS = [
 // The background container: where it keeps running (R-DS-003, no question), its end after 30 days, and the command that
 // removes it (the title in package.json).
 const REMOVE_COMMAND = 'Remove Devspaces from This Docker Engine…';
+// The command that removes everything before the uninstall (R-GEN-009).
+const REMOVE_COMPUTER_COMMAND = 'Remove Devspaces from This Computer…';
 const BACKGROUND_CONTAINER = ['On a remote host, this container keeps running', 'Devspaces asks no question about it.', '30 days', `**Devspaces: ${REMOVE_COMMAND}**`];
 
 /** The text of the section `## <heading>` up to the next `## ` heading. */
@@ -136,12 +138,14 @@ describe('the behaviors of Devspaces at the top of the Marketplace page', () => 
     expect(text).toContain('guide.md#installing-docker');
   });
 
-  it('has the section Uninstall as the last section of the README, with the command and the shared volumes', () => {
+  it('has the section Uninstall as the last section of the README, with the commands and the shared volumes', () => {
     const readme = read('README.md');
     const headings = [...readme.matchAll(/^## (.*)$/gm)].map((match) => match[1]);
     expect(headings.at(-1)).toBe('Uninstall');
     const text = section(readme, 'Uninstall');
-    expect(text).toContain(`**Devspaces: ${REMOVE_COMMAND}**`);
+    // The removal of everything first, then the removal of one part at a time.
+    expect(text.indexOf(`**Devspaces: ${REMOVE_COMPUTER_COMMAND}**`)).toBeGreaterThan(0);
+    expect(text.indexOf(`**Devspaces: ${REMOVE_COMMAND}**`)).toBeGreaterThan(text.indexOf(`**Devspaces: ${REMOVE_COMPUTER_COMMAND}**`));
     for (const volume of SHARED_VOLUMES) expect(text).toContain(`\`${volume}\``);
     expect(text).toContain('(https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#uninstall)');
   });
@@ -149,9 +153,11 @@ describe('the behaviors of Devspaces at the top of the Marketplace page', () => 
   it('has the section Uninstall in the user guide, with the commands that the log names and the files of Devspaces', () => {
     const { contributes } = JSON.parse(read('package.json')) as { contributes: { commands: Array<{ command: string; title: string }> } };
     expect(contributes.commands.find((command) => command.command === 'devspaces.removeFromDockerEngine')?.title).toBe(REMOVE_COMMAND);
+    expect(contributes.commands.find((command) => command.command === 'devspaces.removeFromComputer')?.title).toBe(REMOVE_COMPUTER_COMMAND);
     const guide = read('docs/guide.md');
     expect(guide).toContain('[Uninstall](#uninstall)');
     const text = section(guide, 'Uninstall');
+    expect(text.startsWith(`\n## Uninstall\n\n**Devspaces: ${REMOVE_COMPUTER_COMMAND}**`)).toBe(true);
     expect(text).toContain(`**Devspaces: ${REMOVE_COMMAND}**`);
     for (const volume of SHARED_VOLUMES) expect(text).toContain(`\`${volume}\``);
     for (const command of uninstallCommands()) expect(text).toContain(command);

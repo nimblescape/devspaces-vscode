@@ -78,13 +78,84 @@ describe('LimaSetup.stop and LimaSetup.remove (R-VM-010)', () => {
   });
 
   it('removes the VM with its disk under the lock of the setup, and says false when there was none', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
     const existing = fakeRunner({ status: 'Stopped' });
     await expect(setup(existing.runner).remove()).resolves.toBe(true);
     expect(existing.calls.map((call) => call.slice(0, 4).join(' '))).toEqual(['limactl list --json', 'limactl delete --force devspaces']);
     expect(fs.existsSync(path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock'))).toBe(false);
+    // Without the folder of the VM, no Lima is needed (it is not installed for that).
+    fs.rmSync(folder, { recursive: true });
+    let installed = false;
     const missing = fakeRunner({ status: '' });
-    await expect(setup(missing.runner).remove()).resolves.toBe(false);
-    expect(missing.calls.map((call) => call[1])).toEqual(['list']);
+    await expect(
+      setup(missing.runner, {
+        vm: new LimaVm({ runner: missing.runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths: limaPaths(home), install: async () => ((installed = true), '/lima/bin/limactl') }),
+      }).remove(),
+    ).resolves.toBe(false);
+    expect(missing.calls).toEqual([]);
+    expect(installed).toBe(false);
+  });
+
+  // Mutation: a folder of the VM without its lima.yaml, or with a lima.yaml that Lima does not list, that stays, so that
+  // the folder of Devspaces stays at every run of "Remove Devspaces from This Computer…".
+  it('removes the folder of a VM that limactl create left without its lima.yaml, and a folder with a lima.yaml that Lima does not list', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(path.join(folder, 'cidata'), { recursive: true });
+    // Also when Lima cannot be installed (offline).
+    const halfDone = fakeRunner({ status: '' });
+    const offline = new LimaVm({ runner: halfDone.runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths: limaPaths(home), install: async () => Promise.reject(new Error('offline')) });
+    await expect(setup(halfDone.runner, { vm: offline }).remove()).resolves.toBe(true);
+    expect(fs.existsSync(folder)).toBe(false);
+    expect(halfDone.calls).toEqual([]);
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    const unlisted = fakeRunner({ status: '' });
+    await expect(setup(unlisted.runner).remove()).resolves.toBe(true);
+    expect(fs.existsSync(folder)).toBe(false);
+    // limactl delete first, which stops a VM that runs when Lima still knows it.
+    expect(unlisted.calls.map((call) => call[1])).toEqual(['list', 'delete']);
+    // Mutation: the folder deleted after a failed limactl delete, under a VM that may still run.
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    const failing = fakeRunner({ status: '' });
+    const runner: ProcessRunner = {
+      run: async (file, args, options) => (args[0] === 'delete' ? { exitCode: 1, stdout: '', stderr: 'FATA[0000] instance "devspaces" is running', timedOut: false } : failing.runner.run(file, args, options)),
+    };
+    await expect(setup(runner).remove()).rejects.toThrow(/running/);
+    expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
+  });
+
+  // Mutation: a VM that another window set up after a question that named only the files of a setup deleted with every
+  // devspace in it, because the check before the lock did not see it yet.
+  it('keeps a VM with its lima.yaml when only the files of a setup are to go, and removes those files', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    let installed = false;
+    const { runner, calls } = fakeRunner({ status: 'Stopped' });
+    const vm = new LimaVm({ runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths: limaPaths(home), install: async () => ((installed = true), '/lima/bin/limactl') });
+    await expect(setup(runner, { vm }).remove(true)).resolves.toBe('setUp');
+    expect(calls).toEqual([]);
+    expect(installed).toBe(false);
+    expect(fs.existsSync(path.join(folder, 'lima.yaml'))).toBe(true);
+    fs.rmSync(path.join(folder, 'lima.yaml'));
+    await expect(setup(runner, { vm }).remove(true)).resolves.toBe(true);
+    expect(fs.existsSync(folder)).toBe(false);
+  });
+
+  // Mutation: Lima installed under the lock of the setup, so that its download holds the lock of all windows.
+  it('installs Lima for the removal before it takes the lock of the setup', async () => {
+    const folder = path.join(limaPaths(home).home, 'devspaces');
+    fs.mkdirSync(folder, { recursive: true });
+    fs.writeFileSync(path.join(folder, 'lima.yaml'), 'images: []\n');
+    const lock = path.join(home, '.nimblescape', 'devspaces', 'vm-setup.lock');
+    const locked: boolean[] = [];
+    const { runner } = fakeRunner({ status: 'Stopped' });
+    const vm = new LimaVm({ runner, logger: silentLogger, platform: 'darwin', arch: 'arm64', paths: limaPaths(home), install: async () => (locked.push(fs.existsSync(lock)), '/lima/bin/limactl') });
+    await expect(setup(runner, { vm }).remove()).resolves.toBe(true);
+    expect(locked).toEqual([false]);
   });
 
   it('removes nothing while another window sets up the VM', async () => {

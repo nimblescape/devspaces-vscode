@@ -41,6 +41,7 @@ import { GITHUB_ENTERPRISE_CONTEXT_KEY, SIGNED_IN_CONTEXT_KEY } from './auth';
 import { Commands } from './commands';
 import { CONNECTED_CONTEXT_KEY, Controller, HELPER_BUILDS_STOP_WAIT_MS, type ControllerDeps } from './controller';
 import { placeholderRepositoryInfo } from './targets';
+import { ComputerCleanupTexts } from './computerCleanup';
 import { ControllerTexts } from './controllerTexts';
 import { DisconnectRequests } from './disconnectRequests';
 import { DOUBLE_CLICK_INTERVAL_MS, type ListOpenMode } from './rowActivation';
@@ -301,6 +302,8 @@ function createHarness(
     /** "Remove Devspaces from This Docker Engine…". Default: none (the command does nothing). */
     engineRemoval?: ControllerDeps['engineRemoval'];
     /** The end of "Remove Devspaces from This Docker Engine…". Default: none. */
+    /** The steps of "Remove Devspaces from This Computer…" besides the engines. Default: none (the command does nothing). */
+    computerCleanup?: ControllerDeps['computerCleanup'];
     /** "Update All Images Now". Default: none (the command does nothing). */
     updateImagesNow?: ControllerDeps['updateImagesNow'];
     /** The step "Docker start" that "Update All Images Now" runs in its progress. Default: none. */
@@ -502,6 +505,7 @@ function createHarness(
     sessionMonitor: options.sessionMonitor,
     engineRecords,
     engineRemoval: options.engineRemoval,
+    computerCleanup: options.computerCleanup,
     updateImagesNow: options.updateImagesNow,
     startDocker: options.startDocker,
     dockerHosts: options.dockerHosts,
@@ -706,17 +710,18 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 54 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
+    // 55 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, and the commands of the rows
-    // of the view "Docker Hosts". The last ones that were added are Open Console of a host row and the gear Docker Hosts
-    // Settings… of the view "Docker Hosts" (R-ENG-008), before them Show Report of an object row of the view "Docker
+    // of the view "Docker Hosts". The last one that was added is Remove Devspaces from This Computer… of the "…" menu of
+    // the repository view (R-GEN-009), before it Open Console of a host row and the gear Docker Hosts Settings… of the
+    // view "Docker Hosts" (R-ENG-008), before them Show Report of an object row of the view "Docker
     // Hosts" (R-ENG-010), before it Show Utilization of a host row (R-ENG-009), before it Start of a container and Remove Unused Build Cache… of the view (R-ENG-008), and
     // before them the view itself and the management of the VM of Devspaces in it (R-VM-010). The last one that was removed is "Use as Docker Host" of a host row of the view "Docker Hosts": the
     // Docker host of Devspaces is chosen only in the first row of the repository view (R-ENG-008); before it the
     // installation and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
-    expect(declared).toHaveLength(54);
+    expect(declared).toHaveLength(55);
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use as Docker Host');
     expect(declared).toEqual(
@@ -3485,6 +3490,23 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     );
   });
 
+  // Mutation: the guard of a removal that began in this window during the checks of this one overwritten, and then
+  // cleared at the end of this one while the other one still runs.
+  it('keeps the guard of a removal that began in this window during its checks, and removes nothing', async () => {
+    const fake = removalFake();
+    onBuildBox(fake);
+    const computerRemoval = { kind: 'computer', engine: ControllerTexts.thisComputer };
+    const list = h.registry.list.bind(h.registry);
+    h.registry.list = async () => {
+      (h.controller as unknown as { removingFrom: unknown }).removingFrom = computerRemoval;
+      return list();
+    };
+    await run('removeFromDockerEngine');
+    expect(fake.deps.engineAnswers).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
+    expect((h.controller as unknown as { removingFrom: unknown }).removingFrom).toBe(computerRemoval);
+  });
+
   it('a Start of the user clears the mark of its engine; while the removal runs, the operations of the window are refused', async () => {
     const fake = removalFake();
     onBuildBox(fake);
@@ -4177,7 +4199,7 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(h.connection.open).not.toHaveBeenCalled();
   });
 
-  it('is a command of package.json, in the Command Palette and last in the "…" menu of the view, in a group of its own', () => {
+  it('is a command of package.json, in the Command Palette and in the last group of the "…" menu of the view, with only Remove Devspaces from This Computer…', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -4193,14 +4215,660 @@ describe('Remove Devspaces from This Docker Engine…', () => {
       when: 'view == devspaces.repositories',
       group: '3_remove@1',
     });
-    // As Delete in the ⋯ menu of a row: the last item, apart from the others. VS Code sorts the groups of the "…" menu
-    // by name and puts the items without a group last; the items of the group navigation are the buttons of the title
-    // bar.
-    const more = manifest.contributes.menus['view/title'].filter((entry) => !entry.group?.startsWith('navigation'));
+    // As Delete in the ⋯ menu of a row: the last group, apart from the others, and in it only the removal of
+    // everything from this computer after it (R-GEN-009). VS Code sorts the groups of the "…" menu by name and puts
+    // the items without a group last; the items of the group navigation are the buttons of the title bar.
+    const more = manifest.contributes.menus['view/title'].filter((entry) => entry.when?.startsWith('view == devspaces.repositories') && !entry.group?.startsWith('navigation'));
     const withoutGroup = (entry: { group?: string }) => (entry.group ? 0 : 1);
     const sorted = [...more].sort((a, b) => withoutGroup(a) - withoutGroup(b) || (a.group ?? '').localeCompare(b.group ?? ''));
-    expect(sorted.at(-1)?.command).toBe(Commands.removeFromDockerEngine);
-    expect(more.filter((entry) => entry.group?.startsWith('3_remove@')).map((entry) => entry.command)).toEqual([Commands.removeFromDockerEngine]);
+    expect(sorted.slice(-2).map((entry) => entry.command)).toEqual([Commands.removeFromDockerEngine, Commands.removeFromComputer]);
+    expect(more.filter((entry) => entry.group?.startsWith('3_remove@')).map((entry) => entry.command)).toEqual([Commands.removeFromDockerEngine, Commands.removeFromComputer]);
+  });
+});
+
+describe('Remove Devspaces from This Computer…', () => {
+  const VM_ID = '7c1d2e3f-0000-4000-8000-000000000004';
+  const KEY = '/home/ann/.ssh/devspaces_ed25519';
+  const FOLDER = '/home/ann/.nimblescape/devspaces';
+  const modals = () => fakeVscode.window.showWarningMessage.mock.calls.filter((call: unknown[]) => (call[1] as { modal?: boolean } | undefined)?.modal === true);
+  /** The devspace of the signed-in account on build-box, with recorded changes. */
+  const ownRemote = (): Devspace =>
+    devspace({ dockerHost: 'build-box', gitSummary: { branch: 'main', uncommittedFiles: 2, unpushedCommits: 1, stashes: 0, recordedAt: iso(NOW - 3_600_000) } });
+  const otherAccountRemote = (): Devspace =>
+    devspace({ id: OTHER_ENV_ID, repository: 'acme/web', containerName: 'devspaces-acme-web-7c1d2e3f', volumeName: 'devspaces-acme-web-7c1d2e3f', dockerHost: 'build-box', owner: OTHER_ACCOUNT });
+  const inVm = (): Devspace => devspace({ id: VM_ID, repository: 'acme/vm', containerName: 'devspaces-acme-vm-1', volumeName: 'devspaces-acme-vm-1', dockerHost: LIMA_HOST });
+
+  /**
+   * A harness with the Docker hosts `hosts` of the list (each one its own removal fake, by the host of the operation)
+   * and the steps of the cleanup, which record what they do in `order` and return what stays from `left`.
+   */
+  function onComputer(
+    inventory: Partial<Awaited<ReturnType<NonNullable<ControllerDeps['computerCleanup']>['inventory']>>> = {},
+    answers: Record<string, boolean> = {},
+    inUse: string[] = [],
+  ) {
+    const order: string[] = [];
+    const left = { vm: undefined as string | undefined, key: [] as string[], files: [] as string[] };
+    const engines = inventory.engines ?? ['build-box'];
+    const fakes = new Map(engines.map((host) => [host, removalFake({ answers: answers[host] ?? true, engine: { inUse: [...inUse] } })]));
+    const fakeOf = () => {
+      const fake = fakes.get(operationDockerTarget()?.host ?? '');
+      if (fake === undefined) throw new Error(`no engine ${operationDockerTarget()?.host}`);
+      return fake;
+    };
+    const removal = {
+      engineAnswers: vi.fn(async (target: DockerTarget, signal: AbortSignal) => fakes.get(target.host)?.deps.engineAnswers(target, signal) ?? false),
+      docker: {
+        run: vi.fn(async (args: readonly string[]) => {
+          const result = await fakeOf().deps.docker.run(args);
+          if (!args[0]?.match(/^(ps|image|volume)$/) || args[1] === 'rm') order.push(`${operationDockerTarget()?.host}: docker ${args.join(' ')}`);
+          return result;
+        }),
+        listImagesByLabel: vi.fn(async () => fakeOf().deps.docker.listImagesByLabel()),
+      },
+      closeWorker: vi.fn((target: DockerTarget) => void order.push(`${target.host}: close the worker`)),
+      stopHelperBuilds: vi.fn(async (target: DockerTarget) => void order.push(`${target.host}: stop the helper builds`)),
+      computerId: () => 'c'.repeat(32),
+    };
+    const cleanup = {
+      inventory: vi.fn(async () => ({
+        listUnreadable: undefined as string | undefined,
+        engines,
+        vm: LIMA_HOST as string | undefined,
+        vmLeftovers: false,
+        keyHosts: ['build-box'],
+        keyFile: KEY as string | undefined,
+        folder: FOLDER as string | undefined,
+        ...inventory,
+      })),
+      vmMeanwhile: vi.fn(async (_removed: boolean): Promise<{ kind: 'setUp' } | { kind: 'unknown'; detail: string } | undefined> => undefined),
+      vmGone: vi.fn(() => void order.push('update the task and the context of the VM')),
+      removeVm: vi.fn(async () => {
+        order.push('remove the VM');
+        return left.vm;
+      }),
+      removeSshKey: vi.fn(async (hosts: readonly string[], keepFor: readonly string[] = []) => {
+        order.push(`remove the key and its line on ${hosts.join(', ') || 'no host'}${keepFor.length > 0 ? `, keep them for ${keepFor.join(', ')}` : ''}`);
+        return left.key;
+      }),
+      removeFiles: vi.fn(async () => {
+        order.push('remove the files');
+        return left.files;
+      }),
+      uninstallExtension: vi.fn(async () => void order.push('uninstall the extension')),
+    };
+    recreateHarness({
+      dockerTargets: {
+        resolve: async () => remoteDockerTarget('build-box'),
+        current: async () => operationDockerTarget() ?? remoteDockerTarget('build-box'),
+        withOperation: <T,>(fn: () => Promise<T>) => runWithDockerTarget(remoteDockerTarget('build-box'), fn),
+        ofHost: async (host: string) => remoteDockerTarget(host),
+      } as unknown as ControllerDeps['dockerTargets'],
+      engineRemoval: removal as unknown as ControllerDeps['engineRemoval'],
+      computerCleanup: cleanup,
+    });
+    h.service.deleteInWorker.mockImplementation(async (id: string) => {
+      order.push(`${operationDockerTarget()?.host}: delete ${id}`);
+      await h.registry.remove(id);
+    });
+    return { order, left, cleanup, removal };
+  }
+
+  it('asks once with everything it removes, then removes the engines, the VM, the key and the files, and uninstalls the extension', async () => {
+    // The devspace of the other account uses the store of the VS Code Server on build-box.
+    const { order } = onComputer({}, {}, ['devspaces-vscode']);
+    await h.registry.add(ownRemote());
+    await h.registry.add(otherAccountRemote());
+    await h.registry.add(inVm());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(modals()).toEqual([
+      [
+        'Remove Devspaces from this computer?',
+        {
+          modal: true,
+          detail:
+            'On each Docker host of the list (build-box): the container devspaces-monitor, the helper containers and helper images, the volumes of Devspaces, and your devspace there. The devspaces of other computers there stay, but their operations that run then can fail. ' +
+            'The VM of Devspaces with every devspace in it (one devspace of this VS Code), also those of another VS Code on this computer, its images and its volumes. ' +
+            'The SSH key of Devspaces on this computer, and its line in ~/.ssh/authorized_keys on build-box (not on a host where something of Devspaces stays). ' +
+            `The scheduled task that starts the VM, the Docker context devspaces, and the folder ${FOLDER}. ` +
+            'Each devspace is deleted with its container and all its volumes, also the clone of the repository. Changes that you did not push are lost. Recorded changes: acme/api (2 uncommitted · 1 unpushed). ' +
+            'The devspaces of GitHub accounts that are not signed in to Devspaces stay: acme/web. ' +
+            'Then VS Code uninstalls the extension. Your settings stay. This cannot be undone.',
+        },
+        'Remove Everything',
+      ],
+    ]);
+    // The devspace of the other account stays on build-box, and so does the store of the VS Code Server that it uses,
+    // which is no failure; the devspace in the VM goes with the VM.
+    expect(order).toEqual([
+      `build-box: delete ${ENV_ID}`,
+      'build-box: stop the helper builds',
+      'build-box: close the worker',
+      'build-box: docker rm -f m1',
+      'build-box: docker rm -f w1',
+      'build-box: docker image rm devspaces-monitor:0123456789ab',
+      'build-box: docker image rm devspaces-worker:0123456789ab',
+      'build-box: docker volume rm devspaces-monitor',
+      'build-box: docker volume rm devspaces-worker-cache',
+      'build-box: docker volume rm devspaces-vscode',
+      'remove the VM',
+      // The devspace of the other account stays on build-box, so the key keeps its line there (the fake keeps nothing).
+      'remove the key and its line on no host, keep them for build-box',
+      'remove the files',
+      'uninstall the extension',
+    ]);
+    expect(await h.engineRecords.removed('build-box')).toBe(true);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.removedFromComputer);
+    expect(h.progressTitles.some((title) => title.startsWith(ControllerTexts.removingComputer))).toBe(true);
+    expect(h.progressTitles.some((title) => title.includes(ControllerTexts.removingComputerVm))).toBe(true);
+  });
+
+  it('Cancel of the question removes nothing and keeps the extension', async () => {
+    const { order, removal } = onComputer();
+    await h.registry.add(ownRemote());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(modals()).toHaveLength(1);
+    expect(order).toEqual([]);
+    expect(removal.engineAnswers).not.toHaveBeenCalled();
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
+  });
+
+  it('without an engine, a VM or a key, names only the files of Devspaces', async () => {
+    const { order } = onComputer({ engines: [], vm: undefined, keyHosts: [], keyFile: undefined, folder: undefined });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(modals()[0]?.[1]).toEqual({
+      modal: true,
+      detail: 'The scheduled task that starts the VM, the Docker context devspaces. Then VS Code uninstalls the extension. Your settings stay. This cannot be undone.',
+    });
+    expect(order).toEqual(['remove the key and its line on no host', 'remove the files', 'uninstall the extension']);
+  });
+
+  it('refuses while a window is connected to a devspace anywhere, also in the VM, and asks nothing then', async () => {
+    const { order, cleanup } = onComputer();
+    await h.registry.add(inVm());
+    otherWindowConnected(VM_ID);
+    await run('removeFromComputer');
+    expect(warningMessages()).toEqual(['Close the windows of your devspaces on this computer first: acme/vm. Nothing was removed.']);
+    expect(modals()).toEqual([]);
+    expect(cleanup.inventory).not.toHaveBeenCalled();
+    expect(order).toEqual([]);
+  });
+
+  it('without a sign-in keeps the devspaces on the engines and says so', async () => {
+    const { order } = onComputer({ vm: undefined }, {}, ['devspaces-vscode']);
+    await h.registry.add(ownRemote());
+    h.auth.getAccount.mockResolvedValue(undefined);
+    h.auth.accounts.mockResolvedValue([]);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(String((modals()[0]?.[1] as { detail: string }).detail)).toContain(ControllerTexts.removeComputerSignedOut);
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    // The devspace stays, so the store of the VS Code Server stays too, and that is no failure. Mutation: the line of the
+    // key removed there, so that the next run after a sign-in cannot log in there with the key.
+    expect(order.slice(-3)).toEqual(['remove the key and its line on no host, keep them for build-box', 'remove the files', 'uninstall the extension']);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.removedFromComputer);
+  });
+
+  // Mutation: a Show Details that ends the command loses the choice Uninstall Anyway after a look at the log.
+  it('names what stays: closed keeps the extension, Show Details shows the message again, Uninstall Anyway uninstalls it', async () => {
+    const runs: { choices: (string | undefined)[]; details: number; uninstalled: boolean }[] = [
+      { choices: [undefined], details: 0, uninstalled: false },
+      { choices: [Actions.showDetails, undefined], details: 1, uninstalled: false },
+      { choices: [Actions.showDetails, Actions.showDetails, ControllerTexts.uninstallAnyway], details: 2, uninstalled: true },
+      { choices: [ControllerTexts.uninstallAnyway], details: 0, uninstalled: true },
+    ];
+    for (const { choices, details, uninstalled } of runs) {
+      const { order, left, cleanup } = onComputer({ engines: ['build-box', 'old-box'] }, { 'old-box': false });
+      left.vm = 'The VM of Devspaces could not be removed: limactl failed';
+      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+      for (const choice of choices) fakeVscode.window.showWarningMessage.mockResolvedValueOnce(choice);
+      await run('removeFromComputer');
+      // The removal goes on after an engine that does not answer; the files stay with the VM that stays.
+      expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM', 'remove the key and its line on build-box', ...(uninstalled ? ['uninstall the extension'] : [])]);
+      const ends = fakeVscode.window.showWarningMessage.mock.calls.filter((call) => call[0] === ControllerTexts.removalFromComputerLeft(2));
+      expect(ends).toHaveLength(choices.length);
+      expect(ends.every((call) => call[1] === Actions.showDetails && call[2] === ControllerTexts.uninstallAnyway)).toBe(true);
+      const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+      expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerEngineNotAnswering('old-box')}`);
+      expect(warnings).toContain(`Stays on this computer: ${left.vm}`);
+      expect(h.logger.show).toHaveBeenCalledTimes(details);
+      expect(cleanup.uninstallExtension).toHaveBeenCalledTimes(uninstalled ? 1 : 0);
+      expect(fakeVscode.window.showInformationMessage).not.toHaveBeenCalledWith(ControllerTexts.removedFromComputer);
+      expect(await h.engineRecords.removed('build-box')).toBe(true);
+      expect(await h.engineRecords.removed('old-box')).toBe(false);
+    }
+  });
+
+  // Mutation: the line of the key removed on a host where something of Devspaces stays, and the key deleted, so that a
+  // new run of the command cannot log in there any more.
+  it('keeps the key with its line for a remote host where something stays, and removes the line on the other hosts', async () => {
+    const { order, cleanup } = onComputer({ engines: ['build-box', 'old-box'], keyHosts: ['build-box', 'old-box'], vm: undefined }, { 'old-box': false });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(cleanup.removeSshKey).toHaveBeenCalledWith(['build-box'], ['old-box']);
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the key and its line on build-box, keep them for old-box', 'remove the files']);
+  });
+
+  // Mutation: a list of hosts that cannot be read counted as empty, so that the key was deleted while its lines stayed.
+  it('with a list of hosts that cannot be read, keeps the key, names it in the question and in what stays, and removes the rest', async () => {
+    const { order, cleanup } = onComputer({ listUnreadable: 'EACCES', engines: [], keyHosts: [] });
+    await h.registry.add(inVm());
+    await h.registry.add(ownRemote());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    const detail = String((modals()[0]?.[1] as { detail: string }).detail);
+    expect(detail.startsWith(ControllerTexts.removeComputerListUnreadable)).toBe(true);
+    // Mutation: the devspaces outside of the VM left out of the question when the list cannot be read.
+    expect(detail).toContain(ControllerTexts.removeComputerStayWithoutList('acme/api (build-box)'));
+    expect(detail).not.toContain('acme/vm (');
+    expect(detail).not.toContain('The SSH key of Devspaces');
+    expect(cleanup.removeSshKey).not.toHaveBeenCalled();
+    expect(order).toEqual(['remove the VM', 'remove the files']);
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ComputerCleanupTexts.listUnreadable('EACCES')}`);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: an error of the removal of the VM that ends the command, so that the key stays without a word.
+  it('names an error of the removal of the VM as what stays, removes the key after it, and keeps the files with the VM', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.removeVm.mockImplementation(async () => {
+      order.push('remove the VM');
+      throw new Error('limactl crashed');
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host']);
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmFailed('limactl crashed')}`);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+  });
+
+  it('Cancel while the engines are removed ends before the VM, the key and the files, and keeps the extension', async () => {
+    const { order, cleanup } = onComputer();
+    const progress = cancellableProgress();
+    await h.registry.add(ownRemote());
+    h.service.deleteInWorker.mockImplementation(async (id: string) => {
+      order.push(`delete ${id}`);
+      progress.cancel();
+      await h.registry.remove(id);
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(order).toEqual([`delete ${ENV_ID}`]);
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    expect(cleanup.removeSshKey).not.toHaveBeenCalled();
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
+  });
+
+  // Mutation: a Cancel that is checked only after the remote hosts lets the key and the files go, and uninstalls.
+  it('Cancel while the VM is removed ends before the key and the files, and logs what stays so far', async () => {
+    const { order, cleanup } = onComputer({ engines: ['build-box', 'old-box'] }, { 'old-box': false });
+    const progress = cancellableProgress();
+    cleanup.removeVm.mockImplementation(async () => {
+      order.push('remove the VM');
+      progress.cancel();
+      return undefined;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    // The scheduled task and the Docker context of the VM that is gone are updated as after "Remove the VM…".
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM', 'update the task and the context of the VM']);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
+    // The host that did not answer before the Cancel is in the log.
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerEngineNotAnswering('old-box')}`);
+  });
+
+  // Mutation: without the check before the VM, a window that opened a devspace in the VM while the remote hosts were
+  // removed loses it with the VM.
+  it('keeps the VM when a window connected to a devspace in it during the removal of the remote hosts', async () => {
+    const { order, cleanup } = onComputer();
+    await h.registry.add(ownRemote());
+    await h.registry.add(inVm());
+    h.service.deleteInWorker.mockImplementation(async (id: string) => {
+      order.push(`delete ${id}`);
+      await h.registry.remove(id);
+      otherWindowConnected(VM_ID);
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    const refusal = 'Close the windows of your devspaces on the VM of Devspaces first: acme/vm. Nothing was removed.';
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${refusal}`);
+    // Mutation: the files removed with a VM that stays, so that its scheduled task and its Docker context go under it.
+    expect(order.at(-1)).toBe('remove the key and its line on build-box');
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The scheduled task, the Docker context and the folder of Devspaces stay with the VM.');
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: without the check after the mark, the Monitor and the shared volumes go under a window that began to use
+  // a devspace there while Docker was asked what Devspaces has there.
+  it('removes nothing from a host where a window connected to a devspace while the removal looked there, and brings its record back', async () => {
+    const { order, removal } = onComputer({ vm: undefined });
+    await h.registry.add(ownRemote());
+    removal.engineAnswers.mockImplementation(async () => {
+      otherWindowConnected(ENV_ID);
+      return true;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order.filter((step) => step.startsWith('build-box:'))).toEqual([]);
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain('Stays on this computer: Close the windows of your devspaces on build-box first: acme/api. Nothing was removed.');
+    // The devspace stays there, so the key stays with its line there.
+    expect(order.slice(-2)).toEqual(['remove the key and its line on no host, keep them for build-box', 'remove the files']);
+  });
+
+  // Mutation: a Cancel during the last part that is not checked after it, so that the extension is uninstalled.
+  it('Cancel while the files are removed keeps the extension installed', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    const progress = cancellableProgress();
+    cleanup.removeFiles.mockImplementation(async () => {
+      order.push('remove the files');
+      progress.cancel();
+      return [];
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files']);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerEnded, Actions.showDetails);
+  });
+
+  // Mutation: the devspaces to delete read again on each host without the devspaces of the question, so that a devspace
+  // that another window created after the question is deleted with its changes, without a question, or loses the
+  // Monitor and the shared volumes under it (no devspace when it asked, so no accounts were read then).
+  it('removes nothing from a host or the VM where a devspace came after the question, and keeps the key for that host', async () => {
+    const { order, cleanup } = onComputer({ engines: ['old-box', 'build-box'], keyHosts: ['build-box'] });
+    // While old-box is removed, another window creates a devspace on build-box and one in the VM, and closes.
+    let added = false;
+    h.registry.list = ((list) => async () => {
+      if (!added && operationDockerTarget()?.host === 'old-box') {
+        added = true;
+        await h.registry.add(ownRemote());
+        await h.registry.add(inVm());
+      }
+      return list();
+    })(h.registry.list.bind(h.registry));
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(added).toBe(true);
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(order.filter((step) => step.startsWith('build-box:'))).toEqual([]);
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerNewDevspaces('on build-box', 1, 'acme/api')}`);
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerNewDevspaces(ControllerTexts.inTheVm, 1, 'acme/vm')}`);
+    expect(cleanup.removeSshKey).toHaveBeenCalledWith([], ['build-box']);
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: without the check of another window's removal, a host with nothing to remove gets the removal mark and
+  // counts as removed while that window still removes Devspaces from there.
+  it('leaves a host that another window removes Devspaces from, also when nothing of Devspaces is there', async () => {
+    const { removal, cleanup } = onComputer({ vm: undefined });
+    h.alive.add(OTHER_PID);
+    await h.sessionFiles.writeWindowStatus({ windowId: OTHER_WINDOW_ID, pid: OTHER_PID, devspaceId: null, state: 'active', updatedAt: iso(NOW - 5000) });
+    await h.engineRecords.startRemoval('build-box', { windowId: OTHER_WINDOW_ID, pid: OTHER_PID, since: iso(NOW - 30_000) }, NOW - 30_000, () => true);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(removal.engineAnswers).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.removalRunningElsewhere('build-box')}`);
+    expect(cleanup.removeSshKey).toHaveBeenCalledWith([], ['build-box']);
+  });
+
+  // Mutation: a removal that sets the host of the removal only for the part that runs lets a Refresh restore the
+  // devspaces from the volumes of a host while the VM is removed.
+  it('restores from the volumes of no engine while it runs', async () => {
+    const { cleanup } = onComputer();
+    let refreshed: Promise<unknown> | undefined;
+    cleanup.removeVm.mockImplementation(async () => {
+      refreshed = run('refresh');
+      await refreshed;
+      return undefined;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(refreshed).toBeDefined();
+    expect(h.service.reconcileInWorker).not.toHaveBeenCalled();
+    expect(h.logger.info).toHaveBeenCalledWith('The devspaces are not restored from the volumes on build-box: Devspaces is being removed from there.');
+  });
+
+  // Mutation: the files removed under a VM that another VS Code set up while the remote hosts were removed.
+  it('keeps a VM that was set up after the question, with its files, and says so', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [], vm: undefined });
+    cleanup.vmMeanwhile.mockResolvedValue({ kind: 'setUp' });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(cleanup.vmMeanwhile).toHaveBeenCalledWith(false);
+    expect(order).toEqual(['remove the key and its line on no host']);
+    expect(cleanup.removeVm).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: only a VM that did not exist at the question checked again, so that the files of a VM that another
+  // VS Code set up again after its removal were removed under it.
+  it('keeps the files when the VM was set up again after its removal, and says so', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.vmMeanwhile.mockResolvedValue({ kind: 'setUp' });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(cleanup.vmMeanwhile).toHaveBeenCalledWith(true);
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host']);
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(cleanup.vmGone).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a VM that was set up while the question named only the files of a setup removed with every devspace in
+  // it (also those of another VS Code), or the VM removed while another window removes Devspaces from it.
+  it('keeps a VM that was set up while the question named only the files of a setup, and one that another window removes Devspaces from', async () => {
+    const leftovers = onComputer({ engines: [], keyHosts: [], vmLeftovers: true });
+    leftovers.cleanup.vmMeanwhile.mockResolvedValue({ kind: 'setUp' });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(leftovers.cleanup.vmMeanwhile).toHaveBeenCalledWith(true);
+    expect(leftovers.cleanup.removeVm).not.toHaveBeenCalled();
+    expect(leftovers.cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerVmSetUpMeanwhile}`);
+    // Only the files of a setup, still: they go.
+    const files = onComputer({ engines: [], keyHosts: [], vmLeftovers: true });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(files.order).toEqual(['remove the VM', 'remove the key and its line on no host', 'remove the files', 'uninstall the extension']);
+    expect(files.cleanup.removeVm).toHaveBeenCalledWith(true);
+    // Another window removes Devspaces from the VM.
+    const other = onComputer({ engines: [], keyHosts: [] });
+    h.alive.add(OTHER_PID);
+    await h.sessionFiles.writeWindowStatus({ windowId: OTHER_WINDOW_ID, pid: OTHER_PID, devspaceId: null, state: 'active', updatedAt: iso(NOW - 5000) });
+    await h.engineRecords.startRemoval(LIMA_HOST, { windowId: OTHER_WINDOW_ID, pid: OTHER_PID, since: iso(NOW - 30_000) }, NOW - 30_000, () => true);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(other.cleanup.removeVm).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.removalRunningElsewhere(ControllerTexts.theVm)}`);
+    expect(other.cleanup.removeFiles).not.toHaveBeenCalled();
+  });
+
+  // Mutation: a state of the VM that cannot be read after its removal named as a VM that was set up meanwhile, or the
+  // files removed then (also the task and the context of a VM that another VS Code may have set up).
+  it('keeps the files when the state of the VM cannot be read after its removal, says so, and updates the task and the context in the background', async () => {
+    const { order, cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.vmMeanwhile.mockResolvedValue({ kind: 'unknown', detail: 'wsl.exe did not answer.' });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(order).toEqual(['remove the VM', 'remove the key and its line on no host', 'update the task and the context of the VM']);
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ComputerCleanupTexts.vmUnknown('wsl.exe did not answer.')}`);
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+  });
+
+  // Mutation: the removal from a remote host run on the Docker host that is current, when the operation has no target
+  // of that host.
+  it('removes nothing from a remote host when its work would run on another Docker host', async () => {
+    const { cleanup, removal } = onComputer({ vm: undefined, keyHosts: [] });
+    recreateHarness({
+      dockerTargets: {
+        resolve: async () => remoteDockerTarget('other-box'),
+        current: async () => remoteDockerTarget('other-box'),
+        withOperation: <T,>(fn: () => Promise<T>) => runWithDockerTarget(remoteDockerTarget('other-box'), fn),
+        ofHost: async () => undefined,
+      } as unknown as ControllerDeps['dockerTargets'],
+      engineRemoval: removal as unknown as ControllerDeps['engineRemoval'],
+      computerCleanup: cleanup,
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(removal.engineAnswers).not.toHaveBeenCalled();
+    expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(
+      `Stays on this computer: ${ControllerTexts.computerEngineFailed('build-box', 'Devspaces works on other-box now, not there.')}`,
+    );
+    expect(await h.engineRecords.removed('build-box')).toBe(false);
+  });
+
+  // Mutation: a removal mark that could not be written named in what stays also when everything else went (the
+  // extension is uninstalled then, so no background work comes back), or not named when the extension stays installed.
+  it('names a host whose removal mark could not be written only when the extension stays installed', async () => {
+    for (const stays of [false, true]) {
+      const { left, cleanup } = onComputer({ keyHosts: [], vm: undefined });
+      const mark = vi.spyOn(h.engineRecords, 'startRemoval').mockRejectedValue(new Error('EACCES: permission denied'));
+      if (stays) left.files = ['The folder could not be deleted.'];
+      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+      await run('removeFromComputer');
+      expect(mark).toHaveBeenCalled();
+      const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+      expect(warnings).toContain(ControllerTexts.removalNotRecorded('build-box'));
+      const named = warnings.filter((text) => text === `Stays on this computer: ${ControllerTexts.removalNotRecorded('build-box')}`);
+      if (stays) {
+        expect(named).toHaveLength(1);
+        expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(2), Actions.showDetails, ControllerTexts.uninstallAnyway);
+        expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+      } else {
+        expect(named).toEqual([]);
+        expect(cleanup.uninstallExtension).toHaveBeenCalledTimes(1);
+      }
+      mark.mockRestore();
+    }
+  });
+
+  // Mutation: the devspaces of this computer on an engine that is not in the list left out of the question, so that the
+  // extension is uninstalled while they stay without a word.
+  it('names the devspaces on Docker engines that are not in the list as devspaces that stay', async () => {
+    const { order } = onComputer({ engines: ['build-box'], vm: undefined });
+    await h.registry.add(devspace({ id: OTHER_ENV_ID, repository: 'acme/old', containerName: 'devspaces-acme-old-1', volumeName: 'devspaces-acme-old-1', dockerHost: 'old-host' }));
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    const detail = String((modals()[0]?.[1] as { detail: string }).detail);
+    expect(detail).toContain(ControllerTexts.removeComputerElsewhere('acme/old (old-host)'));
+    expect(detail.indexOf('acme/old (old-host)')).toBeLessThan(detail.indexOf(ControllerTexts.removeComputerEnd));
+    expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+    expect(order.some((step) => step.startsWith('old-host:'))).toBe(false);
+  });
+
+  // Mutation: the records of a VM that is gone named as devspaces on another engine, with a removal by hand; and only the
+  // files of a setup named as the VM with every devspace in it.
+  it('names only the files of an unfinished setup of the VM, and no records of a VM that is gone as devspaces elsewhere', async () => {
+    onComputer({ engines: [], keyHosts: [], vmLeftovers: true });
+    await h.registry.add(inVm());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    const detail = String((modals()[0]?.[1] as { detail: string }).detail);
+    expect(detail.startsWith(ControllerTexts.removeComputerVmLeftovers)).toBe(true);
+    expect(detail).not.toContain('acme/vm');
+    onComputer({ engines: [], keyHosts: [], vm: undefined });
+    await h.registry.add(inVm());
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(undefined);
+    await run('removeFromComputer');
+    expect(String((modals()[0]?.[1] as { detail: string }).detail)).not.toContain('acme/vm');
+  });
+
+  // Mutation: the accounts of the question used after an account left Devspaces, so that its devspaces are deleted
+  // although devspaces of an account that is not signed in stay; or such devspaces not named as what stays, so that the
+  // extension is uninstalled while devspaces that the question said it deletes stay without a word (also when the
+  // accounts cannot be read).
+  it('keeps the devspaces of an account that left Devspaces after the question, or whose accounts cannot be read, and names them', async () => {
+    for (const change of ['left', 'unreadable'] as const) {
+      const { removal, cleanup } = onComputer({ vm: undefined });
+      await h.registry.add(ownRemote());
+      removal.engineAnswers.mockImplementation(async () => {
+        if (change === 'left') h.auth.accounts.mockResolvedValue([]);
+        else h.auth.accounts.mockRejectedValue(new Error('VS Code did not answer'));
+        return true;
+      });
+      fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything).mockResolvedValueOnce(undefined);
+      await run('removeFromComputer');
+      expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+      expect(await h.registry.list()).toHaveLength(1);
+      expect(h.logger.warn.mock.calls.map((call) => String(call[0]))).toContain(`Stays on this computer: ${ControllerTexts.computerAccountDevspacesStay('build-box', 1, 'acme/api')}`);
+      expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(ControllerTexts.removalFromComputerLeft(1), Actions.showDetails, ControllerTexts.uninstallAnyway);
+      expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    }
+  });
+
+  // Mutation: an error that no part handles thrown out of the command, so that the window does not update the scheduled
+  // task and the Docker context after the removal of the VM, and what stays so far is not logged.
+  it('ends at an error that no part handles, logs what stays so far, updates the task and the context of the VM, and keeps the extension', async () => {
+    const { order, cleanup } = onComputer({ engines: ['build-box', 'old-box'] }, { 'old-box': false });
+    cleanup.removeVm.mockImplementation(async () => {
+      order.push('remove the VM');
+      h.registry.list = vi.fn(async () => {
+        throw new Error('registry.json is damaged');
+      });
+      return undefined;
+    });
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(order.filter((step) => !step.startsWith('build-box:'))).toEqual(['remove the VM', 'update the task and the context of the VM']);
+    expect(cleanup.removeSshKey).not.toHaveBeenCalled();
+    expect(cleanup.removeFiles).not.toHaveBeenCalled();
+    expect(cleanup.uninstallExtension).not.toHaveBeenCalled();
+    const warnings = h.logger.warn.mock.calls.map((call) => String(call[0]));
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerEngineNotAnswering('old-box')}`);
+    expect(warnings).toContain(`Stays on this computer: ${ControllerTexts.computerRemovalFailed('registry.json is damaged')}`);
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(
+      `${ControllerTexts.computerRemovalFailed('registry.json is damaged')} ${ControllerTexts.removalFromComputerEnded}`,
+      Actions.showDetails,
+    );
+  });
+
+  // Mutation: a failed uninstall that is not caught ends the command with an error of VS Code and nothing in the log.
+  it('says so when VS Code cannot uninstall the extension', async () => {
+    const { cleanup } = onComputer({ engines: [], keyHosts: [] });
+    cleanup.uninstallExtension.mockRejectedValueOnce(new Error('The extension is not installed in this profile.'));
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(ControllerTexts.removeEverything);
+    await run('removeFromComputer');
+    expect(h.logger.warn).toHaveBeenCalledWith('VS Code could not uninstall the extension: The extension is not installed in this profile.');
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenLastCalledWith(
+      'VS Code could not uninstall the extension: The extension is not installed in this profile. Uninstall it in the Extensions view.',
+      Actions.showDetails,
+    );
+  });
+
+  it('is a command of package.json, in the Command Palette and last in the "…" menu of the repository view', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
+      contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
+    };
+    expect(manifest.contributes.commands.find((entry) => entry.command === Commands.removeFromComputer)).toEqual({
+      command: 'devspaces.removeFromComputer',
+      title: 'Remove Devspaces from This Computer…',
+      category: 'Devspaces',
+    });
+    expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
+    // Not in the view "Docker Hosts", whose actions are off by default (devspaces.dockerHostsActions), and not on a row.
+    expect(manifest.contributes.menus['view/title'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
+      { command: Commands.removeFromComputer, when: 'view == devspaces.repositories', group: '3_remove@2' },
+    ]);
+    expect(manifest.contributes.menus['view/item/context'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
   });
 });
 

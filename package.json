@@ -458,6 +458,11 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "devspaces.removeFromComputer",
+        "title": "Remove Devspaces from This Computer…",
+        "category": "Devspaces"
+      },
+      {
         "command": "devspaces.refreshDockerHosts",
         "title": "Refresh Docker Hosts",
         "category": "Devspaces",
@@ -757,6 +762,11 @@
           "command": "devspaces.removeFromDockerEngine",
           "when": "view == devspaces.repositories",
           "group": "3_remove@1"
+        },
+        {
+          "command": "devspaces.removeFromComputer",
+          "when": "view == devspaces.repositories",
+          "group": "3_remove@2"
         }
       ],
       "view/item/context": [

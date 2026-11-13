@@ -17,7 +17,8 @@ import { wslTaskName } from '../core/docker/wslTask';
 import type { RunResult } from '../core/ports';
 import { DOCKER_CONTEXT_DESCRIPTION, dockerContextFile } from '../core/vm/dockerContext';
 import { VM_TASK_LABEL, vmTaskDefinitionFiles } from '../core/vm/vmTask';
-import { consoleLogger, runUninstall, type UninstallDeps } from './main';
+import { removeDevspacesFiles, type DevspacesFilesDeps as UninstallDeps } from '../core/devspacesFiles';
+import { consoleLogger, runUninstall } from './main';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const SID = 'S-1-5-21-1004336348-1177238915-682003330-1001';
@@ -341,6 +342,28 @@ describe('the uninstall hook on Windows', () => {
     const { calls, run } = setUp('win32', windowsAnswers());
     await run();
     expect(calls).toEqual([]);
+  });
+});
+
+describe('what stays after the removal of the files of Devspaces (Remove Devspaces from This Computer…)', () => {
+  it('names nothing when everything went, and each step that left something', async () => {
+    macOrLinuxFiles('linux', { vm: false });
+    write(contextFile(), JSON.stringify(ownContext));
+    expect(await removeDevspacesFiles(setUp('linux').deps)).toEqual([]);
+    macOrLinuxFiles('darwin', { vm: true });
+    write(contextFile(), JSON.stringify(ownContext));
+    write(path.join(dockerConfig(), 'config.json'), JSON.stringify({ currentContext: 'devspaces' }));
+    // launchctl bootout fails, and the plist cannot be removed: the task is left.
+    const { deps } = setUp('darwin');
+    const plist = vmTaskDefinitionFiles('darwin', home)[0];
+    fs.rmSync(plist);
+    fs.mkdirSync(path.join(plist, 'busy'), { recursive: true });
+    deps.runner = { run: async () => failed('Boot-out failed: 5: Input/output error') };
+    const left = await removeDevspacesFiles(deps);
+    expect(left).toHaveLength(3);
+    expect(left[0]).toContain('The Docker context devspaces is the current Docker context');
+    expect(left[1]).toContain('The scheduled task of the VM of Devspaces could not be removed');
+    expect(left[2]).toBe(`The VM of Devspaces exists, so the folder ${devspacesRoot()} stays. The user guide says how to delete it (Uninstall).`);
   });
 });
 

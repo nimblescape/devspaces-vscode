@@ -12,6 +12,7 @@ import { Actions } from '../core/messages';
 import { DockerSetupTexts } from '../core/docker/dockerSetup';
 import { abortError } from '../core/ports';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
+import { ControllerTexts } from './controllerTexts';
 import { WslSetupCommands, WslSetupTexts, type WslSetupCommandsDeps } from './wslSetupCommands';
 
 const { window } = fakeVscode;
@@ -576,6 +577,83 @@ describe('Remove the WSL Distribution of Devspaces…', () => {
     await commands().remove();
     expect(window.showErrorMessage).toHaveBeenCalledWith(WslSetupTexts.problem('removeFailed'), Actions.showDetails);
     expect(forgetHost).not.toHaveBeenCalled();
+  });
+});
+
+describe('the removal of the distribution for Remove Devspaces from This Computer… (R-GEN-009)', () => {
+  it('removes the distribution of Devspaces without a question or a message, under the lock, and forgets its host', async () => {
+    registered('own');
+    const forgetDistribution = vi.fn(async () => undefined);
+    const beforeRemove = vi.fn();
+    const distributionGone = vi.fn();
+    expect(await commands({ forgetDistribution, beforeRemove, distributionGone }).removeForComputer()).toBeUndefined();
+    expect(setup.locked).toHaveBeenCalledTimes(1);
+    expect(beforeRemove).toHaveBeenCalledTimes(1);
+    expect(setup.remove).toHaveBeenCalledTimes(1);
+    // Not the update of the Docker context and of the task in the background: the next step of the command removes them.
+    expect(forgetDistribution).not.toHaveBeenCalled();
+    // Mutation: without it, the window keeps the distribution as its Docker host and serves the pipe of the context.
+    expect(distributionGone).toHaveBeenCalledTimes(1);
+    expect(forgetHost).toHaveBeenCalledWith(WSL_HOST);
+    expect(window.showWarningMessage).not.toHaveBeenCalled();
+    expect(window.showInformationMessage).not.toHaveBeenCalled();
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it('removes the files of a distribution that is gone, also without WSL, and a list that cannot be changed is no failure', async () => {
+    setup.registration.mockRejectedValue(new WslSetupError('wslMissing', 'wsl.exe was not found.'));
+    forgetHost.mockRejectedValue(new Error('EBUSY'));
+    expect(await commands().removeForComputer()).toBeUndefined();
+    expect(setup.removeLeftovers).toHaveBeenCalledTimes(1);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(`${WSL_HOST} could not be removed from the list of Devspaces: EBUSY`);
+  });
+
+  // Mutation: a distribution of another origin named devspaces that counts as a part of Devspaces that stays, so that
+  // the files of Devspaces stay with it and the extension is never uninstalled.
+  it('leaves a distribution that Devspaces did not set up, removes only the files of an unfinished setup of Devspaces, and calls it no part that stays', async () => {
+    const distributionGone = vi.fn();
+    registered('foreign');
+    expect(await commands({ distributionGone }).removeForComputer()).toBeUndefined();
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(setup.removeLeftovers).toHaveBeenCalledTimes(1);
+    expect(forgetHost).not.toHaveBeenCalled();
+    expect(distributionGone).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith('The WSL distribution devspaces was not set up by Devspaces; it is not removed.');
+  });
+
+  // Mutation: a distribution of Devspaces that was set up after a question that named only the files of a setup removed
+  // with every devspace in it.
+  it('keeps a distribution of Devspaces that was set up meanwhile when only the files of a setup are to go, and says so', async () => {
+    const distributionGone = vi.fn();
+    const beforeRemove = vi.fn();
+    registered('own');
+    expect(await commands({ distributionGone, beforeRemove }).removeForComputer(true)).toBe(ControllerTexts.computerVmSetUpMeanwhile);
+    expect(setup.remove).not.toHaveBeenCalled();
+    expect(beforeRemove).not.toHaveBeenCalled();
+    expect(forgetHost).not.toHaveBeenCalled();
+    expect(distributionGone).not.toHaveBeenCalled();
+    // Only the files of a setup: they go.
+    registered('none');
+    expect(await commands({ distributionGone }).removeForComputer(true)).toBeUndefined();
+    expect(setup.removeLeftovers).toHaveBeenCalledTimes(1);
+  });
+
+  it('says what stays: another window that holds the lock, a refused removal', async () => {
+    const distributionGone = vi.fn();
+    registered('own');
+    setup.locked.mockResolvedValueOnce(undefined);
+    expect(await commands().removeForComputer()).toBe(WslSetupTexts.busyElsewhere);
+    expect(setup.remove).not.toHaveBeenCalled();
+    setup.remove.mockRejectedValue(new WslSetupError('removeFailed', 'Access is denied.'));
+    expect(await commands().removeForComputer()).toBe(`${WslSetupTexts.problem('removeFailed')} Access is denied.`);
+    expect(forgetHost).not.toHaveBeenCalled();
+    setup.remove.mockRejectedValue(new Error('boom'));
+    expect(await commands({ distributionGone }).removeForComputer()).toBe('The WSL distribution of Devspaces could not be removed: boom');
+    expect(window.showErrorMessage).not.toHaveBeenCalled();
+    expect(distributionGone).not.toHaveBeenCalled();
+    // Without the WSL setup of this computer there is nothing to remove.
+    expect(await commands({ setup: undefined }).removeForComputer()).toBeUndefined();
   });
 });
 

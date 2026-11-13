@@ -62,7 +62,7 @@ const REGISTRY_EXPORT_NAME = 'distributions.reg';
  * older than a minute is of a window that ended; another window waits for it one second. After the computer slept for
  * more than a minute, another window can take it before the holder refreshes it; then the script in the distribution
  * still runs only once at a time (flock), and WSL registers the name only once. The uninstall hook takes it with the
- * same timings (src/uninstall/main.ts).
+ * same timings (src/core/devspacesFiles.ts).
  */
 export const WSL_SETUP_LOCK_TIMINGS = { staleMs: 60_000, timeoutMs: 1_000 };
 /** The folders `disk-2` and so on that a new registration may take when `disk` has files of unknown use. */
@@ -80,7 +80,7 @@ export function wslSetupFolder(env: NodeJS.ProcessEnv): string | undefined {
 
 /**
  * The lock folder of the setup of the WSL distribution for all windows of the Windows user, which the uninstall hook
- * takes as well (src/uninstall/main.ts): `<folder>.lock`, next to the folder of the distribution.
+ * takes as well (src/core/devspacesFiles.ts): `<folder>.lock`, next to the folder of the distribution.
  */
 export function wslSetupLockFolder(folder: string): string {
   return `${folder}.lock`;
@@ -633,7 +633,7 @@ export class WslSetup {
 
   /**
    * The WSL distributions that have their virtual disk in the folder of Devspaces (the registry, else `wsl.exe --list`),
-   * or undefined when neither tells. For removeLeftovers and the uninstall hook (src/uninstall/main.ts), which keep the
+   * or undefined when neither tells. For removeLeftovers and the uninstall hook (src/core/devspacesFiles.ts), which keep the
    * folder unless the list is empty. Never throws.
    */
   folderUsers(): Promise<string[] | undefined> {

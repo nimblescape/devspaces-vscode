@@ -14,6 +14,7 @@ import { findExecutable } from '../docker/dockerCli';
 import { errorMessage } from '../errors';
 import { abortError, isAbortError, type Logger, type ProcessRunner } from '../ports';
 import { LockTimeoutError, withLockFolder } from '../storage/lockFolder';
+import { pathState } from '../storage/paths';
 import { downloadVmImage, vmImageFile, type DownloadVmImageOptions } from './vmImage';
 import { LIMA_INSTANCE, LimaInstance, limaConfig, limaEnv, limaResources, LIMA_SETUP_LOCK_TIMINGS, limaSetupLockFolder, limaSshArgs, type LimaResources } from './limaInstance';
 import type { LimaVm } from './limaVm';
@@ -162,19 +163,64 @@ export class LimaSetup {
   /**
    * "Remove the VM…" (R-VM-010): `limactl delete --force`, which deletes the VM with its disk and every devspace in it,
    * under the lock of the setup for all windows, so that no window creates the VM meanwhile. False when the VM did not
-   * exist. Not cancelled once it runs: a half deleted VM would help nobody. Throws a LimaSetupError.
+   * exist. Not cancelled once it runs: a half deleted VM would help nobody. The folder of a VM without its lima.yaml goes
+   * without Lima. `onlyLeftovers` ("Remove Devspaces from This Computer…" after a question that named only the files of
+   * a setup): a VM with its lima.yaml under the lock (another window set it up meanwhile) stays, and the result is
+   * `setUp`. Throws a LimaSetupError.
    */
-  async remove(): Promise<boolean> {
+  async remove(onlyLeftovers = false): Promise<boolean | 'setUp'> {
     const { vm, logger } = this.deps;
-    const instance = await this.step(() => vm.lima());
-    let removed = false;
+    const folder = path.join(vm.paths.home, LIMA_INSTANCE);
+    const config = path.join(folder, 'lima.yaml');
+    // Lima (it may be downloaded) before the lock, so that its download does not hold the lock of all windows; only for
+    // a VM with its lima.yaml, which Lima knows.
+    const lima = onlyLeftovers || (await pathState(config)) === 'missing' ? undefined : await this.step(() => vm.lima());
+    let removed: boolean | 'setUp' = false;
     await this.locked(async () => {
-      const status = await this.step(() => instance.status());
-      if (status === 'missing') {
-        logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
+      // Without its lima.yaml, Lima does not know the VM: a `limactl create` that ended before it wrote it leaves only
+      // the folder, which `limactl delete` would leave, so Devspaces deletes it itself, also without Lima.
+      const deleteFolder = async (why: string): Promise<void> => {
+        logger.info(`Devspaces removes the folder of ${why} (${folder}).`);
+        await this.step(() => fs.promises.rm(folder, { recursive: true, force: true }));
+        vm.forgetRunning();
+        removed = true;
+      };
+      if ((await pathState(config)) === 'missing') {
+        if ((await pathState(folder)) === 'missing') {
+          logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
+          return;
+        }
+        await deleteFolder('a Lima VM that was not created to the end');
         return;
       }
-      logger.info(`Devspaces removes the Lima VM of Devspaces with its disk (${path.join(vm.paths.home, LIMA_INSTANCE)}).`);
+      if (onlyLeftovers) {
+        logger.info('The Lima VM of Devspaces was set up after the question, so it stays.');
+        removed = 'setUp';
+        return;
+      }
+      // Lima is there already when another window created the VM meanwhile.
+      const instance = lima ?? (await this.step(() => vm.lima()));
+      const status = await this.step(() => instance.status());
+      // A folder with its lima.yaml that Lima does not list: `limactl delete --force` may still know it (it stops a VM
+      // that runs), and when it fails, the VM stays with its error, because it may still run. What a successful delete
+      // leaves, Devspaces deletes itself, because the files step of "Remove Devspaces from This Computer…" keeps the
+      // folder of Devspaces while it is there.
+      if (status === 'missing') {
+        if ((await pathState(folder)) === 'missing') {
+          logger.info('The Lima VM of Devspaces does not exist, so it is not removed.');
+          return;
+        }
+        await this.step(() => instance.delete());
+        if ((await pathState(folder)) === 'missing') {
+          vm.forgetRunning();
+          removed = true;
+          logger.info('The Lima VM of Devspaces was removed.');
+          return;
+        }
+        await deleteFolder('a Lima VM that Lima does not list');
+        return;
+      }
+      logger.info(`Devspaces removes the Lima VM of Devspaces with its disk (${folder}).`);
       await this.step(() => instance.delete());
       vm.forgetRunning();
       removed = true;

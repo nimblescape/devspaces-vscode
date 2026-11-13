@@ -29,6 +29,7 @@ import { isAbortError, type Logger } from '../core/ports';
 import type { LinkUri } from '../core/types';
 import { DockerSetupUiTexts } from './dockerSetup';
 import { showErrorMessage, showInformationMessage, showWarningMessage } from './notifications';
+import { ControllerTexts } from './controllerTexts';
 import { withNotificationProgress } from './progress';
 
 /** The part of the bar of the setup that the download fills with its bytes, in percent. */
@@ -169,6 +170,11 @@ export interface WslSetupCommandsDeps {
    * Docker context of the distribution follows. Never rejects.
    */
   forgetDistribution?: () => Promise<void>;
+  /**
+   * After removeForComputer: the window forgets the distribution without an update in the background (the Docker host of
+   * Devspaces is read again, and the pipe of the Docker context stops).
+   */
+  distributionGone?: () => void;
   /**
    * Right before `wsl --unregister`: the connections of this window to the distribution end (its worker, the relay), so
    * that nothing of this window holds or starts it during the removal.
@@ -391,6 +397,64 @@ export class WslSetupCommands {
       this.inform(WslSetupTexts.removed(result.forgotten, result.folderGone ? undefined : folder));
     } catch (error) {
       this.showFailure(error, WslSetupTexts.removeFailedUnknown, 'The removal of the WSL distribution of Devspaces was cancelled.');
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * The removal of the distribution for "Remove Devspaces from This Computer…" after its question (R-GEN-009): as
+   * remove(), without a question and without a message of its own, in the progress of that command, under the lock of
+   * all windows. A distribution that Devspaces did not set up stays, and only the files of a setup of Devspaces that did
+   * not end go. Undefined when the distribution of Devspaces is gone (also when there was none, or only that other
+   * distribution), else what stays, for the message of that command (logged). Never throws. Without
+   * forgetDistribution: the next step of that command removes the Docker context and the scheduled task itself
+   * (removeDevspacesFiles), so that no update in the background removes them at the same time; distributionGone instead.
+   */
+  async removeForComputer(onlyLeftovers = false): Promise<string | undefined> {
+    const { setup, folder, logger } = this.deps;
+    if (setup === undefined || folder === undefined) return undefined;
+    if (this.running) return WslSetupTexts.busy;
+    this.running = true;
+    try {
+      const done = await setup.locked(async () => {
+        const registration = await this.removalCheck(setup);
+        if (registration === 'foreign') {
+          // Not of Devspaces, so it is no part of Devspaces that stays; the files of a setup of Devspaces that did not
+          // end are in the folder of Devspaces, where the disk of that distribution is not.
+          await setup.removeLeftovers();
+          return 'foreign' as const;
+        }
+        if (registration === 'none') {
+          await setup.removeLeftovers();
+        } else if (onlyLeftovers) {
+          // The question named only the files of a setup: a distribution that was set up meanwhile stays.
+          return 'setUp' as const;
+        } else {
+          this.deps.beforeRemove?.();
+          // The next step of that command removes what no distribution uses in the folder, and names what stays.
+          if (!(await setup.remove())) logger.warn(`The WSL distribution ${WSL_DISTRIBUTION} was removed, but its folder ${folder} stays.`);
+        }
+        await this.deps.forgetHost(WSL_HOST).catch((error: unknown) => {
+          // The distribution is gone; the list of Devspaces in the storage of VS Code goes with the extension.
+          logger.warn(`${WSL_HOST} could not be removed from the list of Devspaces: ${errorMessage(error)}`);
+        });
+        return 'gone' as const;
+      });
+      if (done === undefined) return WslSetupTexts.busyElsewhere;
+      if (done.value === 'gone') this.deps.distributionGone?.();
+      if (done.value === 'foreign') logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was not set up by Devspaces; it is not removed.`);
+      if (done.value === 'setUp') {
+        logger.info(`The WSL distribution ${WSL_DISTRIBUTION} was set up after the question, so it stays.`);
+        return ControllerTexts.computerVmSetUpMeanwhile;
+      }
+      return undefined;
+    } catch (error) {
+      const text = isWslSetupError(error)
+        ? `${WslSetupTexts.problem(error.problem)} ${error.message}`
+        : `${WslSetupTexts.removeFailedUnknown.replace(/\.$/, ':')} ${errorMessage(error)}`;
+      logger.error(text);
+      return text;
     } finally {
       this.running = false;
     }

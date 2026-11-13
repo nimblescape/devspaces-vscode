@@ -22,7 +22,7 @@ import { KEEPER_SCRIPT } from './wslKeeper';
 
 /**
  * The folder of the record of the task in the folder of Devspaces on Windows (`%LOCALAPPDATA%\nimblescape\devspaces\task`),
- * for extension.ts and the uninstall hook (src/uninstall/main.ts).
+ * for extension.ts and the uninstall hook (src/core/devspacesFiles.ts).
  */
 export const WSL_TASK_FOLDER = 'task';
 /** The start of the name of the task in the root folder of Task Scheduler; the SID of the Windows user follows. */

@@ -250,6 +250,7 @@ All commands are in the category **Devspaces** of the Command Palette. A command
 | Use a Remote Docker Host… | Choose the Docker engine of Devspaces (see [Remote Docker host](#remote-docker-host)). |
 | Update All Images Now | Runs the background work of the Monitor on the current Docker engine at once (see [Updates](#updates)). |
 | Remove Devspaces from This Docker Engine… | Removes the Monitor, the helper containers and images, and the shared volumes of Devspaces from the current Docker engine, and, if you agree, the devspaces of your accounts there (see [Uninstall](#uninstall)). In the menu of a host row of the view **Docker Hosts**, it acts on that host. |
+| Remove Devspaces from This Computer… | Removes Devspaces from each remote Docker host of the list with your devspaces there, the VM of Devspaces with its devspaces, the SSH key of Devspaces with its line on each host, the scheduled task, the Docker context and the folder of Devspaces, after one question, and then uninstalls the extension (see [Uninstall](#uninstall)). |
 | Refresh Docker Hosts | Reads the open hosts of the view **Docker Hosts** again (see [The view Docker Hosts](#the-view-docker-hosts)). |
 | Show Utilization | Only on a host row of the view **Docker Hosts**, not in the Command Palette: opens the utilization page of that host (see [Utilization of a host](#utilization-of-a-host)). |
 | Show Report | Only on an object row of the view **Docker Hosts** (also a click on the row), not in the Command Palette: opens the report of that object (see [Report of a resource](#report-of-a-resource)). |
@@ -521,7 +522,38 @@ The checks are a guard rail against mistakes and copied templates, not a sandbox
 
 ## Uninstall
 
-Devspaces keeps a few things on each Docker engine that you used: the Monitor (`devspaces-monitor`), its helper containers and images, and three volumes that all devspaces of the engine share. Remove them before you uninstall the extension. On each Docker engine:
+**Devspaces: Remove Devspaces from This Computer…** removes Devspaces from this computer and from the remote Docker hosts of its list, and then uninstalls the extension. It is in the Command Palette and in the **…** menu of the view.
+
+1. Push the changes that you want to keep from each devspace, also from the devspaces in the VM of Devspaces.
+2. Close the windows of your devspaces. The command does not run while a window on this computer is connected to a devspace or is opening one, or while an operation runs, also **Update All Images Now** in the same window. When that changes while it asks, it removes nothing after your answer.
+3. Run the command. One question, "Remove Devspaces from this computer?", lists each part that it removes, the recorded changes of the devspaces that it deletes, and the devspaces that stay. Choose **Remove Everything**. If you close the question, nothing is removed.
+
+It removes, in this order:
+
+- On each remote Docker host of the list: what **Remove Devspaces from This Docker Engine…** removes (the container `devspaces-monitor`, the helper containers and images, the build image, and the volumes `devspaces-monitor`, `devspaces-worker-cache` and `devspaces-vscode`), and the devspaces of your GitHub accounts in Devspaces there, without the questions of that command. The devspaces of other accounts and of other computers stay, and so does the volume `devspaces-vscode` while they use it. Without a sign-in, all devspaces there stay.
+- The VM of Devspaces with every devspace in it: the Lima VM on macOS and Linux, the WSL distribution `devspaces` on Windows. A WSL distribution `devspaces` that Devspaces did not set up stays.
+- The SSH key of Devspaces, after **Use a Key**: on each host where Devspaces added the key, also a host that you removed from the list, it logs in with only that key, which asks nothing, and removes each line with that key from `~/.ssh/authorized_keys`. Then it deletes the files `~/.ssh/devspaces_ed25519` and `devspaces_ed25519.pub`.
+- The scheduled task that starts the VM, the Docker context `devspaces`, and the folder `~/.nimblescape/devspaces` (on Windows `%LOCALAPPDATA%\nimblescape\devspaces`), as the uninstall step does (see [At the next start of VS Code](#at-the-next-start-of-vs-code)).
+
+When everything is removed, VS Code uninstalls the extension. Your settings `devspaces.…` stay, and so does what you installed for Devspaces (see [What stays after the uninstall](#what-stays-after-the-uninstall)).
+
+What to know:
+
+- When a host does not answer or a part cannot be removed, the command goes on with the other parts. At the end, a message says how many things stay. **Show Details** opens the log, which names each one and how to remove it, and shows the message again. The extension stays installed, so that you can run the command again, for example when the host answers again. **Uninstall Anyway** uninstalls the extension; then remove what stays by hand (see [What stays after the uninstall](#what-stays-after-the-uninstall)).
+- When you deleted the SSH key of Devspaces by hand, the command cannot log in with it: the log names the hosts where its line may stay, so that you can remove it by hand, and the next run does not name them again.
+- When Devspaces cannot reach a host with its key, for example because the host is gone, the line of the key stays there, and so does the key on this computer, so that a new run of the command can still log in with it. When the host answers but does not accept the key any more, or asks for more than the key, or the login works but `~/.ssh/authorized_keys` there has no line of the key (the host allows it from another file or with a line with options, or the login used another key of yours from `~/.ssh/config`), a new run cannot remove a line there either: the key on this computer is deleted, and the log names the key, so that you can check that host by hand. The line and the key also stay for a host where something of Devspaces stays, for example a host that does not answer, or your devspaces of an account that is not signed in: the command does not remove the line of the key there.
+- When the list of Docker hosts of Devspaces cannot be read, the question says so, and names your devspaces outside of the VM, which stay. Then the command removes nothing from the remote hosts, and the SSH key stays with its lines. Remove them by hand (see [Remove by hand](#remove-by-hand)), or run the command again when the list can be read.
+- When the VM stays, for example because a window opened a devspace in it meanwhile, or another VS Code set it up again meanwhile, or Devspaces cannot tell whether it exists, the scheduled task that starts the VM, the Docker context `devspaces` and the folder of Devspaces stay with it.
+- VS Code uninstalls the extension only from the current profile. When Devspaces is installed in other profiles of VS Code too, uninstall it there too: until then, Devspaces works there and can set up its scheduled task, its Docker context or its SSH key again. The uninstall step of VS Code runs only after the uninstall from every profile.
+- A devspace that comes on a host or in the VM after your answer, for example from another window, is not deleted: the command removes nothing from that host or the VM, and the log names the devspace.
+- When you sign out of a GitHub account during the command, or VS Code cannot tell the accounts, the devspaces of that account stay, and the log names them as something that stays.
+- **Cancel** in the progress notification stops the command before its next part; a part that runs is not stopped half-way. The extension then stays installed.
+- The command removes Devspaces only from the hosts of the list of this VS Code. A host that you removed from the list earlier keeps what Devspaces left there, and the question names your devspaces there (see [Remove by hand](#remove-by-hand)).
+- When you use Devspaces in another VS Code on this computer too, for example VS Code Insiders, it shares the VM, the SSH key, the scheduled task and the folder: the command removes them for that VS Code too.
+
+### Remove one part at a time
+
+To keep some parts, for example the VM with its devspaces, remove the others one by one, and then uninstall the extension. Devspaces keeps a few things on each Docker engine that you used: the Monitor (`devspaces-monitor`), its helper containers and images, and three volumes that all devspaces of the engine share. On each Docker engine:
 
 1. Push the changes that you want to keep from each devspace there.
 2. Close the windows of your devspaces there. The command does not run while a window on this computer is connected to a devspace on the engine or is opening one, or while an operation runs, also **Update All Images Now** in the same window. When that changes while it asks, it removes nothing after your answer.
@@ -543,7 +575,7 @@ What to know:
 - A build of the helper image that another VS Code window began in the background before the removal, for example right after an update of Devspaces, goes on and can make the image `devspaces-worker:<hash>` there again. When `docker image ls` still lists it after the removal, run the command again.
 - An **Update All Images Now** in another VS Code window that is already sending its request when the removal begins goes on, and can create the container `devspaces-monitor`, the helper image and the volumes there again. When `docker ps -a` still lists `devspaces-monitor` after the removal, run the command again.
 - When something cannot be removed, for example a volume that a container still uses, the message says so. The log of Devspaces (**Devspaces: Show Log**) names each item and the command that removes it.
-- The command removes nothing on your computer (see [What stays after the uninstall](#what-stays-after-the-uninstall)).
+- **Remove Devspaces from This Docker Engine…** removes nothing on your computer (see [What stays after the uninstall](#what-stays-after-the-uninstall)).
 
 ### At the next start of VS Code
 
@@ -556,6 +588,8 @@ VS Code runs the uninstall step of Devspaces once, at its next start after Devsp
 It never deletes the VM of Devspaces, the WSL distribution or a devspace, because they can hold work that you did not push, and it cannot ask you. It never connects to a Docker engine or to a remote host. Until that start of VS Code, the scheduled task can still start the VM. When the step needs more than the 5 seconds, VS Code ends it, and you remove what stays by hand (see [What stays after the uninstall](#what-stays-after-the-uninstall)). When you use Devspaces in another VS Code on this computer too, for example VS Code Insiders, it shares the VM, the task and the context: its next window writes the task and the context again. VS Code writes the lines of the step into the log of its shared process, `sharedprocess.log` (**Developer: Open Logs Folder**).
 
 ### What stays after the uninstall
+
+After **Remove Devspaces from This Computer…**, only what its last message named stays, and what you installed for Devspaces, and your settings. After an uninstall without that command:
 
 - **The VM of Devspaces**, when you did not remove it, with your devspaces, and the folder with Lima. Without the extension, delete the VM and the folder on macOS and Linux with:
 
@@ -588,7 +622,7 @@ It never deletes the VM of Devspaces, the WSL distribution or a devspace, becaus
   ```
 
 - **The Docker context `devspaces`**, when it was the current Docker context at the uninstall, or when the uninstall step could not read the `config.json` of the Docker CLI; the log of the step says so. Run `docker context use default` and then `docker context rm devspaces`. The uninstall step sees the environment of VS Code, not of your shell: when your shell profile sets `DOCKER_CONTEXT=devspaces`, remove that line, because the context is gone; when it sets `DOCKER_CONFIG`, the context in that folder stays.
-- **The objects of Devspaces on each Docker engine** where you did not run **Devspaces: Remove Devspaces from This Docker Engine…**. On a remote host, the Monitor can keep running; it ends itself after 30 days without a devspace there. [Remove by hand](#remove-by-hand) has the Docker commands.
+- **The objects of Devspaces on each Docker engine** where you did not run **Devspaces: Remove Devspaces from This Docker Engine…** or **Remove Devspaces from This Computer…**. On a remote host, the Monitor can keep running; it ends itself after 30 days without a devspace there. [Remove by hand](#remove-by-hand) has the Docker commands.
 - **The SSH key of Devspaces**, after **Use a Key**: the files `~/.ssh/devspaces_ed25519` and `devspaces_ed25519.pub` on your computer, and the line of the public key in `~/.ssh/authorized_keys` on each remote host; that line ends with `devspaces@` and the name of your computer. Delete the line on each host, then the two files.
 - **What you installed for Devspaces**: QEMU and your membership in the group `kvm` on Linux, WSL 2 on Windows, and the Dev Containers extension, which other tools can use too.
 - **Your settings** `devspaces.…` in `settings.json`, until you remove them.

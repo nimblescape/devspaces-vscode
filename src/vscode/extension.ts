@@ -111,6 +111,7 @@ import { SessionFiles } from '../core/storage/sessionFiles';
 import type { ExtensionSettings } from '../core/types';
 import { AccountOffers } from './accountOffers';
 import { VsCodeGitHubAuth, watchGitHubEnterpriseSettings } from './auth';
+import { ComputerCleanup, computerVmState } from './computerCleanup';
 import { ConnectionAdapter } from './connectionAdapter';
 import { installOwnDockerCliWithProgress, OwnDockerCliTexts } from './ownDockerCliWindow';
 import { Controller } from './controller';
@@ -1369,6 +1370,10 @@ async function activateExtension(
       background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
       background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
     },
+    distributionGone: () => {
+      wslDistributionKnown(false);
+      contextPipe?.stop();
+    },
   });
   // "Set Up Docker for Devspaces in Its VM…" (macOS and Linux): after its setup, the Lima VM is the Docker host of
   // Devspaces.
@@ -1738,6 +1743,34 @@ async function activateExtension(
       },
       computerId,
     },
+    // "Remove Devspaces from This Computer…" (R-GEN-009): the VM without its question, the SSH key of Devspaces with its
+    // line on each host, the files of the uninstall hook (with the environment of this window, which VS Code took from
+    // the shell of the user), and the uninstall of the extension by VS Code.
+    computerCleanup: new ComputerCleanup({
+      logger,
+      state: remoteState,
+      vmHost,
+      vmState: () =>
+        computerVmState({
+          limaHome: limaVm?.paths.home,
+          // `sure`: when neither the list of WSL nor the registry can be read, an error (the VM counts as there), not none.
+          wsl:
+            limaVm === undefined && wslSetupCore !== undefined && wslFolder !== undefined
+              ? { registration: () => wslSetupCore.registration(undefined, true), folder: wslFolder, known: wslDistributionKnown }
+              : undefined,
+        }),
+      removeVm: (onlyLeftovers) => (limaVm !== undefined ? limaSetup.removeForComputer(onlyLeftovers) : wslSetup.removeForComputer(onlyLeftovers)),
+      vmGone: () => {
+        background(syncVmDockerContext(false), 'update the Docker context of the VM of Devspaces');
+        background(updateVmTask(), 'update the scheduled task of the VM of Devspaces');
+      },
+      key: sshKeys,
+      folder: limaVm?.paths.root ?? (wslFolder !== undefined ? path.win32.dirname(wslFolder) : undefined),
+      files: { runner, platform, env, homeDir: os.homedir(), uid: () => os.userInfo().uid },
+      uninstallExtension: async () => {
+        await vscode.commands.executeCommand('workbench.extensions.uninstallExtension', context.extension.id);
+      },
+    }),
   });
   // A link to Devspaces, for example on a website (links.ts; the activation event onUri starts the extension for it):
   // taken at once, because VS Code keeps a link only for some minutes until an extension takes it. Controller.openLink
