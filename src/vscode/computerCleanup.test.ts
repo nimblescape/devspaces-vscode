@@ -244,7 +244,7 @@ describe('the removal of the SSH key of Devspaces', () => {
     expect(logger.warn).toHaveBeenCalledWith(`${ComputerCleanupTexts.keyRefused('box', keyText)} (box: Permission denied (publickey))`);
     expect(logger.info).toHaveBeenCalledWith(`Devspaces deleted its SSH key ${keyPath()}, if it was there.`);
     // The key data itself, because the .pub file is gone after this.
-    expect(ComputerCleanupTexts.keyRefused('box', keyText)).toContain(`box does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has a line with the key "${keyText}"`);
+    expect(ComputerCleanupTexts.keyRefused('box', keyText)).toContain(`Devspaces cannot log in to box with its SSH key any more (the host refuses it, or asks for more), so it cannot remove its line there. If ~/.ssh/authorized_keys there still has a line with the key "${keyText}"`);
   });
 
   // Mutation: the key deleted while its line stays on a host where something of Devspaces stays, so that a new run of

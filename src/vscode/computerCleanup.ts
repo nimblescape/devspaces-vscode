@@ -134,7 +134,7 @@ export const ComputerCleanupTexts = {
     `Devspaces could not tell whether the VM of Devspaces exists now (${detail.replace(/\.$/, '')}), so its scheduled task, the Docker context devspaces and the folder of Devspaces stay. Run the command again.`,
   /** `key`: the type and the key data of the public key, because the key files go after this. */
   keyRefused: (host: string, key: string) =>
-    `${host} does not accept the SSH key of Devspaces any more, so Devspaces cannot remove its line there. If ~/.ssh/authorized_keys there still has a line with the key "${key}", remove it by hand.`,
+    `Devspaces cannot log in to ${host} with its SSH key any more (the host refuses it, or asks for more), so it cannot remove its line there. If ~/.ssh/authorized_keys there still has a line with the key "${key}", remove it by hand.`,
   /** `key`: as for keyRefused. */
   keyElsewhere: (host: string, key: string) =>
     `Devspaces found no line of its SSH key in ~/.ssh/authorized_keys on ${host}, although the login worked: the host may allow the key in another way (another file, or a line with options), or the login used another key of yours (IdentityFile in ~/.ssh/config). If ${host} has a line with the key "${key}", remove it by hand.`,
