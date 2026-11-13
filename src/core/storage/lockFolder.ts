@@ -117,6 +117,14 @@ async function writeLockToken(lockDir: string, token: string): Promise<boolean> 
 }
 
 /**
+ * The guard folder of `lockDir` that one waiter holds while it removes a stale `lockDir` (removeStaleLockFolder):
+ * `<lockDir>.takeover`. A removal of the folder around a lock must keep it too (src/uninstall/main.ts).
+ */
+export function lockTakeoverFolder(lockDir: string): string {
+  return `${lockDir}.takeover`;
+}
+
+/**
  * Removes `lockDir` if it is stale (its holder crashed). Returns true if the folder is gone, so that the caller tries
  * mkdir again at once. Only one waiter at a time removes a stale folder: it holds the guard folder `<lockDir>.takeover`
  * and checks the age again, because another waiter may have replaced the stale folder with its own fresh lock meanwhile.
@@ -125,7 +133,7 @@ async function removeStaleLockFolder(lockDir: string, staleMs: number): Promise<
   const age = await folderAge(lockDir);
   if (age === undefined) return true;
   if (age <= staleMs) return false;
-  const guard = `${lockDir}.takeover`;
+  const guard = lockTakeoverFolder(lockDir);
   try {
     await fs.promises.mkdir(guard);
   } catch (error) {

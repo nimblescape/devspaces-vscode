@@ -28,8 +28,8 @@ import { WSL_TASK_FOLDER, WslTask } from '../core/docker/wslTask';
 import { errorMessage } from '../core/errors';
 import type { Logger, ProcessRunner } from '../core/ports';
 import { NodeProcessRunner } from '../core/process';
-import { LockTimeoutError, withLockFolder } from '../core/storage/lockFolder';
-import { errorCode } from '../core/storage/paths';
+import { LockTimeoutError, lockTakeoverFolder, withLockFolder } from '../core/storage/lockFolder';
+import { errorCode, retryTransient } from '../core/storage/paths';
 import { dockerConfigDir, removeDockerContextFiles } from '../core/vm/dockerContext';
 import { LIMA_INSTANCE, limaPaths, limaSetupLockFolder } from '../core/vm/limaInstance';
 import { VmTask, vmTaskPaths } from '../core/vm/vmTask';
@@ -55,16 +55,18 @@ export interface UninstallDeps {
   wslFolder?: string;
 }
 
+/** Whether the VM of Devspaces, or what is left of it, is in the folder of Devspaces; `unknown` keeps the folder too. */
+type VmPresence = 'present' | 'absent' | 'unknown';
+
 /** The folder of Devspaces outside of VS Code, its lock of the setup of the VM, and whether a VM of Devspaces is in it. */
 interface DevspacesFolder {
   root: string;
   /** The lock folder of the setup in `root` (limaSetupLockFolder, wslSetupLockFolder), which only its holder removes. */
   lock: string;
-  /** True when the VM of Devspaces, or what is left of it, is in the folder, or when that cannot be told. */
-  hasVm: () => Promise<boolean>;
+  vm: () => Promise<VmPresence>;
   /** The names in `root` that stay although no VM is there. */
   keep: () => Promise<string[]>;
-  /** The name of the VM in the log. */
+  /** The name of the VM in the log, in the middle of a sentence. */
   vmName: string;
 }
 
@@ -135,9 +137,9 @@ async function removeScheduledTask(deps: UninstallDeps): Promise<void> {
     return;
   }
   if (platform !== 'win32') return;
-  const root = windowsRoot(deps);
-  if (root === undefined) return;
-  await wslTaskOf(deps, root).remove();
+  const folders = windowsFolders(deps);
+  if (folders === undefined) return;
+  await wslTaskOf(deps, folders.root).remove();
 }
 
 /** The task of Task Scheduler with its record in `root` (as in extension.ts); a removal needs no program of the task. */
@@ -145,15 +147,13 @@ function wslTaskOf(deps: UninstallDeps, root: string): WslTask {
   return new WslTask({ runner: deps.runner, logger: deps.logger, env: deps.env, folder: path.join(root, WSL_TASK_FOLDER), program: () => undefined });
 }
 
-/** The folder of the WSL distribution of Devspaces (`%LOCALAPPDATA%\nimblescape\devspaces\wsl`); undefined without LOCALAPPDATA. */
-function wslFolderOf(deps: UninstallDeps): string | undefined {
-  return absolute(deps.wslFolder ?? wslSetupFolder(deps.env));
-}
-
-/** The folder of Devspaces on Windows (`%LOCALAPPDATA%\nimblescape\devspaces`), next to which nothing else is touched. */
-function windowsRoot(deps: UninstallDeps): string | undefined {
-  const wslFolder = wslFolderOf(deps);
-  return wslFolder === undefined ? undefined : path.dirname(wslFolder);
+/**
+ * The folder of the WSL distribution of Devspaces (`%LOCALAPPDATA%\nimblescape\devspaces\wsl`) and the folder of
+ * Devspaces on Windows around it (`root`), next to which nothing else is touched; undefined without LOCALAPPDATA.
+ */
+function windowsFolders(deps: UninstallDeps): { wslFolder: string; root: string } | undefined {
+  const wslFolder = absolute(deps.wslFolder ?? wslSetupFolder(deps.env));
+  return wslFolder === undefined ? undefined : { wslFolder, root: path.dirname(wslFolder) };
 }
 
 /** The folder of Devspaces outside of VS Code on this platform, or undefined where there is none. */
@@ -166,17 +166,17 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
       root: paths.root,
       lock: limaSetupLockFolder(paths),
       // Also a VM that `limactl create` left half done: only `limactl delete` removes it.
-      hasVm: () => exists(path.join(paths.home, LIMA_INSTANCE)),
+      vm: async () => presence(await pathState(path.join(paths.home, LIMA_INSTANCE))),
       // A task that step 2 could not unload (launchctl, systemctl) finds no program anymore, so it starts nothing, and it
       // is gone at the next login, because its definition file is gone. A task of Task Scheduler stays until it is deleted.
       keep: async () => [],
-      vmName: 'The VM of Devspaces',
+      vmName: 'the VM of Devspaces',
     };
   }
   if (deps.platform !== 'win32') return undefined;
-  const wslFolder = wslFolderOf(deps);
-  if (wslFolder === undefined) return undefined;
-  const root = path.dirname(wslFolder);
+  const folders = windowsFolders(deps);
+  if (folders === undefined) return undefined;
+  const { wslFolder, root } = folders;
   const task = wslTaskOf(deps, root);
   const setup = new WslSetup({
     runner: deps.runner,
@@ -191,10 +191,16 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
     lock: wslSetupLockFolder(wslFolder),
     // The virtual disk of a distribution of Devspaces is in a folder `disk` (or `disk-2` and so on) of the folder `wsl`;
     // the registry of WSL names the folder of the disk of every distribution (also when its file has another name).
-    hasVm: async () => (await holdsFileWith(wslFolder, WSL_DISK_EXTENSION)) || setup.folderInUse(),
+    vm: async () => {
+      const folder = await pathState(wslFolder);
+      if (folder !== 'present') return presence(folder);
+      if (await holdsFileWith(wslFolder, WSL_DISK_EXTENSION)) return 'present';
+      const users = await setup.folderUsers();
+      return users === undefined ? 'unknown' : users.length > 0 ? 'present' : 'absent';
+    },
     // The record of a task that step 2 could not remove: without it, a later install of Devspaces cannot remove the task.
-    keep: async () => ((await exists(task.file)) ? [WSL_TASK_FOLDER] : []),
-    vmName: 'The WSL distribution of Devspaces',
+    keep: async () => ((await pathState(task.file)) === 'missing' ? [] : [WSL_TASK_FOLDER]),
+    vmName: 'the WSL distribution of Devspaces',
   };
 }
 
@@ -206,22 +212,26 @@ function devspacesFolder(deps: UninstallDeps): DevspacesFolder | undefined {
 async function removeDevspacesFolder(deps: UninstallDeps): Promise<void> {
   const { logger } = deps;
   const folder = devspacesFolder(deps);
-  if (folder === undefined || !(await exists(folder.root))) return;
+  if (folder === undefined || (await pathState(folder.root)) === 'missing') return;
   let failed: string[] | undefined;
   try {
     await withLockFolder(
       folder.lock,
       async () => {
-        if (await folder.hasVm()) {
-          logger.info(`${folder.vmName} exists, so its folder ${folder.root} stays. The user guide says how to delete it (Uninstall).`);
+        const vm = await folder.vm();
+        if (vm !== 'absent') {
+          const what = vm === 'present' ? `${capitalized(folder.vmName)} exists` : `Devspaces cannot tell whether ${folder.vmName} exists`;
+          logger.info(`${what}, so the folder ${folder.root} stays. The user guide says how to delete it (Uninstall).`);
           return;
         }
-        const kept = [path.basename(folder.lock), ...(await folder.keep())];
+        // The lock, and the guard of a takeover of a stale lock that a window of another VS Code may hold now.
+        const kept = [path.basename(folder.lock), path.basename(lockTakeoverFolder(folder.lock)), ...(await folder.keep())];
         failed = [];
         for (const name of await fs.promises.readdir(folder.root)) {
           if (kept.includes(name)) continue;
           try {
-            await fs.promises.rm(path.join(folder.root, name), { recursive: true, force: true });
+            // A virus scanner or the indexer of Windows can hold a file for a short time.
+            await retryTransient(() => fs.promises.rm(path.join(folder.root, name), { recursive: true, force: true }));
           } catch (error) {
             failed.push(`${name} (${errorMessage(error)})`);
           }
@@ -255,13 +265,23 @@ async function removeEmptyFolder(folder: string): Promise<boolean> {
   }
 }
 
-async function exists(file: string): Promise<boolean> {
+/** Whether `file` exists: `unknown` when lstat fails for another reason than a missing path (for example EACCES). */
+async function pathState(file: string): Promise<'present' | 'missing' | 'unknown'> {
   try {
-    await fs.promises.access(file);
-    return true;
-  } catch {
-    return false;
+    await fs.promises.lstat(file);
+    return 'present';
+  } catch (error) {
+    const code = errorCode(error);
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unknown';
   }
+}
+
+function presence(state: 'present' | 'missing' | 'unknown'): VmPresence {
+  return state === 'missing' ? 'absent' : state;
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** True when `folder` or a folder in it holds a file whose name ends with `extension` (any case). */

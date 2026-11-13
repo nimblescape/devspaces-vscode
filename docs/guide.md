@@ -577,7 +577,7 @@ It never deletes the VM of Devspaces, the WSL distribution or a devspace, becaus
   Unregister-ScheduledTask -TaskName "nimblescape Devspaces WSL $sid" -Confirm:$false
   ```
 
-- **The Docker context `devspaces`**, when it was the current Docker context at the uninstall, or when the uninstall step could not read the `config.json` of the Docker CLI; the log of the step says so. Run `docker context use default` and then `docker context rm devspaces`.
+- **The Docker context `devspaces`**, when it was the current Docker context at the uninstall, or when the uninstall step could not read the `config.json` of the Docker CLI; the log of the step says so. Run `docker context use default` and then `docker context rm devspaces`. The uninstall step sees the environment of VS Code, not of your shell: when your shell profile sets `DOCKER_CONTEXT=devspaces`, remove that line, because the context is gone; when it sets `DOCKER_CONFIG`, the context in that folder stays.
 - **The objects of Devspaces on each Docker engine** where you did not run **Devspaces: Remove Devspaces from This Docker Engine…**. On a remote host, the Monitor can keep running; it ends itself after 30 days without a devspace there. [Remove by hand](#remove-by-hand) has the Docker commands.
 - **The SSH key of Devspaces**, after **Use a Key**: the files `~/.ssh/devspaces_ed25519` and `devspaces_ed25519.pub` on your computer, and the line of the public key in `~/.ssh/authorized_keys` on each remote host; that line ends with `devspaces@` and the name of your computer. Delete the line on each host, then the two files.
 - **What you installed for Devspaces**: QEMU and your membership in the group `kvm` on Linux, WSL 2 on Windows, and the Dev Containers extension, which other tools can use too.

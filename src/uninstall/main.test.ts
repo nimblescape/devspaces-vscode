@@ -108,7 +108,7 @@ describe('the uninstall hook on Linux and macOS', () => {
     expect(fs.existsSync(path.join(home, 'Library', 'LaunchAgents', `${VM_TASK_LABEL}.plist`))).toBe(false);
     expect(fs.readdirSync(devspacesRoot()).sort()).toEqual(['lima', 'vm']);
     expect(fs.existsSync(path.join(devspacesRoot(), 'vm', 'devspaces', 'lima.yaml'))).toBe(true);
-    expect(lines()).toContain(`The VM of Devspaces exists, so its folder ${devspacesRoot()} stays. The user guide says how to delete it (Uninstall).`);
+    expect(lines()).toContain(`The VM of Devspaces exists, so the folder ${devspacesRoot()} stays. The user guide says how to delete it (Uninstall).`);
   });
 
   it('keeps a VM that `limactl create` left half done', async () => {
@@ -117,6 +117,27 @@ describe('the uninstall hook on Linux and macOS', () => {
     await setUp('linux').run();
     expect(fs.existsSync(path.join(devspacesRoot(), 'vm', 'devspaces', 'diffdisk'))).toBe(true);
     expect(fs.existsSync(path.join(devspacesRoot(), 'lima'))).toBe(true);
+  });
+
+  it('keeps the folder when it cannot tell whether the VM exists', async () => {
+    macOrLinuxFiles('linux', { vm: false });
+    const vm = path.join(devspacesRoot(), 'vm');
+    fs.rmSync(vm, { recursive: true });
+    // lstat of vm/devspaces fails with ELOOP, not with ENOENT.
+    fs.symlinkSync('vm', vm);
+    const { lines, run } = setUp('linux');
+    await run();
+    expect(fs.existsSync(path.join(devspacesRoot(), 'lima'))).toBe(true);
+    expect(lines()).toContain(`Devspaces cannot tell whether the VM of Devspaces exists, so the folder ${devspacesRoot()} stays. The user guide says how to delete it (Uninstall).`);
+  });
+
+  it('keeps the guard of a takeover of the lock, which a window of another VS Code may hold now', async () => {
+    macOrLinuxFiles('linux', { vm: false });
+    fs.mkdirSync(path.join(devspacesRoot(), 'vm-setup.lock.takeover'));
+    const { lines, run } = setUp('linux');
+    await run();
+    expect(fs.readdirSync(devspacesRoot())).toEqual(['vm-setup.lock.takeover']);
+    expect(lines()).toContain(`Devspaces removed its files in ${devspacesRoot()}; the folder stays, because it is not empty.`);
   });
 
   it('keeps the folder while another window sets up the VM', async () => {
@@ -247,7 +268,7 @@ describe('the uninstall hook on Windows', () => {
     expect(fs.existsSync(path.join(root, 'task', 'task.xml'))).toBe(false);
     expect(fs.existsSync(path.join(deps.wslFolder!, 'disk', 'ext4.vhdx'))).toBe(true);
     expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
-    expect(lines()).toContain(`The WSL distribution of Devspaces exists, so its folder ${root} stays. The user guide says how to delete it (Uninstall).`);
+    expect(lines()).toContain(`The WSL distribution of Devspaces exists, so the folder ${root} stays. The user guide says how to delete it (Uninstall).`);
   });
 
   it('keeps the folder when the registry names a distribution with its disk there, also without a .vhdx file', async () => {
@@ -255,6 +276,24 @@ describe('the uninstall hook on Windows', () => {
     windowsFiles(deps, { disk: false });
     await run();
     expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
+  });
+
+  it('keeps the folder when neither the registry nor wsl.exe tells whether a distribution has its disk there', async () => {
+    const answers = windowsAnswers();
+    const { deps, lines, run } = setUp('win32', (file, args) => (file.endsWith('reg.exe') ? failed('ERROR: The system was unable to find the specified registry key.') : answers(file, args)));
+    const root = windowsFiles(deps, { disk: false });
+    await run();
+    expect(fs.existsSync(path.join(deps.wslFolder!, 'download', 'devspaces-vm-x64.wsl'))).toBe(true);
+    expect(lines()).toContain(`Devspaces cannot tell whether the WSL distribution of Devspaces exists, so the folder ${root} stays. The user guide says how to delete it (Uninstall).`);
+  });
+
+  it('removes the files that are left without the folder of the distribution, without the registry', async () => {
+    const { deps, calls, run } = setUp('win32', windowsAnswers());
+    const root = path.dirname(deps.wslFolder!);
+    write(path.join(root, 'wsl.part', 'file'), 'left by a setup that did not end');
+    await run();
+    expect(fs.existsSync(root)).toBe(false);
+    expect(calls.filter(({ file }) => file.endsWith('reg.exe'))).toEqual([]);
   });
 
   it('keeps the record of a task that it could not delete, so that a later install can delete the task', async () => {

@@ -631,13 +631,12 @@ export class WslSetup {
   }
 
   /**
-   * Whether a WSL distribution has its virtual disk in the folder of Devspaces (the registry, else `wsl.exe --list`), or
-   * may have it there because neither tells. For the uninstall hook (src/uninstall/main.ts), which then keeps the
-   * folder. Never throws.
+   * The WSL distributions that have their virtual disk in the folder of Devspaces (the registry, else `wsl.exe --list`),
+   * or undefined when neither tells. For removeLeftovers and the uninstall hook (src/uninstall/main.ts), which keep the
+   * folder unless the list is empty. Never throws.
    */
-  async folderInUse(): Promise<boolean> {
-    const users = await this.diskUsers(this.deps.folder).catch(() => undefined);
-    return users === undefined || users.length > 0;
+  folderUsers(): Promise<string[] | undefined> {
+    return this.diskUsers(this.deps.folder).catch(() => undefined);
   }
 
   /**
@@ -651,7 +650,7 @@ export class WslSetup {
       (error: unknown) => errorCode(error) !== 'ENOENT',
     );
     if (!exists) return true;
-    const users = await this.diskUsers(folder).catch(() => undefined);
+    const users = await this.folderUsers();
     if (users === undefined || users.length > 0) {
       logger.warn(`The folder ${folder} stays: ${users === undefined ? 'neither the registry nor WSL tells whether a WSL distribution uses it' : `the WSL distribution ${users.join(', ')} has its virtual disk there`}.`);
       return false;
