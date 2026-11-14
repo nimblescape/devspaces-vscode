@@ -80,7 +80,15 @@ import type { HostConsoles } from './hostConsole';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
 import type { SessionCoordinator } from './sessionCoordinator';
 import { RowActivationTracker, activatedRow, type ListOpenMode } from './rowActivation';
-import { CONFIRM_OPEN_FROM_LINK_SETTING, SETTINGS_SECTION, dockerHostsActionsAllowed, hostAccessChecksOffValue, openSetting, readListOpenMode } from './settings';
+import {
+  CONFIRM_OPEN_FROM_LINK_SETTING,
+  SETTINGS_SECTION,
+  dockerHostsActionsAllowed,
+  dockerHostsDestructiveAllowed,
+  hostAccessChecksOffValue,
+  openSetting,
+  readListOpenMode,
+} from './settings';
 import type { Sidebar } from './sidebar';
 import type { DevspaceStatusBar } from './statusBar';
 import { pickRepository, showSwitcher, SwitcherTexts } from './switcher';
@@ -652,6 +660,11 @@ export class Controller implements vscode.Disposable {
       'resetVm',
       'vmSettings',
     ]);
+    // The commands of the view "Docker Hosts" that remove or delete something (R-ENG-008): only in the context menu of a
+    // row, and only while the setting devspaces.allowDestructiveActions is on as well; a run with a row of the view while
+    // it is off (a key binding, a menu that VS Code drew before the change) does nothing and says why. The Command
+    // Palette and the repository view pass no row of the view, so their commands stay.
+    const hostsViewRemovals = new Set<CommandName>(['delete', 'removeFromDockerEngine', 'removeDockerHostFromList', 'pruneBuildCache', 'removeDockerObjects', 'removeVm', 'resetVm']);
     const run = async (name: CommandName, argument: unknown, selection: unknown): Promise<void> => {
       // Enter on a row whose command is another command of Devspaces (the Sign in row, the Docker host row) ends with
       // that command: a click on a repository row right after it only selects that row (rowActivation.ts).
@@ -659,6 +672,11 @@ export class Controller implements vscode.Disposable {
       if (hostsViewActions.has(name) && hostOfNode(argument) !== undefined && !dockerHostsActionsAllowed(this.deps.settings())) {
         this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.dockerHostsActions is Disabled.`);
         this.informHostsViewReadOnly();
+        return;
+      }
+      if (hostsViewRemovals.has(name) && hostOfNode(argument) !== undefined && !dockerHostsDestructiveAllowed(this.deps.settings())) {
+        this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.allowDestructiveActions is off.`);
+        this.informHostsViewNoDestructive();
         return;
       }
       const host = hostCommands.has(name) ? hostOfArgument(argument) : undefined;
@@ -1553,8 +1571,8 @@ export class Controller implements vscode.Disposable {
   }
 
   /**
-   * "Remove Devspaces from This Docker Engine…" (only the Command Palette), on the engine of the Docker host of
-   * Devspaces: after a confirmation, the Monitor, the helper containers and images, and the shared volumes
+   * "Remove Devspaces from This Docker Engine…" (the Command Palette, and the context menu of a host row of the view
+   * Docker Hosts, which runs it on the host of the row: hostCommands), on the engine of the Docker host of Devspaces: after a confirmation, the Monitor, the helper containers and images, and the shared volumes
    * of Devspaces (engineRemoval.ts, with the Docker CLI of the extension once the worker of this window ended); and,
    * after a second confirmation, first the devspaces of the signed-in account there (each as Delete does, in the
    * worker, with all its volumes). Devspaces of other accounts and of other computers stay. Refused while a window of
@@ -4588,6 +4606,15 @@ export class Controller implements vscode.Disposable {
     showInformationMessage(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings).then(
       (choice) => {
         if (choice === ControllerTexts.openSettings) void openSetting('dockerHostsActions');
+      },
+      (error: unknown) => this.logger.error('Could not show the message.', error),
+    );
+  }
+
+  private informHostsViewNoDestructive(): void {
+    showInformationMessage(ControllerTexts.hostsViewNoDestructive, ControllerTexts.openSettings).then(
+      (choice) => {
+        if (choice === ControllerTexts.openSettings) void openSetting('allowDestructiveActions');
       },
       (error: unknown) => this.logger.error('Could not show the message.', error),
     );

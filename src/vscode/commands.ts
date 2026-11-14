@@ -110,8 +110,9 @@ export const Commands = {
   resetVm: 'devspaces.resetVm',
   vmSettings: 'devspaces.vmSettings',
   // The gear in the title bar of the view "Docker Hosts" (dockerHostsSettings.ts, R-ENG-008), shown with the setting
-  // devspaces.dockerHostsSettingsButton: a quick pick for the settings dockerHostsActions and allowContainerLogs
-  // (hidden in the Command Palette: the settings are changed in the Settings editor).
+  // devspaces.dockerHostsSettingsButton: a quick pick for the settings dockerHostsActions, allowDestructiveActions,
+  // allowContainerLogs and dockerHostsConsoleButton (hidden in the Command Palette: the settings are changed in the
+  // Settings editor).
   dockerHostsSettings: 'devspaces.dockerHostsSettings',
 } as const;
 

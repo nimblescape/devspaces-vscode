@@ -508,12 +508,19 @@ export interface ExtensionSettings {
    */
   dockerHostsActions?: DockerHostsActions;
   /**
+   * The actions of the view Docker Hosts that remove or delete something (R-ENG-008): Delete… of a devspace, Remove… of
+   * objects, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine…, Remove the VM…
+   * and Remove and Set Up the VM Again…, only in the context menu of a row, and only with dockerHostsActions
+   * `contextMenu` or `icons`. Off (the default): the view has none of them. Scope `application`.
+   */
+  allowDestructiveActions?: boolean;
+  /**
    * Show Log of every container in the view Docker Hosts and on its reports (R-ENG-008, R-ENG-010), and the log of a
    * container through the Docker pipes of Devspaces. Off (the default): no Show Log, and the pipes refuse the log of
    * every container. Scope `application`.
    */
   allowContainerLogs?: boolean;
-  /** The button Docker Hosts Settings… in the title bar of the view Docker Hosts, which switches both. Default off. */
+  /** The button Docker Hosts Settings… in the title bar of the view Docker Hosts, which switches the others. Default off. */
   dockerHostsSettingsButton?: boolean;
   /** The button Open Console on each host row of the view Docker Hosts: a shell on that host. Default off. */
   dockerHostsConsoleButton?: boolean;

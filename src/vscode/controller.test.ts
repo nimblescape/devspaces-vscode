@@ -4201,7 +4201,7 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(h.connection.open).not.toHaveBeenCalled();
   });
 
-  it('is a command of package.json, only in the Command Palette: in no menu of a view and on no row', () => {
+  it('is a command of package.json, in the Command Palette and only in the context menu of an engine row of the view "Docker Hosts", with allowDestructiveActions', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -4213,8 +4213,17 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     });
     // A command without an entry of the menu commandPalette is in the Command Palette, on the Docker host of Devspaces.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromDockerEngine)).toBe(false);
+    const rows = manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.removeFromDockerEngine);
+    // One entry of the context menu of a host row with an engine, never a button (inline), and only with the setting.
+    expect(rows).toEqual([
+      {
+        command: 'devspaces.removeFromDockerEngine',
+        when: 'view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/ && config.devspaces.allowDestructiveActions',
+        group: '3_remove@1',
+      },
+    ]);
     for (const [menu, entries] of Object.entries(manifest.contributes.menus)) {
-      if (menu !== 'commandPalette') expect(entries.some((entry) => entry.command === Commands.removeFromDockerEngine), menu).toBe(false);
+      if (menu !== 'commandPalette' && menu !== 'view/item/context') expect(entries.some((entry) => entry.command === Commands.removeFromDockerEngine), menu).toBe(false);
     }
   });
 });
@@ -7022,6 +7031,7 @@ describe('the Docker host of Devspaces', () => {
     fs.rmSync(h.root, { recursive: true, force: true });
     h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm });
     h.settings.dockerHostsActions = 'contextMenu';
+    h.settings.allowDestructiveActions = true;
     const clicked = { hostsNode: 'object', host: 'lab', object: { kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume' } };
     const handler = h.commands.get(Commands.removeDockerObjects);
     await handler?.(clicked, [clicked]);
@@ -7102,6 +7112,58 @@ describe('the Docker host of Devspaces', () => {
     await settle(() => fakeVscode.commands.executeCommand.mock.calls.some((call) => call[0] === 'workbench.action.openSettings'), 'the Settings editor');
     expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', '@id:devspaces.dockerHostsActions');
     expect(vm.stop).not.toHaveBeenCalled();
+  });
+
+  // The setting devspaces.allowDestructiveActions (R-ENG-008): while it is off (the default), an action that removes or
+  // deletes something does nothing when a row of the view asks for it, and says why; the actions that remove nothing
+  // run, and the same commands without a row (the Command Palette, the repository view) run.
+  it('runs no action of a row of the view "Docker Hosts" that removes or deletes something while allowDestructiveActions is off, and says why', async () => {
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const vm = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), remove: vi.fn(async () => {}), reset: vi.fn(async () => {}), settings: vi.fn(async () => {}) };
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm });
+    await h.registry.add(remoteDevspace());
+    const hostRow = { hostsNode: 'host', host: 'lab', vm: false, selected: false };
+    const vmRow = { hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'running' } };
+    const objectRow = { hostsNode: 'object', host: 'lab', object: { kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume' } };
+    const devspaceRow = { hostsNode: 'object', host: 'build-box', devspaceId: REMOTE_ENV_ID, object: { kind: 'container', id: 'c', name: 'c', purpose: 'devspace', state: 'running' } };
+    const cacheRow = { hostsNode: 'buildCache', host: 'lab' };
+    for (const allowed of [undefined, false] as const) {
+      h.settings.dockerHostsActions = 'icons';
+      h.settings.allowDestructiveActions = allowed;
+      fakeVscode.window.showInformationMessage.mockClear();
+      await run('removeDockerObjects', objectRow);
+      await run('pruneBuildCache', cacheRow);
+      await run('removeDockerHostFromList', hostRow);
+      await run('removeFromDockerEngine', hostRow);
+      await run('delete', devspaceRow);
+      await run('removeVm', vmRow);
+      await run('resetVm', vmRow);
+      expect(dockerHosts.removeObjects).not.toHaveBeenCalled();
+      expect(dockerHosts.pruneBuildCache).not.toHaveBeenCalled();
+      expect(dockerHosts.removeFromList).not.toHaveBeenCalled();
+      expect(h.service.deleteCheckInWorker).not.toHaveBeenCalled();
+      expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+      expect([vm.remove, vm.reset].map((mock) => mock.mock.calls.length)).toEqual([0, 0]);
+      expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledTimes(7);
+      expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.hostsViewNoDestructive, ControllerTexts.openSettings);
+    }
+    expect(operations).toEqual([]);
+    // The actions that remove nothing run.
+    await run('stopDockerObject', { hostsNode: 'object', host: 'lab', object: { kind: 'container', id: 'c', name: 'c', purpose: 'notDevspaces', state: 'running' } });
+    await run('stopVm', vmRow);
+    expect(dockerHosts.stopObject).toHaveBeenCalledTimes(1);
+    expect(vm.stop).toHaveBeenCalledTimes(1);
+    // Without a row of the view (the Command Palette), the commands run.
+    await run('removeVm');
+    expect(vm.remove).toHaveBeenCalledTimes(1);
+    // Open Settings opens the setting.
+    fakeVscode.window.showInformationMessage.mockResolvedValueOnce(ControllerTexts.openSettings);
+    await run('resetVm', vmRow);
+    await settle(() => fakeVscode.commands.executeCommand.mock.calls.some((call) => call[0] === 'workbench.action.openSettings'), 'the Settings editor');
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', '@id:devspaces.allowDestructiveActions');
+    expect(vm.reset).not.toHaveBeenCalled();
   });
 
   it('runs every other command as one operation on the host that is current when it starts', async () => {

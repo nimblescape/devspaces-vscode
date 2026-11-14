@@ -9,6 +9,8 @@ import { listSome } from '../core/messages';
 export const ControllerTexts = {
   // A row of the view Docker Hosts asked for an action while the setting devspaces.dockerHostsActions is Disabled.
   hostsViewReadOnly: 'The view Docker Hosts is read only: the setting devspaces.dockerHostsActions is Disabled. Choose Context Menu or Icons to use its actions.',
+  hostsViewNoDestructive:
+    'The view Docker Hosts does not allow actions that remove or delete something: turn on the setting devspaces.allowDestructiveActions to use them in the context menu of a row.',
   openSettings: 'Open Settings',
   // Progress titles (one notification per operation).
   stopping: (repository: string) => `Stopping ${repository}…`,
