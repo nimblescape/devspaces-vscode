@@ -1309,7 +1309,7 @@
           "type": "boolean",
           "scope": "application",
           "default": false,
-          "markdownDescription": "Allow the actions of the view Docker Hosts that remove or delete something (**Delete…** and **Rebuild** of a devspace, **Remove…**, **Remove Unused Build Cache…**, **Remove from the List**, the removals of the engine, of the VM and of Devspaces from this computer), only in the context menu of a row and with Context Menu or Icons of `#devspaces.dockerHostsActions#`. Off: the view has none of them.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
+          "markdownDescription": "Allow the actions of the view Docker Hosts that remove or delete something (**Delete…** and **Rebuild** of a devspace, **Remove…**, and the other removals of the user guide), only in the context menu of a row and with Context Menu or Icons of `#devspaces.dockerHostsActions#`. Off: the view has none of them.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
         },
         "devspaces.allowContainerLogs": {
           "order": 25,
