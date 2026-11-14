@@ -874,7 +874,8 @@ export function parseRefreshValue(value: unknown, params: RefreshParams): Devspa
 // secrets, the requests to the extension or the output of an operation (src/helperChannel/workerLog.ts). At
 // WORKER_LOG_MAX_BYTES the file becomes `<ID>.log.1` (the one before is removed). Show Log of a worker on the view
 // Docker Hosts reads both (src/core/hosts/workerLogReader.ts). A worker touches its file every WORKER_LOG_TOUCH_MS, and
-// at its start removes the files of other workers that nobody touched for WORKER_LOG_KEEP_MS: their workers ended.
+// at its start removes the files of other workers that nobody touched for WORKER_LOG_KEEP_MS: their workers ended (the
+// older part of a file that was touched within that time stays).
 
 /** The variable of the environment of a worker container (value `1`) that makes the worker write its log. */
 export const WORKER_LOG_ENV = 'DEVSPACES_WORKER_LOG';

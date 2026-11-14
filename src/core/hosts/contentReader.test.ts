@@ -169,6 +169,20 @@ describe('the script of the reader of Show Files', () => {
     expect(tree.root.files).toBe(10);
     expect(tree.root.leftOut).toBe(20);
   });
+
+  it('keeps no more entries than its limit of output bytes allows, for long names too', () => {
+    for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(root, `${String(i).padStart(2, '0')}${'n'.repeat(200)}`), 'x');
+    const code = CONTENT_READER_CODE.replace(/bytes: \d+,/, 'bytes: 2000,');
+    expect(code).not.toBe(CONTENT_READER_CODE);
+    const output = read(code);
+    const tree = parseContentTree(output) as ContentTree;
+    expect(tree.stopped).toBe(false);
+    expect(tree.root.files).toBe(20);
+    // Each entry counts its name as JSON (204 bytes with its quotes) and 120 more: 6 of them fit into 2000 bytes.
+    expect(tree.root.entries).toHaveLength(6);
+    expect(tree.root.leftOut).toBe(14);
+    expect(output.length).toBeLessThan(2000 + 200);
+  });
 });
 
 describe('parseContentTree', () => {
@@ -199,7 +213,7 @@ describe('contentTreeText', () => {
         folders: 1,
         entries: [
           { name: 'z.txt', type: 'file', bytes: 500_000, modified: at },
-          { name: 'bad\nname‮.txt', type: 'file', bytes: 1, modified: at },
+          { name: 'bad\nname\u202e.txt', type: 'file', bytes: 1, modified: at },
           { name: 'current', type: 'link', bytes: 0, modified: at, link: '/data/v2' },
           { name: 'data', type: 'folder', bytes: 999_999, modified: at, files: 1, folders: 0, entries: [{ name: 'a.bin', type: 'file', bytes: 999_999, modified: at }], leftOut: 2 },
           { name: 'fifo', type: 'other', bytes: 0, modified: at },
@@ -221,6 +235,28 @@ describe('contentTreeText', () => {
       '  z.txt · 500 kB · 2026-11-14 08:00',
       '',
     ]);
+  });
+
+  it('says how many entries are left out of a folder that kept none at the limits, but not of a folder at the level limit', () => {
+    const folder = (name: string, entries: ContentTree['root'][], leftOut?: number) => ({
+      name,
+      type: 'folder' as const,
+      bytes: 0,
+      modified: at,
+      files: 0,
+      folders: 0,
+      entries,
+      ...(leftOut !== undefined ? { leftOut } : {}),
+    });
+    // A folder of the first level whose entries an earlier folder used up (the limit of the kept entries).
+    const early = contentTreeText({ stopped: false, seen: 4, root: folder('', [folder('big', [], 1), folder('src', [], 3)]) }, { subject: 'volume v', host: 'lab', at, timeZone: 'UTC' });
+    expect(early).toContain('  src/ · 0 B · 0 files · 2026-11-14 07:00\n    … 3 more entries\n');
+    // The folder of the last level of the tree shows only its totals.
+    let deep = folder(`level${CONTENT_READER_LIMITS.levels}`, [], 2);
+    for (let level = CONTENT_READER_LIMITS.levels - 1; level >= 1; level--) deep = folder(`level${level}`, [deep]);
+    const text = contentTreeText({ stopped: false, seen: 7, root: folder('', [deep]) }, { subject: 'volume v', host: 'lab', at, timeZone: 'UTC' });
+    expect(text).toMatch(new RegExp(`level${CONTENT_READER_LIMITS.levels}/ · 0 B · 0 files · 2026-11-14 07:00\\n$`));
+    expect(text).not.toContain('more entries');
   });
 
   it('says when the read stopped at its limit, and gives the totals as lower bounds', () => {

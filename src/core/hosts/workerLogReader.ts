@@ -13,6 +13,7 @@
 // (isWorkerLogReaderCall). The read itself is readWorkerLog (workerLogRead.ts). No `vscode`.
 import { WORKER_LOG_FOLDER } from '../helperChannel/protocol';
 import { CONTAINER_LOG_LINES } from './monitorLog';
+import { IMAGE_ID, READER_NAME, VOLUME_NAME, regExpLiteral } from './volumeReader';
 
 /** The folder of the container at which the volume of the Monitor is mounted (read-only). */
 export const WORKER_LOG_READER_ROOT = '/devspaces/monitor';
@@ -65,12 +66,6 @@ export const WORKER_LOG_READER_CODE = WORKER_LOG_READER_SCRIPT.split('\n')
   .filter((line) => line !== '' && !line.startsWith('//'))
   .join(' ');
 
-/** A name of a container of the readers (newReaderName). */
-const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
-/** A volume name as Docker allows it. */
-const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-/** The ID of an image (the worker's own image, by its ID). */
-const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
 /** The short ID of a container. */
 const SHORT_ID = /^[0-9a-f]{12}$/;
 
@@ -115,7 +110,7 @@ export function workerLogReaderArgs(p: { image: string; volume: string; id: stri
 }
 
 /** The value of the `--mount` of workerLogReaderArgs. */
-const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${WORKER_LOG_READER_ROOT.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&')},readonly$`);
+const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${regExpLiteral(WORKER_LOG_READER_ROOT)},readonly$`);
 
 /**
  * Whether `args` are a call of workerLogReaderArgs, exactly: the shared shell of a host runs it (isSharedShellCall), as

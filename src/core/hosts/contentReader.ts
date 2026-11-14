@@ -14,13 +14,21 @@
 // contentTreeText. No `vscode`.
 import { formatSize } from './hostObjects';
 import { countText, dateAndTime } from './reportModel';
+import { IMAGE_ID, READER_NAME, VOLUME_NAME, regExpLiteral } from './volumeReader';
 
 /** The folder of the container at which the volume or the image is mounted (read-only). */
 export const CONTENT_READER_ROOT = '/devspaces/content';
 /** The time limit of one run of the reader. */
 export const CONTENT_READER_TIMEOUT_MS = 90_000;
-/** The limits of the script: entries that it looks at, entries that it keeps for the tree, levels that the tree shows, and its time. */
-export const CONTENT_READER_LIMITS = { entries: 200_000, kept: 20_000, levels: 5, depth: 64, ms: 60_000 } as const;
+/**
+ * The limits of the script: entries that it looks at, entries that it keeps for the tree, levels that the tree shows,
+ * folders that it walks into, its time, and the bytes of its output for the kept entries (each counted with its name,
+ * its link target and CONTENT_ENTRY_BYTES), so that the output stays far below the limit of the shared shell
+ * (MAX_SHELL_COMMAND_OUTPUT, 16 MiB) also with long names.
+ */
+export const CONTENT_READER_LIMITS = { entries: 200_000, kept: 20_000, levels: 5, depth: 64, ms: 60_000, bytes: 8_000_000 } as const;
+/** The bytes of the output of one kept entry besides its name and its link target (its other fields). */
+const CONTENT_ENTRY_BYTES = 120;
 
 /** What Show Files reads: a volume by its name, or an image by its ID. */
 export type ContentTarget = { kind: 'volume'; name: string } | { kind: 'image'; id: string };
@@ -38,10 +46,11 @@ export const CONTENT_READER_SCRIPT = String.raw`
 const fs = require("fs");
 const path = require("path");
 const root = process.argv[1];
-const limits = { entries: ${CONTENT_READER_LIMITS.entries}, kept: ${CONTENT_READER_LIMITS.kept}, levels: ${CONTENT_READER_LIMITS.levels}, depth: ${CONTENT_READER_LIMITS.depth}, ms: ${CONTENT_READER_LIMITS.ms} };
+const limits = { entries: ${CONTENT_READER_LIMITS.entries}, kept: ${CONTENT_READER_LIMITS.kept}, levels: ${CONTENT_READER_LIMITS.levels}, depth: ${CONTENT_READER_LIMITS.depth}, ms: ${CONTENT_READER_LIMITS.ms}, bytes: ${CONTENT_READER_LIMITS.bytes}, entry: ${CONTENT_ENTRY_BYTES} };
 const started = Date.now();
 let entries = 0;
 let kept = 0;
+let bytes = 0;
 let stopped = false;
 // One entry from its lstat: the link itself, never its target.
 function entry(name, stat) {
@@ -64,9 +73,11 @@ function walk(dir, node, depth) {
     let stat;
     try { stat = fs.lstatSync(full); } catch { node.x += 1; continue; }
     const child = entry(name, stat);
-    const keep = depth < limits.levels && kept < limits.kept;
-    if (keep) { kept += 1; }
     if (child.t === "l") { try { child.l = fs.readlinkSync(full).slice(0, 300); } catch {} }
+    // The bytes of the entry in the output: its name and its link target as JSON, and its other fields.
+    const cost = JSON.stringify(name).length + (child.l === undefined ? 0 : JSON.stringify(child.l).length) + limits.entry;
+    const keep = depth < limits.levels && kept < limits.kept && bytes + cost <= limits.bytes;
+    if (keep) { kept += 1; bytes += cost; }
     if (child.t === "d") {
       if (depth < limits.depth) { walk(full, child, depth + 1); } else { child.f = 0; child.d = 0; child.e = 2; }
       node.d += 1 + child.d;
@@ -87,12 +98,6 @@ export const CONTENT_READER_CODE = CONTENT_READER_SCRIPT.split('\n')
   .filter((line) => line !== '' && !line.startsWith('//'))
   .join(' ');
 
-/** A name of a container of the readers (newReaderName). */
-const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
-/** A volume name as Docker allows it. */
-const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-/** The full ID of an image. */
-const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
 /** A helper image of Devspaces (readerImages). */
 const HELPER_IMAGE = /^devspaces-(?:worker|monitor):[0-9a-f]{12}$/;
 
@@ -150,7 +155,7 @@ export function contentReaderArgs(p: { image: string; target: ContentTarget; nam
 }
 
 /** The target of a value of `--mount` of contentReaderArgs. */
-const MOUNT_ARGUMENT = new RegExp(`^type=(volume|image),source=([^,]*),target=${CONTENT_READER_ROOT.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&')},readonly$`);
+const MOUNT_ARGUMENT = new RegExp(`^type=(volume|image),source=([^,]*),target=${regExpLiteral(CONTENT_READER_ROOT)},readonly$`);
 
 /**
  * Whether `args` are a call of contentReaderArgs, exactly: the shared shell of a host runs it (isSharedShellCall), as the
@@ -293,8 +298,11 @@ function folderLines(folder: ContentEntry, level: number, timeZone: string, comp
     lines.push(entryLine(entry, indent, timeZone, complete));
     if (entry.type === 'folder') folderLines(entry, level + 1, timeZone, complete, lines);
   }
-  // A folder at the level limit shows only its totals; a folder with kept entries says how many are left out.
-  if ((folder.entries?.length ?? 0) > 0 && folder.leftOut !== undefined) lines.push(`${indent}… ${countText(folder.leftOut, 'more entry', 'more entries')}`);
+  // A folder at the level limit shows only its totals (its entries are at `level`, deeper than the levels of the
+  // tree). Any other folder says how many of its entries are left out: at the limits of the entries or of the output,
+  // which an earlier, larger folder can use up, also when it kept none of them.
+  const atLevelLimit = level > CONTENT_READER_LIMITS.levels;
+  if (folder.leftOut !== undefined && ((folder.entries?.length ?? 0) > 0 || !atLevelLimit)) lines.push(`${indent}… ${countText(folder.leftOut, 'more entry', 'more entries')}`);
 }
 
 export interface ContentTreeTextInput {

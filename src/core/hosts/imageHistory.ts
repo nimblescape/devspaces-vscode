@@ -61,24 +61,40 @@ const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 /** The shells with which Docker runs the shell form of RUN, after the build arguments. */
 const SHELLS = ['/bin/sh -c ', '/bin/bash -c ', 'cmd /S /C '];
+/**
+ * The marker of the classic builder for an instruction that runs nothing, after the shell of the image: `/bin/sh -c`,
+ * the shell of a SHELL instruction (for example `/bin/bash -o pipefail -c`), or `cmd /S /C` on Windows.
+ */
+const NOP = /^.*?#\(nop\)\s+(.*)$/s;
+/** A step that starts with its instruction (BuildKit, or the classic builder after NOP). */
+const INSTRUCTION = /^[A-Z]+(?:\s|$)/;
 
 function clipped(text: string): string {
   return text.length <= MAX_STEP_LENGTH ? text : `${text.slice(0, MAX_STEP_LENGTH - 1)}…`;
 }
 
-/** The names of the variables of the words of ENV or ARG (`A=1 B=2`, or the older form `NAME value`). */
-function variableNames(rest: string): string[] {
+/**
+ * ENV or ARG in words, without a value. Docker writes the values without quotes, so a value with a space and a `=`
+ * looks like one more variable (`A=x y=z` can be A with the value `x y=z`): only the name of the first word is certain,
+ * and further words show as `…`. The first word is `NAME=VALUE`, or `NAME` (the older form `ENV NAME value`, whose rest
+ * is the value, and ARG without a default). ARG with only names has no value and shows them all.
+ */
+function variablesText(keyword: 'ENV' | 'ARG', rest: string): string {
   const words = rest.split(/\s+/).filter((word) => word !== '');
-  const names = words.map((word) => ASSIGNMENT.exec(word)?.[1]).filter((name): name is string => name !== undefined);
-  if (names.length > 0) return names;
-  return words.length > 0 && NAME.test(words[0]) ? [words[0]] : [];
+  if (keyword === 'ARG' && words.length > 0 && words.every((word) => NAME.test(word))) return `ARG ${words.join(', ')}`;
+  const first = words[0];
+  const name = first === undefined ? undefined : NAME.test(first) ? first : ASSIGNMENT.exec(first)?.[1];
+  if (name === undefined) return `${keyword} (not shown, because a value could be a secret)`;
+  // The older form: one variable, the rest of the words is its value.
+  const one = words.length === 1 || (keyword === 'ENV' && NAME.test(first ?? ''));
+  return one ? `${keyword} ${name} (the value is not shown)` : `${keyword} ${name}, … (the values are not shown)`;
 }
 
 /**
  * The step of a layer in words: the instruction without the shell that runs it, never a value of a build argument, of
  * ENV or of ARG (each can be a secret), at most MAX_STEP_LENGTH characters.
  *
- * - The classic builder writes `/bin/sh -c #(nop) <instruction>` for an instruction that runs nothing, and
+ * - The classic builder writes `<shell> #(nop) <instruction>` for an instruction that runs nothing (NOP), and
  *   `/bin/sh -c <command>` or `|<N> <build arguments> /bin/sh -c <command>` for RUN; BuildKit writes the instruction
  *   (`RUN …`, `ENV …`) and ` # buildkit` at the end.
  * - The N words after `|<N>` are the build arguments, `NAME=VALUE`, which Docker writes without quotes. A value with a
@@ -88,17 +104,13 @@ function variableNames(rest: string): string[] {
 export function stepText(createdBy: string): string {
   let text = createdBy.trim().replace(/\s+# buildkit$/, '');
   if (text === '') return '(no step recorded)';
-  if (text.startsWith('/bin/sh -c #(nop) ')) text = text.slice('/bin/sh -c #(nop) '.length).trim();
-  else if (text.startsWith('/bin/sh -c ') || /^\|\d+ /.test(text)) text = `RUN ${text}`;
+  const nop = INSTRUCTION.test(text) ? null : NOP.exec(text);
+  if (nop !== null) text = nop[1].trim();
+  else if (SHELLS.some((shell) => text.startsWith(shell)) || /^\|\d+ /.test(text)) text = `RUN ${text}`;
   const instruction = /^([A-Z]+)(?:\s+(.*))?$/s.exec(text);
   const keyword = instruction?.[1];
   const rest = instruction?.[2] ?? '';
-  if (keyword === 'ENV' || keyword === 'ARG') {
-    // ARG NAME without a default has no value.
-    if (keyword === 'ARG' && NAME.test(rest.trim())) return `ARG ${rest.trim()}`;
-    const names = variableNames(rest);
-    return clipped(names.length === 0 ? `${keyword} (not shown, because a value could be a secret)` : `${keyword} ${names.join(', ')} (the value${names.length === 1 ? ' is' : 's are'} not shown)`);
-  }
+  if (keyword === 'ENV' || keyword === 'ARG') return clipped(variablesText(keyword, rest));
   if (keyword === 'RUN') {
     const args = /^\|(\d+) (.*)$/s.exec(rest);
     if (args === null) return clipped(`RUN ${SHELLS.reduce((command, shell) => (command.startsWith(shell) ? command.slice(shell.length) : command), rest)}`);

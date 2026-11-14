@@ -50,7 +50,17 @@ describe('stepText', () => {
   });
 
   it('never shows a value of ENV or ARG, only the names', () => {
-    expect(stepText('ENV API_TOKEN=ghp_secret PATH=/usr/local/bin:/usr/bin # buildkit')).toBe('ENV API_TOKEN, PATH (the values are not shown)');
+    // Docker writes the values without quotes: only the first name is certain, so the next words show as `…`.
+    expect(stepText('ENV API_TOKEN=ghp_secret PATH=/usr/local/bin:/usr/bin # buildkit')).toBe('ENV API_TOKEN, … (the values are not shown)');
+    // A value with a space and a `=` (`ENV A="x y=z"`) shows no part of it.
+    expect(stepText('ENV A=x y=z # buildkit')).toBe('ENV A, … (the values are not shown)');
+    // The older form `ENV NAME value`: a `=` in the value is no name.
+    expect(stepText('/bin/sh -c #(nop)  ENV TOKEN abc=def')).toBe('ENV TOKEN (the value is not shown)');
+    // The classic builder with another shell (SHELL), and on Windows.
+    expect(stepText('/bin/bash -o pipefail -c #(nop)  ENV API_TOKEN=s3cr3t')).toBe('ENV API_TOKEN (the value is not shown)');
+    expect(stepText('cmd /S /C #(nop)  ENV API_TOKEN=s3cr3t')).toBe('ENV API_TOKEN (the value is not shown)');
+    expect(stepText('/bin/bash -c #(nop)  ARG TOKEN=s3cr3t')).toBe('ARG TOKEN (the value is not shown)');
+    expect(stepText('ARG A B # buildkit')).toBe('ARG A, B');
     expect(stepText('/bin/sh -c #(nop)  ENV TOKEN=abc')).toBe('ENV TOKEN (the value is not shown)');
     expect(stepText('/bin/sh -c #(nop)  ENV TOKEN abc def')).toBe('ENV TOKEN (the value is not shown)');
     expect(stepText('ARG TOKEN=default-secret')).toBe('ARG TOKEN (the value is not shown)');

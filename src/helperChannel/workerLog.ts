@@ -13,6 +13,10 @@ import { WORKER_LOG_MAX_BYTES } from '../core/helperChannel/protocol';
 
 /** The name of a log of a worker, or of its older part, in its folder. */
 const LOG_FILE = /^[0-9a-f]{12}\.log(\.1)?$/;
+/** The bytes that a process writes before it reads the size of the log again (other processes of the container write to it too). */
+const SIZE_CHECK_BYTES = 64 * 1024;
+/** The age after which the lock of a move of the log counts as left by a process that ended during the move. */
+const ROTATE_LOCK_STALE_MS = 60_000;
 
 /** One entry of the log: its time in UTC, its text, and the further lines of the text indented. */
 export function workerLogLine(at: number, text: string): string {
@@ -42,11 +46,15 @@ export interface WorkerLogOptions {
 /**
  * The log of one worker process: it appends to the log of its container (a worker that the relay starts again goes on).
  * Several processes of one container (the workers of the streams of a relay) append to the same file; each line is
- * one write, and before it moves the log to its older part, a process checks that no other process did it already.
+ * one write. Only one process at a time moves the log to its older part (the folder `<name>.lock` is the lock), and it
+ * moves it only when no other process did it already.
  */
 export class WorkerLog {
   private fd: number | undefined;
   private broken = false;
+  /** The size of the file at its last read, and the bytes that this process wrote since. */
+  private knownSize = 0;
+  private writtenSince = 0;
   private readonly now: () => number;
   private readonly maxBytes: number;
   readonly file: string;
@@ -64,20 +72,15 @@ export class WorkerLog {
       const line = workerLogLine(this.now(), text);
       const bytes = Buffer.byteLength(line);
       if (this.fd === undefined) this.open();
-      const own = fs.fstatSync(this.fd as number);
-      if (own.size > 0 && own.size + bytes > this.maxBytes) {
-        // Another process of the container may have moved the log already: then this file is the older part.
-        let current = false;
-        try {
-          current = fs.lstatSync(this.file).ino === own.ino;
-        } catch {
-          // The log is gone: a new one is opened.
-        }
-        this.close();
-        if (current) fs.renameSync(this.file, `${this.file}.1`);
-        this.open();
+      // The size is read again after SIZE_CHECK_BYTES of own writes, and whenever the log may be full.
+      if (this.writtenSince + bytes >= SIZE_CHECK_BYTES || this.knownSize + this.writtenSince + bytes > this.maxBytes) {
+        const own = fs.fstatSync(this.fd as number);
+        this.knownSize = own.size;
+        this.writtenSince = 0;
+        if (own.size > 0 && own.size + bytes > this.maxBytes) this.rotate(own.ino);
       }
       fs.writeSync(this.fd as number, line);
+      this.writtenSince += bytes;
     } catch {
       this.broken = true;
       this.close();
@@ -106,11 +109,41 @@ export class WorkerLog {
     this.fd = undefined;
   }
 
+  /**
+   * Moves the log of the open file (inode `ino`) to its older part and opens a new log, under the lock of the move. When
+   * another process holds the lock, it moves nothing now: the next entry tries again. When another process moved the
+   * log already, this file is the older part, and only the new log is opened.
+   */
+  private rotate(ino: number): void {
+    const lock = `${this.file}.lock`;
+    if (!takeLock(lock)) return;
+    try {
+      let current = false;
+      try {
+        current = fs.lstatSync(this.file).ino === ino;
+      } catch {
+        // The log is gone: a new one is opened.
+      }
+      this.close();
+      if (current) fs.renameSync(this.file, `${this.file}.1`);
+      this.open();
+    } finally {
+      try {
+        fs.rmdirSync(lock);
+      } catch {
+        // Taken over as stale meanwhile.
+      }
+    }
+  }
+
   private open(): void {
     ensureFolder(this.options.folder);
     const fd = fs.openSync(this.file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o600);
     try {
-      if (!fs.fstatSync(fd).isFile()) throw new Error(`${this.file} is no regular file.`);
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) throw new Error(`${this.file} is no regular file.`);
+      this.knownSize = stat.size;
+      this.writtenSince = 0;
     } catch (error) {
       fs.closeSync(fd);
       throw error;
@@ -119,10 +152,30 @@ export class WorkerLog {
   }
 }
 
+/** Takes the lock folder `lock` (mkdir is atomic); a lock older than ROTATE_LOCK_STALE_MS is taken over. */
+function takeLock(lock: string): boolean {
+  try {
+    fs.mkdirSync(lock, { mode: 0o700 });
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  try {
+    const stat = fs.lstatSync(lock);
+    if (!stat.isDirectory() || Date.now() - stat.mtimeMs <= ROTATE_LOCK_STALE_MS) return false;
+    fs.rmdirSync(lock);
+    fs.mkdirSync(lock, { mode: 0o700 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Removes the logs of other workers in `folder` that nobody touched for `keepMs` (their workers ended; a worker touches
- * its log every WORKER_LOG_TOUCH_MS), never the log `own` and its older part, and nothing that is no log of a worker
- * (LOG_FILE) or no regular file. Gives the number of the removed files; never throws.
+ * its log every WORKER_LOG_TOUCH_MS), never the log `own` and its older part, never the older part of a log that was
+ * touched within `keepMs` (its worker still runs), and nothing that is no log of a worker (LOG_FILE) or no regular file.
+ * Gives the number of the removed files; never throws.
  */
 export function sweepWorkerLogs(folder: string, own: string, now: number, keepMs: number): number {
   let names: string[];
@@ -139,6 +192,7 @@ export function sweepWorkerLogs(folder: string, own: string, now: number, keepMs
       const file = path.join(folder, name);
       const stat = fs.lstatSync(file);
       if (!stat.isFile() || now - stat.mtimeMs <= keepMs) continue;
+      if (name.endsWith('.1') && isFresh(path.join(folder, name.slice(0, -2)), now, keepMs)) continue;
       fs.unlinkSync(file);
       removed++;
     } catch {
@@ -146,4 +200,14 @@ export function sweepWorkerLogs(folder: string, own: string, now: number, keepMs
     }
   }
   return removed;
+}
+
+/** Whether `file` is a regular file that was touched within `keepMs`. */
+function isFresh(file: string, now: number, keepMs: number): boolean {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && now - stat.mtimeMs <= keepMs;
+  } catch {
+    return false;
+  }
 }

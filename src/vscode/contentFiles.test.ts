@@ -16,7 +16,7 @@ import type { ContentTree } from '../core/hosts/contentReader';
 import type { HostObject } from '../core/hosts/hostObjects';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
-import { CONTENT_FILES_SCHEME, ContentFiles, ContentFilesTexts, contentFilesTarget, type ContentFilesDeps } from './contentFiles';
+import { CONTENT_FILES_SCHEME, ContentFiles, ContentFilesTexts, contentFilesPath, contentFilesTarget, type ContentFilesDeps } from './contentFiles';
 import { fakeVscode, resetFakeVscode } from './testing/fakeVscode';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), output: vi.fn() };
@@ -70,12 +70,16 @@ describe('Show Files of a volume or an image row', () => {
     expect(fakeVscode.contentProviders.size).toBe(0);
   });
 
-  it('reads an image by its full ID, and keeps one segment of the path for a name with a slash and a colon', async () => {
+  it('reads an image by its full ID, and keeps one segment of the path for a name with a slash and a colon, with the short ID', async () => {
     const h = harness();
     await h.files.showRow(row('lab', nginx));
     expect(h.read).toHaveBeenCalledWith('lab', { kind: 'image', id: IMAGE_ID });
     const [document] = fakeVscode.window.showTextDocument.mock.calls[0] as [Shown];
-    expect(document.uri.path).toBe('/lab/image-ghcr.io_acme_nginx_1.27.files');
+    expect(document.uri.path).toBe('/lab/image-ghcr.io_acme_nginx_1.27-abababababab.files');
+    // Another image whose name differs only in `/` and `:` gets a document of its own.
+    const other = contentFilesTarget('lab', { kind: 'image', id: `sha256:${'cd'.repeat(32)}`, name: 'ghcr.io_acme_nginx_1.27' });
+    if (other === undefined) throw new Error('No target.');
+    expect(contentFilesPath(other)).toBe('/lab/image-ghcr.io_acme_nginx_1.27-cdcdcdcdcdcd.files');
     expect(document.getText()).toMatch(/^Files of the image ghcr\.io\/acme\/nginx:1\.27 on lab\n/);
   });
 

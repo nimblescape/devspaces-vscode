@@ -10,7 +10,7 @@ import type { BootstrapDocker } from '../docker/bootstrapDocker';
 import { readableStderr } from '../loader/pipeLoader';
 import type { RunResult } from '../ports';
 import { CONTENT_READER_TIMEOUT_MS, contentReaderArgs, isContentTarget, parseContentTree, type ContentTarget, type ContentTree } from './contentReader';
-import { OLD_CLI_DETAIL, newReaderName, readerImages } from './volumeReader';
+import { OLD_CLI_DETAIL, newReaderName, readerImages, regExpLiteral } from './volumeReader';
 
 /** The time limit of each list before the read. */
 const LIST_TIMEOUT_MS = 30_000;
@@ -72,7 +72,7 @@ export async function readContents(docker: Pick<BootstrapDocker, 'run'>, input: 
       const tree = parseContentTree(result.stdout);
       return tree !== undefined ? { kind: 'read', tree } : { kind: 'failed', detail: 'The output of the reader could not be read.' };
     }
-    if (new RegExp(`no such image:? *${image.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&')}`, 'i').test(result.stderr)) continue;
+    if (new RegExp(`no such image:? *${regExpLiteral(image)}`, 'i').test(result.stderr)) continue;
     if (/unknown flag: --pull/.test(result.stderr)) return { kind: 'failed', detail: OLD_CLI_DETAIL };
     if (target.kind === 'image' && IMAGE_MOUNT_UNSUPPORTED.test(result.stderr)) return { kind: 'unsupported', detail: detailOf(result) };
     return { kind: 'failed', detail: detailOf(result) };

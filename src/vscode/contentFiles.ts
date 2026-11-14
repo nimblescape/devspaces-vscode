@@ -53,6 +53,17 @@ export interface ContentFilesDeps {
   now?(): number;
 }
 
+/**
+ * The path of the document of `files`: one segment for the host and one for the object. A name of an image can hold
+ * `/` and `:`, which become `_`, so the segment of an image also has the short ID of the image: two images whose names
+ * differ only there get two documents. A volume name has none of them.
+ */
+export function contentFilesPath(files: ContentFilesTarget): string {
+  const name = files.name.replace(/[/\\:]/g, '_');
+  const id = files.target.kind === 'image' ? `-${files.target.id.slice('sha256:'.length, 'sha256:'.length + 12)}` : '';
+  return `/${files.host}/${files.target.kind}-${name}${id}.files`;
+}
+
 /** The target of Show Files of a row or a report: a volume by its name, an image by its full ID. */
 export function contentFilesTarget(host: string, object: { kind: string; id: string; name: string }): ContentFilesTarget | undefined {
   const target = contentTargetOf(object);
@@ -118,8 +129,7 @@ export class ContentFiles implements vscode.Disposable {
       onDidChange: this.changed.event,
       provideTextDocumentContent: (uri) => this.texts.get(uri.toString()) ?? '',
     });
-    // A name of an image can hold `/` and `:`; the path keeps one segment per host and object.
-    const uri = vscode.Uri.from({ scheme: CONTENT_FILES_SCHEME, path: `/${files.host}/${files.target.kind}-${files.name.replace(/[/\\:]/g, '_')}.files` });
+    const uri = vscode.Uri.from({ scheme: CONTENT_FILES_SCHEME, path: contentFilesPath(files) });
     this.texts.set(uri.toString(), contentTreeText(outcome.tree, { subject, host: files.host, at: (this.deps.now ?? Date.now)(), timeZone: this.deps.timeZone() }));
     this.changed.fire(uri);
     try {

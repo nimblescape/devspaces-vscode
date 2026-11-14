@@ -88,6 +88,24 @@ describe('WorkerLog', () => {
     expect(fs.readFileSync(first.file, 'utf8')).toBe('2026-11-14T07:00:00.000Z first 1 xxxxxxxxxxxxxxxxxxxx\n2026-11-14T07:00:00.000Z second 2 xxxxxxxxxxxxxxxxxxx\n');
   });
 
+  it('moves the log only under its lock: while another process holds it, it goes on writing, and a lock left by an ended process is taken over', () => {
+    const log = new WorkerLog({ folder, name: `${ID}.log`, now: () => AT, maxBytes: 100 });
+    log.write(`entry 1 ${'x'.repeat(20)}`);
+    const lock = `${log.file}.lock`;
+    fs.mkdirSync(lock);
+    log.write(`entry 2 ${'x'.repeat(20)}`);
+    expect(fs.existsSync(`${log.file}.1`)).toBe(false);
+    expect(fs.readFileSync(log.file, 'utf8').split('\n').filter((line) => line !== '')).toHaveLength(2);
+    // A lock older than a minute: its process ended during the move.
+    const old = (Date.now() - 5 * 60_000) / 1000;
+    fs.utimesSync(lock, old, old);
+    log.write(`entry 3 ${'x'.repeat(20)}`);
+    log.close();
+    expect(fs.readFileSync(`${log.file}.1`, 'utf8')).toContain('entry 2');
+    expect(fs.readFileSync(log.file, 'utf8')).toBe('2026-11-14T07:00:00.000Z entry 3 xxxxxxxxxxxxxxxxxxxx\n');
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
   it('never writes through a link or into something that is no regular file, and then writes nothing more', () => {
     if (process.platform === 'win32') return;
     fs.mkdirSync(folder, { mode: 0o700 });
@@ -138,6 +156,8 @@ describe('sweepWorkerLogs', () => {
       ended: 'aaaaaaaaaaaa.log',
       endedOlder: 'aaaaaaaaaaaa.log.1',
       young: 'bbbbbbbbbbbb.log',
+      // The older part of a log that its worker still touches: kept, however old it is.
+      youngOlder: 'bbbbbbbbbbbb.log.1',
       other: 'notes.txt',
     };
     for (const name of Object.values(files)) {
@@ -154,7 +174,7 @@ describe('sweepWorkerLogs', () => {
     fs.mkdirSync(path.join(folder, 'dddddddddddd.log'));
     expect(sweepWorkerLogs(folder, files.own, AT, WORKER_LOG_KEEP_MS)).toBe(2);
     const left = fs.readdirSync(folder).sort();
-    expect(left).toEqual([files.own, files.ownOlder, files.young, ...(link !== undefined ? [link] : []), 'dddddddddddd.log', files.other].sort());
+    expect(left).toEqual([files.own, files.ownOlder, files.young, files.youngOlder, ...(link !== undefined ? [link] : []), 'dddddddddddd.log', files.other].sort());
     if (link !== undefined) expect(fs.readFileSync(path.join(root, 'target'), 'utf8')).toBe('kept\n');
   });
 

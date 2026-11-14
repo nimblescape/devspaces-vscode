@@ -250,8 +250,8 @@ export const VOLUME_READER_CODE = VOLUME_READER_SCRIPT.split('\n')
   .filter((line) => line !== '' && !line.startsWith('//'))
   .join(' ');
 
-/** The name of a container of the reader: `devspaces-reader-` and 8 hexadecimal digits. */
-const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
+/** The name of a container of the readers (also of contentReader.ts and workerLogReader.ts): `devspaces-reader-` and 8 hexadecimal digits. */
+export const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
 
 /** A new name for a container of the reader. */
 export function newReaderName(): string {
@@ -259,7 +259,14 @@ export function newReaderName(): string {
 }
 
 /** A name of a volume as Docker accepts it (and that cannot hold a comma of the value of `--mount`). */
-const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+export const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+/** The full ID of an image. */
+export const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
+
+/** `text` as a literal part of a regular expression. */
+export function regExpLiteral(text: string): string {
+  return text.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&');
+}
 /** An image reference without a space, a comma or a leading `-`. */
 const IMAGE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/;
 
@@ -306,7 +313,7 @@ export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name
 }
 
 /** The value of a `--mount` of volumeReaderArgs: the volume, and its folder under READER_ROOT. */
-const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${READER_ROOT.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&')}/([a-z-]+),readonly$`);
+const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${regExpLiteral(READER_ROOT)}/([a-z-]+),readonly$`);
 
 /**
  * Whether `args` are a call of volumeReaderArgs, exactly: the shared shell of a host runs it (isSharedShellCall), as
