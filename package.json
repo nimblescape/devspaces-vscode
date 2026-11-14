@@ -1380,7 +1380,7 @@
     "globals": "^17.13.0",
     "js-yaml": "^4.3.2",
     "typescript": "6.0.3",
-    "typescript-eslint": "^8.72.1",
+    "typescript-eslint": "^8.72.2",
     "vitest": "^5.1.0"
   },
   "overrides": {
