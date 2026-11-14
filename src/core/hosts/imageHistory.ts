@@ -97,6 +97,7 @@ function variablesText(keyword: 'ENV' | 'ARG', rest: string): string {
  * - The classic builder writes `<shell> #(nop) <instruction>` for an instruction that runs nothing (NOP), and
  *   `/bin/sh -c <command>` or `|<N> <build arguments> /bin/sh -c <command>` for RUN; BuildKit writes the instruction
  *   (`RUN …`, `ENV …`) and ` # buildkit` at the end.
+ * - ONBUILD gets the same rules for the instruction that it holds.
  * - The N words after `|<N>` are the build arguments, `NAME=VALUE`, which Docker writes without quotes. A value with a
  *   space would shift the words, so the command is shown only when the N words are assignments and the shell follows
  *   them; otherwise only that the step had N build arguments.
@@ -111,6 +112,8 @@ export function stepText(createdBy: string): string {
   const keyword = instruction?.[1];
   const rest = instruction?.[2] ?? '';
   if (keyword === 'ENV' || keyword === 'ARG') return clipped(variablesText(keyword, rest));
+  // ONBUILD holds an instruction of a later build (`ONBUILD ENV TOKEN=…`): the same rules for it.
+  if (keyword === 'ONBUILD') return clipped(`ONBUILD ${INSTRUCTION.test(rest) ? stepText(rest) : '(not shown, because a value could be a secret)'}`);
   if (keyword === 'RUN') {
     const args = /^\|(\d+) (.*)$/s.exec(rest);
     if (args === null) return clipped(`RUN ${SHELLS.reduce((command, shell) => (command.startsWith(shell) ? command.slice(shell.length) : command), rest)}`);
@@ -122,6 +125,7 @@ export function stepText(createdBy: string): string {
     if (names.length !== count || names.some((name) => name === undefined) || shell === undefined) {
       return `RUN (a command with ${count} build argument${count === 1 ? '' : 's'}; not shown, because a value could be a secret)`;
     }
+    if (count === 0) return clipped(`RUN ${command.slice(shell.length)}`);
     return clipped(`RUN ${command.slice(shell.length)} (build argument${count === 1 ? '' : 's'} ${names.join(', ')})`);
   }
   return clipped(text);

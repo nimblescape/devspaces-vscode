@@ -66,6 +66,13 @@ describe('stepText', () => {
     expect(stepText('ARG TOKEN=default-secret')).toBe('ARG TOKEN (the value is not shown)');
     expect(stepText('ARG VARIANT')).toBe('ARG VARIANT');
     expect(stepText('ENV "x y"')).toBe('ENV (not shown, because a value could be a secret)');
+    // ONBUILD holds an instruction of a later build: the same rules.
+    expect(stepText('ONBUILD ENV TOKEN=s3cr3t # buildkit')).toBe('ONBUILD ENV TOKEN (the value is not shown)');
+    expect(stepText('/bin/sh -c #(nop)  ONBUILD ARG TOKEN=s3cr3t')).toBe('ONBUILD ARG TOKEN (the value is not shown)');
+    expect(stepText('ONBUILD RUN |1 TOKEN=s3cr3t /bin/sh -c make')).toBe('ONBUILD RUN make (build argument TOKEN)');
+    expect(stepText('ONBUILD COPY . /app')).toBe('ONBUILD COPY . /app');
+    expect(stepText('ONBUILD TOKEN=s3cr3t')).toBe('ONBUILD (not shown, because a value could be a secret)');
+    expect(stepText('RUN |0 /bin/sh -c make # buildkit')).toBe('RUN make');
   });
 });
 
