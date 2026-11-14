@@ -100,7 +100,9 @@ describe('the filter of the Docker pipe of the extension', () => {
     'POST /grpc',
     'POST /build/prune',
     // The report page of the view (R-ENG-010): the reader of the shared volumes (`docker run --rm`, as the build
-    // container).
+    // container), and the history of an image (its section Layers).
+    'GET /images/sha256:0b7d9e66e81dd1155639421b8342f9731f8bb67cb11b58663f938d9c6e9b6eef/history',
+    'GET /images/nginx:1.27/history',
   ])('lets %s through, which Devspaces needs', (line) => {
     expect(allowed(extensionPipeRule(() => false), line)).toBe(true);
   });
