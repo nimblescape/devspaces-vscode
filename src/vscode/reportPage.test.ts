@@ -57,6 +57,7 @@ interface Harness {
   startVm: ReturnType<typeof vi.fn>;
   /** The read of a log (ContainerLogs, as extension.ts wires it to the pages). */
   readLog: ReturnType<typeof vi.fn>;
+  readWorkerLog: ReturnType<typeof vi.fn>;
   logs: ContainerLogs;
   read: (target: ReportTarget) => Promise<ReportContent>;
 }
@@ -71,6 +72,7 @@ function harness(overrides: Partial<ReportPagesDeps> = {}): Harness {
     h.vmState = { kind: 'running' };
   });
   h.readLog = vi.fn(async () => '2026-11-12T06:00:00.000000000Z run started');
+  h.readWorkerLog = vi.fn(async () => '2026-11-14T07:00:00.000Z The worker started.');
   h.deps = {
     extensionUri: fakeVscode.Uri.file('/extension') as never,
     logger,
@@ -90,7 +92,7 @@ function harness(overrides: Partial<ReportPagesDeps> = {}): Harness {
     allowed: () => ({ actions: true, logs: true }),
     ...overrides,
   };
-  h.logs = new ContainerLogs({ logger, allowed: () => h.deps.allowed().logs, vmHost: LIMA_HOST, vmState: h.deps.vmState, read: h.readLog as never, timeZone: () => CLOCK.timeZone });
+  h.logs = new ContainerLogs({ logger, allowed: () => h.deps.allowed().logs, vmHost: LIMA_HOST, vmState: h.deps.vmState, read: h.readLog as never, readWorker: h.readWorkerLog as never, timeZone: () => CLOCK.timeZone });
   h.pages = new ReportPages(h.deps);
   return h;
 }
@@ -396,6 +398,22 @@ describe('Show Log of any other container', () => {
     expect(document.uri).toMatchObject({ scheme: CONTAINER_LOG_SCHEME, path: '/lab/shop-web-1.log' });
   });
 
+  it('shows Show Log on the report of a worker, which reads the log that the worker writes itself', async () => {
+    const h = harness();
+    const worker: HostObject = { kind: 'container', id: WEB_ID, name: 'devspaces-api-worker1', purpose: 'worker', state: 'running' };
+    h.read = async (target) => ({ ...contentOf(target.object.name), workerLog: target.object.id });
+    const panel = await open(h, 'lab', worker);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => [button.action, button.label])).toEqual([
+      ['showLog', ReportPageTexts.showLog],
+      ['refresh', ReportPageTexts.refresh],
+    ]);
+    panel.receive({ type: 'showLog' });
+    await flush();
+    expect(h.readWorkerLog).toHaveBeenCalledWith('lab', WEB_ID, 'Europe/Vienna');
+    expect(h.readLog).not.toHaveBeenCalled();
+  });
+
   it('shows no Show Log on a report that offers no log (an image, or a container whose log driver is none)', async () => {
     const h = harness();
     h.read = async (target) => contentOf(target.object.name);
@@ -408,6 +426,44 @@ describe('Show Log of any other container', () => {
     container.receive({ type: 'showLog' });
     await flush();
     expect(h.readLog).not.toHaveBeenCalled();
+  });
+});
+
+describe('Show Files of a volume or an image', () => {
+  it('shows Show Files on a report that offers files while the setting allowContentReads is on, and shows the files of the object of the report', async () => {
+    let allowed = { actions: true, logs: true, files: false };
+    const showFiles = vi.fn(async () => undefined);
+    const h = harness({ allowed: () => allowed, showFiles });
+    const data: HostObject = { kind: 'volume', id: 'shop_data', name: 'shop_data', purpose: 'notDevspaces' };
+    h.read = async (target) => ({ ...contentOf(target.object.name), files: { kind: 'volume', name: target.object.name } });
+    const panel = await open(h, 'lab', data);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['refresh']);
+    // An old message of the page reads nothing while the setting is off.
+    panel.receive({ type: 'showFiles' });
+    await flush();
+    expect(showFiles).not.toHaveBeenCalled();
+    allowed = { actions: true, logs: true, files: true };
+    h.pages.settingsChanged();
+    expect(lastView(panel).buttons.map((button) => [button.action, button.label])).toEqual([
+      ['showFiles', ReportPageTexts.showFiles],
+      ['refresh', ReportPageTexts.refresh],
+    ]);
+    panel.receive({ type: 'showFiles' });
+    await flush();
+    expect(showFiles).toHaveBeenCalledWith({ host: 'lab', target: { kind: 'volume', name: 'shop_data' }, name: 'shop_data' });
+  });
+
+  it('shows no Show Files on a report that offers no files (a container)', async () => {
+    const showFiles = vi.fn(async () => undefined);
+    const h = harness({ allowed: () => ({ actions: true, logs: true, files: true }), showFiles });
+    h.read = async (target) => contentOf(target.object.name);
+    const panel = await open(h, 'lab', web);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['refresh']);
+    panel.receive({ type: 'showFiles' });
+    await flush();
+    expect(showFiles).not.toHaveBeenCalled();
   });
 });
 

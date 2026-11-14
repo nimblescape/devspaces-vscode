@@ -17,6 +17,8 @@ import { HELPER_CACHE_VOLUME, VSCODE_STORE_VOLUME } from '../names';
 import { REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import { devspaceReport, isDevspaceObject } from './devspaceReport';
 import { helperReport, isHelperContainer } from './helperReport';
+import { contentTargetOf } from './contentReader';
+import { layersSection, type ImageLayer } from './imageHistory';
 import { imageReport, imageReportNeedsRecords, isImageReportObject } from './imageReport';
 import type { HostObject } from './hostObjects';
 import { isLogContainer } from './monitorLog';
@@ -64,6 +66,9 @@ export interface ResourceReportInput {
   platform?: VscodePlatform;
   /** The helper tag of this version of Devspaces (helperImageTag), when it is known: for the helper image and the helper containers. */
   currentHelperTag?: string;
+  /** The history of an image (readImageHistory), for its section Layers; undefined when it could not be read (`layersProblem`). */
+  layers?: readonly ImageLayer[];
+  layersProblem?: string;
   computer: ReportComputer;
   clock: ReportClock;
 }
@@ -129,15 +134,20 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
   }
   const notices = [...readNotices(input.volumes, object.kind === 'volume'), ...(own?.notices ?? [])];
   if (input.detailsProblem !== undefined) notices.push(`Docker could not give the facts of this object: ${input.detailsProblem}`);
+  if (input.layersProblem !== undefined) notices.push(`Docker could not give the layers of this image: ${input.layersProblem}`);
   const monitorLog = own?.monitorLog ?? false;
-  // Show Log of every other container, by its full ID; not when Docker says that its log driver keeps no log.
+  // Show Log of every other container, by its full ID; not when Docker says that its log driver keeps no log. A worker
+  // has no log of Docker (`none`): its Show Log reads the log that it writes itself (workerLogRead.ts).
   const logDriver = details?.kind === 'container' ? details.logDriver : undefined;
-  const containerLog = object.kind === 'container' && !monitorLog && logDriver !== 'none' && isLogContainer(object.id) ? object.id : undefined;
+  const worker = object.kind === 'container' && object.purpose === 'worker' && isLogContainer(object.id);
+  const containerLog = object.kind === 'container' && !monitorLog && !worker && logDriver !== 'none' && isLogContainer(object.id) ? object.id : undefined;
   return {
     summary: own?.summary ?? [],
-    sections: [...(own?.sections ?? []), ...dockerFactsSections(object, details, clock)],
+    sections: [...(own?.sections ?? []), ...dockerFactsSections(object, details, clock), ...(input.layers !== undefined ? [layersSection(input.layers, clock)] : [])],
     notices,
     monitorLog,
     ...optional('containerLog', containerLog),
+    ...optional('workerLog', worker ? object.id : undefined),
+    ...optional('files', contentTargetOf(object)),
   };
 }

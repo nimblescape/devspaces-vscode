@@ -72,6 +72,29 @@ describe('the report of a resource', () => {
     expect(resourceReport({ object: { kind: 'image', id: `sha256:${id}`, name: 'nginx:1.27', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK }).containerLog).toBeUndefined();
   });
 
+  it('offers Show Log on the report of a worker for the log that the worker writes itself, whose log driver is none', () => {
+    const id = '0123456789abcdef'.repeat(4);
+    const worker: HostObject = { kind: 'container', id, name: 'devspaces-api-worker1', purpose: 'worker', state: 'running' };
+    const details = (env: [string, string][]): Parameters<typeof resourceReport>[0]['details'] => ({ kind: 'container', labels: new Map(), env: new Map(env), mounts: [], ports: [], networks: [], logDriver: 'none' });
+    const report = resourceReport({ object: worker, details: details([['DEVSPACES_WORKER_LOG', '1']]), computer: COMPUTER, clock: CLOCK });
+    expect(report).toMatchObject({ monitorLog: false, workerLog: id });
+    expect(report.containerLog).toBeUndefined();
+    expect(JSON.stringify(report.sections)).toContain('none (the worker writes a log of its own, which Show Log reads)');
+    // A worker that the Monitor or an older version started writes no log of its own.
+    expect(JSON.stringify(resourceReport({ object: worker, details: details([]), computer: COMPUTER, clock: CLOCK }).sections)).toContain('none (this worker writes no log of its own: the Monitor or an older version started it)');
+    // Without the facts of Docker too; a row without a full ID has none.
+    expect(resourceReport({ object: worker, computer: COMPUTER, clock: CLOCK }).workerLog).toBe(id);
+    expect(resourceReport({ object: { ...worker, id: 'w1' }, computer: COMPUTER, clock: CLOCK }).workerLog).toBeUndefined();
+  });
+
+  it('offers Show Files on the report of a volume by its name and of an image by its full ID, never of another object', () => {
+    const id = '0123456789abcdef'.repeat(4);
+    expect(resourceReport({ object: { kind: 'volume', id: 'shop_data', name: 'shop_data', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK }).files).toEqual({ kind: 'volume', name: 'shop_data' });
+    expect(resourceReport({ object: { kind: 'image', id: `sha256:${id}`, name: 'nginx:1.27', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK }).files).toEqual({ kind: 'image', id: `sha256:${id}` });
+    expect(resourceReport({ object: { kind: 'image', id: id.slice(0, 12), name: 'nginx:1.27', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK }).files).toBeUndefined();
+    expect(resourceReport({ object: { kind: 'container', id, name: 'web', purpose: 'notDevspaces', state: 'running' }, computer: COMPUTER, clock: CLOCK }).files).toBeUndefined();
+  });
+
   it('says what could not be read', () => {
     const notices = (volumes: Parameters<typeof resourceReport>[0]['volumes'], detailsProblem?: string): string[] =>
       resourceReport({ object: shared('devspaces-monitor'), volumes, computer: COMPUTER, clock: CLOCK, ...(detailsProblem !== undefined ? { detailsProblem } : {}) }).notices;

@@ -201,18 +201,21 @@ export function isRunningContainer(object: HostObject): boolean {
 }
 
 /**
- * The actions of an object row: the devspace actions for an object of a devspace of this computer; else Stop for a
+ * The actions of an object row: the devspace actions for an object of a devspace of this computer (Rebuild only on its
+ * dev container); else Stop for a
  * running container, Start for a stopped container that is not of Devspaces (Devspaces starts its own helpers itself),
  * and Remove… for every object that does not run, but never for a network of Docker itself.
  */
-export function objectActions(row: ObjectRow): { stopDevspace: boolean; deleteDevspace: boolean; stop: boolean; start: boolean; remove: boolean } {
+export function objectActions(row: ObjectRow): { stopDevspace: boolean; rebuildDevspace: boolean; deleteDevspace: boolean; stop: boolean; start: boolean; remove: boolean } {
   const { object } = row;
   if (row.devspaceId !== undefined) {
-    return { stopDevspace: object.kind === 'container' && isRunningContainer(object), deleteDevspace: true, stop: false, start: false, remove: false };
+    // Rebuild only on the dev container of the devspace: the row that the devspace runs in.
+    const rebuildDevspace = object.kind === 'container' && object.role === 'dev container';
+    return { stopDevspace: object.kind === 'container' && isRunningContainer(object), rebuildDevspace, deleteDevspace: true, stop: false, start: false, remove: false };
   }
   const running = isRunningContainer(object);
   const start = object.kind === 'container' && object.purpose === 'notDevspaces' && (object.state === 'exited' || object.state === 'created');
-  return { stopDevspace: false, deleteDevspace: false, stop: running, start, remove: !running && object.builtIn !== true };
+  return { stopDevspace: false, rebuildDevspace: false, deleteDevspace: false, stop: running, start, remove: !running && object.builtIn !== true };
 }
 
 /** The row of a host. `actions`: the setting dockerHostsActions allows the actions of the view (the tooltip of Set Up). */
@@ -307,6 +310,7 @@ export function objectRowLook(row: ObjectRow): RowLook {
   const actions = objectActions(row);
   const flags = ['hostsObject', object.kind, object.purpose];
   if (actions.stopDevspace) flags.push('canStopDevspace');
+  if (actions.rebuildDevspace) flags.push('canRebuildDevspace');
   if (actions.deleteDevspace) flags.push('canDeleteDevspace');
   if (actions.stop) flags.push('canStop');
   if (actions.start) flags.push('canStart');

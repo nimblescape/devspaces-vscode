@@ -152,7 +152,7 @@ describe('reportPageView', () => {
 
 describe('parseReportRequest', () => {
   it('takes only the messages of the page', () => {
-    for (const type of ['ready', 'refresh', 'showLog', 'startVm']) expect(parseReportRequest({ type, extra: 1 })).toEqual({ type });
+    for (const type of ['ready', 'refresh', 'showLog', 'showFiles', 'startVm']) expect(parseReportRequest({ type, extra: 1 })).toEqual({ type });
     for (const raw of [undefined, null, 'refresh', { type: 'run' }, { type: 'keepOpen' }, { type: 3 }, {}]) expect(parseReportRequest(raw)).toBeUndefined();
   });
 });

@@ -864,6 +864,38 @@ export function parseRefreshValue(value: unknown, params: RefreshParams): Devspa
   return states;
 }
 
+// ---- The log of a worker ----
+
+// A worker container that the extension starts (channelRunArgs sets WORKER_LOG_ENV) writes a log of its own into the
+// volume of the Monitor (LOCK_STATE_DIR, mounted into every worker), because Docker keeps no log of a worker (its log
+// driver is `none`: its input and output carry the channel). The file is WORKER_LOG_FOLDER/<short ID of its container>.log
+// (folder 0700, file 0600, opened with O_NOFOLLOW): the start of the worker, each operation with its name and its result,
+// and the log messages of the operations, with their secrets masked as the channel sends them; never the parameters, the
+// secrets, the requests to the extension or the output of an operation (src/helperChannel/workerLog.ts). At
+// WORKER_LOG_MAX_BYTES the file becomes `<ID>.log.1` (the one before is removed). Show Log of a worker on the view
+// Docker Hosts reads both (src/core/hosts/workerLogReader.ts). A worker touches its file every WORKER_LOG_TOUCH_MS, and
+// at its start removes the files of other workers that nobody touched for WORKER_LOG_KEEP_MS: their workers ended (the
+// older part of a file that was touched within that time stays).
+
+/** The variable of the environment of a worker container (value `1`) that makes the worker write its log. */
+export const WORKER_LOG_ENV = 'DEVSPACES_WORKER_LOG';
+/** The folder of the logs of the workers in the volume of the Monitor. */
+export const WORKER_LOG_FOLDER = 'worker-logs';
+/** The size at which the log of a worker becomes `<ID>.log.1`. */
+export const WORKER_LOG_MAX_BYTES = 1024 * 1024;
+/** A worker touches its log this often, so that the start of another worker never removes it. */
+export const WORKER_LOG_TOUCH_MS = 60 * 60_000;
+/** The log of a worker that nobody touched for this long is removed at the start of another worker. */
+export const WORKER_LOG_KEEP_MS = 24 * 60 * 60_000;
+/** The short ID of a container (12 hexadecimal digits): the host name of a worker, the name of its log. */
+const SHORT_CONTAINER_ID = /^[0-9a-f]{12}$/;
+
+/** The name of the log of the worker whose container has the ID `container` (full or short); undefined for any other text. */
+export function workerLogName(container: string): string | undefined {
+  const id = container.slice(0, 12);
+  return SHORT_CONTAINER_ID.test(id) && /^[0-9a-f]*$/.test(container) ? `${id}.log` : undefined;
+}
+
 // ---- The devspace lock ----
 
 // The lock of one devspace on the Docker host (docs/architecture.md "Locks"): the worker opens lockFilePath (in the

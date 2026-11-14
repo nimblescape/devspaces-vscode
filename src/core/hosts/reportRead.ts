@@ -5,7 +5,7 @@
 // The reads of the report of one resource of the view Docker Hosts (docs/requirements.md R-ENG-010), within an operation
 // on its host on the shared shell (runWithDockerTarget with `onShell`; through the Docker pipe of the extension while a
 // connection of the relay to an SSH host is open): the facts of Docker of the object, and for a
-// report that needs the shared volumes (reportVolumes) the volumes that exist, the helper images that may run the reader,
+// report that needs the shared volumes (reportVolumes) the volumes that exist, for an image its history (the section Layers), the helper images that may run the reader,
 // the platform of the engine, and one run of the reader. Only calls that read, and the reader, which only reads; nothing
 // is pulled. No `vscode`.
 import type { BootstrapDocker } from '../docker/bootstrapDocker';
@@ -16,6 +16,7 @@ import { isAbortError, type RunResult } from '../ports';
 import { readableStderr } from '../loader/pipeLoader';
 import { serverPlatform } from '../worker/vscodeStoreLayout';
 import type { HostObject } from './hostObjects';
+import { readImageHistory, type ImageLayer } from './imageHistory';
 import type { ReportComputer } from './monitorReport';
 import { readObjectDetails, type ObjectDetails } from './objectDetails';
 import type { ReportClock, ReportContent } from './reportModel';
@@ -109,12 +110,25 @@ export async function readResourceReport(docker: Pick<BootstrapDocker, 'run'>, i
     if (!(error instanceof CommandError)) throw error;
     detailsProblem = errorText(error.stderr) || error.message;
   }
+  // The steps of the build of an image (its section Layers): metadata of the image, as its inspect.
+  let layers: ImageLayer[] | undefined;
+  let layersProblem: string | undefined;
+  if (object.kind === 'image') {
+    try {
+      layers = await readImageHistory(docker, object.id, signal);
+    } catch (error) {
+      if (!(error instanceof CommandError)) throw error;
+      layersProblem = errorText(error.stderr) || error.message;
+    }
+  }
   const wanted = reportVolumes(object);
   const read = READER_VOLUMES.some((key) => wanted[key] !== undefined) ? await readVolumes(docker, wanted, input) : undefined;
   return resourceReport({
     object,
     ...(details !== undefined ? { details } : {}),
     ...(detailsProblem !== undefined ? { detailsProblem } : {}),
+    ...(layers !== undefined ? { layers } : {}),
+    ...(layersProblem !== undefined ? { layersProblem } : {}),
     ...(read !== undefined ? { volumes: read.volumes } : {}),
     ...(read?.platform !== undefined ? { platform: read.platform } : {}),
     ...(input.currentHelperTag !== undefined ? { currentHelperTag: input.currentHelperTag } : {}),

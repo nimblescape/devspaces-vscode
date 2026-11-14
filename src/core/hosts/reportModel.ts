@@ -5,6 +5,7 @@
 // The parts of a report of a resource of the view Docker Hosts (docs/requirements.md R-ENG-008): sections of facts or
 // tables, each with the place its values come from, and colored tags that give the rule of Devspaces for an item. The
 // report page (src/vscode) shows them as they are. The texts of times and sizes. Pure; no I/O.
+import type { ContentTarget } from './contentReader';
 import { formatSize } from './hostObjects';
 
 /**
@@ -55,6 +56,10 @@ export interface ReportContent {
    * no log (`none`).
    */
   containerLog?: string;
+  /** The report of a worker offers Show Log of the log that the worker writes itself (Docker keeps none): its full ID. */
+  workerLog?: string;
+  /** The report of a volume or an image offers Show Files (contentReader.ts): what the reader mounts. */
+  files?: ContentTarget;
 }
 
 export function cell(text: string, chip?: ReportChip): ReportCell {
@@ -81,7 +86,7 @@ const DAY_MS = 24 * 60 * 60_000;
 const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 
 /** The date of `at` in `timeZone` as YYYY-MM-DD, and its time as HH:MM. */
-function dateAndTime(at: number, timeZone: string): { date: string; time: string } {
+export function dateAndTime(at: number, timeZone: string): { date: string; time: string } {
   let format = FORMATTERS.get(timeZone);
   if (format === undefined) {
     format = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone });

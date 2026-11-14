@@ -40,6 +40,8 @@ import { DOCKER_INFO_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS } from './dockerTimeout
 import { extractBaseImages } from '../imageCheck/dockerfile';
 import { isContainerLogCall } from '../hosts/monitorLog';
 import { isVolumeReaderCall } from '../hosts/volumeReader';
+import { isContentReaderCall } from '../hosts/contentReader';
+import { isWorkerLogReaderCall } from '../hosts/workerLogReader';
 import { operationDockerTarget, operationOnShell, operationOpenLoginOnly, operationWithoutLogin, outsideOperation } from './dockerTargets';
 import { isRecord } from '../valueChecks';
 
@@ -288,13 +290,15 @@ const SHARED_SHELL_CHANGES: Readonly<Record<string, readonly string[]>> = {
 
 /**
  * The reads of the report page of the view Docker Hosts that are no plain read call: the reader of the shared volumes
- * (isVolumeReaderCall: a container without network that only reads the volumes, with its script as an argument) and
- * Show Log of a container (isContainerLogCall). Like every call of the view, they go through the Docker pipe of the
- * extension while a connection of the relay to an SSH host is open (dockerPipeRules.ts lets both through, a log only
- * while the setting allowContainerLogs is on).
+ * (isVolumeReaderCall: a container without network that only reads the volumes, with its script as an argument), Show
+ * Log of a container (isContainerLogCall), Show Log of a worker (isWorkerLogReaderCall: a container of the same kind
+ * that reads the log of the worker in the volume of the Monitor), and Show Files of a volume or an image
+ * (isContentReaderCall: a container of the same kind that reads the names, sizes and times of its files). Like every
+ * call of the view, they go through the Docker pipe of the extension while a connection of the relay to an SSH host is
+ * open (dockerPipeRules.ts lets them through, a log of Docker only while the setting allowContainerLogs is on).
  */
 function isReportRead(args: readonly string[]): boolean {
-  return isVolumeReaderCall(args) || isContainerLogCall(args);
+  return isVolumeReaderCall(args) || isContainerLogCall(args) || isWorkerLogReaderCall(args) || isContentReaderCall(args);
 }
 
 /**

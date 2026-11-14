@@ -73,7 +73,10 @@ describe('settings', () => {
       createDockerContext: false,
       // The view Docker Hosts is read only, no log of a container, and neither button (R-ENG-008, R-ENG-010).
       dockerHostsActions: 'disabled',
+      // No action of the view that removes or deletes something (R-ENG-008).
+      allowDestructiveActions: false,
       allowContainerLogs: false,
+      allowContentReads: false,
       dockerHostsSettingsButton: false,
       dockerHostsConsoleButton: false,
     });

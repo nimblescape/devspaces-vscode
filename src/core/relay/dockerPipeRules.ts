@@ -57,8 +57,9 @@ export const WINDOW_PIPE_ENDPOINTS: readonly Endpoint[] = [
  * container, the removal and the removal of the unused build cache of the view "Docker Hosts" (hostObjects.ts:
  * `docker system df -v`, `docker network ls`, `docker image ls` of the tags of the images, `docker container inspect` of the running containers, `docker image inspect` and `docker container ls --filter ancestor=` before the removal of an image, `docker container start` and `stop`, `rm` without force, and
  * `docker builder prune --all`: with buildx `POST /grpc`, without it `POST /build/prune`), and the report page of the view
- * (reportRead.ts: the inspect of the object, the lists of the volumes and the images, `docker info`, the reader of the
- * shared volumes as a container with `docker run --rm`, and `docker logs` of the Monitor, CONTAINER_LOGS_ENDPOINT). Its worker starts behind the relay or with
+ * (reportRead.ts: the inspect of the object, the history of an image, the lists of the volumes and the images, `docker info`, the reader of the
+ * shared volumes as a container with `docker run --rm`, and `docker logs` of the Monitor, CONTAINER_LOGS_ENDPOINT), and Show Files of a volume or an
+ * image (contentRead.ts: `docker volume inspect`, `docker image ls` of the helper images, and the reader as a container with `docker run --rm`). Its worker starts behind the relay or with
  * `ssh://`, never through the pipe (BootstrapDocker.start).
  */
 export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
@@ -76,6 +77,7 @@ export const EXTENSION_PIPE_ENDPOINTS: readonly Endpoint[] = [
   endpoint('DELETE', `/containers/${NAME}`),
   endpoint('GET', '/images/json'),
   endpoint('GET', `/images/${IMAGE}/json`),
+  endpoint('GET', `/images/${IMAGE}/history`),
   endpoint('POST', '/images/create'),
   endpoint('POST', `/images/${IMAGE}/tag`),
   endpoint('DELETE', `/images/${IMAGE}`),

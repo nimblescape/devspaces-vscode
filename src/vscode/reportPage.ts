@@ -23,6 +23,7 @@ import { isAbortError, type Logger } from '../core/ports';
 import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { monitorLogOf, type ContainerLog } from './containerLogs';
+import type { ContentFilesTarget } from './contentFiles';
 import {
   REPORT_SCHEME,
   ReportPageTexts,
@@ -58,6 +59,8 @@ export interface ReportPagesDeps {
   read: (target: ReportTarget, clock: ReportClock) => Promise<ReportContent>;
   /** Show Log of a container, or of the Monitor (ContainerLogs.show). */
   showLog: (log: ContainerLog) => Promise<void>;
+  /** Show Files of a volume or an image (ContentFiles.show). */
+  showFiles?: (files: ContentFilesTarget) => Promise<void>;
   /** Now, and the time zone of this computer, in which the page gives times. */
   clock: () => ReportClock;
   /** What the settings allow now (dockerHostsActions, allowContainerLogs), read at each update of a page. */
@@ -220,6 +223,14 @@ class ReportPage {
         else this.deps.logger.info(`Show Log of ${log.name} on ${this.key.host} is not run: the setting devspaces.allowContainerLogs is off.`);
         return;
       }
+      case 'showFiles': {
+        const target = this.content?.files;
+        const name = this.target?.object.name ?? this.key.name;
+        if (target === undefined) this.deps.logger.info(`Show Files of the report of ${this.key.name} on ${this.key.host} is not run: the report offers no files.`);
+        else if (this.deps.allowed().files === true) void this.deps.showFiles?.({ host: this.key.host, target, name });
+        else this.deps.logger.info(`Show Files of ${name} on ${this.key.host} is not run: the setting devspaces.allowContentReads is off.`);
+        return;
+      }
       case 'startVm':
         if (this.deps.allowed().actions) void this.startVm();
         else this.deps.logger.info('Start the VM of a report page is not run: the setting devspaces.dockerHostsActions allows no actions.');
@@ -227,11 +238,17 @@ class ReportPage {
     }
   }
 
-  /** The log that Show Log of the last read opens: of the Monitor (its container or its volume), or of the container. */
+  /**
+   * The log that Show Log of the last read opens: of the Monitor (its container or its volume), of the container, or the
+   * log that a worker writes itself.
+   */
   private log(): ContainerLog | undefined {
     if (this.content?.monitorLog === true) return monitorLogOf(this.key.host);
+    const name = this.target?.object.name ?? this.key.name;
+    const worker = this.content?.workerLog;
+    if (worker !== undefined) return { host: this.key.host, container: worker, name, monitor: false, worker: true };
     const container = this.content?.containerLog;
-    return container !== undefined ? { host: this.key.host, container, name: this.target?.object.name ?? this.key.name, monitor: false } : undefined;
+    return container !== undefined ? { host: this.key.host, container, name, monitor: false } : undefined;
   }
 
   /** Start the VM of the banner: the start of the user, then the read. */

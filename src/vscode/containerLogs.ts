@@ -5,11 +5,14 @@
 // Show Log of a container of the view Docker Hosts (docs/requirements.md R-ENG-008, R-ENG-010): the last lines of its
 // log (core/hosts/monitorLog.ts) as a read-only document of VS Code, from the menu of a container row, from the report
 // of a container, and from the report of the volume of the Monitor (Show Log of the Monitor). Only while the setting
-// devspaces.allowContainerLogs is on, and never on a VM that does not run, because a read would start it. The document
-// of a container has the address of its host and its name, so a second Show Log of it shows the newer log in its tab.
+// devspaces.allowContainerLogs is on, and never on a VM that does not run, because a read would start it. Docker keeps
+// no log of a worker, so Show Log of a worker reads the log that the worker writes itself in the volume of the Monitor
+// (core/hosts/workerLogRead.ts). The document of a container has the address of its host and its name, so a second
+// Show Log of it shows the newer log in its tab.
 import * as vscode from 'vscode';
 import { errorMessage } from '../core/errors';
 import { isLogContainer, isNoLogDriverError } from '../core/hosts/monitorLog';
+import { NoWorkerLogError } from '../core/hosts/workerLogReader';
 import { isAbortError, type Logger } from '../core/ports';
 import { REMOTE_MONITOR_CONTAINER } from '../core/remoteMonitor/protocol';
 import { withSshPrompts } from '../core/sshAskpass';
@@ -30,6 +33,8 @@ export interface ContainerLog {
   name: string;
   /** The container of the Monitor: the messages name the Monitor. */
   monitor: boolean;
+  /** A worker: Show Log reads the log that it writes itself (Docker keeps none). */
+  worker?: boolean;
 }
 
 /** The log of the Monitor of `host` (Show Log of the Monitor), by the name of its container. */
@@ -41,10 +46,12 @@ export function monitorLogOf(host: string): ContainerLog {
 export const ContainerLogTexts = {
   off: 'Show Log is off: turn on the setting devspaces.allowContainerLogs to read the log of a container.',
   vmNotRunning: 'The VM of Devspaces does not run. Show Log reads nothing while it is stopped, because a read would start it.',
-  subject: (log: ContainerLog) => (log.monitor ? 'the Monitor' : `the container ${log.name}`),
-  empty: (log: ContainerLog) => (log.monitor ? 'The Monitor wrote nothing to its log yet.' : `The container ${log.name} wrote nothing to its log yet.`),
+  subject: (log: ContainerLog) => (log.monitor ? 'the Monitor' : log.worker === true ? `the worker ${log.name}` : `the container ${log.name}`),
+  empty: (log: ContainerLog) => (log.monitor ? 'The Monitor wrote nothing to its log yet.' : `The ${log.worker === true ? 'worker' : 'container'} ${log.name} wrote nothing to its log yet.`),
   failed: (log: ContainerLog, detail: string) => `The log of ${ContainerLogTexts.subject(log)} could not be read: ${detail}`,
   noLog: (log: ContainerLog) => `Docker keeps no log of ${ContainerLogTexts.subject(log)} that it can give: its log driver does not support reading (for example the driver none).`,
+  noWorkerLog: (log: ContainerLog) =>
+    `The worker ${log.name} has no log: an earlier version of Devspaces started it, or it could not write its log. A worker that this version of Devspaces starts writes one.`,
 };
 
 export interface ContainerLogsDeps {
@@ -57,6 +64,8 @@ export interface ContainerLogsDeps {
   vmState(): Promise<VmState>;
   /** The last lines of the log of `container` on `host`, with times in `timeZone` (readContainerLog on the shared shell of the host). */
   read(host: string, container: string, timeZone: string): Promise<string>;
+  /** The last lines of the log that the worker `container` on `host` writes itself (readWorkerLog on the shared shell of the host). */
+  readWorker(host: string, container: string, timeZone: string): Promise<string>;
   /** The time zone of this computer, in which the log gives times. */
   timeZone(): string;
 }
@@ -79,7 +88,7 @@ export class ContainerLogs implements vscode.Disposable {
       this.deps.logger.warn(`Show Log of ${object.name} on ${host} is not run: the row has no full ID of a container.`);
       return;
     }
-    await this.show({ host, container: object.id, name: object.name, monitor: object.purpose === 'monitor' });
+    await this.show({ host, container: object.id, name: object.name, monitor: object.purpose === 'monitor', ...(object.purpose === 'worker' ? { worker: true } : {}) });
   }
 
   /** Show Log of `log`: the last lines of the log, as a read-only document in a tab of its own. */
@@ -98,9 +107,15 @@ export class ContainerLogs implements vscode.Disposable {
     }
     let text: string;
     try {
-      text = await withSshPrompts(() => this.deps.read(log.host, log.container, this.deps.timeZone()));
+      const read = log.worker === true ? this.deps.readWorker : this.deps.read;
+      text = await withSshPrompts(() => read(log.host, log.container, this.deps.timeZone()));
     } catch (error) {
       if (isAbortError(error)) return;
+      if (error instanceof NoWorkerLogError) {
+        this.deps.logger.info(`Show Log of the worker ${log.name} on ${log.host}: ${error.message}`);
+        this.inform(ContainerLogTexts.noWorkerLog(log));
+        return;
+      }
       const detail = errorMessage(error);
       this.deps.logger.warn(`The log of ${ContainerLogTexts.subject(log)} on ${log.host} could not be read: ${detail}`);
       const message = isNoLogDriverError(detail) ? ContainerLogTexts.noLog(log) : ContainerLogTexts.failed(log, detail.split('\n')[0].slice(0, 300));

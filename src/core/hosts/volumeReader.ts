@@ -245,38 +245,26 @@ process.stdout.write(json);
 `;
 
 /** VOLUME_READER_SCRIPT on one line, without its comments: the argument of `node -e`. */
-export const VOLUME_READER_CODE = VOLUME_READER_SCRIPT.split('\n')
-  .map((line) => line.trim())
-  .filter((line) => line !== '' && !line.startsWith('//'))
-  .join(' ');
-
-/** The name of a container of the reader: `devspaces-reader-` and 8 hexadecimal digits. */
-const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
-
-/** A new name for a container of the reader. */
-export function newReaderName(): string {
-  return `devspaces-reader-${randomBytes(4).toString('hex')}`;
-}
-
-/** A name of a volume as Docker accepts it (and that cannot hold a comma of the value of `--mount`). */
-const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-/** An image reference without a space, a comma or a leading `-`. */
-const IMAGE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/;
+export const VOLUME_READER_CODE = oneLineScript(VOLUME_READER_SCRIPT);
 
 /**
- * The arguments of `docker` for one run of the reader with `image` on `volumes`, named `name` (newReaderName). Throws
- * for a name, an image or a volume name that the call cannot carry.
+ * A script of a reader on one line, without its comments: the argument of `node -e`, because a line of the shared shell
+ * carries no line break. The script has a comment or one statement per line.
  */
-export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name: string): string[] {
-  if (!READER_NAME.test(name)) throw new Error(`${JSON.stringify(name)} is no name of a container of the reader.`);
-  if (!IMAGE_REFERENCE.test(image)) throw new Error(`${JSON.stringify(image)} is no image reference that the reader can use.`);
-  const mounts: string[] = [];
-  for (const volume of READER_VOLUMES) {
-    const source = volumes[volume];
-    if (source === undefined) continue;
-    if (!VOLUME_NAME.test(source)) throw new Error(`${JSON.stringify(source)} is no name of a volume.`);
-    mounts.push('--mount', `type=volume,source=${source},target=${READER_ROOT}/${volume},readonly`);
-  }
+export function oneLineScript(script: string): string {
+  return script
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('//'))
+    .join(' ');
+}
+
+/**
+ * The start of the arguments of `docker` of every reader (this one, contentReader.ts and workerLogReader.ts), named
+ * `name`: never a pull, no network, a read-only root file system, only the capability to read every file, no new
+ * privileges, no log, and removed at its end. The mounts, the image and the script follow.
+ */
+export function readerRunArgs(name: string): string[] {
   return [
     'run',
     '--rm',
@@ -295,6 +283,45 @@ export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name
     'no-new-privileges',
     '--log-driver',
     'none',
+  ];
+}
+
+/** The name of a container of the readers (also of contentReader.ts and workerLogReader.ts): `devspaces-reader-` and 8 hexadecimal digits. */
+export const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
+
+/** A new name for a container of the reader. */
+export function newReaderName(): string {
+  return `devspaces-reader-${randomBytes(4).toString('hex')}`;
+}
+
+/** A name of a volume as Docker accepts it (and that cannot hold a comma of the value of `--mount`). */
+export const VOLUME_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+/** The full ID of an image. */
+export const IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
+
+/** `text` as a literal part of a regular expression. */
+export function regExpLiteral(text: string): string {
+  return text.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&');
+}
+/** An image reference without a space, a comma or a leading `-`. */
+const IMAGE_REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/;
+
+/**
+ * The arguments of `docker` for one run of the reader with `image` on `volumes`, named `name` (newReaderName). Throws
+ * for a name, an image or a volume name that the call cannot carry.
+ */
+export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name: string): string[] {
+  if (!READER_NAME.test(name)) throw new Error(`${JSON.stringify(name)} is no name of a container of the reader.`);
+  if (!IMAGE_REFERENCE.test(image)) throw new Error(`${JSON.stringify(image)} is no image reference that the reader can use.`);
+  const mounts: string[] = [];
+  for (const volume of READER_VOLUMES) {
+    const source = volumes[volume];
+    if (source === undefined) continue;
+    if (!VOLUME_NAME.test(source)) throw new Error(`${JSON.stringify(source)} is no name of a volume.`);
+    mounts.push('--mount', `type=volume,source=${source},target=${READER_ROOT}/${volume},readonly`);
+  }
+  return [
+    ...readerRunArgs(name),
     ...mounts,
     '--entrypoint',
     'node',
@@ -306,7 +333,7 @@ export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name
 }
 
 /** The value of a `--mount` of volumeReaderArgs: the volume, and its folder under READER_ROOT. */
-const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${READER_ROOT.replace(/[.*+?^$()|[\]\\/{}]/g, '\\$&')}/([a-z-]+),readonly$`);
+const MOUNT_ARGUMENT = new RegExp(`^type=volume,source=([^,]*),target=${regExpLiteral(READER_ROOT)}/([a-z-]+),readonly$`);
 
 /**
  * Whether `args` are a call of volumeReaderArgs, exactly: the shared shell of a host runs it (isSharedShellCall), as

@@ -43,7 +43,9 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   vmCpus: DEFAULT_VM_CPUS,
   createDockerContext: false,
   dockerHostsActions: 'disabled',
+  allowDestructiveActions: false,
   allowContainerLogs: false,
+  allowContentReads: false,
   dockerHostsSettingsButton: false,
   dockerHostsConsoleButton: false,
 });
@@ -336,7 +338,9 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     createDockerContext: bool('createDockerContext', DEFAULT_SETTINGS.createDockerContext ?? false),
     // One of its three values, else the default `disabled`: a value that is not known shows no action.
     dockerHostsActions: dockerHostsActionsOf(get('dockerHostsActions')),
+    allowDestructiveActions: bool('allowDestructiveActions', DEFAULT_SETTINGS.allowDestructiveActions ?? false),
     allowContainerLogs: bool('allowContainerLogs', DEFAULT_SETTINGS.allowContainerLogs ?? false),
+    allowContentReads: bool('allowContentReads', DEFAULT_SETTINGS.allowContentReads ?? false),
     dockerHostsSettingsButton: bool('dockerHostsSettingsButton', DEFAULT_SETTINGS.dockerHostsSettingsButton ?? false),
     dockerHostsConsoleButton: bool('dockerHostsConsoleButton', DEFAULT_SETTINGS.dockerHostsConsoleButton ?? false),
   };
@@ -350,6 +354,14 @@ function updateContainer(value: unknown): UpdateContainer {
 /** Whether the setting dockerHostsActions allows the actions of the view Docker Hosts (`contextMenu` or `icons`). */
 export function dockerHostsActionsAllowed(settings: Pick<ExtensionSettings, 'dockerHostsActions'>): boolean {
   return settings.dockerHostsActions === 'contextMenu' || settings.dockerHostsActions === 'icons';
+}
+
+/**
+ * Whether the view Docker Hosts allows its actions that remove or delete something now: the actions of the view
+ * (dockerHostsActionsAllowed) and the setting allowDestructiveActions (R-ENG-008).
+ */
+export function dockerHostsDestructiveAllowed(settings: Pick<ExtensionSettings, 'dockerHostsActions' | 'allowDestructiveActions'>): boolean {
+  return dockerHostsActionsAllowed(settings) && settings.allowDestructiveActions === true;
 }
 
 /** The value of the setting dockerHostsActions: one of its three values, else `disabled`. */

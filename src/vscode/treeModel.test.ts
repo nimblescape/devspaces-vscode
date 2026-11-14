@@ -249,10 +249,10 @@ describe('running side services of Docker Compose', () => {
   });
 
   it('offers Stop for running side services, but not while the devspace is updating', () => {
-    expect(rowActions('stopped', info, undefined, true).canStop).toBe(true);
-    expect(rowActions('noContainer', info, undefined, true).canStop).toBe(true);
-    expect(rowActions('updating', info, 'rebuild', true).canStop).toBe(false);
-    expect(rowActions('stopped', info, undefined, false).canStop).toBe(false);
+    expect(rowActions('stopped', info, true).canStop).toBe(true);
+    expect(rowActions('noContainer', info, true).canStop).toBe(true);
+    expect(rowActions('updating', info, true).canStop).toBe(false);
+    expect(rowActions('stopped', info, false).canStop).toBe(false);
   });
 });
 
@@ -264,19 +264,19 @@ describe('row actions and contextValue', () => {
 
   it.each<[DevspaceState | undefined, string]>([
     [undefined, 'repository;canStart;onGitHub'],
-    ['connected', 'repository;canStop;canDelete;canRebuild;onGitHub'],
-    ['connectedOtherWindow', 'repository;canStart;canStop;canDelete;canRebuild;onGitHub'],
-    ['running', 'repository;canStart;canStop;canDelete;canRebuild;onGitHub'],
-    ['stopped', 'repository;canStart;canDelete;canRebuild;onGitHub'],
-    ['noContainer', 'repository;canStart;canDelete;canRebuild;onGitHub'],
-    ['filesMissing', 'repository;canStart;canDelete;canRebuild;onGitHub'],
-    ['updating', 'repository;canDelete;onGitHub'],
+    ['connected', 'repository;canStop;onGitHub'],
+    ['connectedOtherWindow', 'repository;canStart;canStop;onGitHub'],
+    ['running', 'repository;canStart;canStop;onGitHub'],
+    ['stopped', 'repository;canStart;onGitHub'],
+    ['noContainer', 'repository;canStart;onGitHub'],
+    ['filesMissing', 'repository;canStart;onGitHub'],
+    ['updating', 'repository;onGitHub'],
   ])('state %s → %s', (state, expected) => {
     expect(contextValue(rowActions(state, info))).toBe(expected);
   });
 
   it('offers Start with Account… only where Start is offered, with a flag that the `when` clauses of Start do not match', () => {
-    expect(contextValue(rowActions('stopped', info), undefined, undefined, false, true)).toBe('repository;canStart;canDelete;canRebuild;onGitHub;canChooseAccount');
+    expect(contextValue(rowActions('stopped', info), undefined, undefined, false, true)).toBe('repository;canStart;onGitHub;canChooseAccount');
     for (const state of ['connected', 'updating'] as const) {
       const value = contextValue(rowActions(state, info), undefined, undefined, false, true);
       expect(flags(value)).not.toContain('canChooseAccount');
@@ -285,23 +285,17 @@ describe('row actions and contextValue', () => {
     }
   });
 
-  it('offers Delete while the devspace is updating, except while it is being deleted', () => {
-    for (const operation of ['create', 'update', 'rebuild'] as const) {
-      expect(contextValue(rowActions('updating', info, operation))).toBe('repository;canDelete;onGitHub');
+  it('offers no Delete and no Rebuild: they are management actions of the view Docker Hosts (R-ENG-008)', () => {
+    for (const state of ['connected', 'running', 'stopped', 'updating', undefined] as const) {
+      expect(flags(contextValue(rowActions(state, info)))).not.toContain('canDelete');
+      expect(flags(contextValue(rowActions(state, info)))).not.toContain('canRebuild');
     }
-    expect(contextValue(rowActions('updating', info, 'delete'))).toBe('repository;onGitHub');
-    // The operation of a mark matters only while the state is updating.
-    expect(flags(contextValue(rowActions('stopped', info, 'delete')))).toContain('canDelete');
   });
 
-  it('takes the operation of the busy mark of the devspace for the row', () => {
-    const mark = (operation: 'rebuild' | 'delete') =>
-      devspace('e1', 'acme/api', { busy: { operation, since: iso(T0), pid: 4242, windowId: 'window-2' } });
-    const rowFor = (env: Devspace) =>
-      row(buildTreeModel(input({ devspaces: [env], busyDevspaceIds: new Set(['e1']) })), 'acme/api');
-    expect(rowFor(mark('rebuild')).actions.canDelete).toBe(true);
-    expect(rowFor(mark('delete')).actions.canDelete).toBe(false);
-    expect(rowFor(mark('rebuild')).actions.canStart).toBe(false);
+  it('offers no Start for a devspace with a busy mark of another window', () => {
+    const marked = devspace('e1', 'acme/api', { busy: { operation: 'rebuild', since: iso(T0), pid: 4242, windowId: 'window-2' } });
+    const busy = row(buildTreeModel(input({ devspaces: [marked], busyDevspaceIds: new Set(['e1']) })), 'acme/api');
+    expect(busy.actions.canStart).toBe(false);
   });
 
   it('adds onGitHub only with discovery data; the number of configurations changes no flag (the sources are rows)', () => {
@@ -324,8 +318,6 @@ describe('row actions and contextValue', () => {
     const cases: Array<[string, keyof ReturnType<typeof rowActions>]> = [
       ['devspaces.start', 'canStart'],
       ['devspaces.stop', 'canStop'],
-      ['devspaces.delete', 'canDelete'],
-      ['devspaces.rebuild', 'canRebuild'],
       ['devspaces.showOnGitHub', 'onGitHub'],
     ];
     const states: Array<DevspaceState | undefined> = [
@@ -413,16 +405,16 @@ describe('buildTreeModel', () => {
         owner: 'acme-university',
         rows: [
           ['config', undefined, '', 'repository;canStart;onGitHub;hostAccessChecked'],
-          ['python', 'connected', 'main   Connected', 'repository;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning;canCloseAndKeepRunning'],
-          ['docs', 'running', 'main   Running', 'repository;canStart;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning'],
+          ['python', 'connected', 'main   Connected', 'repository;canStop;onGitHub;hostAccessChecked;canKeepRunning;canCloseAndKeepRunning'],
+          ['docs', 'running', 'main   Running', 'repository;canStart;canStop;onGitHub;hostAccessChecked;canKeepRunning'],
           ['infra', undefined, '', 'repository;canStart;onGitHub;hostAccessChecked'],
-          ['web', 'stopped', 'feature-x   Stopped · 3 unpushed', 'repository;canStart;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning'],
+          ['web', 'stopped', 'feature-x   Stopped · 3 unpushed', 'repository;canStart;onGitHub;hostAccessChecked;canKeepRunning'],
         ],
       },
       {
         owner: 'me',
         rows: [
-          ['dotfiles', 'stopped', 'main   Stopped', 'repository;canStart;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning'],
+          ['dotfiles', 'stopped', 'main   Stopped', 'repository;canStart;onGitHub;hostAccessChecked;canKeepRunning'],
           ['website', undefined, '', 'repository;canStart;onGitHub;hostAccessChecked'],
         ],
       },
@@ -486,7 +478,7 @@ describe('buildTreeModel', () => {
     expect(old.notOnGitHub).toBe(true);
     expect(old.description).toBe('dev   Stopped · 2 uncommitted · not on GitHub');
     // The flag of the host access checks (on by default).
-    expect(old.contextValue).toBe('repository;canStart;canDelete;canRebuild;hostAccessChecked;canKeepRunning');
+    expect(old.contextValue).toBe('repository;canStart;hostAccessChecked;canKeepRunning');
     expect(old.tooltip).toContain(TreeTexts.notListedOnGitHub);
     expect(row(groups, 'lost/repo').description).toBe('main   Stopped · not on GitHub');
     expect(groups.map((group) => group.owner)).toEqual(['acme', 'lost']);
@@ -566,7 +558,7 @@ describe('buildTreeModel', () => {
       expect(childRow(groups, 'acme/api', 'default').tooltip).toContain(TreeTexts.sourceDefaultImage(IMAGE));
       expect(childRow(groups, 'acme/api', 'python').tooltip.split('\n')[0]).toBe('acme/api · python');
       expect(childRow(groups, 'acme/api', 'python').tooltip).toContain(TreeTexts.sourceConfiguration(python));
-      expect(childRow(groups, 'acme/api', 'python').contextValue).toBe('repository;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning;canCloseAndKeepRunning');
+      expect(childRow(groups, 'acme/api', 'python').contextValue).toBe('repository;canStop;onGitHub;hostAccessChecked;canKeepRunning;canCloseAndKeepRunning');
       expect(childRow(groups, 'acme/api', 'config').contextValue).toBe('repository;canStart;onGitHub;hostAccessChecked');
       expect(childRow(groups, 'acme/api', 'config').tooltip).toContain(TreeTexts.noDevspace);
     });
@@ -778,7 +770,7 @@ describe('buildTreeModel', () => {
     const groups = buildTreeModel(input({ discovery: undefined, devspaces: [devspace('e1', 'acme/api')] }));
     // The flag of the host access checks (on by default).
     expect(rows(groups).map((entry) => [entry.repository, entry.description, entry.contextValue])).toEqual([
-      ['acme/api', 'main   Stopped', 'repository;canStart;canDelete;canRebuild;hostAccessChecked;canKeepRunning'],
+      ['acme/api', 'main   Stopped', 'repository;canStart;hostAccessChecked;canKeepRunning'],
     ]);
   });
 
@@ -1290,9 +1282,9 @@ describe('the switch of the host access checks in the rows', () => {
 
   it('adds no flag of the switch to contextValue without it', () => {
     const actions = rowActions('stopped', repo('acme/api'));
-    expect(contextValue(actions)).toBe('repository;canStart;canDelete;canRebuild;onGitHub');
-    expect(contextValue(actions, 'on')).toBe('repository;canStart;canDelete;canRebuild;onGitHub;hostAccessChecked');
-    expect(contextValue(actions, 'off')).toBe('repository;canStart;canDelete;canRebuild;onGitHub;hostAccessUnrestricted');
+    expect(contextValue(actions)).toBe('repository;canStart;onGitHub');
+    expect(contextValue(actions, 'on')).toBe('repository;canStart;onGitHub;hostAccessChecked');
+    expect(contextValue(actions, 'off')).toBe('repository;canStart;onGitHub;hostAccessUnrestricted');
     // The when clauses of package.json tell the two flags apart.
     expect(/hostAccessChecked/.test('hostAccessUnrestricted')).toBe(false);
     expect(/hostAccessUnrestricted/.test('hostAccessChecked')).toBe(false);
@@ -1844,8 +1836,8 @@ describe('Keep Running When Closed in the sidebar', () => {
 
   it('adds the flag only for a row with a devspace', () => {
     const actions = rowActions('running', repo('acme/api'));
-    expect(contextValue(actions, 'on', true)).toBe('repository;canStart;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;kept');
-    expect(contextValue(actions, 'on', false)).toBe('repository;canStart;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning');
+    expect(contextValue(actions, 'on', true)).toBe('repository;canStart;canStop;onGitHub;hostAccessChecked;kept');
+    expect(contextValue(actions, 'on', false)).toBe('repository;canStart;canStop;onGitHub;hostAccessChecked;canKeepRunning');
     expect(contextValue(rowActions(undefined, repo('acme/api')), 'on')).toBe('repository;canStart;onGitHub;hostAccessChecked');
     // The when clauses of package.json tell the two flags apart.
     expect(/;kept(;|$)/.test('repository;canKeepRunning')).toBe(false);

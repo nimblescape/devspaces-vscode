@@ -43,12 +43,41 @@ const vscodeVolume: HostObject = { kind: 'volume', id: 'devspaces-vscode', name:
 const nginx: HostObject = { kind: 'image', id: 'sha256:n', name: 'nginx:1.27', tags: ['nginx:1.27'], purpose: 'notDevspaces' };
 
 describe('readResourceReport', () => {
-  it('reads only the facts of Docker for a report without shared volumes', async () => {
-    const docker = fakeDocker({ 'image inspect': ok(`${JSON.stringify({ Id: 'sha256:n', RepoTags: ['nginx:1.27'], Size: 1000, Created: '2026-11-01T10:00:00Z', Config: { Labels: {} } })}\n`) });
+  it('reads only the facts of Docker for a report without shared volumes, and for an image its history', async () => {
+    const history = [
+      { CreatedAt: '2026-11-01T10:00:00Z', CreatedBy: 'CMD ["nginx" "-g" "daemon off;"] # buildkit', Size: '0', ID: '<missing>', Comment: 'buildkit.dockerfile.v0' },
+      { CreatedAt: '2026-10-30T08:00:00Z', CreatedBy: '/bin/sh -c #(nop) ADD file:abc in / ', Size: '74000000', ID: '<missing>', Comment: '' },
+    ];
+    const docker = fakeDocker({
+      'image inspect': ok(`${JSON.stringify({ Id: 'sha256:n', RepoTags: ['nginx:1.27'], Size: 1000, Created: '2026-11-01T10:00:00Z', Config: { Labels: {} } })}\n`),
+      'image history': ok(history.map((entry) => JSON.stringify(entry)).join('\n')),
+    });
     const report = await readResourceReport(docker, { object: nginx, computer: COMPUTER, clock: CLOCK });
-    expect(docker.words()).toEqual(['image inspect']);
+    expect(docker.words()).toEqual(['image inspect', 'image history']);
+    expect(docker.calls[1].args).toEqual(['image', 'history', '--no-trunc', '--human=false', '--format', '{{json .}}', nginx.id]);
+    for (const call of docker.calls) expect(isSharedShellCall(call.args, false)).toBe(true);
     expect(report.notices).toEqual([]);
-    expect(report.sections.length).toBeGreaterThan(0);
+    const layers = report.sections.at(-1);
+    expect(layers?.title).toBe('Layers');
+    expect(layers?.body.kind === 'table' ? layers.body.rows.map((row) => row.map((entry) => entry.text).slice(0, 2)) : []).toEqual([
+      ['ADD file:abc in /', '74 MB'],
+      ['CMD ["nginx" "-g" "daemon off;"]', '0 B'],
+    ]);
+    // A container has no history.
+    const container = fakeDocker({ 'container inspect': ok(`${JSON.stringify({ Id: 'c1', Config: { Labels: {} } })}\n`) });
+    await readResourceReport(container, { object: { kind: 'container', id: 'c1', name: 'web', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK });
+    expect(container.words()).toEqual(['container inspect']);
+  });
+
+  it('gives a failed history as a note of the report of the image, with its facts', async () => {
+    const docker = fakeDocker({
+      'image inspect': ok(`${JSON.stringify({ Id: 'sha256:n', RepoTags: ['nginx:1.27'], Size: 1000, Created: '2026-11-01T10:00:00Z', Config: { Labels: {} } })}\n`),
+      'image history': failed('Error response from daemon: No such image: sha256:n\n'),
+    });
+    const report = await readResourceReport(docker, { object: nginx, computer: COMPUTER, clock: CLOCK });
+    expect(report.notices).toEqual(['Docker could not give the layers of this image: Error response from daemon: No such image: sha256:n']);
+    expect(report.sections.map((section) => section.title)).not.toContain('Layers');
+    expect(report.sections.map((section) => section.title)).toContain('Facts of Docker');
   });
 
   it('gives a failed inspect as a note of the report, and reads the volumes all the same', async () => {

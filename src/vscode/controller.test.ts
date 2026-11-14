@@ -710,19 +710,19 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 56 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
+    // 57 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, and the commands of the rows
-    // of the view "Docker Hosts". The last one that was added is Show Log of a container row of the view "Docker Hosts"
-    // (R-ENG-008), before it Remove Devspaces from This Computer… of the "…" menu of the repository view (R-GEN-009),
+    // of the view "Docker Hosts". The last one that was added is Show Files of a volume or image row of the view "Docker
+    // Hosts" (R-ENG-008, R-ENG-010), before it Show Log of a container row of the view "Docker Hosts" (R-ENG-008), before it Remove Devspaces from This Computer… of the "…" menu of the repository view (R-GEN-009),
     // before it Open Console of a host row and the gear Docker Hosts Settings… of the
     // view "Docker Hosts" (R-ENG-008), before them Show Report of an object row of the view "Docker
     // Hosts" (R-ENG-010), before it Show Utilization of a host row (R-ENG-009), before it Start of a container and Remove Unused Build Cache… of the view (R-ENG-008), and
     // before them the view itself and the management of the VM of Devspaces in it (R-VM-010). The last one that was removed is "Use as Docker Host" of a host row of the view "Docker Hosts": the
     // Docker host of Devspaces is chosen only in the first row of the repository view (R-ENG-008); before it the
     // installation and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
-    expect(declared).toHaveLength(56);
+    expect(declared).toHaveLength(57);
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use as Docker Host');
     expect(declared).toEqual(
@@ -4201,7 +4201,7 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     expect(h.connection.open).not.toHaveBeenCalled();
   });
 
-  it('is a command of package.json, only in the Command Palette: in no menu of a view and on no row', () => {
+  it('is a command of package.json, in the Command Palette and only in the context menu of an engine row of the view "Docker Hosts", with allowDestructiveActions', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -4213,8 +4213,17 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     });
     // A command without an entry of the menu commandPalette is in the Command Palette, on the Docker host of Devspaces.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromDockerEngine)).toBe(false);
+    const rows = manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.removeFromDockerEngine);
+    // One entry of the context menu of a host row with an engine, never a button (inline), and only with the setting.
+    expect(rows).toEqual([
+      {
+        command: 'devspaces.removeFromDockerEngine',
+        when: 'view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/ && config.devspaces.allowDestructiveActions',
+        group: '3_remove@1',
+      },
+    ]);
     for (const [menu, entries] of Object.entries(manifest.contributes.menus)) {
-      if (menu !== 'commandPalette') expect(entries.some((entry) => entry.command === Commands.removeFromDockerEngine), menu).toBe(false);
+      if (menu !== 'commandPalette' && menu !== 'view/item/context') expect(entries.some((entry) => entry.command === Commands.removeFromDockerEngine), menu).toBe(false);
     }
   });
 });
@@ -4847,7 +4856,7 @@ describe('Remove Devspaces from This Computer…', () => {
     );
   });
 
-  it('is a command of package.json, in the Command Palette and last in the "…" menu of the repository view', () => {
+  it('is a command of package.json, in the Command Palette and only in the context menu of the VM row of the view Docker Hosts', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -4857,11 +4866,17 @@ describe('Remove Devspaces from This Computer…', () => {
       category: 'Devspaces',
     });
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
-    // Not in the view "Docker Hosts", whose actions are off by default (devspaces.dockerHostsActions), and not on a row.
-    expect(manifest.contributes.menus['view/title'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
-      { command: Commands.removeFromComputer, when: 'view == devspaces.repositories', group: '3_remove@1' },
+    // A management action of the view "Docker Hosts" (R-ENG-008): no longer in the "…" menu of the repository view, never a
+    // button, and only while the actions of the view and the removals are on (devspaces.dockerHostsActions and
+    // devspaces.allowDestructiveActions, both off by default).
+    expect(manifest.contributes.menus['view/title'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
+    expect(manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
+      {
+        command: Commands.removeFromComputer,
+        when: 'view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/ && config.devspaces.allowDestructiveActions',
+        group: '5_removeComputer@1',
+      },
     ]);
-    expect(manifest.contributes.menus['view/item/context'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
   });
 });
 
@@ -6802,16 +6817,18 @@ describe('Start in a new window', () => {
       '1_actions@2 devspaces.startInCurrentWindow',
       '1_actions@3 devspaces.startWithAccount',
       '1_actions@4 devspaces.stop',
-      '1_actions@5 devspaces.delete',
       '1_actions@6 devspaces.keepRunning',
       '1_actions@6 devspaces.stopWhenClosed',
       '1_actions@7 devspaces.closeAndKeepRunning',
     ]);
-    // The buttons of a row are Start, Stop and the ⋯ submenu; Delete is in the submenu (last, in its own group) and in
-    // the context menu, not next to Stop.
+    // The buttons of a row are Start, Stop and the ⋯ submenu. Delete and Rebuild are management actions of the view
+    // "Docker Hosts" (R-ENG-008): neither is in a menu of the repository view; the Command Palette keeps them.
     const inline = repositoryItems.filter((item) => item.group?.startsWith('inline@')).map((item) => `${item.group} ${item.command ?? item.submenu}`);
     expect(inline).toEqual(['inline@1 devspaces.start', 'inline@2 devspaces.stop', 'inline@4 devspaces.more']);
-    expect(menus['devspaces.more'].at(-1)).toEqual({ command: Commands.delete, when: 'viewItem =~ /canDelete/', group: '3_delete@1' });
+    for (const command of [Commands.delete, Commands.rebuild]) {
+      expect([...repositoryItems, ...menus['devspaces.more']].some((item) => item.command === command), command).toBe(false);
+      expect(menus.commandPalette.some((item) => item.command === command), command).toBe(false);
+    }
     // The settings of the default image: the image, and the place of its row.
     expect(manifest.contributes.configuration.properties[`${SETTINGS_SECTION}.defaultImage`]).toMatchObject({ type: 'string', scope: 'application', default: '' });
     expect(manifest.contributes.configuration.properties[`${SETTINGS_SECTION}.startWithDefaultImage`]).toMatchObject({ type: 'boolean', scope: 'application', default: true });
@@ -7022,6 +7039,7 @@ describe('the Docker host of Devspaces', () => {
     fs.rmSync(h.root, { recursive: true, force: true });
     h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm });
     h.settings.dockerHostsActions = 'contextMenu';
+    h.settings.allowDestructiveActions = true;
     const clicked = { hostsNode: 'object', host: 'lab', object: { kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume' } };
     const handler = h.commands.get(Commands.removeDockerObjects);
     await handler?.(clicked, [clicked]);
@@ -7102,6 +7120,58 @@ describe('the Docker host of Devspaces', () => {
     await settle(() => fakeVscode.commands.executeCommand.mock.calls.some((call) => call[0] === 'workbench.action.openSettings'), 'the Settings editor');
     expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', '@id:devspaces.dockerHostsActions');
     expect(vm.stop).not.toHaveBeenCalled();
+  });
+
+  // The setting devspaces.allowDestructiveActions (R-ENG-008): while it is off (the default), an action that removes or
+  // deletes something does nothing when a row of the view asks for it, and says why; the actions that remove nothing
+  // run, and the same commands without a row (the Command Palette, the repository view) run.
+  it('runs no action of a row of the view "Docker Hosts" that removes or deletes something while allowDestructiveActions is off, and says why', async () => {
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const vm = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), remove: vi.fn(async () => {}), reset: vi.fn(async () => {}), settings: vi.fn(async () => {}) };
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm });
+    await h.registry.add(remoteDevspace());
+    const hostRow = { hostsNode: 'host', host: 'lab', vm: false, selected: false };
+    const vmRow = { hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'running' } };
+    const objectRow = { hostsNode: 'object', host: 'lab', object: { kind: 'volume', id: 'v', name: 'v', purpose: 'sharedVolume' } };
+    const devspaceRow = { hostsNode: 'object', host: 'build-box', devspaceId: REMOTE_ENV_ID, object: { kind: 'container', id: 'c', name: 'c', purpose: 'devspace', state: 'running' } };
+    const cacheRow = { hostsNode: 'buildCache', host: 'lab' };
+    for (const allowed of [undefined, false] as const) {
+      h.settings.dockerHostsActions = 'icons';
+      h.settings.allowDestructiveActions = allowed;
+      fakeVscode.window.showInformationMessage.mockClear();
+      await run('removeDockerObjects', objectRow);
+      await run('pruneBuildCache', cacheRow);
+      await run('removeDockerHostFromList', hostRow);
+      await run('removeFromDockerEngine', hostRow);
+      await run('delete', devspaceRow);
+      await run('removeVm', vmRow);
+      await run('resetVm', vmRow);
+      expect(dockerHosts.removeObjects).not.toHaveBeenCalled();
+      expect(dockerHosts.pruneBuildCache).not.toHaveBeenCalled();
+      expect(dockerHosts.removeFromList).not.toHaveBeenCalled();
+      expect(h.service.deleteCheckInWorker).not.toHaveBeenCalled();
+      expect(h.service.deleteInWorker).not.toHaveBeenCalled();
+      expect([vm.remove, vm.reset].map((mock) => mock.mock.calls.length)).toEqual([0, 0]);
+      expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledTimes(7);
+      expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.hostsViewNoDestructive, ControllerTexts.openSettings);
+    }
+    expect(operations).toEqual([]);
+    // The actions that remove nothing run.
+    await run('stopDockerObject', { hostsNode: 'object', host: 'lab', object: { kind: 'container', id: 'c', name: 'c', purpose: 'notDevspaces', state: 'running' } });
+    await run('stopVm', vmRow);
+    expect(dockerHosts.stopObject).toHaveBeenCalledTimes(1);
+    expect(vm.stop).toHaveBeenCalledTimes(1);
+    // Without a row of the view (the Command Palette), the commands run.
+    await run('removeVm');
+    expect(vm.remove).toHaveBeenCalledTimes(1);
+    // Open Settings opens the setting.
+    fakeVscode.window.showInformationMessage.mockResolvedValueOnce(ControllerTexts.openSettings);
+    await run('resetVm', vmRow);
+    await settle(() => fakeVscode.commands.executeCommand.mock.calls.some((call) => call[0] === 'workbench.action.openSettings'), 'the Settings editor');
+    expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', '@id:devspaces.allowDestructiveActions');
+    expect(vm.reset).not.toHaveBeenCalled();
   });
 
   it('runs every other command as one operation on the host that is current when it starts', async () => {

@@ -91,14 +91,25 @@ describe('hostRowLook', () => {
 });
 
 describe('objectActions', () => {
-  it('gives the objects of a devspace of this computer its Stop and Delete…, never Remove…', () => {
-    expect(objectActions(objectRow(container('running', { purpose: 'devspace' }), 'id-1'))).toEqual({ stopDevspace: true, deleteDevspace: true, stop: false, start: false, remove: false });
-    expect(objectActions(objectRow({ kind: 'volume', id: 'v', name: 'v', purpose: 'devspace' }, 'id-1'))).toEqual({ stopDevspace: false, deleteDevspace: true, stop: false, start: false, remove: false });
+  it('gives the objects of a devspace of this computer its Stop and Delete…, its dev container also Rebuild, never Remove…', () => {
+    expect(objectActions(objectRow(container('running', { purpose: 'devspace' }), 'id-1'))).toEqual({ stopDevspace: true, rebuildDevspace: false, deleteDevspace: true, stop: false, start: false, remove: false });
+    expect(objectActions(objectRow(container('exited', { purpose: 'devspace', role: 'dev container' }), 'id-1'))).toEqual({
+      stopDevspace: false,
+      rebuildDevspace: true,
+      deleteDevspace: true,
+      stop: false,
+      start: false,
+      remove: false,
+    });
+    expect(objectActions(objectRow(container('running', { purpose: 'devspace', role: 'service db' }), 'id-1'))).toMatchObject({ stopDevspace: true, rebuildDevspace: false });
+    expect(objectActions(objectRow({ kind: 'volume', id: 'v', name: 'v', purpose: 'devspace', role: 'workspace' }, 'id-1'))).toEqual({ stopDevspace: false, rebuildDevspace: false, deleteDevspace: true, stop: false, start: false, remove: false });
+    // A dev container of a devspace that this computer does not know has no devspace actions.
+    expect(objectActions(objectRow(container('running', { purpose: 'otherDevspace', role: 'dev container' })))).toMatchObject({ rebuildDevspace: false, deleteDevspace: false });
     expect(objectActions(objectRow({ kind: 'network', id: 'n', name: 'n', purpose: 'devspace' }, 'id-1'))).toMatchObject({ deleteDevspace: true, remove: false });
   });
 
   it('gives any other running container Stop first, and Remove… only after it stopped', () => {
-    expect(objectActions(objectRow(container('running')))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: true, start: false, remove: false });
+    expect(objectActions(objectRow(container('running')))).toEqual({ stopDevspace: false, rebuildDevspace: false, deleteDevspace: false, stop: true, start: false, remove: false });
     expect(objectActions(objectRow(container('paused')))).toMatchObject({ stop: true, remove: false });
     expect(objectActions(objectRow(container('exited')))).toMatchObject({ stop: false, remove: true });
     expect(objectActions(objectRow({ kind: 'image', id: 'sha256:1', name: 'devspaces-worker:1', purpose: 'helperImage' }))).toMatchObject({ remove: true });
@@ -106,7 +117,7 @@ describe('objectActions', () => {
 
   it('gives a stopped container that is not of Devspaces Start; Devspaces starts its own helpers itself', () => {
     const other = (state: string) => container(state, { name: 'shop-web-1', purpose: 'notDevspaces' });
-    expect(objectActions(objectRow(other('exited')))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: false, start: true, remove: true });
+    expect(objectActions(objectRow(other('exited')))).toEqual({ stopDevspace: false, rebuildDevspace: false, deleteDevspace: false, stop: false, start: true, remove: true });
     expect(objectActions(objectRow(other('created')))).toMatchObject({ start: true, remove: true });
     expect(objectActions(objectRow(other('running')))).toMatchObject({ start: false, stop: true, remove: false });
     expect(objectActions(objectRow(other('dead')))).toMatchObject({ start: false, remove: true });
@@ -115,13 +126,16 @@ describe('objectActions', () => {
 
   it('gives a network Remove…, but never a network of Docker itself', () => {
     expect(objectActions(objectRow({ kind: 'network', id: 'n6', name: 'mynet', purpose: 'notDevspaces', usedBy: 0 }))).toMatchObject({ stop: false, start: false, remove: true });
-    expect(objectActions(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true }))).toEqual({ stopDevspace: false, deleteDevspace: false, stop: false, start: false, remove: false });
+    expect(objectActions(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true }))).toEqual({ stopDevspace: false, rebuildDevspace: false, deleteDevspace: false, stop: false, start: false, remove: false });
   });
 
   it('names the actions in the context value, which the menus of package.json match', () => {
     expect(objectRowLook(objectRow(container('running'))).contextValue).toBe('hostsObject;container;monitor;canStop');
     expect(objectRowLook(objectRow(container('exited', { purpose: 'otherDevspace' }))).contextValue).toBe('hostsObject;container;otherDevspace;canRemove');
     expect(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue).toBe('hostsObject;container;devspace;canStopDevspace;canDeleteDevspace');
+    expect(objectRowLook(objectRow(container('running', { purpose: 'devspace', role: 'dev container' }), 'id-1')).contextValue).toBe(
+      'hostsObject;container;devspace;canStopDevspace;canRebuildDevspace;canDeleteDevspace',
+    );
     expect(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue).toBe('hostsObject;container;notDevspaces;canStart;canRemove');
   });
 });
@@ -292,6 +306,10 @@ describe('the menus of the view (package.json)', () => {
     settingsButton?: boolean;
     consoleButton?: boolean;
     logs?: boolean;
+    /** devspaces.allowDestructiveActions. */
+    removals?: boolean;
+    /** devspaces.allowContentReads. */
+    files?: boolean;
   }
   /** Whether the clauses `config.devspaces.…` of `when` hold with `settings` (the platform clauses are not checked). */
   const configHolds = (when: string, settings: ViewSettings): boolean => {
@@ -302,6 +320,8 @@ describe('the menus of the view (package.json)', () => {
     if (when.includes('config.devspaces.dockerHostsSettingsButton') && settings.settingsButton !== true) return false;
     if (when.includes('config.devspaces.dockerHostsConsoleButton') && settings.consoleButton !== true) return false;
     if (when.includes('config.devspaces.allowContainerLogs') && settings.logs !== true) return false;
+    if (when.includes('config.devspaces.allowDestructiveActions') && settings.removals !== true) return false;
+    if (when.includes('config.devspaces.allowContentReads') && settings.files !== true) return false;
     return true;
   };
   /** The commands of a row with `contextValue` (the clause viewItem and the settings of each `when`): its context menu, or its buttons. */
@@ -327,40 +347,93 @@ describe('the menus of the view (package.json)', () => {
     objectRowLook(objectRow(container('exited'))).contextValue,
     objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue,
     buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 10, unusedBytes: 10 } }).contextValue,
+    objectRowLook(objectRow(container('running', { purpose: 'devspace', role: 'dev container' }), 'id-1')).contextValue,
   ];
   /** The commands that only read: they stay in every mode. */
-  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.showContainerLog', 'devspaces.refreshDockerHosts'];
+  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.showContainerLog', 'devspaces.showFiles', 'devspaces.refreshDockerHosts'];
+  /** The commands that remove or delete something: only in the context menu, and only with allowDestructiveActions. */
+  const REMOVING = [
+    'devspaces.rebuild',
+    'devspaces.delete',
+    'devspaces.removeDockerObjects',
+    'devspaces.pruneBuildCache',
+    'devspaces.removeDockerHostFromList',
+    'devspaces.removeFromDockerEngine',
+    'devspaces.removeVm',
+    'devspaces.resetVm',
+    'devspaces.removeFromComputer',
+  ];
 
   it('shows the view "Docker Hosts" below the repositories', () => {
     expect(manifest.contributes.views.devspaces.map((view) => view.id)).toEqual(['devspaces.repositories', DOCKER_HOSTS_VIEW_ID]);
   });
 
   it('offers on each row exactly its actions', () => {
+    const all: ViewSettings = { actions: 'contextMenu', removals: true };
     const stoppedVm = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind: 'stopped' } }).contextValue;
-    expect(commandsOf(stoppedVm)).toEqual(['devspaces.startVm', 'devspaces.vmSettings', 'devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeVm']);
+    expect(commandsOf(stoppedVm, false, all)).toEqual([
+      'devspaces.startVm',
+      'devspaces.vmSettings',
+      'devspaces.showUtilization',
+      'devspaces.updateImagesNow',
+      'devspaces.removeFromDockerEngine',
+      'devspaces.removeVm',
+      'devspaces.resetVm',
+      'devspaces.removeFromComputer',
+    ]);
     const notSetUp = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'notSetUp' } }).contextValue;
-    expect(commandsOf(notSetUp)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings']);
+    expect(commandsOf(notSetUp, false, all)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings', 'devspaces.removeFromComputer']);
     const remote = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: false }).contextValue;
-    expect(commandsOf(remote)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeDockerHostFromList']);
-    // "Remove Devspaces from This Docker Engine…" and "Remove and Set Up the VM Again…" are only in the Command Palette:
-    // on no row, as a button or in the context menu, in no mode.
+    expect(commandsOf(remote, false, all)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine', 'devspaces.removeDockerHostFromList']);
+    expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue, false, all)).toEqual(['devspaces.showResourceReport', 'devspaces.stop', 'devspaces.delete']);
+    // The dev container of a devspace also has Rebuild (R-ENG-008: the management actions of a devspace are in this view).
+    expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace', role: 'dev container' }), 'id-1')).contextValue, false, all)).toEqual([
+      'devspaces.showResourceReport',
+      'devspaces.stop',
+      'devspaces.rebuild',
+      'devspaces.delete',
+    ]);
+    expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue, false, all)).toEqual(['devspaces.showResourceReport', 'devspaces.stopDockerObject']);
+    expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue, false, all)).toEqual(['devspaces.showResourceReport', 'devspaces.removeDockerObjects']);
+    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue, false, all)).toEqual([
+      'devspaces.showResourceReport',
+      'devspaces.startDockerObject',
+      'devspaces.removeDockerObjects',
+    ]);
+    expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue, false, all)).toEqual(['devspaces.showResourceReport']);
+    const cache = { records: 1, bytes: 10, unusedBytes: 10 };
+    expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache }).contextValue, false, all)).toEqual(['devspaces.pruneBuildCache']);
+    expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue, false, all)).toEqual([]);
+  });
+
+  // The rules of Hannes for the actions that remove or delete something (R-ENG-008).
+  it('offers an action that removes or deletes only in the context menu, never as a button, and only with allowDestructiveActions', () => {
+    const menuEntries = new Set<string>();
     for (const contextValue of rows()) {
-      for (const buttons of [false, true]) {
-        for (const actions of ['disabled', 'contextMenu', 'icons']) {
-          const commands = commandsOf(contextValue, buttons, { actions });
-          expect(commands, contextValue).not.toContain('devspaces.removeFromDockerEngine');
-          expect(commands, contextValue).not.toContain('devspaces.resetVm');
+      for (const actions of ['disabled', 'contextMenu', 'icons']) {
+        for (const removals of [false, true]) {
+          // Never a button, in any mode.
+          for (const command of commandsOf(contextValue, true, { actions, removals })) expect(REMOVING, `${contextValue}: ${command}`).not.toContain(command);
+          const menu = commandsOf(contextValue, false, { actions, removals });
+          // In the context menu only with Context Menu or Icons, and the setting on.
+          const allowed = actions !== 'disabled' && removals;
+          for (const command of menu.filter((entry) => REMOVING.includes(entry))) {
+            expect(allowed, `${contextValue} ${actions} ${String(removals)}: ${command}`).toBe(true);
+            menuEntries.add(command);
+          }
         }
       }
     }
-    expect(commandsOf(objectRowLook(objectRow(container('running', { purpose: 'devspace' }), 'id-1')).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.stop', 'devspaces.delete']);
-    expect(commandsOf(objectRowLook(objectRow(container('running'))).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.stopDockerObject']);
-    expect(commandsOf(objectRowLook(objectRow(container('exited'))).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.removeDockerObjects']);
-    expect(commandsOf(objectRowLook(objectRow(container('exited', { purpose: 'notDevspaces' }))).contextValue)).toEqual(['devspaces.showResourceReport', 'devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
-    expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue)).toEqual(['devspaces.showResourceReport']);
-    const cache = { records: 1, bytes: 10, unusedBytes: 10 };
-    expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache }).contextValue)).toEqual(['devspaces.pruneBuildCache']);
-    expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue)).toEqual([]);
+    // Each of them is in a context menu then.
+    expect([...menuEntries].sort()).toEqual([...REMOVING].sort());
+    // Every entry of package.json of such a command in the view needs the setting and is no button.
+    for (const item of items.filter((entry) => REMOVING.includes(entry.command ?? '') && (entry.when ?? '').includes('view == devspaces.hosts'))) {
+      expect(item.group?.startsWith('inline'), item.command).toBe(false);
+      expect(item.when, item.command).toContain('config.devspaces.allowDestructiveActions');
+    }
+    // Stop and Start stay: they remove nothing.
+    expect(commandsOf(rows()[4], false, { actions: 'contextMenu' })).toEqual(['devspaces.showResourceReport', 'devspaces.stop']);
+    expect(commandsOf(rows()[7], false, { actions: 'contextMenu' })).toEqual(['devspaces.showResourceReport', 'devspaces.startDockerObject']);
   });
 
   // The setting devspaces.dockerHostsActions (R-ENG-008).
@@ -388,25 +461,25 @@ describe('the menus of the view (package.json)', () => {
     expect(titleOf({ actions: 'contextMenu' }, false)).toEqual(['devspaces.useRemoteDockerHost']);
   });
 
-  it('offers every action of the context menu also as a button with Icons, Stop included, and the + in the title bar', () => {
+  it('offers every action of the context menu that removes nothing also as a button with Icons, Stop included, and the + in the title bar', () => {
     for (const contextValue of rows()) {
-      const menu = commandsOf(contextValue, false, { actions: 'icons' });
-      expect(menu, contextValue).toEqual(commandsOf(contextValue, false, { actions: 'contextMenu' }));
-      const buttons = commandsOf(contextValue, true, { actions: 'icons' });
-      // A click on an object row opens its report: Show Report is no button.
-      for (const command of menu.filter((entry) => entry !== 'devspaces.showResourceReport')) expect(buttons, `${contextValue}: ${command}`).toContain(command);
+      const menu = commandsOf(contextValue, false, { actions: 'icons', removals: true });
+      expect(menu, contextValue).toEqual(commandsOf(contextValue, false, { actions: 'contextMenu', removals: true }));
+      const buttons = commandsOf(contextValue, true, { actions: 'icons', removals: true });
+      // A click on an object row opens its report: Show Report is no button; an action that removes is no button.
+      for (const command of menu.filter((entry) => entry !== 'devspaces.showResourceReport' && !REMOVING.includes(entry))) expect(buttons, `${contextValue}: ${command}`).toContain(command);
       expect(commandsOf(contextValue, true, { actions: 'icons', logs: true }), contextValue).not.toContain('devspaces.showContainerLog');
     }
-    expect(commandsOf(rows()[4], true, { actions: 'icons' })).toEqual(['devspaces.stop', 'devspaces.delete']);
-    expect(commandsOf(rows()[5], true, { actions: 'icons' })).toEqual(['devspaces.stopDockerObject']);
-    expect(commandsOf(rows()[7], true, { actions: 'icons' })).toEqual(['devspaces.startDockerObject', 'devspaces.removeDockerObjects']);
+    expect(commandsOf(rows()[4], true, { actions: 'icons', removals: true })).toEqual(['devspaces.stop']);
+    expect(commandsOf(rows()[5], true, { actions: 'icons', removals: true })).toEqual(['devspaces.stopDockerObject']);
+    expect(commandsOf(rows()[7], true, { actions: 'icons', removals: true })).toEqual(['devspaces.startDockerObject']);
     expect(titleOf({ actions: 'icons' }, true)).toEqual(['devspaces.useRemoteDockerHost', 'devspaces.refreshDockerHosts']);
     expect(titleOf({ actions: 'icons' }, false)).toEqual([]);
   });
 
   it('offers Show Log in the context menu of every container row while the logs are on, in every mode, and never as a button', () => {
     const containers = rows().filter((contextValue) => contextValue.startsWith('hostsObject;container;'));
-    expect(containers).toHaveLength(4);
+    expect(containers).toHaveLength(5);
     for (const actions of ['disabled', 'contextMenu', 'icons']) {
       for (const contextValue of rows()) {
         const menu = commandsOf(contextValue, false, { actions, logs: true });
@@ -418,6 +491,20 @@ describe('the menus of the view (package.json)', () => {
     }
     // The other objects have no log: an image, a volume, a network.
     expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue, false, { actions: 'icons', logs: true })).toEqual(['devspaces.showResourceReport']);
+  });
+
+  it('offers Show Files in the context menu of every volume and image row while the files are on, in every mode, and never as a button', () => {
+    const volume = objectRowLook(objectRow({ kind: 'volume', id: 'shop_data', name: 'shop_data', purpose: 'notDevspaces' })).contextValue;
+    const image = objectRowLook(objectRow({ kind: 'image', id: `sha256:${'ab'.repeat(32)}`, name: 'nginx:1.27', purpose: 'notDevspaces' })).contextValue;
+    const store = objectRowLook(objectRow({ kind: 'volume', id: 'devspaces-vscode', name: 'devspaces-vscode', purpose: 'sharedVolume' })).contextValue;
+    for (const actions of ['disabled', 'contextMenu', 'icons']) {
+      for (const contextValue of [volume, image, store]) {
+        expect(commandsOf(contextValue, false, { actions, files: true }), contextValue).toEqual(['devspaces.showResourceReport', 'devspaces.showFiles']);
+        expect(commandsOf(contextValue, false, { actions, files: false }), contextValue).not.toContain('devspaces.showFiles');
+        expect(commandsOf(contextValue, true, { actions, files: true }), contextValue).not.toContain('devspaces.showFiles');
+      }
+      for (const contextValue of rows()) expect(commandsOf(contextValue, false, { actions, files: true, logs: true, removals: true }), contextValue).not.toContain('devspaces.showFiles');
+    }
   });
 
   it('shows the gear Docker Hosts Settings… with its setting, and Open Console on each host row with an engine with its setting', () => {

@@ -90,12 +90,16 @@ export function reportKeyOf(address: ReportAddress): ReportKey | undefined {
 export type ReportPhase = { kind: 'reading' } | { kind: 'read'; at: number } | { kind: 'failed'; message: string } | { kind: 'vm'; state: VmState } | { kind: 'missing' };
 
 /** What a button of the page asks the extension. */
-export type ReportAction = 'refresh' | 'showLog' | 'startVm';
+export type ReportAction = 'refresh' | 'showLog' | 'showFiles' | 'startVm';
 
-/** What the settings allow on a report page now: Start the VM (dockerHostsActions), and Show Log (allowContainerLogs). */
+/**
+ * What the settings allow on a report page now: Start the VM (dockerHostsActions), Show Log (allowContainerLogs), and
+ * Show Files (allowContentReads).
+ */
 export interface ReportPermissions {
   actions: boolean;
   logs: boolean;
+  files?: boolean;
 }
 
 /** A message of the webview: `ready` (the page started, also after it was hidden), or a button. */
@@ -103,7 +107,7 @@ export interface ReportRequest {
   type: 'ready' | ReportAction;
 }
 
-const REQUEST_TYPES: ReadonlySet<string> = new Set(['ready', 'refresh', 'showLog', 'startVm']);
+const REQUEST_TYPES: ReadonlySet<string> = new Set(['ready', 'refresh', 'showLog', 'showFiles', 'startVm']);
 
 /** The message of the webview, else undefined (the webview is not trusted). */
 export function parseReportRequest(raw: unknown): ReportRequest | undefined {
@@ -148,6 +152,7 @@ export const ReportPageTexts = {
   refresh: 'Refresh',
   showLog: 'Show Log',
   showMonitorLog: 'Show Log of the Monitor',
+  showFiles: 'Show Files',
   startVm: 'Start the VM',
   failed: 'The report could not be read.',
   missing: 'The view Docker Hosts does not show this resource now.',
@@ -191,7 +196,8 @@ export function reportPageView(input: {
   const busy = phase.kind === 'reading';
   const buttons: ReportButton[] = [];
   if (content?.monitorLog === true && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showMonitorLog });
-  else if (content?.containerLog !== undefined && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
+  else if ((content?.containerLog !== undefined || content?.workerLog !== undefined) && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
+  if (content?.files !== undefined && allowed.files === true) buttons.push({ action: 'showFiles', label: ReportPageTexts.showFiles });
   buttons.push({ action: 'refresh', label: ReportPageTexts.refresh, primary: true, ...(busy ? { disabled: true } : {}) });
   const status = phase.kind === 'reading' ? ReportPageTexts.reading : phase.kind === 'read' ? ReportPageTexts.read(timeText(phase.at, input.clock)) : '';
   const known = 'object' in target ? target.object : undefined;
