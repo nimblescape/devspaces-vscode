@@ -13,6 +13,8 @@ import { WORKER_LOG_MAX_BYTES } from '../core/helperChannel/protocol';
 
 /** The name of a log of a worker, or of its older part, in its folder. */
 const LOG_FILE = /^[0-9a-f]{12}\.log(\.1)?$/;
+/** The lock folder of a move of a log (WorkerLog.rotate). */
+const LOCK_FOLDER = /^[0-9a-f]{12}\.log\.lock$/;
 /** The bytes that a process writes before it reads the size of the log again (other processes of the container write to it too). */
 const SIZE_CHECK_BYTES = 64 * 1024;
 /** The age after which the lock of a move of the log counts as left by a process that ended during the move. */
@@ -175,7 +177,8 @@ function takeLock(lock: string): boolean {
  * Removes the logs of other workers in `folder` that nobody touched for `keepMs` (their workers ended; a worker touches
  * its log every WORKER_LOG_TOUCH_MS), never the log `own` and its older part, never the older part of a log that was
  * touched within `keepMs` (its worker still runs), and nothing that is no log of a worker (LOG_FILE) or no regular file.
- * Gives the number of the removed files; never throws.
+ * It also removes the empty lock folders of moves (LOCK_FOLDER) that are older than `keepMs`: a process ended during its
+ * move. Gives the number of the removed files and folders; never throws.
  */
 export function sweepWorkerLogs(folder: string, own: string, now: number, keepMs: number): number {
   let names: string[];
@@ -187,6 +190,10 @@ export function sweepWorkerLogs(folder: string, own: string, now: number, keepMs
   }
   let removed = 0;
   for (const name of names) {
+    if (LOCK_FOLDER.test(name) && name !== `${own}.lock`) {
+      removed += removeStaleLock(path.join(folder, name), now, keepMs);
+      continue;
+    }
     if (!LOG_FILE.test(name) || name === own || name === `${own}.1`) continue;
     try {
       const file = path.join(folder, name);
@@ -200,6 +207,19 @@ export function sweepWorkerLogs(folder: string, own: string, now: number, keepMs
     }
   }
   return removed;
+}
+
+/** Removes the lock folder `lock` when it is a folder older than `keepMs` (rmdir removes only an empty one); 1 when removed. */
+function removeStaleLock(lock: string, now: number, keepMs: number): number {
+  try {
+    const stat = fs.lstatSync(lock);
+    if (!stat.isDirectory() || now - stat.mtimeMs <= keepMs) return 0;
+    fs.rmdirSync(lock);
+    return 1;
+  } catch {
+    // Gone meanwhile, or not empty.
+    return 0;
+  }
 }
 
 /** Whether `file` is a regular file that was touched within `keepMs`. */

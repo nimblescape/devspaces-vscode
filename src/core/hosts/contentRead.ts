@@ -72,7 +72,8 @@ export async function readContents(docker: Pick<BootstrapDocker, 'run'>, input: 
       const tree = parseContentTree(result.stdout);
       return tree !== undefined ? { kind: 'read', tree } : { kind: 'failed', detail: 'The output of the reader could not be read.' };
     }
-    if (new RegExp(`no such image:? *${regExpLiteral(image)}`, 'i').test(result.stderr)) continue;
+    // The helper image is gone since the list (the image store of containerd names it with its registry): the next one.
+    if (new RegExp(`no such image:? *(?:\\S*/)?${regExpLiteral(image)}`, 'i').test(result.stderr)) continue;
     if (/unknown flag: --pull/.test(result.stderr)) return { kind: 'failed', detail: OLD_CLI_DETAIL };
     if (target.kind === 'image' && IMAGE_MOUNT_UNSUPPORTED.test(result.stderr)) return { kind: 'unsupported', detail: detailOf(result) };
     return { kind: 'failed', detail: detailOf(result) };

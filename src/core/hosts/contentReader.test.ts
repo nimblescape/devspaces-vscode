@@ -183,6 +183,35 @@ describe('the script of the reader of Show Files', () => {
     expect(tree.root.leftOut).toBe(14);
     expect(output.length).toBeLessThan(2000 + 200);
   });
+
+  it('spends no bytes on the entries of a folder that is not kept itself', () => {
+    // The folder L… does not fit; its entry a would fit, and the file b fits only when a spent nothing.
+    const long = `L${'n'.repeat(200)}`;
+    fs.mkdirSync(path.join(root, long));
+    fs.writeFileSync(path.join(root, long, 'a'), 'x');
+    fs.writeFileSync(path.join(root, 'b'), 'x');
+    // The names in sorted order: the folder L… before the file b.
+    const code = CONTENT_READER_CODE.replace(/bytes: \d+,/, 'bytes: 200,').replace('fs.readdirSync(dir);', 'fs.readdirSync(dir).sort();');
+    expect(code).not.toContain('bytes: 8000000');
+    expect(code).toContain('.sort()');
+    const tree = parseContentTree(read(code)) as ContentTree;
+    expect(tree.root.entries?.map((entry) => entry.name)).toEqual(['b']);
+    expect(tree.root).toMatchObject({ files: 2, folders: 1, leftOut: 1 });
+  });
+
+  it('says that its totals are lower when a folder is deeper than the walk goes', () => {
+    fs.mkdirSync(path.join(root, 'a', 'b', 'c'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'a', 'b', 'c', 'deep.txt'), 'x');
+    const complete = parseContentTree(read()) as ContentTree;
+    expect(complete.incomplete).toBeUndefined();
+    expect(complete.root.files).toBe(1);
+    const code = CONTENT_READER_CODE.replace(/depth: \d+,/, 'depth: 2,');
+    expect(code).not.toBe(CONTENT_READER_CODE);
+    const tree = parseContentTree(read(code)) as ContentTree;
+    expect(tree.stopped).toBe(false);
+    expect(tree.incomplete).toBe(true);
+    expect(tree.root).toMatchObject({ files: 0, folders: 3 });
+  });
 });
 
 describe('parseContentTree', () => {
@@ -195,6 +224,8 @@ describe('parseContentTree', () => {
       seen: 0,
       root: { name: '', type: 'folder', bytes: 0, modified: 0, files: 0, folders: 0, entries: [] },
     });
+    expect(parseContentTree('{"reader":1,"stopped":false,"incomplete":true,"entries":0,"tree":{"n":"","t":"d","s":0,"m":0,"f":0,"d":0,"c":[],"x":0}}')).toMatchObject({ incomplete: true });
+    expect(parseContentTree('{"reader":1,"stopped":false,"incomplete":false,"entries":0,"tree":{"n":"","t":"d","s":0,"m":0,"f":0,"d":0,"c":[],"x":0}}')).not.toHaveProperty('incomplete');
   });
 });
 
@@ -264,5 +295,13 @@ describe('contentTreeText', () => {
     const text = contentTreeText(tree, { subject: 'image nginx:1.27', host: 'lab', at, timeZone: 'UTC' });
     expect(text).toContain('Read 2026-11-14 07:00 · at least 2 files in 0 folders · at least 10 B');
     expect(text).toContain('The read stopped at its limit');
+  });
+
+  it('says when some entries could not be read, and gives the totals as lower bounds', () => {
+    const tree: ContentTree = { stopped: false, incomplete: true, seen: 3, root: { name: '', type: 'folder', bytes: 10, modified: at, files: 2, folders: 1, entries: [] } };
+    const text = contentTreeText(tree, { subject: 'volume v', host: 'lab', at, timeZone: 'UTC' });
+    expect(text).toContain('Read 2026-11-14 07:00 · at least 2 files in 1 folder · at least 10 B');
+    expect(text).toContain('Some entries could not be read, or are deeper than the read goes: the totals are lower.');
+    expect(text).not.toContain('The read stopped at its limit');
   });
 });

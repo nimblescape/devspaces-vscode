@@ -245,10 +245,46 @@ process.stdout.write(json);
 `;
 
 /** VOLUME_READER_SCRIPT on one line, without its comments: the argument of `node -e`. */
-export const VOLUME_READER_CODE = VOLUME_READER_SCRIPT.split('\n')
-  .map((line) => line.trim())
-  .filter((line) => line !== '' && !line.startsWith('//'))
-  .join(' ');
+export const VOLUME_READER_CODE = oneLineScript(VOLUME_READER_SCRIPT);
+
+/**
+ * A script of a reader on one line, without its comments: the argument of `node -e`, because a line of the shared shell
+ * carries no line break. The script has a comment or one statement per line.
+ */
+export function oneLineScript(script: string): string {
+  return script
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('//'))
+    .join(' ');
+}
+
+/**
+ * The start of the arguments of `docker` of every reader (this one, contentReader.ts and workerLogReader.ts), named
+ * `name`: never a pull, no network, a read-only root file system, only the capability to read every file, no new
+ * privileges, no log, and removed at its end. The mounts, the image and the script follow.
+ */
+export function readerRunArgs(name: string): string[] {
+  return [
+    'run',
+    '--rm',
+    '--name',
+    name,
+    '--pull',
+    'never',
+    '--network',
+    'none',
+    '--read-only',
+    '--cap-drop',
+    'ALL',
+    '--cap-add',
+    'DAC_READ_SEARCH',
+    '--security-opt',
+    'no-new-privileges',
+    '--log-driver',
+    'none',
+  ];
+}
 
 /** The name of a container of the readers (also of contentReader.ts and workerLogReader.ts): `devspaces-reader-` and 8 hexadecimal digits. */
 export const READER_NAME = /^devspaces-reader-[0-9a-f]{8}$/;
@@ -285,23 +321,7 @@ export function volumeReaderArgs(image: string, volumes: ReaderVolumeNames, name
     mounts.push('--mount', `type=volume,source=${source},target=${READER_ROOT}/${volume},readonly`);
   }
   return [
-    'run',
-    '--rm',
-    '--name',
-    name,
-    '--pull',
-    'never',
-    '--network',
-    'none',
-    '--read-only',
-    '--cap-drop',
-    'ALL',
-    '--cap-add',
-    'DAC_READ_SEARCH',
-    '--security-opt',
-    'no-new-privileges',
-    '--log-driver',
-    'none',
+    ...readerRunArgs(name),
     ...mounts,
     '--entrypoint',
     'node',

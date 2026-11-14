@@ -59,6 +59,10 @@ describe('a read of Show Files', () => {
     expect(await readContents(docker, { target: image, currentHelperTag: HELPER, name: () => NAME })).toMatchObject({ kind: 'read' });
     expect(docker.calls.map((call) => call.args[0])).toEqual(['image', 'run', 'run']);
     expect(docker.calls[2].args).toEqual(contentReaderArgs({ image: OTHER, target: image, name: NAME }));
+    // The image store of containerd names the image with its registry.
+    const containerd = fakeDocker([listedImages, result({ exitCode: 125, stderr: `docker: Error response from daemon: No such image: docker.io/library/${HELPER}\n` }), result({ stdout: output })]);
+    expect(await readContents(containerd, { target: image, currentHelperTag: HELPER, name: () => NAME })).toMatchObject({ kind: 'read' });
+    expect(containerd.calls[2].args).toEqual(contentReaderArgs({ image: OTHER, target: image, name: NAME }));
   });
 
   it('says noImage when the host has no helper image, or none of them anymore', async () => {

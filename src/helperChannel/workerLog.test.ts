@@ -172,9 +172,14 @@ describe('sweepWorkerLogs', () => {
       fs.symlinkSync(path.join(root, 'target'), path.join(folder, link));
     }
     fs.mkdirSync(path.join(folder, 'dddddddddddd.log'));
-    expect(sweepWorkerLogs(folder, files.own, AT, WORKER_LOG_KEEP_MS)).toBe(2);
+    // The lock folders of moves: an old one of an ended worker is removed; its own, a young one, and one with content stay.
+    const locks = { ended: 'aaaaaaaaaaaa.log.lock', own: `${ID}.log.lock`, young: 'bbbbbbbbbbbb.log.lock', full: 'eeeeeeeeeeee.log.lock' };
+    for (const name of Object.values(locks)) fs.mkdirSync(path.join(folder, name));
+    fs.writeFileSync(path.join(folder, locks.full, 'x'), 'x');
+    for (const name of [locks.ended, locks.own, locks.full]) fs.utimesSync(path.join(folder, name), old, old);
+    expect(sweepWorkerLogs(folder, files.own, AT, WORKER_LOG_KEEP_MS)).toBe(3);
     const left = fs.readdirSync(folder).sort();
-    expect(left).toEqual([files.own, files.ownOlder, files.young, files.youngOlder, ...(link !== undefined ? [link] : []), 'dddddddddddd.log', files.other].sort());
+    expect(left).toEqual([files.own, files.ownOlder, files.young, files.youngOlder, ...(link !== undefined ? [link] : []), 'dddddddddddd.log', files.other, locks.own, locks.young, locks.full].sort());
     if (link !== undefined) expect(fs.readFileSync(path.join(root, 'target'), 'utf8')).toBe('kept\n');
   });
 

@@ -45,7 +45,7 @@ const CONTAINER_INSPECT = {
   Id: 'c1',
   Created: '2026-11-09T08:00:00Z',
   Image: 'sha256:abc',
-  Config: { Image: 'nginx:1.27', Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' }, Env: ['API_TOKEN=secret', 'DEVSPACE_IMAGE_TZ=Europe/Vienna', 'DEVSPACE_IMAGE_SCHEDULE=7 6 * * *', 'NOVALUE'] },
+  Config: { Image: 'nginx:1.27', Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' }, Env: ['API_TOKEN=secret', 'DEVSPACE_IMAGE_TZ=Europe/Vienna', 'DEVSPACE_IMAGE_SCHEDULE=7 6 * * *', 'DEVSPACES_WORKER_LOG=1', 'NOVALUE'] },
   State: { Status: 'running', StartedAt: '2026-11-12T07:00:00Z', FinishedAt: '0001-01-01T00:00:00Z', ExitCode: 0 },
   HostConfig: { RestartPolicy: { Name: 'unless-stopped' } },
   NetworkSettings: { Ports: { '80/tcp': [{ HostIp: '0.0.0.0', HostPort: '8080' }, { HostIp: '::', HostPort: '8080' }], '443/tcp': null }, Networks: { shop_default: {} } },
@@ -79,10 +79,12 @@ describe('the facts of Docker about an object', () => {
       finishedAt: '0001-01-01T00:00:00Z',
       exitCode: 0,
       restartPolicy: 'unless-stopped',
-      // Only the schedule of the Monitor and its time zone: other variables can hold secrets.
+      // Only the schedule of the Monitor, its time zone, and whether a worker writes its log: other variables can hold
+      // secrets.
       env: new Map([
         ['DEVSPACE_IMAGE_TZ', 'Europe/Vienna'],
         ['DEVSPACE_IMAGE_SCHEDULE', '7 6 * * *'],
+        ['DEVSPACES_WORKER_LOG', '1'],
       ]),
       mounts: [
         { type: 'volume', source: 'shop_static', destination: '/usr/share/nginx/html', readOnly: true },

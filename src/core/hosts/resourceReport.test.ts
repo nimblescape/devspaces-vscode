@@ -75,11 +75,13 @@ describe('the report of a resource', () => {
   it('offers Show Log on the report of a worker for the log that the worker writes itself, whose log driver is none', () => {
     const id = '0123456789abcdef'.repeat(4);
     const worker: HostObject = { kind: 'container', id, name: 'devspaces-api-worker1', purpose: 'worker', state: 'running' };
-    const details: Parameters<typeof resourceReport>[0]['details'] = { kind: 'container', labels: new Map(), env: new Map(), mounts: [], ports: [], networks: [], logDriver: 'none' };
-    const report = resourceReport({ object: worker, details, computer: COMPUTER, clock: CLOCK });
+    const details = (env: [string, string][]): Parameters<typeof resourceReport>[0]['details'] => ({ kind: 'container', labels: new Map(), env: new Map(env), mounts: [], ports: [], networks: [], logDriver: 'none' });
+    const report = resourceReport({ object: worker, details: details([['DEVSPACES_WORKER_LOG', '1']]), computer: COMPUTER, clock: CLOCK });
     expect(report).toMatchObject({ monitorLog: false, workerLog: id });
     expect(report.containerLog).toBeUndefined();
     expect(JSON.stringify(report.sections)).toContain('none (the worker writes a log of its own, which Show Log reads)');
+    // A worker that the Monitor or an older version started writes no log of its own.
+    expect(JSON.stringify(resourceReport({ object: worker, details: details([]), computer: COMPUTER, clock: CLOCK }).sections)).toContain('none (this worker writes no log of its own: the Monitor or an older version started it)');
     // Without the facts of Docker too; a row without a full ID has none.
     expect(resourceReport({ object: worker, computer: COMPUTER, clock: CLOCK }).workerLog).toBe(id);
     expect(resourceReport({ object: { ...worker, id: 'w1' }, computer: COMPUTER, clock: CLOCK }).workerLog).toBeUndefined();

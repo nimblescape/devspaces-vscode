@@ -14,7 +14,7 @@
 // contentTreeText. No `vscode`.
 import { formatSize } from './hostObjects';
 import { countText, dateAndTime } from './reportModel';
-import { IMAGE_ID, READER_NAME, VOLUME_NAME, regExpLiteral } from './volumeReader';
+import { IMAGE_ID, READER_NAME, VOLUME_NAME, oneLineScript, readerRunArgs, regExpLiteral } from './volumeReader';
 
 /** The folder of the container at which the volume or the image is mounted (read-only). */
 export const CONTENT_READER_ROOT = '/devspaces/content';
@@ -52,34 +52,36 @@ let entries = 0;
 let kept = 0;
 let bytes = 0;
 let stopped = false;
+let incomplete = false;
 // One entry from its lstat: the link itself, never its target.
 function entry(name, stat) {
   const type = stat.isDirectory() ? "d" : stat.isFile() ? "f" : stat.isSymbolicLink() ? "l" : "o";
   return { n: name, t: type, s: stat.isFile() ? stat.size : 0, m: Math.round(stat.mtimeMs) };
 }
-// The entries of the folder dir into node, its totals of all levels, and its kept entries up to the level limit.
-function walk(dir, node, depth) {
+// The entries of the folder dir into node, its totals of all levels, and its kept entries up to the level limit (only
+// when the folder itself is kept, shown).
+function walk(dir, node, depth, shown) {
   node.f = 0;
   node.d = 0;
   node.c = [];
   node.x = 0;
   let names;
-  try { names = fs.readdirSync(dir); } catch { node.e = 1; return; }
+  try { names = fs.readdirSync(dir); } catch { node.e = 1; incomplete = true; return; }
   for (const name of names) {
     if (!stopped && (entries >= limits.entries || Date.now() - started > limits.ms)) { stopped = true; }
     if (stopped) { node.x += 1; continue; }
     entries += 1;
     const full = path.join(dir, name);
     let stat;
-    try { stat = fs.lstatSync(full); } catch { node.x += 1; continue; }
+    try { stat = fs.lstatSync(full); } catch { node.x += 1; incomplete = true; continue; }
     const child = entry(name, stat);
     if (child.t === "l") { try { child.l = fs.readlinkSync(full).slice(0, 300); } catch {} }
     // The bytes of the entry in the output: its name and its link target as JSON, and its other fields.
     const cost = JSON.stringify(name).length + (child.l === undefined ? 0 : JSON.stringify(child.l).length) + limits.entry;
-    const keep = depth < limits.levels && kept < limits.kept && bytes + cost <= limits.bytes;
+    const keep = shown && depth < limits.levels && kept < limits.kept && bytes + cost <= limits.bytes;
     if (keep) { kept += 1; bytes += cost; }
     if (child.t === "d") {
-      if (depth < limits.depth) { walk(full, child, depth + 1); } else { child.f = 0; child.d = 0; child.e = 2; }
+      if (depth < limits.depth) { walk(full, child, depth + 1, keep); } else { child.f = 0; child.d = 0; child.e = 2; incomplete = true; }
       node.d += 1 + child.d;
       node.f += child.f;
     } else if (child.t === "f") { node.f += 1; }
@@ -88,15 +90,12 @@ function walk(dir, node, depth) {
   }
 }
 const tree = entry("", fs.lstatSync(root));
-walk(root, tree, 0);
-process.stdout.write(JSON.stringify({ reader: 1, stopped: stopped, entries: entries, tree: tree }));
+walk(root, tree, 0, true);
+process.stdout.write(JSON.stringify({ reader: 1, stopped: stopped, incomplete: incomplete, entries: entries, tree: tree }));
 `;
 
 /** CONTENT_READER_SCRIPT on one line, without its comments: the argument of `node -e`. */
-export const CONTENT_READER_CODE = CONTENT_READER_SCRIPT.split('\n')
-  .map((line) => line.trim())
-  .filter((line) => line !== '' && !line.startsWith('//'))
-  .join(' ');
+export const CONTENT_READER_CODE = oneLineScript(CONTENT_READER_SCRIPT);
 
 /** A helper image of Devspaces (readerImages). */
 const HELPER_IMAGE = /^devspaces-(?:worker|monitor):[0-9a-f]{12}$/;
@@ -126,23 +125,7 @@ export function contentReaderArgs(p: { image: string; target: ContentTarget; nam
   if (!HELPER_IMAGE.test(p.image)) throw new Error(`${JSON.stringify(p.image)} is no helper image of Devspaces.`);
   if (!isContentTarget(p.target)) throw new Error(`${JSON.stringify(p.target)} is no volume name or image ID that the reader can mount.`);
   return [
-    'run',
-    '--rm',
-    '--name',
-    p.name,
-    '--pull',
-    'never',
-    '--network',
-    'none',
-    '--read-only',
-    '--cap-drop',
-    'ALL',
-    '--cap-add',
-    'DAC_READ_SEARCH',
-    '--security-opt',
-    'no-new-privileges',
-    '--log-driver',
-    'none',
+    ...readerRunArgs(p.name),
     '--mount',
     targetMount(p.target),
     '--entrypoint',
@@ -198,6 +181,8 @@ export interface ContentEntry {
 export interface ContentTree {
   /** The walk stopped at a limit: the totals are lower bounds. */
   stopped: boolean;
+  /** An entry could not be read, or a folder is deeper than the walk goes: the totals are lower bounds too. */
+  incomplete?: boolean;
   /** The entries that the walk looked at. */
   seen: number;
   root: ContentEntry;
@@ -254,7 +239,8 @@ export function parseContentTree(stdout: string): ContentTree | undefined {
   const seen = count(raw.entries);
   if (raw.reader !== 1 || typeof raw.stopped !== 'boolean' || seen === undefined) return undefined;
   const root = parseEntry(raw.tree, 0);
-  return root === undefined || root.type !== 'folder' ? undefined : { stopped: raw.stopped, seen, root };
+  if (root === undefined || root.type !== 'folder') return undefined;
+  return { stopped: raw.stopped, ...(raw.incomplete === true ? { incomplete: true } : {}), seen, root };
 }
 
 /** A name as one line of text: control characters and the characters that turn the direction of a text become `?`. */
@@ -317,13 +303,14 @@ export interface ContentTreeTextInput {
 /** The text of the document of Show Files: a header, then one line per entry, indented by its level. */
 export function contentTreeText(tree: ContentTree, input: ContentTreeTextInput): string {
   const { root } = tree;
-  const complete = !tree.stopped;
+  const complete = !tree.stopped && tree.incomplete !== true;
   const lines = [
     `Files of the ${input.subject} on ${input.host}`,
     `Read ${shownTime(input.at, input.timeZone)} · ${complete ? '' : 'at least '}${countText(root.files ?? 0, 'file')} in ${countText(root.folders ?? 0, 'folder')} · ${complete ? '' : 'at least '}${formatSize(root.bytes)} (the sizes of the files)`,
     `Only the names, sizes and times are read, never the content of a file. Folders deeper than ${CONTENT_READER_LIMITS.levels} levels show only their totals.`,
   ];
   if (tree.stopped) lines.push(`The read stopped at its limit (${CONTENT_READER_LIMITS.entries} entries or ${CONTENT_READER_LIMITS.ms / 1000} s): the totals are lower, and entries are left out.`);
+  else if (tree.incomplete === true) lines.push('Some entries could not be read, or are deeper than the read goes: the totals are lower.');
   lines.push('', entryLine({ ...root, name: '' }, '', input.timeZone, complete));
   folderLines(root, 1, input.timeZone, complete, lines);
   return `${lines.join('\n')}\n`;

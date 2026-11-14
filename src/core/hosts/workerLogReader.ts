@@ -13,7 +13,7 @@
 // (isWorkerLogReaderCall). The read itself is readWorkerLog (workerLogRead.ts). No `vscode`.
 import { WORKER_LOG_FOLDER } from '../helperChannel/protocol';
 import { CONTAINER_LOG_LINES } from './monitorLog';
-import { IMAGE_ID, READER_NAME, VOLUME_NAME, regExpLiteral } from './volumeReader';
+import { IMAGE_ID, READER_NAME, VOLUME_NAME, oneLineScript, readerRunArgs, regExpLiteral } from './volumeReader';
 
 /** The folder of the container at which the volume of the Monitor is mounted (read-only). */
 export const WORKER_LOG_READER_ROOT = '/devspaces/monitor';
@@ -61,10 +61,7 @@ process.stdout.write(lines.slice(-${CONTAINER_LOG_LINES}).join("\n"));
 `;
 
 /** WORKER_LOG_READER_SCRIPT on one line, without its comments: the argument of `node -e`. */
-export const WORKER_LOG_READER_CODE = WORKER_LOG_READER_SCRIPT.split('\n')
-  .map((line) => line.trim())
-  .filter((line) => line !== '' && !line.startsWith('//'))
-  .join(' ');
+export const WORKER_LOG_READER_CODE = oneLineScript(WORKER_LOG_READER_SCRIPT);
 
 /** The short ID of a container. */
 const SHORT_ID = /^[0-9a-f]{12}$/;
@@ -80,23 +77,7 @@ export function workerLogReaderArgs(p: { image: string; volume: string; id: stri
   if (!VOLUME_NAME.test(p.volume)) throw new Error(`${JSON.stringify(p.volume)} is no name of a volume.`);
   if (!SHORT_ID.test(p.id)) throw new Error(`${JSON.stringify(p.id)} is no short ID of a container.`);
   return [
-    'run',
-    '--rm',
-    '--name',
-    p.name,
-    '--pull',
-    'never',
-    '--network',
-    'none',
-    '--read-only',
-    '--cap-drop',
-    'ALL',
-    '--cap-add',
-    'DAC_READ_SEARCH',
-    '--security-opt',
-    'no-new-privileges',
-    '--log-driver',
-    'none',
+    ...readerRunArgs(p.name),
     '--mount',
     `type=volume,source=${p.volume},target=${WORKER_LOG_READER_ROOT},readonly`,
     '--entrypoint',

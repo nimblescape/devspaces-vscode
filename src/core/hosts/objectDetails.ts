@@ -8,6 +8,7 @@
 // of the host (isShellCall). The sections "Facts of Docker", "Mounts", "Used by" and "Containers" of its report. No
 // `vscode`.
 import { COMPOSE_PROJECT_LABEL, COMPOSE_SERVICE_LABEL } from '../names';
+import { WORKER_LOG_ENV } from '../helperChannel/protocol';
 import { MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV } from '../remoteMonitor/cacheSettings';
 import { CommandError } from '../errors';
 import { isRecord } from '../valueChecks';
@@ -28,10 +29,11 @@ export const MAX_VOLUME_USERS = 20;
 /** At most this many rows of mounts, ports, networks or containers. */
 const MAX_LIST = 50;
 /**
- * The only environment variables of a container that its details keep: the schedule of the Monitor and its time zone.
+ * The only environment variables of a container that its details keep: the schedule of the Monitor, its time zone, and
+ * whether a worker writes its log.
  * The others can hold secrets, and no report needs them.
  */
-const KEPT_ENV: readonly string[] = [MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV];
+const KEPT_ENV: readonly string[] = [MONITOR_SCHEDULE_ENV, MONITOR_TIME_ZONE_ENV, WORKER_LOG_ENV];
 /** The states of Docker of a container whose last run ended: its report gives the end and the exit code. */
 const ENDED_STATES: readonly string[] = ['exited', 'dead', 'restarting'];
 
@@ -315,10 +317,14 @@ function listText(values: readonly string[]): string {
   return itemsText(values, MAX_LIST);
 }
 
-/** The log driver of a container in words: `none` keeps no log; a worker writes a log of its own (workerLogRead.ts). */
-function logDriverText(driver: string, worker: boolean): string {
+/**
+ * The log driver of a container in words: `none` keeps no log; a worker that the extension started with WORKER_LOG_ENV
+ * writes a log of its own (workerLogRead.ts), another worker (one of the Monitor, one of an older version) none.
+ */
+function logDriverText(driver: string, worker: boolean, env: ReadonlyMap<string, string>): string {
   if (driver !== 'none') return driver;
-  return worker ? 'none (the worker writes a log of its own, which Show Log reads)' : 'none (Docker keeps no log of it)';
+  if (!worker) return 'none (Docker keeps no log of it)';
+  return env.get(WORKER_LOG_ENV) === '1' ? 'none (the worker writes a log of its own, which Show Log reads)' : 'none (this worker writes no log of its own: the Monitor or an older version started it)';
 }
 
 /**
@@ -347,7 +353,7 @@ export function dockerFactsSections(object: HostObject, details: ObjectDetails |
       const finished = state !== undefined && ENDED_STATES.includes(state) ? dockerTimeText(container?.finishedAt, clock) : undefined;
       push(finished !== undefined ? fact('Last end', `${finished}${container?.exitCode !== undefined ? ` · exit code ${container.exitCode}` : ''}`) : undefined);
       push(restartFact(container?.restartPolicy));
-      push(container?.logDriver !== undefined ? fact('Log driver', logDriverText(container.logDriver, object.purpose === 'worker')) : undefined);
+      push(container?.logDriver !== undefined ? fact('Log driver', logDriverText(container.logDriver, object.purpose === 'worker', container.env)) : undefined);
       push(composeFact(container?.labels ?? new Map(), 'service'));
       push(container !== undefined && container.ports.length > 0 ? fact('Ports', listText(container.ports)) : undefined);
       const networks = container?.networks ?? object.networks ?? [];
