@@ -31,7 +31,7 @@ export const DockerHostsSettingsTexts = {
   logsOff: { label: 'Do Not Allow', detail: 'No log of a container: the Docker pipe of Devspaces refuses every log.' },
   destructiveOn: {
     label: 'Allow',
-    detail: 'Delete…, Remove…, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine… and the removals of the VM in the context menu of a row (with Context Menu or Icons).',
+    detail: 'Delete… and Rebuild of a devspace, Remove…, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine…, Remove Devspaces from This Computer… and the removals of the VM in the context menu of a row (with Context Menu or Icons).',
   },
   destructiveOff: { label: 'Do Not Allow', detail: 'The view has no action that removes or deletes something; the Command Palette keeps its commands.' },
   filesOn: { label: 'Allow', detail: 'Show Files of every volume and image: the tree of its folders and files, with names, sizes and times, never the content of a file.' },
