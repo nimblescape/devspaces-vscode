@@ -227,11 +227,17 @@ class ReportPage {
     }
   }
 
-  /** The log that Show Log of the last read opens: of the Monitor (its container or its volume), or of the container. */
+  /**
+   * The log that Show Log of the last read opens: of the Monitor (its container or its volume), of the container, or the
+   * log that a worker writes itself.
+   */
   private log(): ContainerLog | undefined {
     if (this.content?.monitorLog === true) return monitorLogOf(this.key.host);
+    const name = this.target?.object.name ?? this.key.name;
+    const worker = this.content?.workerLog;
+    if (worker !== undefined) return { host: this.key.host, container: worker, name, monitor: false, worker: true };
     const container = this.content?.containerLog;
-    return container !== undefined ? { host: this.key.host, container, name: this.target?.object.name ?? this.key.name, monitor: false } : undefined;
+    return container !== undefined ? { host: this.key.host, container, name, monitor: false } : undefined;
   }
 
   /** Start the VM of the banner: the start of the user, then the read. */

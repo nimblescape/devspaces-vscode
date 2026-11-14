@@ -267,7 +267,7 @@ docker run --rm -i --pull never --name <worker name>
   --mount type=bind,source=<engine socket>,target=/var/run/docker.sock
   --mount type=volume,source=devspaces-monitor,target=/state
   --mount type=volume,source=devspaces-vscode,target=/vscode,volume-nocopy
-  --env DEVSPACES_VERSION=<version>
+  --env DEVSPACES_WORKER_LOG=1 --env DEVSPACES_VERSION=<version>
   devspaces-worker:<tag> node -e <pipe loader> /opt/devspace/channel.js <sha256> startRelay
 ```
 

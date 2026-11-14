@@ -12,6 +12,7 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 import { LIMA_HOST } from '../core/docker/dockerHost';
 import { CommandError } from '../core/errors';
 import type { HostObject } from '../core/hosts/hostObjects';
+import { NoWorkerLogError } from '../core/hosts/workerLogReader';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { CONTAINER_LOG_SCHEME, ContainerLogTexts, ContainerLogs, type ContainerLogsDeps } from './containerLogs';
@@ -32,8 +33,12 @@ function harness(overrides: Partial<ContainerLogsDeps> = {}) {
     state.flow = sshPromptsAllowed();
     return '2026-11-13 22:00:00.000 listening on :80';
   });
-  const logs = new ContainerLogs({ logger, allowed: () => state.allowed, vmHost: LIMA_HOST, vmState: async () => state.vm, read, timeZone: () => 'Europe/Vienna', ...overrides });
-  return { state, read, logs };
+  const readWorker = vi.fn(async () => {
+    state.flow = sshPromptsAllowed();
+    return '2026-11-14 07:00:00.000 The worker started: Devspaces 0.4.1, Node.js v24.22.0, channel protocol 9.';
+  });
+  const logs = new ContainerLogs({ logger, allowed: () => state.allowed, vmHost: LIMA_HOST, vmState: async () => state.vm, read, readWorker, timeZone: () => 'Europe/Vienna', ...overrides });
+  return { state, read, readWorker, logs };
 }
 
 beforeEach(() => {
@@ -115,5 +120,50 @@ describe('Show Log of a container row', () => {
     await flush();
     expect(fakeVscode.window.showWarningMessage).toHaveBeenCalledWith(ContainerLogTexts.noLog({ host: 'lab', container: ID, name: 'shop-web-1', monitor: false }));
     expect(fakeVscode.window.showTextDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe('Show Log of a worker row', () => {
+  const worker: HostObject = { kind: 'container', id: ID, name: 'devspaces-api-worker1', purpose: 'worker', state: 'running' };
+
+  it('reads the log that the worker writes itself (Docker keeps none), as a flow of the user, and names the worker', async () => {
+    const h = harness();
+    await h.logs.showRow(row('lab', worker));
+    expect(h.readWorker).toHaveBeenCalledWith('lab', ID, 'Europe/Vienna');
+    expect(h.read).not.toHaveBeenCalled();
+    expect(h.state.flow).toBe(true);
+    const [document] = fakeVscode.window.showTextDocument.mock.calls[0] as [{ uri: { path: string }; getText(): string }];
+    expect(document.uri.path).toBe('/lab/devspaces-api-worker1.log');
+    expect(document.getText()).toBe('2026-11-14 07:00:00.000 The worker started: Devspaces 0.4.1, Node.js v24.22.0, channel protocol 9.\n');
+    h.readWorker.mockResolvedValue('');
+    await h.logs.showRow(row('lab', worker));
+    const [again] = fakeVscode.window.showTextDocument.mock.calls[1] as [{ getText(): string }];
+    expect(again.getText()).toBe('The worker devspaces-api-worker1 wrote nothing to its log yet.');
+  });
+
+  it('says that a worker of an earlier version has no log, as information, and opens no document', async () => {
+    const h = harness();
+    h.readWorker.mockRejectedValue(new NoWorkerLogError(ID));
+    await h.logs.showRow(row('lab', worker));
+    await flush();
+    const log = { host: 'lab', container: ID, name: 'devspaces-api-worker1', monitor: false, worker: true };
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ContainerLogTexts.noWorkerLog(log));
+    expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
+    expect(fakeVscode.window.showTextDocument).not.toHaveBeenCalled();
+    // Another failure is a warning that names the worker.
+    h.readWorker.mockRejectedValue(new CommandError('the reader of the log of the worker', 125, '', 'No such container'));
+    await h.logs.showRow(row('lab', worker));
+    await flush();
+    expect(fakeVscode.window.showWarningMessage).toHaveBeenCalledWith(expect.stringMatching(/^The log of the worker devspaces-api-worker1 could not be read: .*No such container/));
+  });
+
+  it('reads nothing while the logs are off or the VM does not run', async () => {
+    const h = harness();
+    h.state.allowed = false;
+    await h.logs.showRow(row('lab', worker));
+    h.state.allowed = true;
+    h.state.vm = { kind: 'stopped' } as VmState;
+    await h.logs.showRow(row(LIMA_HOST, worker));
+    expect(h.readWorker).not.toHaveBeenCalled();
   });
 });

@@ -476,20 +476,22 @@ describe('channelRunArgs and openHelperChannel', () => {
       // The shared VS Code server store of the engine, read-write at /vscode, with `volume-nocopy`: the store's content
       // never comes from an image.
       '--mount', 'type=volume,source=devspaces-vscode,target=/vscode,volume-nocopy',
+      // The worker writes a log of its own into the volume of the Monitor (Docker keeps none).
+      '--env', 'DEVSPACES_WORKER_LOG=1',
       // Pipe loading.
       'devspaces-worker:abc', 'node', '-e', PIPE_LOADER, '/opt/devspace/channel.js', hash, 'startChannel',
     ]);
     // Neither a restart policy nor -d: the container lives only as long as its connection.
     expect(args).not.toContain('--restart');
     expect(args).not.toContain('-d');
-    // Its only variable: the version of Devspaces, for the header User-Agent of the worker; none without a version
-    // x.y.z.
-    expect(args).not.toContain('--env');
+    // Its variables: the switch of its own log, and the version of Devspaces, for the header User-Agent of the worker;
+    // no version without a version x.y.z.
+    expect(args.filter((arg) => arg === '--env')).toHaveLength(1);
     const withVersion = (version: string) =>
       channelRunArgs({ tag: 't', socketPath: '/s', stateVolume: 'v', vscodeVolume: 'w', containerName: 'n', label: 'l', scriptHash: hash, version });
     expect(withVersion('1.20.3').slice(-9, -6)).toEqual(['--env', 'DEVSPACES_VERSION=1.20.3', 't']);
-    expect(withVersion('1.20.3').filter((arg) => arg === '--env')).toHaveLength(1);
-    for (const version of ['1.20', '1.20.3 --privileged', '']) expect(withVersion(version)).not.toContain('--env');
+    expect(withVersion('1.20.3').filter((arg) => arg === '--env')).toHaveLength(2);
+    for (const version of ['1.20', '1.20.3 --privileged', '']) expect(withVersion(version).filter((arg) => arg.startsWith('DEVSPACES_VERSION'))).toEqual([]);
     expect(() => channelRunArgs({ tag: 't', socketPath: '/a,b', stateVolume: 'v', vscodeVolume: 'w', containerName: 'n', label: 'l', scriptHash: hash })).toThrow(HelperChannelError);
     // A volume name that could change the mount (CSV) or be an option is refused.
     for (const stateVolume of ['a,b', '-v', 'a"b', '', 'a=b']) {

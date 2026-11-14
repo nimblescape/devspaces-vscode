@@ -130,14 +130,17 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
   const notices = [...readNotices(input.volumes, object.kind === 'volume'), ...(own?.notices ?? [])];
   if (input.detailsProblem !== undefined) notices.push(`Docker could not give the facts of this object: ${input.detailsProblem}`);
   const monitorLog = own?.monitorLog ?? false;
-  // Show Log of every other container, by its full ID; not when Docker says that its log driver keeps no log.
+  // Show Log of every other container, by its full ID; not when Docker says that its log driver keeps no log. A worker
+  // has no log of Docker (`none`): its Show Log reads the log that it writes itself (workerLogRead.ts).
   const logDriver = details?.kind === 'container' ? details.logDriver : undefined;
-  const containerLog = object.kind === 'container' && !monitorLog && logDriver !== 'none' && isLogContainer(object.id) ? object.id : undefined;
+  const worker = object.kind === 'container' && object.purpose === 'worker' && isLogContainer(object.id);
+  const containerLog = object.kind === 'container' && !monitorLog && !worker && logDriver !== 'none' && isLogContainer(object.id) ? object.id : undefined;
   return {
     summary: own?.summary ?? [],
     sections: [...(own?.sections ?? []), ...dockerFactsSections(object, details, clock)],
     notices,
     monitorLog,
     ...optional('containerLog', containerLog),
+    ...optional('workerLog', worker ? object.id : undefined),
   };
 }

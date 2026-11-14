@@ -191,7 +191,7 @@ export function reportPageView(input: {
   const busy = phase.kind === 'reading';
   const buttons: ReportButton[] = [];
   if (content?.monitorLog === true && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showMonitorLog });
-  else if (content?.containerLog !== undefined && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
+  else if ((content?.containerLog !== undefined || content?.workerLog !== undefined) && allowed.logs) buttons.push({ action: 'showLog', label: ReportPageTexts.showLog });
   buttons.push({ action: 'refresh', label: ReportPageTexts.refresh, primary: true, ...(busy ? { disabled: true } : {}) });
   const status = phase.kind === 'reading' ? ReportPageTexts.reading : phase.kind === 'read' ? ReportPageTexts.read(timeText(phase.at, input.clock)) : '';
   const known = 'object' in target ? target.object : undefined;

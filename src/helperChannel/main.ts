@@ -21,9 +21,22 @@
 // Loading the file starts nothing else: no module of src/helperChannel or src/remoteMonitor does I/O when it is loaded
 // (entries.test.ts).
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { isAnalysisThread, startAnalysisThread } from '../core/helper/configurationAnalysisWorker';
-import { VERSION_ENV, setUserAgentVersion } from '../core/http';
-import { CHANNEL_CLEANUP_TIMEOUT_MS, CHANNEL_KILL_GRACE_MS, CHANNEL_SILENCE_EXIT_MS } from '../core/helperChannel/protocol';
+import { VERSION_ENV, isDevspacesVersion, setUserAgentVersion } from '../core/http';
+import {
+  CHANNEL_CLEANUP_TIMEOUT_MS,
+  CHANNEL_KILL_GRACE_MS,
+  CHANNEL_PROTOCOL_VERSION,
+  CHANNEL_SILENCE_EXIT_MS,
+  LOCK_STATE_DIR,
+  WORKER_LOG_ENV,
+  WORKER_LOG_FOLDER,
+  WORKER_LOG_KEEP_MS,
+  WORKER_LOG_TOUCH_MS,
+  workerLogName,
+} from '../core/helperChannel/protocol';
 
 /**
  * The output that the operations read from the engine (OperationContext.pausable) pauses while more than this many
@@ -33,6 +46,7 @@ export const CHANNEL_OUTPUT_HIGH_WATER = 1024 * 1024;
 import { batchHelperOperations, prepareBatchHelper, runQuietProcess, spawnStepProcess } from './batchHelper';
 import { OPERATIONS } from './operations';
 import { ChannelServer, type OperationHandler } from './server';
+import { WorkerLog, sweepWorkerLogs } from './workerLog';
 
 /** The entry of the Monitor (REMOTE_MONITOR_ENTRY) in this file. */
 export { startMonitor } from '../remoteMonitor/main';
@@ -55,15 +69,45 @@ export function timesFromEnv(env: NodeJS.ProcessEnv): { silenceMs?: number; idle
  * what runs (the shutdown ends the process by itself, with its own deadline); a timer ends it later in any case, and
  * when the shutdown itself fails, at once.
  */
-export function fatalHandler(server: Pick<ChannelServer, 'shutdown'>, exit: (code: number) => void): () => void {
-  return () => {
+export function fatalHandler(server: Pick<ChannelServer, 'shutdown'>, exit: (code: number) => void): (error?: unknown) => void {
+  return (error?: unknown) => {
     setTimeout(() => exit(1), CHANNEL_KILL_GRACE_MS + CHANNEL_CLEANUP_TIMEOUT_MS + 10_000);
     try {
-      server.shutdown();
+      // Only the kind of the error: its message could carry a value of an operation.
+      server.shutdown(`an unexpected error of the script (${error instanceof Error ? error.name : typeof error})`);
     } catch {
       exit(1);
     }
   };
+}
+
+export interface WorkerLogStart {
+  env: NodeJS.ProcessEnv;
+  /** The host name of the process: in a worker container, the short ID of the container. */
+  hostname: string;
+  /** The folder of the logs (LOCK_STATE_DIR/WORKER_LOG_FOLDER; another one in the tests). */
+  folder?: string;
+  now?: () => number;
+}
+
+/**
+ * The log of this worker (protocol.ts "The log of a worker"), only in a worker container that the extension started
+ * (WORKER_LOG_ENV) and whose host name is the short ID of its container; undefined otherwise (the worker of the prepares
+ * of the Monitor, the Docker tests). It first removes the logs of the workers that ended (sweepWorkerLogs), then notes
+ * the start, and touches the log every WORKER_LOG_TOUCH_MS while the process lives.
+ */
+export function startWorkerLog(start: WorkerLogStart): WorkerLog | undefined {
+  if (start.env[WORKER_LOG_ENV] !== '1') return undefined;
+  const name = /^[0-9a-f]{12}$/.test(start.hostname) ? workerLogName(start.hostname) : undefined;
+  if (name === undefined) return undefined;
+  const folder = start.folder ?? path.join(LOCK_STATE_DIR, WORKER_LOG_FOLDER);
+  const now = start.now ?? Date.now;
+  sweepWorkerLogs(folder, name, now(), WORKER_LOG_KEEP_MS);
+  const log = new WorkerLog({ folder, name, now });
+  const version = start.env[VERSION_ENV];
+  log.write(`The worker started: Devspaces ${isDevspacesVersion(version) ? version : '(no version)'}, Node.js ${process.version}, channel protocol ${CHANNEL_PROTOCOL_VERSION}.`);
+  setInterval(() => log.touch(), WORKER_LOG_TOUCH_MS).unref();
+  return log;
 }
 
 /**
@@ -73,7 +117,7 @@ export function fatalHandler(server: Pick<ChannelServer, 'shutdown'>, exit: (cod
  */
 export function startChannel(): void {
   setUserAgentVersion(process.env[VERSION_ENV]);
-  serve(OPERATIONS);
+  serve(OPERATIONS, startWorkerLog({ env: process.env, hostname: os.hostname() }));
 }
 
 /**
@@ -85,7 +129,7 @@ export function startBatchHelper(): void {
   serve(batchHelperOperations({ spawnStep: spawnStepProcess, runQuiet: runQuietProcess, fs, env: process.env, unsafe }));
 }
 
-function serve(operations: Readonly<Record<string, OperationHandler>>): void {
+function serve(operations: Readonly<Record<string, OperationHandler>>, log?: WorkerLog): void {
   const server = new ChannelServer({
     write: (text) => {
       if (process.stdout.destroyed || !process.stdout.writable) return false;
@@ -96,14 +140,16 @@ function serve(operations: Readonly<Record<string, OperationHandler>>): void {
     // `process.stdout.write` to a pipe does not wait; the answers that wait are bounded here.
     congested: () => process.stdout.writableLength > CHANNEL_OUTPUT_HIGH_WATER,
     onDrain: (listener) => process.stdout.once('drain', listener),
-    exit: (code) => process.exit(code),
+    exit: (code) => {
+      log?.close();
+      process.exit(code);
+    },
+    ...(log !== undefined ? { journal: (text: string) => log.write(text) } : {}),
     ...timesFromEnv(process.env),
   });
   // An answer that cannot be written anymore (EPIPE: the connection is gone).
-  process.stdout.on('error', () => server.shutdown());
-  process.on('SIGTERM', () => server.shutdown());
-  process.on('SIGINT', () => server.shutdown());
-  process.on('SIGHUP', () => server.shutdown());
+  process.stdout.on('error', () => server.shutdown('its output failed: the connection is gone'));
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(signal, () => server.shutdown(`it got ${signal}`));
   const fatal = fatalHandler(server, (code) => process.exit(code));
   process.on('uncaughtException', fatal);
   process.on('unhandledRejection', fatal);

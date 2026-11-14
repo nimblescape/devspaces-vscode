@@ -72,6 +72,19 @@ describe('the report of a resource', () => {
     expect(resourceReport({ object: { kind: 'image', id: `sha256:${id}`, name: 'nginx:1.27', purpose: 'notDevspaces' }, computer: COMPUTER, clock: CLOCK }).containerLog).toBeUndefined();
   });
 
+  it('offers Show Log on the report of a worker for the log that the worker writes itself, whose log driver is none', () => {
+    const id = '0123456789abcdef'.repeat(4);
+    const worker: HostObject = { kind: 'container', id, name: 'devspaces-api-worker1', purpose: 'worker', state: 'running' };
+    const details: Parameters<typeof resourceReport>[0]['details'] = { kind: 'container', labels: new Map(), env: new Map(), mounts: [], ports: [], networks: [], logDriver: 'none' };
+    const report = resourceReport({ object: worker, details, computer: COMPUTER, clock: CLOCK });
+    expect(report).toMatchObject({ monitorLog: false, workerLog: id });
+    expect(report.containerLog).toBeUndefined();
+    expect(JSON.stringify(report.sections)).toContain('none (the worker writes a log of its own, which Show Log reads)');
+    // Without the facts of Docker too; a row without a full ID has none.
+    expect(resourceReport({ object: worker, computer: COMPUTER, clock: CLOCK }).workerLog).toBe(id);
+    expect(resourceReport({ object: { ...worker, id: 'w1' }, computer: COMPUTER, clock: CLOCK }).workerLog).toBeUndefined();
+  });
+
   it('says what could not be read', () => {
     const notices = (volumes: Parameters<typeof resourceReport>[0]['volumes'], detailsProblem?: string): string[] =>
       resourceReport({ object: shared('devspaces-monitor'), volumes, computer: COMPUTER, clock: CLOCK, ...(detailsProblem !== undefined ? { detailsProblem } : {}) }).notices;

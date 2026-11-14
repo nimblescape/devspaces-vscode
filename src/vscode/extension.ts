@@ -51,6 +51,7 @@ import { LimaVm } from '../core/vm/limaVm';
 import { LimaSetup } from '../core/vm/limaSetup';
 import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
 import { readContainerLog } from '../core/hosts/monitorLog';
+import { readWorkerLog } from '../core/hosts/workerLogRead';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostCheck, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
@@ -1559,13 +1560,16 @@ async function activateExtension(
   // Show Log of a container of the view Docker Hosts and of its reports (R-ENG-008, R-ENG-010): never a log while the
   // setting devspaces.allowContainerLogs is off (the view and the pages show no Show Log then, and the Docker pipe of the
   // extension refuses the log too; this covers the shared shell of the host, which has no such filter), and never on a
-  // VM that does not run.
+  // VM that does not run. The log of a worker is the one that it writes itself in the volume of the Monitor (Docker keeps
+  // none), under the same setting.
   const containerLogs = new ContainerLogs({
     logger,
     allowed: () => settings.allowContainerLogs === true,
     vmHost,
     vmState: readVmState,
     read: (host, container, timeZone) => (settings.allowContainerLogs === true ? onHostShell(host, () => readContainerLog(docker, container, timeZone)) : Promise.reject(new Error(CONTAINER_LOGS_OFF))),
+    readWorker: (host, container, timeZone) =>
+      settings.allowContainerLogs === true ? onHostShell(host, () => readWorkerLog(docker, { container, timeZone })) : Promise.reject(new Error(CONTAINER_LOGS_OFF)),
     timeZone: () => usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
   });
   context.subscriptions.push(containerLogs);

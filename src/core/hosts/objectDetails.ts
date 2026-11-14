@@ -315,6 +315,12 @@ function listText(values: readonly string[]): string {
   return itemsText(values, MAX_LIST);
 }
 
+/** The log driver of a container in words: `none` keeps no log; a worker writes a log of its own (workerLogRead.ts). */
+function logDriverText(driver: string, worker: boolean): string {
+  if (driver !== 'none') return driver;
+  return worker ? 'none (the worker writes a log of its own, which Show Log reads)' : 'none (Docker keeps no log of it)';
+}
+
 /**
  * The sections of the facts of Docker about `object`: "Facts of Docker" from the inventory of the host and from
  * `details` (when its inspect worked), and the mounts of a container, the containers that use a volume, and the
@@ -341,7 +347,7 @@ export function dockerFactsSections(object: HostObject, details: ObjectDetails |
       const finished = state !== undefined && ENDED_STATES.includes(state) ? dockerTimeText(container?.finishedAt, clock) : undefined;
       push(finished !== undefined ? fact('Last end', `${finished}${container?.exitCode !== undefined ? ` · exit code ${container.exitCode}` : ''}`) : undefined);
       push(restartFact(container?.restartPolicy));
-      push(container?.logDriver !== undefined ? fact('Log driver', container.logDriver === 'none' ? 'none (Docker keeps no log of it)' : container.logDriver) : undefined);
+      push(container?.logDriver !== undefined ? fact('Log driver', logDriverText(container.logDriver, object.purpose === 'worker')) : undefined);
       push(composeFact(container?.labels ?? new Map(), 'service'));
       push(container !== undefined && container.ports.length > 0 ? fact('Ports', listText(container.ports)) : undefined);
       const networks = container?.networks ?? object.networks ?? [];

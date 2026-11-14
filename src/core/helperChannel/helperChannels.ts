@@ -34,6 +34,7 @@ import {
   OP_PROBE,
   OP_REFRESH,
   OP_SWEEP,
+  WORKER_LOG_ENV,
   channelLabelValue,
   engineIdentity,
   parseProbeParams,
@@ -131,6 +132,10 @@ export function channelRunArgs(p: {
     // content comes only from ensureServer, never from an image.
     '--mount',
     `type=volume,source=${p.vscodeVolume},target=${VSCODE_STORE_DIR},volume-nocopy`,
+    // The worker writes a log of its own into the volume of the Monitor (protocol.ts "The log of a worker"), because
+    // the engine keeps none; Show Log of the view Docker Hosts reads it.
+    '--env',
+    `${WORKER_LOG_ENV}=1`,
     ...(isDevspacesVersion(p.version) ? ['--env', `${VERSION_ENV}=${p.version}`] : []),
     p.tag,
     ...loaderCommand({ path: CHANNEL_SCRIPT_PATH, hash: p.scriptHash, entry: p.entry ?? CHANNEL_ENTRY }),

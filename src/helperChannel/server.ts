@@ -7,7 +7,9 @@
 // result per operation. It ends by itself when the connection is lost (the four ways in protocol.ts); before it exits,
 // it cancels every operation that runs (their signals abort) and waits for their results. It never writes the secret or
 // the parameters of an operation anywhere. The script makes no Docker call of its own: an operation acts on the engine
-// only through its port (DockerEngine), and the script starts no process of its own.
+// only through its port (DockerEngine), and the script starts no process of its own. With a journal (the log of a
+// worker, workerLog.ts), it notes each operation with its name and its result, the log messages of the operations (masked
+// as they are sent), and why it ends; never the parameters, the secrets, the requests to the extension or the output.
 import {
   CHANNEL_CLEANUP_TIMEOUT_MS,
   CHANNEL_KILL_GRACE_MS,
@@ -114,6 +116,11 @@ export interface ServerDeps {
   onDrain?(listener: () => void): void;
   /** Ends the process. Called once. */
   exit(code: number): void;
+  /**
+   * The log of the worker (WorkerLog.write): an entry per start and end of an operation, per log message of an
+   * operation, and the reason of the end. Never the parameters, the secrets, the requests or the output.
+   */
+  journal?(text: string): void;
   /** Only for the tests: shorter times (main.ts: DEVSPACE_CHANNEL_SILENCE_MS). */
   silenceMs?: number;
   idleMs?: number;
@@ -149,6 +156,8 @@ interface Running {
   /** The open requests to the extension, by their number. */
   asks: Map<number, { resolve(value: unknown): void; reject(error: unknown): void }>;
   nextAsk: number;
+  /** When the operation started (Date.now), for the journal. */
+  startedAt: number;
 }
 
 /** The logic of the script: one instance per process. */
@@ -166,7 +175,7 @@ export class ChannelServer {
   constructor(private readonly deps: ServerDeps) {
     this.silenceMs = deps.silenceMs ?? CHANNEL_SILENCE_EXIT_MS;
     this.idleMs = deps.idleMs ?? CHANNEL_SERVER_IDLE_EXIT_MS;
-    this.splitter = new LineSplitter(MAX_CLIENT_LINE, (line) => this.onLine(line), () => this.shutdown());
+    this.splitter = new LineSplitter(MAX_CLIENT_LINE, (line) => this.onLine(line), () => this.shutdown('a message of the extension was longer than the channel allows'));
   }
 
   /** Starts the timers; call once before the first input. */
@@ -187,7 +196,7 @@ export class ChannelServer {
 
   /** The standard input ended or failed: the connection is gone. */
   inputEnded(): void {
-    this.shutdown();
+    this.shutdown('its input ended: the connection closed');
   }
 
   /** True until it begins to exit. */
@@ -220,7 +229,7 @@ export class ChannelServer {
     }
     // The standard output cannot be written: nobody reads the answers anymore.
     if (!written) {
-      this.shutdown();
+      this.shutdown('its output could not be written: the connection is gone');
       return;
     }
     if (!this.outputPaused && this.deps.congested?.() === true) this.pauseOutput();
@@ -261,13 +270,13 @@ export class ChannelServer {
 
   private touchSilence(): void {
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
-    this.silenceTimer = setTimeout(() => this.shutdown(), this.silenceMs);
+    this.silenceTimer = setTimeout(() => this.shutdown(`no message came for ${Math.round(this.silenceMs / 1000)} s`), this.silenceMs);
   }
 
   private touchIdle(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(() => {
-      if (this.running.size === 0) this.shutdown();
+      if (this.running.size === 0) this.shutdown(`no operation came for ${Math.round(this.idleMs / 60_000)} min`);
       else this.touchIdle();
     }, this.idleMs);
   }
@@ -376,6 +385,7 @@ export class ChannelServer {
     }
     const handler = Object.prototype.hasOwnProperty.call(this.deps.operations, request.op) ? this.deps.operations[request.op] : undefined;
     if (handler === undefined) {
+      this.note(`#${request.id} was refused: the helper does not know its operation.`);
       this.fail(request.id, { code: 'unknown', message: `The helper does not know the operation ${request.op}.` }, false, false);
       return;
     }
@@ -397,8 +407,10 @@ export class ChannelServer {
       asksClosed: false,
       asks: new Map(),
       nextAsk: 1,
+      startedAt: Date.now(),
     };
     this.running.set(request.id, run);
+    this.note(`#${id} ${request.op} started.`);
     if (request.timeoutMs !== undefined) run.timeoutTimer = setTimeout(() => this.cancel(run, true), request.timeoutMs);
     const context = this.contextOf(run);
     let outcome: { ok: true; value: unknown } | { ok: false; error: OperationFailure };
@@ -426,6 +438,10 @@ export class ChannelServer {
       const aborted = run.cancelled || run.timedOut;
       this.running.delete(request.id);
       this.touchIdle();
+      const after = `after ${((Date.now() - run.startedAt) / 1000).toFixed(1)} s`;
+      if (aborted) this.note(`#${id} ${request.op} ${run.timedOut ? 'did not end in time' : 'was cancelled'} (${after}).`);
+      else if (outcome.ok) this.note(`#${id} ${request.op} ended ${after}.`);
+      else this.note(`#${id} ${request.op} failed ${after}: ${outcome.error.code}: ${clip(outcome.error.message)}`);
       if (aborted) {
         const message = run.timedOut ? 'The operation did not end in time.' : 'The operation was cancelled.';
         this.fail(request.id, { code: run.timedOut ? 'timeout' : 'cancelled', message }, run.cancelled, run.timedOut);
@@ -463,7 +479,11 @@ export class ChannelServer {
         this.send(
           detail === undefined ? { t: 'progress', id, step: clip(mask(step)) } : { t: 'progress', id, step: clip(mask(step)), detail: clip(mask(detail)) },
         ),
-      log: (text, level = 'info') => this.send({ t: 'log', id, level, text: clip(mask(text)) }),
+      log: (text, level = 'info') => {
+        const masked = clip(mask(text));
+        this.note(`#${id} ${run.request.op}${level === 'warn' ? ' warning' : ''}: ${masked}`);
+        this.send({ t: 'log', id, level, text: masked });
+      },
       output: (stream, text) => run.redactors[stream].push(text),
       pausable: (target) => {
         if (this.running.get(id) !== run) return () => {};
@@ -490,14 +510,24 @@ export class ChannelServer {
     this.endAsks(run);
   }
 
+  /** An entry of the journal (the log of the worker); a failure of the journal never fails the channel. */
+  private note(text: string): void {
+    try {
+      this.deps.journal?.(text);
+    } catch {
+      // The log writes nothing more; the channel goes on.
+    }
+  }
+
   /**
    * Ends the script: no more messages are read; every operation is cancelled (its signal aborts); then exit, once every
    * cancelled operation sent its result. A hard deadline (SHUTDOWN_DEADLINE_MS) makes sure that it exits even when a
-   * handler does not end.
+   * handler does not end. `reason` goes to the journal.
    */
-  shutdown(): void {
+  shutdown(reason = 'it was asked to end'): void {
     if (this.stopping) return;
     this.stopping = true;
+    this.note(`The worker ends: ${reason}.`);
     if (this.silenceTimer) clearTimeout(this.silenceTimer);
     if (this.idleTimer) clearTimeout(this.idleTimer);
     const deadline = setTimeout(() => this.deps.exit(0), SHUTDOWN_DEADLINE_MS);

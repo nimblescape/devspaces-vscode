@@ -55,6 +55,8 @@ export interface ReportContent {
    * no log (`none`).
    */
   containerLog?: string;
+  /** The report of a worker offers Show Log of the log that the worker writes itself (Docker keeps none): its full ID. */
+  workerLog?: string;
 }
 
 export function cell(text: string, chip?: ReportChip): ReportCell {
