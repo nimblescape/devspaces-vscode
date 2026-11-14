@@ -429,6 +429,44 @@ describe('Show Log of any other container', () => {
   });
 });
 
+describe('Show Files of a volume or an image', () => {
+  it('shows Show Files on a report that offers files while the setting allowContentReads is on, and shows the files of the object of the report', async () => {
+    let allowed = { actions: true, logs: true, files: false };
+    const showFiles = vi.fn(async () => undefined);
+    const h = harness({ allowed: () => allowed, showFiles });
+    const data: HostObject = { kind: 'volume', id: 'shop_data', name: 'shop_data', purpose: 'notDevspaces' };
+    h.read = async (target) => ({ ...contentOf(target.object.name), files: { kind: 'volume', name: target.object.name } });
+    const panel = await open(h, 'lab', data);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['refresh']);
+    // An old message of the page reads nothing while the setting is off.
+    panel.receive({ type: 'showFiles' });
+    await flush();
+    expect(showFiles).not.toHaveBeenCalled();
+    allowed = { actions: true, logs: true, files: true };
+    h.pages.settingsChanged();
+    expect(lastView(panel).buttons.map((button) => [button.action, button.label])).toEqual([
+      ['showFiles', ReportPageTexts.showFiles],
+      ['refresh', ReportPageTexts.refresh],
+    ]);
+    panel.receive({ type: 'showFiles' });
+    await flush();
+    expect(showFiles).toHaveBeenCalledWith({ host: 'lab', target: { kind: 'volume', name: 'shop_data' }, name: 'shop_data' });
+  });
+
+  it('shows no Show Files on a report that offers no files (a container)', async () => {
+    const showFiles = vi.fn(async () => undefined);
+    const h = harness({ allowed: () => ({ actions: true, logs: true, files: true }), showFiles });
+    h.read = async (target) => contentOf(target.object.name);
+    const panel = await open(h, 'lab', web);
+    await flush();
+    expect(lastView(panel).buttons.map((button) => button.action)).toEqual(['refresh']);
+    panel.receive({ type: 'showFiles' });
+    await flush();
+    expect(showFiles).not.toHaveBeenCalled();
+  });
+});
+
 describe('the setting devspaces.allowContainerLogs', () => {
   it('shows no Show Log while the logs are off, reads no log for an old message, and shows the button after the change', async () => {
     let allowed = { actions: true, logs: false };

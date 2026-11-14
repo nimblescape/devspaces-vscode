@@ -102,6 +102,9 @@ export const Commands = {
   showResourceReport: 'devspaces.showResourceReport',
   // Show Log of a container row of the view Docker Hosts (R-ENG-008), while devspaces.allowContainerLogs is on.
   showContainerLog: 'devspaces.showContainerLog',
+  // Show Files of a volume or image row of the view Docker Hosts (contentFiles.ts, R-ENG-008), while
+  // devspaces.allowContentReads is on.
+  showFiles: 'devspaces.showFiles',
   // The VM of Devspaces in its row of the view "Docker Hosts" (vmCommands.ts, R-VM-010), the same on every platform:
   // Start, Stop, Remove, Remove and Set Up Again, and its settings (macOS and Linux).
   startVm: 'devspaces.startVm',
@@ -111,8 +114,8 @@ export const Commands = {
   vmSettings: 'devspaces.vmSettings',
   // The gear in the title bar of the view "Docker Hosts" (dockerHostsSettings.ts, R-ENG-008), shown with the setting
   // devspaces.dockerHostsSettingsButton: a quick pick for the settings dockerHostsActions, allowDestructiveActions,
-  // allowContainerLogs and dockerHostsConsoleButton (hidden in the Command Palette: the settings are changed in the
-  // Settings editor).
+  // allowContainerLogs, allowContentReads and dockerHostsConsoleButton (hidden in the Command Palette: the settings are
+  // changed in the Settings editor).
   dockerHostsSettings: 'devspaces.dockerHostsSettings',
 } as const;
 

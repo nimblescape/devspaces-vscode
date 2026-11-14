@@ -4,8 +4,8 @@
 
 // The gear "Docker Hosts Settings…" in the title bar of the view Docker Hosts (docs/requirements.md R-ENG-008): a quick
 // pick that switches the settings of the view in the user settings (all have the scope `application`):
-// devspaces.dockerHostsActions, devspaces.allowDestructiveActions, devspaces.allowContainerLogs and
-// devspaces.dockerHostsConsoleButton. The setting devspaces.dockerHostsSettingsButton shows the gear (it stays in the
+// devspaces.dockerHostsActions, devspaces.allowDestructiveActions, devspaces.allowContainerLogs,
+// devspaces.allowContentReads and devspaces.dockerHostsConsoleButton. The setting devspaces.dockerHostsSettingsButton shows the gear (it stays in the
 // Settings editor: a gear that hid itself could not show itself again); the command is not in the Command Palette, and
 // a run while the setting is off changes nothing.
 import * as vscode from 'vscode';
@@ -20,6 +20,7 @@ export const DockerHostsSettingsTexts = {
   actionsGroup: 'Actions of the view',
   destructiveGroup: 'Actions that remove or delete',
   logsGroup: 'Logs of containers',
+  filesGroup: 'Files of volumes and images',
   consoleGroup: 'Open Console on the host rows',
   actions: {
     disabled: { label: 'Disabled', detail: 'The view is read only: no action changes a host.' },
@@ -33,6 +34,8 @@ export const DockerHostsSettingsTexts = {
     detail: 'Delete…, Remove…, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine… and the removals of the VM in the context menu of a row (with Context Menu or Icons).',
   },
   destructiveOff: { label: 'Do Not Allow', detail: 'The view has no action that removes or deletes something; the Command Palette keeps its commands.' },
+  filesOn: { label: 'Allow', detail: 'Show Files of every volume and image: the tree of its folders and files, with names, sizes and times, never the content of a file.' },
+  filesOff: { label: 'Do Not Allow', detail: 'No Show Files: Devspaces reads no folder or file of a volume or an image for it.' },
   consoleOn: { label: 'Show', detail: 'A button on each host row opens a terminal with a shell on that host.' },
   consoleOff: { label: 'Hide', detail: 'No Open Console on the host rows.' },
   current: 'current',
@@ -41,7 +44,7 @@ export const DockerHostsSettingsTexts = {
 
 /** One choice of the quick pick: the setting that it writes, and its value. */
 export interface DockerHostsSettingsChoice {
-  key: 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'dockerHostsConsoleButton';
+  key: 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'allowContentReads' | 'dockerHostsConsoleButton';
   value: DockerHostsActions | boolean;
 }
 
@@ -49,12 +52,13 @@ type Item = vscode.QuickPickItem & { choice?: DockerHostsSettingsChoice };
 
 /** The items of the quick pick: a group per setting, the current value of each marked. */
 export function dockerHostsSettingsItems(
-  settings: Pick<ExtensionSettings, 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'dockerHostsConsoleButton'>,
+  settings: Pick<ExtensionSettings, 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'allowContentReads' | 'dockerHostsConsoleButton'>,
 ): Item[] {
   const texts = DockerHostsSettingsTexts;
   const actions = settings.dockerHostsActions ?? 'disabled';
   const destructive = settings.allowDestructiveActions === true;
   const logs = settings.allowContainerLogs === true;
+  const files = settings.allowContentReads === true;
   const consoleButton = settings.dockerHostsConsoleButton === true;
   const item = (label: string, detail: string, current: boolean, choice: DockerHostsSettingsChoice): Item => ({
     label: `${current ? '$(check)' : '$(blank)'} ${label}`,
@@ -71,6 +75,9 @@ export function dockerHostsSettingsItems(
     { label: texts.logsGroup, kind: vscode.QuickPickItemKind.Separator },
     item(texts.logsOn.label, texts.logsOn.detail, logs, { key: 'allowContainerLogs', value: true }),
     item(texts.logsOff.label, texts.logsOff.detail, !logs, { key: 'allowContainerLogs', value: false }),
+    { label: texts.filesGroup, kind: vscode.QuickPickItemKind.Separator },
+    item(texts.filesOn.label, texts.filesOn.detail, files, { key: 'allowContentReads', value: true }),
+    item(texts.filesOff.label, texts.filesOff.detail, !files, { key: 'allowContentReads', value: false }),
     { label: texts.consoleGroup, kind: vscode.QuickPickItemKind.Separator },
     item(texts.consoleOn.label, texts.consoleOn.detail, consoleButton, { key: 'dockerHostsConsoleButton', value: true }),
     item(texts.consoleOff.label, texts.consoleOff.detail, !consoleButton, { key: 'dockerHostsConsoleButton', value: false }),

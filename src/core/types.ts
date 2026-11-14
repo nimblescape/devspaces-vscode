@@ -520,6 +520,12 @@ export interface ExtensionSettings {
    * every container. Scope `application`.
    */
   allowContainerLogs?: boolean;
+  /**
+   * Show Files of every volume and image in the view Docker Hosts and on its reports (R-ENG-008, R-ENG-010): the tree of
+   * its folders and files, never the content of a file. Off (the default): Devspaces runs no reader of the content of a
+   * volume or an image for it. Scope `application`.
+   */
+  allowContentReads?: boolean;
   /** The button Docker Hosts Settings… in the title bar of the view Docker Hosts, which switches the others. Default off. */
   dockerHostsSettingsButton?: boolean;
   /** The button Open Console on each host row of the view Docker Hosts: a shell on that host. Default off. */

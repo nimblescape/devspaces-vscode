@@ -294,6 +294,8 @@ describe('the menus of the view (package.json)', () => {
     logs?: boolean;
     /** devspaces.allowDestructiveActions. */
     removals?: boolean;
+    /** devspaces.allowContentReads. */
+    files?: boolean;
   }
   /** Whether the clauses `config.devspaces.…` of `when` hold with `settings` (the platform clauses are not checked). */
   const configHolds = (when: string, settings: ViewSettings): boolean => {
@@ -305,6 +307,7 @@ describe('the menus of the view (package.json)', () => {
     if (when.includes('config.devspaces.dockerHostsConsoleButton') && settings.consoleButton !== true) return false;
     if (when.includes('config.devspaces.allowContainerLogs') && settings.logs !== true) return false;
     if (when.includes('config.devspaces.allowDestructiveActions') && settings.removals !== true) return false;
+    if (when.includes('config.devspaces.allowContentReads') && settings.files !== true) return false;
     return true;
   };
   /** The commands of a row with `contextValue` (the clause viewItem and the settings of each `when`): its context menu, or its buttons. */
@@ -332,7 +335,7 @@ describe('the menus of the view (package.json)', () => {
     buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { records: 1, bytes: 10, unusedBytes: 10 } }).contextValue,
   ];
   /** The commands that only read: they stay in every mode. */
-  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.showContainerLog', 'devspaces.refreshDockerHosts'];
+  const READING = ['devspaces.showUtilization', 'devspaces.showResourceReport', 'devspaces.showContainerLog', 'devspaces.showFiles', 'devspaces.refreshDockerHosts'];
   /** The commands that remove or delete something: only in the context menu, and only with allowDestructiveActions. */
   const REMOVING = [
     'devspaces.delete',
@@ -463,6 +466,20 @@ describe('the menus of the view (package.json)', () => {
     }
     // The other objects have no log: an image, a volume, a network.
     expect(commandsOf(objectRowLook(objectRow({ kind: 'network', id: 'n1', name: 'bridge', purpose: 'notDevspaces', builtIn: true })).contextValue, false, { actions: 'icons', logs: true })).toEqual(['devspaces.showResourceReport']);
+  });
+
+  it('offers Show Files in the context menu of every volume and image row while the files are on, in every mode, and never as a button', () => {
+    const volume = objectRowLook(objectRow({ kind: 'volume', id: 'shop_data', name: 'shop_data', purpose: 'notDevspaces' })).contextValue;
+    const image = objectRowLook(objectRow({ kind: 'image', id: `sha256:${'ab'.repeat(32)}`, name: 'nginx:1.27', purpose: 'notDevspaces' })).contextValue;
+    const store = objectRowLook(objectRow({ kind: 'volume', id: 'devspaces-vscode', name: 'devspaces-vscode', purpose: 'sharedVolume' })).contextValue;
+    for (const actions of ['disabled', 'contextMenu', 'icons']) {
+      for (const contextValue of [volume, image, store]) {
+        expect(commandsOf(contextValue, false, { actions, files: true }), contextValue).toEqual(['devspaces.showResourceReport', 'devspaces.showFiles']);
+        expect(commandsOf(contextValue, false, { actions, files: false }), contextValue).not.toContain('devspaces.showFiles');
+        expect(commandsOf(contextValue, true, { actions, files: true }), contextValue).not.toContain('devspaces.showFiles');
+      }
+      for (const contextValue of rows()) expect(commandsOf(contextValue, false, { actions, files: true, logs: true, removals: true }), contextValue).not.toContain('devspaces.showFiles');
+    }
   });
 
   it('shows the gear Docker Hosts Settings… with its setting, and Open Console on each host row with an engine with its setting', () => {

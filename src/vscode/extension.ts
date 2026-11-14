@@ -52,6 +52,7 @@ import { LimaSetup } from '../core/vm/limaSetup';
 import { freeSpace, limaVmState, wslVmState, type VmState } from '../core/vm/vmState';
 import { readContainerLog } from '../core/hosts/monitorLog';
 import { readWorkerLog } from '../core/hosts/workerLogRead';
+import { readContents } from '../core/hosts/contentRead';
 import { readResourceReport } from '../core/hosts/reportRead';
 import { baseImageReferences, helperBaseImageReferences, knownDevspace, pruneBuildCache, readHostCheck, readHostInventory, removeHostObjects, runningDevspaces, startHostContainer, stopHostContainer } from '../core/hosts/hostObjects';
 import { limaDockerSocket, limaEnv, limaResources, type LimaResources } from '../core/vm/limaInstance';
@@ -122,6 +123,7 @@ import { DockerHostIndicator } from './dockerHostIndicator';
 import { DockerHostsView } from './dockerHostsView';
 import { ReportPages } from './reportPage';
 import { ContainerLogs } from './containerLogs';
+import { ContentFiles, ContentFilesTexts } from './contentFiles';
 import { HostConsoles } from './hostConsole';
 import { chooseDockerHostsSettings } from './dockerHostsSettings';
 import { UsagePages } from './usagePage';
@@ -1573,6 +1575,22 @@ async function activateExtension(
     timeZone: () => usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
   });
   context.subscriptions.push(containerLogs);
+  // Show Files of a volume or an image of the view Docker Hosts and of its reports (R-ENG-008, R-ENG-010): the tree of
+  // its folders and files, never the content of a file; never while the setting devspaces.allowContentReads is off, and
+  // never on a VM that does not run.
+  const contentFiles = new ContentFiles({
+    logger,
+    allowed: () => settings.allowContentReads === true,
+    vmHost,
+    vmState: readVmState,
+    read: async (host, target) => {
+      if (settings.allowContentReads !== true) throw new Error(ContentFilesTexts.off);
+      const helperTag = await readCurrentHelperTag();
+      return onHostShell(host, () => readContents(docker, { target, ...(helperTag !== undefined ? { currentHelperTag: helperTag } : {}) }));
+    },
+    timeZone: () => usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone),
+  });
+  context.subscriptions.push(contentFiles);
   const reportPages = new ReportPages({
     extensionUri: context.extensionUri,
     logger,
@@ -1590,8 +1608,9 @@ async function activateExtension(
     },
     objectOf: (host, kind, id) => hostsView?.objectOf(host, kind, id),
     showLog: (log) => containerLogs.show(log),
+    showFiles: (files) => contentFiles.show(files),
     clock: () => ({ now: Date.now(), timeZone: usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) }),
-    allowed: () => ({ actions: dockerHostsActionsAllowed(settings), logs: settings.allowContainerLogs === true }),
+    allowed: () => ({ actions: dockerHostsActionsAllowed(settings), logs: settings.allowContainerLogs === true, files: settings.allowContentReads === true }),
   });
   context.subscriptions.push(reportPages);
   // Before a stop or a removal of the VM: its utilization page pauses, and the worker channel, the relay connection and
@@ -1738,6 +1757,7 @@ async function activateExtension(
     usagePages,
     reportPages,
     containerLogs,
+    contentFiles,
     vm: vmCommands,
     hostConsoles,
     dockerHostsSettings: () => chooseDockerHostsSettings({ logger, settings: () => settings }),
@@ -1968,7 +1988,11 @@ async function activateExtension(
       updateDevspacesOnlyContextKey(settings.showOnlyDevspaces === true, logger);
       // The menus follow dockerHostsActions by themselves (`config.` in their `when`); the rows of the view and the report
       // pages show their actions and Show Log again.
-      if (event.affectsConfiguration(`${SETTINGS_SECTION}.dockerHostsActions`) || event.affectsConfiguration(`${SETTINGS_SECTION}.allowContainerLogs`)) {
+      if (
+        event.affectsConfiguration(`${SETTINGS_SECTION}.dockerHostsActions`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.allowContainerLogs`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.allowContentReads`)
+      ) {
         dockerHosts.changed();
         reportPages.settingsChanged();
         usagePages.settingsChanged();

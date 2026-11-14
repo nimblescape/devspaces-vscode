@@ -17,6 +17,7 @@ import { HELPER_CACHE_VOLUME, VSCODE_STORE_VOLUME } from '../names';
 import { REMOTE_MONITOR_VOLUME } from '../remoteMonitor/protocol';
 import { devspaceReport, isDevspaceObject } from './devspaceReport';
 import { helperReport, isHelperContainer } from './helperReport';
+import { contentTargetOf } from './contentReader';
 import { layersSection, type ImageLayer } from './imageHistory';
 import { imageReport, imageReportNeedsRecords, isImageReportObject } from './imageReport';
 import type { HostObject } from './hostObjects';
@@ -147,5 +148,6 @@ export function resourceReport(input: ResourceReportInput): ReportContent {
     monitorLog,
     ...optional('containerLog', containerLog),
     ...optional('workerLog', worker ? object.id : undefined),
+    ...optional('files', contentTargetOf(object)),
   };
 }

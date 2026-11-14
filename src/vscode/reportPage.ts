@@ -23,6 +23,7 @@ import { isAbortError, type Logger } from '../core/ports';
 import { withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import { monitorLogOf, type ContainerLog } from './containerLogs';
+import type { ContentFilesTarget } from './contentFiles';
 import {
   REPORT_SCHEME,
   ReportPageTexts,
@@ -58,6 +59,8 @@ export interface ReportPagesDeps {
   read: (target: ReportTarget, clock: ReportClock) => Promise<ReportContent>;
   /** Show Log of a container, or of the Monitor (ContainerLogs.show). */
   showLog: (log: ContainerLog) => Promise<void>;
+  /** Show Files of a volume or an image (ContentFiles.show). */
+  showFiles?: (files: ContentFilesTarget) => Promise<void>;
   /** Now, and the time zone of this computer, in which the page gives times. */
   clock: () => ReportClock;
   /** What the settings allow now (dockerHostsActions, allowContainerLogs), read at each update of a page. */
@@ -218,6 +221,14 @@ class ReportPage {
         if (log === undefined) this.deps.logger.info(`Show Log of the report of ${this.key.name} on ${this.key.host} is not run: the report offers no log.`);
         else if (this.deps.allowed().logs) void this.deps.showLog(log);
         else this.deps.logger.info(`Show Log of ${log.name} on ${this.key.host} is not run: the setting devspaces.allowContainerLogs is off.`);
+        return;
+      }
+      case 'showFiles': {
+        const target = this.content?.files;
+        const name = this.target?.object.name ?? this.key.name;
+        if (target === undefined) this.deps.logger.info(`Show Files of the report of ${this.key.name} on ${this.key.host} is not run: the report offers no files.`);
+        else if (this.deps.allowed().files === true) void this.deps.showFiles?.({ host: this.key.host, target, name });
+        else this.deps.logger.info(`Show Files of ${name} on ${this.key.host} is not run: the setting devspaces.allowContentReads is off.`);
         return;
       }
       case 'startVm':

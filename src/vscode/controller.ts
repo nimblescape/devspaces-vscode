@@ -72,6 +72,7 @@ import type { WslSetupCommands } from './wslSetupCommands';
 import type { LimaSetupCommands } from './limaSetupCommands';
 import type { DockerHostsView } from './dockerHostsView';
 import type { ContainerLogs } from './containerLogs';
+import type { ContentFiles } from './contentFiles';
 import type { ReportPages } from './reportPage';
 import type { UsagePages } from './usagePage';
 import { hostOfArgument, hostOfNode } from './dockerHostsModel';
@@ -218,6 +219,8 @@ export interface ControllerDeps {
   reportPages?: Pick<ReportPages, 'show'>;
   /** Show Log of a container row of the view "Docker Hosts" (containerLogs.ts). Without it, the command does nothing. */
   containerLogs?: Pick<ContainerLogs, 'showRow'>;
+  /** Show Files of a volume or image row of the view "Docker Hosts" (contentFiles.ts). Without it, the command does nothing. */
+  contentFiles?: Pick<ContentFiles, 'showRow'>;
   /** The management of the VM of Devspaces in its row of the view "Docker Hosts" (R-VM-010). */
   vm?: Pick<VmCommands, 'start' | 'stop' | 'remove' | 'reset' | 'settings'>;
   /** Open Console of a host row of the view "Docker Hosts" (hostConsole.ts). Without it, the command does nothing. */
@@ -591,6 +594,7 @@ export class Controller implements vscode.Disposable {
       showUtilization: async (argument) => this.deps.usagePages?.show(argument),
       showResourceReport: async (argument) => this.deps.reportPages?.show(argument),
       showContainerLog: async (argument) => this.deps.containerLogs?.showRow(argument),
+      showFiles: async (argument) => this.deps.contentFiles?.showRow(argument),
       startVm: async () => this.deps.vm?.start(),
       stopVm: async () => this.deps.vm?.stop(),
       removeVm: async () => this.deps.vm?.remove(),
@@ -626,6 +630,7 @@ export class Controller implements vscode.Disposable {
       'showUtilization',
       'showResourceReport',
       'showContainerLog',
+      'showFiles',
       'startVm',
       'stopVm',
       'removeVm',

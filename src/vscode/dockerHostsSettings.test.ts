@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 
 describe('dockerHostsSettingsItems', () => {
-  it('lists a group per setting of the view (actions, removals, logs, console), the current values marked', () => {
+  it('lists a group per setting of the view (actions, removals, logs, files, console), the current values marked', () => {
     const items = dockerHostsSettingsItems({ dockerHostsActions: 'contextMenu', allowDestructiveActions: true, allowContainerLogs: false });
     expect(items.map((item) => item.label)).toEqual([
       DockerHostsSettingsTexts.actionsGroup,
@@ -34,20 +34,25 @@ describe('dockerHostsSettingsItems', () => {
       DockerHostsSettingsTexts.logsGroup,
       '$(blank) Allow',
       '$(check) Do Not Allow',
+      DockerHostsSettingsTexts.filesGroup,
+      '$(blank) Allow',
+      '$(check) Do Not Allow',
       DockerHostsSettingsTexts.consoleGroup,
       '$(blank) Show',
       '$(check) Hide',
     ]);
-    expect(items.filter((item) => item.kind === fakeVscode.QuickPickItemKind.Separator)).toHaveLength(4);
+    expect(items.filter((item) => item.kind === fakeVscode.QuickPickItemKind.Separator)).toHaveLength(5);
     expect(items.filter((item) => item.description === DockerHostsSettingsTexts.current).map((item) => item.choice)).toEqual([
       { key: 'dockerHostsActions', value: 'contextMenu' },
       { key: 'allowDestructiveActions', value: true },
       { key: 'allowContainerLogs', value: false },
+      { key: 'allowContentReads', value: false },
       { key: 'dockerHostsConsoleButton', value: false },
     ]);
     // Without values: the defaults.
     expect(dockerHostsSettingsItems({}).filter((item) => item.description === DockerHostsSettingsTexts.current).map((item) => item.choice?.value)).toEqual([
       'disabled',
+      false,
       false,
       false,
       false,
@@ -65,7 +70,7 @@ describe('chooseDockerHostsSettings', () => {
     await chooseDockerHostsSettings({ logger, settings: () => settings({}) });
     expect(fakeVscode.workspace.getConfiguration).toHaveBeenCalledWith('devspaces');
     expect(update).toHaveBeenCalledWith('dockerHostsActions', 'icons', fakeVscode.ConfigurationTarget.Global);
-    for (const key of ['allowDestructiveActions', 'allowContainerLogs', 'dockerHostsConsoleButton'] as const) {
+    for (const key of ['allowDestructiveActions', 'allowContainerLogs', 'allowContentReads', 'dockerHostsConsoleButton'] as const) {
       fakeVscode.window.showQuickPick.mockImplementationOnce(async (items: Array<{ choice?: { key: string; value: unknown } }>) =>
         items.find((item) => item.choice?.key === key && item.choice.value === true),
       );

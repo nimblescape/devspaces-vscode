@@ -11,7 +11,7 @@
   'use strict';
 
   const vscode = acquireVsCodeApi();
-  const ACTIONS = ['refresh', 'showLog', 'startVm'];
+  const ACTIONS = ['refresh', 'showLog', 'showFiles', 'startVm'];
   const TONES = ['keep', 'remove', 'info', 'warn', 'new'];
   const NAME_TONES = ['inactive', 'notDevspaces', 'notDevspacesInactive'];
 

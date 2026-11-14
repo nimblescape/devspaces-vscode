@@ -76,6 +76,7 @@ describe('settings', () => {
       // No action of the view that removes or deletes something (R-ENG-008).
       allowDestructiveActions: false,
       allowContainerLogs: false,
+      allowContentReads: false,
       dockerHostsSettingsButton: false,
       dockerHostsConsoleButton: false,
     });

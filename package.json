@@ -499,6 +499,12 @@
         "icon": "$(output)"
       },
       {
+        "command": "devspaces.showFiles",
+        "title": "Show Files",
+        "category": "Devspaces",
+        "icon": "$(files)"
+      },
+      {
         "command": "devspaces.stopDockerObject",
         "title": "Stop",
         "category": "Devspaces",
@@ -666,6 +672,10 @@
         },
         {
           "command": "devspaces.showContainerLog",
+          "when": "false"
+        },
+        {
+          "command": "devspaces.showFiles",
           "when": "false"
         },
         {
@@ -899,6 +909,11 @@
           "command": "devspaces.showContainerLog",
           "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;container;/ && config.devspaces.allowContainerLogs",
           "group": "0_report@2"
+        },
+        {
+          "command": "devspaces.showFiles",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;(volume|image);/ && config.devspaces.allowContentReads",
+          "group": "0_report@3"
         },
         {
           "command": "devspaces.stop",
@@ -1323,15 +1338,22 @@
           "default": false,
           "markdownDescription": "Allow **Show Log** of every container in the view Docker Hosts: in the menu of each container row and on the report of a container, also of a container that is not of Devspaces, and **Show Log of the Monitor** on its reports. Off: no Show Log, and the Docker pipes of Devspaces refuse the log of every container.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
         },
-        "devspaces.dockerHostsSettingsButton": {
+        "devspaces.allowContentReads": {
           "order": 26,
           "type": "boolean",
           "scope": "application",
           "default": false,
-          "markdownDescription": "Show the button **Docker Hosts Settings…** (a gear) in the title bar of the view Docker Hosts. It switches `#devspaces.dockerHostsActions#` and `#devspaces.allowContainerLogs#` in your user settings.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
+          "markdownDescription": "Allow **Show Files** of every volume and image in the view Docker Hosts (its menu and its report), also of those that are not of Devspaces: the tree of its folders and files with names, sizes and times, never the content of a file. Off: no Show Files.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
+        },
+        "devspaces.dockerHostsSettingsButton": {
+          "order": 27,
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "Show the button **Docker Hosts Settings…** (a gear) in the title bar of the view Docker Hosts. It switches the other settings of the view (actions, removals, logs, files, console) in your user settings.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
         },
         "devspaces.dockerHostsConsoleButton": {
-          "order": 27,
+          "order": 28,
           "type": "boolean",
           "scope": "application",
           "default": false,

@@ -710,19 +710,19 @@ describe('Controller commands', () => {
     };
     const declared = manifest.contributes.commands.map((command) => command.command).sort();
     expect([...h.commands.keys()].sort()).toEqual(declared);
-    // 56 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
+    // 57 commands, among them hidden ones: Show Docker Setup (the action Set Up Docker… of an error: it looks for the
     // CLI, then shows the view), the command of a repository row (a double-click runs Start), Enter on a row (Enter
     // runs Start), the choice of the Docker host (the command of the first row of the view), the button "Remove and
     // Set Up Again" of the error about a damaged disk of the WSL distribution of Devspaces, and the commands of the rows
-    // of the view "Docker Hosts". The last one that was added is Show Log of a container row of the view "Docker Hosts"
-    // (R-ENG-008), before it Remove Devspaces from This Computer… of the "…" menu of the repository view (R-GEN-009),
+    // of the view "Docker Hosts". The last one that was added is Show Files of a volume or image row of the view "Docker
+    // Hosts" (R-ENG-008, R-ENG-010), before it Show Log of a container row of the view "Docker Hosts" (R-ENG-008), before it Remove Devspaces from This Computer… of the "…" menu of the repository view (R-GEN-009),
     // before it Open Console of a host row and the gear Docker Hosts Settings… of the
     // view "Docker Hosts" (R-ENG-008), before them Show Report of an object row of the view "Docker
     // Hosts" (R-ENG-010), before it Show Utilization of a host row (R-ENG-009), before it Start of a container and Remove Unused Build Cache… of the view (R-ENG-008), and
     // before them the view itself and the management of the VM of Devspaces in it (R-VM-010). The last one that was removed is "Use as Docker Host" of a host row of the view "Docker Hosts": the
     // Docker host of Devspaces is chosen only in the first row of the repository view (R-ENG-008); before it the
     // installation and the start of Docker Desktop or Docker Engine, and "Use the Local Docker" (R-ENG-001).
-    expect(declared).toHaveLength(56);
+    expect(declared).toHaveLength(57);
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use the Local Docker');
     expect(manifest.contributes.commands.map((command) => command.title)).not.toContain('Use as Docker Host');
     expect(declared).toEqual(

@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   dockerHostsActions: 'disabled',
   allowDestructiveActions: false,
   allowContainerLogs: false,
+  allowContentReads: false,
   dockerHostsSettingsButton: false,
   dockerHostsConsoleButton: false,
 });
@@ -339,6 +340,7 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     dockerHostsActions: dockerHostsActionsOf(get('dockerHostsActions')),
     allowDestructiveActions: bool('allowDestructiveActions', DEFAULT_SETTINGS.allowDestructiveActions ?? false),
     allowContainerLogs: bool('allowContainerLogs', DEFAULT_SETTINGS.allowContainerLogs ?? false),
+    allowContentReads: bool('allowContentReads', DEFAULT_SETTINGS.allowContentReads ?? false),
     dockerHostsSettingsButton: bool('dockerHostsSettingsButton', DEFAULT_SETTINGS.dockerHostsSettingsButton ?? false),
     dockerHostsConsoleButton: bool('dockerHostsConsoleButton', DEFAULT_SETTINGS.dockerHostsConsoleButton ?? false),
   };
