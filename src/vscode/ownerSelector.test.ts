@@ -235,11 +235,8 @@ describe('the filter icon of the view title bar', () => {
       [Commands.addAccount, '0_accounts@1'],
       // Edit Repository Groups… in the "…" menu of the view.
       [Commands.editRepositoryGroups, '1_settings@1'],
-      // Update All Images Now in the "…" menu of the view; "Remove Devspaces from This Computer…" last, in a group of
-      // its own, as Delete in the ⋯ menu of a row. "Remove Devspaces from This Docker Engine…" is only in the Command
-      // Palette.
-      [Commands.updateImagesNow, '2_maintenance@1'],
-      [Commands.removeFromComputer, '3_remove@1'],
+      // Update All Images Now and Remove Devspaces from This Computer… are management actions of the view "Docker
+      // Hosts" (R-ENG-008), and in the Command Palette.
       // No icon of the Docker host; the first row of the list chooses it.
     ]);
     expect(title[0].when).toBe(`view == devspaces.repositories && !${OWNERS_FILTERED_CONTEXT_KEY}`);

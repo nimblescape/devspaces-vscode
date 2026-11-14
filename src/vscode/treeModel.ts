@@ -14,7 +14,6 @@ import { DEFAULT_CONFIG_PATH } from '../core/pipeline/recordRules';
 import type { GitChanges } from '../core/pipeline/refreshStates';
 import { keepFlagsOf, keptWhenClosed } from '../core/session/sessionRules';
 import type {
-  BusyOperation,
   ContainerState,
   DiscoveryData,
   Devspace,
@@ -208,8 +207,6 @@ export interface TreeInput {
 export interface RowActions {
   canStart: boolean;
   canStop: boolean;
-  canDelete: boolean;
-  canRebuild: boolean;
   /** The discovery lists the repository: Show on GitHub. */
   onGitHub: boolean;
 }
@@ -276,7 +273,7 @@ export interface RepositoryRow {
   /** Includes the source, the GitHub account, and the time of the last use. */
   tooltip: string;
   /**
-   * `repository;canStart;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning`, only the flags that
+   * `repository;canStart;canStop;onGitHub;hostAccessChecked;canKeepRunning`, only the flags that
    * apply (package.json menus); `hostAccessUnrestricted` in place of `hostAccessChecked` while the checks are off;
    * `kept` in place of `canKeepRunning` for a kept devspace; neither without a devspace; `canCloseAndKeepRunning`
    * for the devspace of this window; and `canChooseAccount` when two or more accounts of Devspaces can access the
@@ -536,25 +533,17 @@ export function containerRuns(state: DevspaceState | undefined): boolean {
 }
 
 /**
- * Actions of a row. `state` is `undefined` for a row without devspace. `busyOperation` is the operation of the live
- * busy mark while the state is `updating`. Delete is possible in every state; during an operation of another window it
- * runs after that operation, and it is hidden only while the devspace is being deleted. Start, Stop, and Rebuild are
- * hidden while the devspace is updating: a busy devspace is in use and must not be stopped or changed.
+ * Actions of a row. `state` is `undefined` for a row without devspace. Start and Stop are hidden while the devspace is
+ * updating: a busy devspace is in use and must not be stopped or changed. Delete and Rebuild are management actions of
+ * the view "Docker Hosts" (R-ENG-008), on the rows of the objects of the devspace there, and in the Command Palette.
  */
-export function rowActions(
-  state: DevspaceState | undefined,
-  info: RepositoryInfo | undefined,
-  busyOperation?: BusyOperation,
-  servicesRunning = false,
-): RowActions {
+export function rowActions(state: DevspaceState | undefined, info: RepositoryInfo | undefined, servicesRunning = false): RowActions {
   const hasDevspace = state !== undefined;
   return {
     canStart: state !== 'connected' && state !== 'updating',
     // Also while only other services of Docker Compose or another dev container of the devspace run (the dev
     // container is stopped).
     canStop: containerRuns(state) || (servicesRunning && hasDevspace && state !== 'updating'),
-    canDelete: hasDevspace && !(state === 'updating' && busyOperation === 'delete'),
-    canRebuild: hasDevspace && state !== 'updating',
     onGitHub: info !== undefined,
   };
 }
@@ -572,8 +561,6 @@ export function contextValue(actions: RowActions, checks?: HostAccessChecks, kep
   const flags = ['repository'];
   if (actions.canStart) flags.push('canStart');
   if (actions.canStop) flags.push('canStop');
-  if (actions.canDelete) flags.push('canDelete');
-  if (actions.canRebuild) flags.push('canRebuild');
   if (actions.onGitHub) flags.push('onGitHub');
   if (checks === 'on') flags.push('hostAccessChecked');
   if (checks === 'off') flags.push('hostAccessUnrestricted');
@@ -957,7 +944,7 @@ function devspaceRow(
   // The state is the one of the dev container; running side services keep Stop and are named, and so does another
   // running dev container of the devspace.
   const servicesRunning = input.runtime?.get(devspace.id)?.servicesRunning === true && !containerRuns(state) && state !== 'updating';
-  const actions = rowActions(state, info, state === 'updating' ? devspace.busy?.operation : undefined, servicesRunning);
+  const actions = rowActions(state, info, servicesRunning);
   const liveBranch = containerRuns(state) || state === 'updating' ? input.liveBranches.get(devspace.id) : undefined;
   const branch = nonEmpty(liveBranch) ?? nonEmpty(devspace.gitSummary?.branch ?? undefined);
   const notOnGitHub = input.signedIn && input.discovery !== undefined && info === undefined && confirmedMissing;

@@ -4856,7 +4856,7 @@ describe('Remove Devspaces from This Computer…', () => {
     );
   });
 
-  it('is a command of package.json, in the Command Palette and last in the "…" menu of the repository view', () => {
+  it('is a command of package.json, in the Command Palette and only in the context menu of the VM row of the view Docker Hosts', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -4866,11 +4866,17 @@ describe('Remove Devspaces from This Computer…', () => {
       category: 'Devspaces',
     });
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
-    // Not in the view "Docker Hosts", whose actions are off by default (devspaces.dockerHostsActions), and not on a row.
-    expect(manifest.contributes.menus['view/title'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
-      { command: Commands.removeFromComputer, when: 'view == devspaces.repositories', group: '3_remove@1' },
+    // A management action of the view "Docker Hosts" (R-ENG-008): no longer in the "…" menu of the repository view, never a
+    // button, and only while the actions of the view and the removals are on (devspaces.dockerHostsActions and
+    // devspaces.allowDestructiveActions, both off by default).
+    expect(manifest.contributes.menus['view/title'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
+    expect(manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
+      {
+        command: Commands.removeFromComputer,
+        when: 'view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/ && config.devspaces.allowDestructiveActions',
+        group: '5_removeComputer@1',
+      },
     ]);
-    expect(manifest.contributes.menus['view/item/context'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
   });
 });
 
@@ -6811,16 +6817,18 @@ describe('Start in a new window', () => {
       '1_actions@2 devspaces.startInCurrentWindow',
       '1_actions@3 devspaces.startWithAccount',
       '1_actions@4 devspaces.stop',
-      '1_actions@5 devspaces.delete',
       '1_actions@6 devspaces.keepRunning',
       '1_actions@6 devspaces.stopWhenClosed',
       '1_actions@7 devspaces.closeAndKeepRunning',
     ]);
-    // The buttons of a row are Start, Stop and the ⋯ submenu; Delete is in the submenu (last, in its own group) and in
-    // the context menu, not next to Stop.
+    // The buttons of a row are Start, Stop and the ⋯ submenu. Delete and Rebuild are management actions of the view
+    // "Docker Hosts" (R-ENG-008): neither is in a menu of the repository view; the Command Palette keeps them.
     const inline = repositoryItems.filter((item) => item.group?.startsWith('inline@')).map((item) => `${item.group} ${item.command ?? item.submenu}`);
     expect(inline).toEqual(['inline@1 devspaces.start', 'inline@2 devspaces.stop', 'inline@4 devspaces.more']);
-    expect(menus['devspaces.more'].at(-1)).toEqual({ command: Commands.delete, when: 'viewItem =~ /canDelete/', group: '3_delete@1' });
+    for (const command of [Commands.delete, Commands.rebuild]) {
+      expect([...repositoryItems, ...menus['devspaces.more']].some((item) => item.command === command), command).toBe(false);
+      expect(menus.commandPalette.some((item) => item.command === command), command).toBe(false);
+    }
     // The settings of the default image: the image, and the place of its row.
     expect(manifest.contributes.configuration.properties[`${SETTINGS_SECTION}.defaultImage`]).toMatchObject({ type: 'string', scope: 'application', default: '' });
     expect(manifest.contributes.configuration.properties[`${SETTINGS_SECTION}.startWithDefaultImage`]).toMatchObject({ type: 'boolean', scope: 'application', default: true });

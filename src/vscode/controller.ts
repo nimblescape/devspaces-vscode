@@ -648,6 +648,7 @@ export class Controller implements vscode.Disposable {
     // repository view pass no row of the view, so their commands stay.
     const hostsViewActions = new Set<CommandName>([
       'stop',
+      'rebuild',
       'delete',
       'updateImagesNow',
       'removeFromDockerEngine',
@@ -663,13 +664,15 @@ export class Controller implements vscode.Disposable {
       'stopVm',
       'removeVm',
       'resetVm',
+      'removeFromComputer',
       'vmSettings',
     ]);
-    // The commands of the view "Docker Hosts" that remove or delete something (R-ENG-008): only in the context menu of a
-    // row, and only while the setting devspaces.allowDestructiveActions is on as well; a run with a row of the view while
-    // it is off (a key binding, a menu that VS Code drew before the change) does nothing and says why. The Command
-    // Palette and the repository view pass no row of the view, so their commands stay.
-    const hostsViewRemovals = new Set<CommandName>(['delete', 'removeFromDockerEngine', 'removeDockerHostFromList', 'pruneBuildCache', 'removeDockerObjects', 'removeVm', 'resetVm']);
+    // The commands of the view "Docker Hosts" that remove or delete something (R-ENG-008), also Rebuild, which removes the
+    // dev container and creates it again: only in the context menu of a row, and only while the setting
+    // devspaces.allowDestructiveActions is on as well; a run with a row of the view while it is off (a key binding, a
+    // menu that VS Code drew before the change) does nothing and says why. The Command Palette passes no row of the view,
+    // so its commands stay.
+    const hostsViewRemovals = new Set<CommandName>(['rebuild', 'delete', 'removeFromDockerEngine', 'removeDockerHostFromList', 'pruneBuildCache', 'removeDockerObjects', 'removeVm', 'resetVm', 'removeFromComputer']);
     const run = async (name: CommandName, argument: unknown, selection: unknown): Promise<void> => {
       // Enter on a row whose command is another command of Devspaces (the Sign in row, the Docker host row) ends with
       // that command: a click on a repository row right after it only selects that row (rowActivation.ts).

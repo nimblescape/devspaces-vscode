@@ -229,7 +229,7 @@ describe('the command Update All Images Now', () => {
     expect(fakeVscode.window.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it('is a command of package.json, in the Command Palette and in the "…" menu of the view', () => {
+  it('is a command of package.json, in the Command Palette and in the context menu of each host row of the view Docker Hosts', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: { commands: Array<{ command: string; title: string; category: string }>; menus: Record<string, Array<{ command: string; when?: string; group?: string }>> };
     };
@@ -243,11 +243,9 @@ describe('the command Update All Images Now', () => {
     });
     // Not hidden in the Command Palette.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.updateImagesNow)).toBe(false);
-    expect(manifest.contributes.menus['view/title'].find((entry) => entry.command === Commands.updateImagesNow)).toEqual({
-      command: Commands.updateImagesNow,
-      when: 'view == devspaces.repositories',
-      group: '2_maintenance@1',
-    });
+    // A management action of the view "Docker Hosts" (R-ENG-008): no longer in the "…" menu of the repository view.
+    expect(manifest.contributes.menus['view/title'].some((entry) => entry.command === Commands.updateImagesNow)).toBe(false);
+    expect(manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.updateImagesNow).map((entry) => entry.group)).toEqual(['inline@3', '2_engine@1']);
   });
 });
 

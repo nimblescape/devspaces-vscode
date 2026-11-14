@@ -94,7 +94,7 @@ describe('RepositoriesTreeProvider', () => {
       description: 'main   Connected',
       // The flag of the host access checks (on by default), Keep Running When Closed (off by default), and Close and
       // Keep Running for the devspace of this window.
-      contextValue: 'repository;canStop;canDelete;canRebuild;onGitHub;hostAccessChecked;canKeepRunning;canCloseAndKeepRunning',
+      contextValue: 'repository;canStop;onGitHub;hostAccessChecked;canKeepRunning;canCloseAndKeepRunning',
     });
     // The switched-on monitor with the connection sign (the icon font of the extension).
     expect((apiItem.iconPath as ThemeIcon).id).toBe('devspaces-monitor-connected');
