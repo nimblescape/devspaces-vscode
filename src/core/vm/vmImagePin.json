@@ -1,29 +1,29 @@
 {
-  "version": "13.20261109.1850",
+  "version": "13.20261116.1323",
   "repository": "ghcr.io/nimblescape/devspaces-vm",
   "files": {
     "amd64": {
       "wsl": {
         "name": "devspaces-vm-amd64.wsl",
-        "digest": "sha256:3f7fd2e79aff4a543c4510721aefec8580a976a41e5f6378e0bfd6b5a9cd94aa",
-        "size": 197134667
+        "digest": "sha256:115588db45af62e82c524893b7eb1257ec2cb58492dcc29d8457dc2403006d27",
+        "size": 188425036
       },
       "lima": {
         "name": "devspaces-vm-amd64.qcow2",
-        "digest": "sha256:b395b74e969fa3fddf31b51939d82780b3b358f57146639543810f302956c470",
-        "size": 290914304
+        "digest": "sha256:1da33641cf94603c6e946cb8b57da260176ec75a73f6a50fe355914517981897",
+        "size": 282066944
       }
     },
     "arm64": {
       "wsl": {
         "name": "devspaces-vm-arm64.wsl",
-        "digest": "sha256:45663a5655c137b84f841c1b5b5a1b814ade7913f4e794dd15b7c40671def561",
-        "size": 188437486
+        "digest": "sha256:f2c95d8dccf7654423dbbd38c99b71b3d3931415dccedc7115664bf2b8450263",
+        "size": 180278459
       },
       "lima": {
         "name": "devspaces-vm-arm64.qcow2",
-        "digest": "sha256:24ba953259a57ebd28f8d3875326d1d4afdf1456cfa9f77245e879d38c00819b",
-        "size": 281018368
+        "digest": "sha256:78a2e8e481b47ba68f4984d41edb92efbfb0dcaed80967131a84b4bd48dae7c5",
+        "size": 272957440
       }
     }
   }
