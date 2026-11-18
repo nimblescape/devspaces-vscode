@@ -8,7 +8,7 @@ import { errorMessage } from '../core/errors';
 import { HOST_ACCESS_CHECKS_OFF_SETTING, parseHostAccessChecksOff } from '../core/policy/hostAccessChecks';
 import { Actions, Messages } from '../core/messages';
 import type { Logger } from '../core/ports';
-import { DOCKER_HOSTS_ACTIONS, type DockerHostsActions, type ExtensionSettings, type UpdateContainer } from '../core/types';
+import { DOCKER_HOSTS_ACTIONS, type DockerHostsActions, type DockerHostsViewMode, type ExtensionSettings, type UpdateContainer } from '../core/types';
 import { DEFAULT_CACHE_UPDATE_SCHEDULE, normalizeCacheSchedule, parseCacheSchedule } from '../core/remoteMonitor/cacheSettings';
 import { parseImageReference } from '../core/remoteMonitor/protocol';
 import { DEFAULT_VM_CPUS, DEFAULT_VM_MEMORY_GIB, limaResources } from '../core/vm/limaInstance';
@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS: Readonly<ExtensionSettings> = Object.freeze({
   vmMemoryGiB: DEFAULT_VM_MEMORY_GIB,
   vmCpus: DEFAULT_VM_CPUS,
   createDockerContext: false,
+  dockerHostsView: 'simple',
   dockerHostsActions: 'disabled',
   allowDestructiveActions: false,
   allowContainerLogs: false,
@@ -336,6 +337,8 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
     vmMemoryGiB: wholeNumber(get('vmMemoryGiB'), DEFAULT_VM_MEMORY_GIB),
     vmCpus: wholeNumber(get('vmCpus'), DEFAULT_VM_CPUS),
     createDockerContext: bool('createDockerContext', DEFAULT_SETTINGS.createDockerContext ?? false),
+    // One of its two values, else the default `simple`.
+    dockerHostsView: dockerHostsViewOf(get('dockerHostsView')),
     // One of its three values, else the default `disabled`: a value that is not known shows no action.
     dockerHostsActions: dockerHostsActionsOf(get('dockerHostsActions')),
     allowDestructiveActions: bool('allowDestructiveActions', DEFAULT_SETTINGS.allowDestructiveActions ?? false),
@@ -349,6 +352,27 @@ export function normalizeSettings(get: (key: keyof ExtensionSettings) => unknown
 /** The setting updateContainer: `notify` or `ask` as written, anything else the default `yes`. */
 function updateContainer(value: unknown): UpdateContainer {
   return value === 'notify' || value === 'ask' ? value : 'yes';
+}
+
+/**
+ * Whether the view Docker Hosts is the simple view (setting dockerHostsView `simple`, the default): only the Docker host
+ * of Devspaces with the devspaces of this computer there, and their management actions always (R-ENG-008).
+ */
+export function simpleDockerHostsView(settings: Pick<ExtensionSettings, 'dockerHostsView'>): boolean {
+  return settings.dockerHostsView !== 'full';
+}
+
+/** The value of the setting dockerHostsView: `full` as written, anything else the default `simple`. */
+export function dockerHostsViewOf(value: unknown): DockerHostsViewMode {
+  return value === 'full' ? 'full' : 'simple';
+}
+
+/**
+ * Whether the row of a stopped VM, the report pages and the utilization pages may start the VM of Devspaces: always in
+ * the simple view, whose host row has Start the VM in every case, else with the actions of the view.
+ */
+export function dockerHostsVmStartAllowed(settings: Pick<ExtensionSettings, 'dockerHostsView' | 'dockerHostsActions'>): boolean {
+  return simpleDockerHostsView(settings) || dockerHostsActionsAllowed(settings);
 }
 
 /** Whether the setting dockerHostsActions allows the actions of the view Docker Hosts (`contextMenu` or `icons`). */

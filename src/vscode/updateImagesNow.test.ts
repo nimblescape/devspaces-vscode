@@ -243,9 +243,14 @@ describe('the command Update All Images Now', () => {
     });
     // Not hidden in the Command Palette.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.updateImagesNow)).toBe(false);
-    // A management action of the view "Docker Hosts" (R-ENG-008): no longer in the "…" menu of the repository view.
+    // A management action of the view "Docker Hosts" (R-ENG-008): no longer in the "…" menu of the repository view; in the
+    // full view with the actions of the view (a button with Icons), on the host row of the simple view always.
     expect(manifest.contributes.menus['view/title'].some((entry) => entry.command === Commands.updateImagesNow)).toBe(false);
-    expect(manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.updateImagesNow).map((entry) => entry.group)).toEqual(['inline@3', '2_engine@1']);
+    expect(manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.updateImagesNow).map((entry) => [entry.group, entry.when])).toEqual([
+      ['inline@3', 'view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions == icons'],
+      ['2_engine@1', 'view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/'],
+      ['1_engine@2', 'view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/'],
+    ]);
   });
 });
 

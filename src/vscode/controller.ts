@@ -75,7 +75,7 @@ import type { ContainerLogs } from './containerLogs';
 import type { ContentFiles } from './contentFiles';
 import type { ReportPages } from './reportPage';
 import type { UsagePages } from './usagePage';
-import { hostOfArgument, hostOfNode } from './dockerHostsModel';
+import { hostOfArgument, hostOfNode, isSimpleRow } from './dockerHostsModel';
 import type { VmCommands } from './vmCommands';
 import type { HostConsoles } from './hostConsole';
 import type { RepositoryGroupsEditor } from './repositoryGroupsEditor';
@@ -86,6 +86,7 @@ import {
   SETTINGS_SECTION,
   dockerHostsActionsAllowed,
   dockerHostsDestructiveAllowed,
+  simpleDockerHostsView,
   hostAccessChecksOffValue,
   openSetting,
   readListOpenMode,
@@ -642,10 +643,10 @@ export class Controller implements vscode.Disposable {
     // The commands of the engine that a host row of the view "Docker Hosts" passes: on that host, whatever host
     // Devspaces uses now.
     const hostCommands = new Set<CommandName>(['updateImagesNow', 'removeFromDockerEngine']);
-    // The commands that change something from a row of the view "Docker Hosts" (R-ENG-008). While the setting
-    // devspaces.dockerHostsActions is Disabled, the view shows none of them; a run with a row of the view (a key binding,
-    // a button of a row that VS Code drew before the change) does nothing and says why. The Command Palette and the
-    // repository view pass no row of the view, so their commands stay.
+    // The commands that change something from a row of the full view "Docker Hosts" (R-ENG-008). While the setting
+    // devspaces.dockerHostsActions is Disabled, the full view shows none of them; a run with a row of the full view (a key
+    // binding, a button of a row that VS Code drew before the change) does nothing and says why. The Command Palette and
+    // the repository view pass no row of the view, so their commands stay.
     const hostsViewActions = new Set<CommandName>([
       'stop',
       'rebuild',
@@ -666,6 +667,8 @@ export class Controller implements vscode.Disposable {
       'resetVm',
       'removeFromComputer',
       'vmSettings',
+      'turnOffHostAccessChecks',
+      'turnOnHostAccessChecks',
     ]);
     // The commands of the view "Docker Hosts" that remove or delete something (R-ENG-008), also Rebuild, which removes the
     // dev container and creates it again: only in the context menu of a row, and only while the setting
@@ -673,20 +676,17 @@ export class Controller implements vscode.Disposable {
     // menu that VS Code drew before the change) does nothing and says why. The Command Palette passes no row of the view,
     // so its commands stay.
     const hostsViewRemovals = new Set<CommandName>(['rebuild', 'delete', 'removeFromDockerEngine', 'removeDockerHostFromList', 'pruneBuildCache', 'removeDockerObjects', 'removeVm', 'resetVm', 'removeFromComputer']);
+    // The simple view (setting devspaces.dockerHostsView `simple`) has the management actions of its rows always: Stop,
+    // Rebuild and Delete… of a devspace, the host access checks, and the actions of the host and of the VM, whatever
+    // devspaces.dockerHostsActions says. Only its removals of the engine, of the VM and of the computer need
+    // devspaces.allowDestructiveActions. A row of the simple view while the setting is `full` counts as a row of the
+    // full view (a menu that VS Code drew before the change).
+    const simpleViewRemovals = new Set<CommandName>([...hostsViewRemovals].filter((name) => name !== 'rebuild' && name !== 'delete'));
     const run = async (name: CommandName, argument: unknown, selection: unknown): Promise<void> => {
       // Enter on a row whose command is another command of Devspaces (the Sign in row, the Docker host row) ends with
       // that command: a click on a repository row right after it only selects that row (rowActivation.ts).
       if (name !== 'rowEnter' && name !== 'rowActivated') this.rowActivations.forgetEnter();
-      if (hostsViewActions.has(name) && hostOfNode(argument) !== undefined && !dockerHostsActionsAllowed(this.deps.settings())) {
-        this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.dockerHostsActions is Disabled.`);
-        this.informHostsViewReadOnly();
-        return;
-      }
-      if (hostsViewRemovals.has(name) && hostOfNode(argument) !== undefined && !dockerHostsDestructiveAllowed(this.deps.settings())) {
-        this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.allowDestructiveActions is off.`);
-        this.informHostsViewNoDestructive();
-        return;
-      }
+      if (hostOfNode(argument) !== undefined && !this.hostsViewAllows(name, argument, { hostsViewActions, hostsViewRemovals, simpleViewRemovals })) return;
       const host = hostCommands.has(name) ? hostOfArgument(argument) : undefined;
       try {
         if (ownTarget.has(name)) await handlers[name](argument, selection);
@@ -4610,6 +4610,38 @@ export class Controller implements vscode.Disposable {
   }
 
   /** A row of the view Docker Hosts asked for an action while the view is read only: why, and the setting to change. */
+  /**
+   * Whether the settings allow `name` with `argument`, a row of the view Docker Hosts; else it logs and says why. A row of
+   * the simple view (while the setting dockerHostsView is `simple`) needs only allowDestructiveActions, and only for the
+   * commands of `simpleViewRemovals`; a row of the full view needs dockerHostsActions for `hostsViewActions`, and also
+   * allowDestructiveActions for `hostsViewRemovals`.
+   */
+  private hostsViewAllows(
+    name: CommandName,
+    argument: unknown,
+    sets: { hostsViewActions: ReadonlySet<CommandName>; hostsViewRemovals: ReadonlySet<CommandName>; simpleViewRemovals: ReadonlySet<CommandName> },
+  ): boolean {
+    if (!sets.hostsViewActions.has(name) && !sets.hostsViewRemovals.has(name)) return true;
+    const settings = this.deps.settings();
+    if (isSimpleRow(argument) && simpleDockerHostsView(settings)) {
+      if (!sets.simpleViewRemovals.has(name) || settings.allowDestructiveActions === true) return true;
+      this.logger.info(`${Commands[name]} on a row of the simple view Docker Hosts: not run, the setting devspaces.allowDestructiveActions is off.`);
+      this.informHostsViewNoDestructive();
+      return false;
+    }
+    if (sets.hostsViewActions.has(name) && !dockerHostsActionsAllowed(settings)) {
+      this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.dockerHostsActions is Disabled.`);
+      this.informHostsViewReadOnly();
+      return false;
+    }
+    if (sets.hostsViewRemovals.has(name) && !dockerHostsDestructiveAllowed(settings)) {
+      this.logger.info(`${Commands[name]} on a row of the view Docker Hosts: not run, the setting devspaces.allowDestructiveActions is off.`);
+      this.informHostsViewNoDestructive();
+      return false;
+    }
+    return true;
+  }
+
   private informHostsViewReadOnly(): void {
     showInformationMessage(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings).then(
       (choice) => {

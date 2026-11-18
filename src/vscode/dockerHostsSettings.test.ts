@@ -21,9 +21,12 @@ beforeEach(() => {
 });
 
 describe('dockerHostsSettingsItems', () => {
-  it('lists a group per setting of the view (actions, removals, logs, files, console), the current values marked', () => {
-    const items = dockerHostsSettingsItems({ dockerHostsActions: 'contextMenu', allowDestructiveActions: true, allowContainerLogs: false });
+  it('lists a group per setting of the view (view, actions, removals, logs, files, console), the current values marked', () => {
+    const items = dockerHostsSettingsItems({ dockerHostsView: 'full', dockerHostsActions: 'contextMenu', allowDestructiveActions: true, allowContainerLogs: false });
     expect(items.map((item) => item.label)).toEqual([
+      DockerHostsSettingsTexts.viewGroup,
+      '$(blank) Simple',
+      '$(check) Full',
       DockerHostsSettingsTexts.actionsGroup,
       '$(blank) Disabled',
       '$(check) Context Menu',
@@ -41,8 +44,9 @@ describe('dockerHostsSettingsItems', () => {
       '$(blank) Show',
       '$(check) Hide',
     ]);
-    expect(items.filter((item) => item.kind === fakeVscode.QuickPickItemKind.Separator)).toHaveLength(5);
+    expect(items.filter((item) => item.kind === fakeVscode.QuickPickItemKind.Separator)).toHaveLength(6);
     expect(items.filter((item) => item.description === DockerHostsSettingsTexts.current).map((item) => item.choice)).toEqual([
+      { key: 'dockerHostsView', value: 'full' },
       { key: 'dockerHostsActions', value: 'contextMenu' },
       { key: 'allowDestructiveActions', value: true },
       { key: 'allowContainerLogs', value: false },
@@ -51,6 +55,7 @@ describe('dockerHostsSettingsItems', () => {
     ]);
     // Without values: the defaults.
     expect(dockerHostsSettingsItems({}).filter((item) => item.description === DockerHostsSettingsTexts.current).map((item) => item.choice?.value)).toEqual([
+      'simple',
       'disabled',
       false,
       false,

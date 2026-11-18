@@ -15,6 +15,9 @@ import {
   DEFAULT_SETTINGS,
   devContainersDefaultExtensionsValue,
   dockerHostsActionsAllowed,
+  dockerHostsViewOf,
+  dockerHostsVmStartAllowed,
+  simpleDockerHostsView,
   githubEnterpriseConfigured,
   MAX_REFRESH_INTERVAL_MINUTES,
   normalizeSettings,
@@ -71,7 +74,9 @@ describe('settings', () => {
       vmCpus: 4,
       // No Docker context for the VM.
       createDockerContext: false,
-      // The view Docker Hosts is read only, no log of a container, and neither button (R-ENG-008, R-ENG-010).
+      // The simple view Docker Hosts: only the Docker host of Devspaces with the devspaces of this computer (R-ENG-008).
+      dockerHostsView: 'simple',
+      // The full view Docker Hosts is read only, no log of a container, and neither button (R-ENG-008, R-ENG-010).
       dockerHostsActions: 'disabled',
       // No action of the view that removes or deletes something (R-ENG-008).
       allowDestructiveActions: false,
@@ -92,6 +97,22 @@ describe('settings', () => {
     expect(dockerHostsActionsAllowed({})).toBe(false);
     expect(dockerHostsActionsAllowed({ dockerHostsActions: 'contextMenu' })).toBe(true);
     expect(dockerHostsActionsAllowed({ dockerHostsActions: 'icons' })).toBe(true);
+  });
+
+  it('reads dockerHostsView as full only when written so, any other value as simple', () => {
+    const of = (value: unknown) => normalizeSettings((key) => (key === 'dockerHostsView' ? value : undefined)).dockerHostsView;
+    expect(of('full')).toBe('full');
+    expect(of('simple')).toBe('simple');
+    for (const value of ['Full', 'all', '', true, 1, null, undefined, ['full']]) expect(of(value)).toBe('simple');
+    expect(dockerHostsViewOf('full')).toBe('full');
+    expect(simpleDockerHostsView({ dockerHostsView: 'simple' })).toBe(true);
+    expect(simpleDockerHostsView({})).toBe(true);
+    expect(simpleDockerHostsView({ dockerHostsView: 'full' })).toBe(false);
+    // The simple view starts the VM always (its host row has Start the VM in every case); the full view only with its
+    // actions.
+    expect(dockerHostsVmStartAllowed({ dockerHostsView: 'simple', dockerHostsActions: 'disabled' })).toBe(true);
+    expect(dockerHostsVmStartAllowed({ dockerHostsView: 'full', dockerHostsActions: 'disabled' })).toBe(false);
+    expect(dockerHostsVmStartAllowed({ dockerHostsView: 'full', dockerHostsActions: 'contextMenu' })).toBe(true);
   });
 
   it('reads defaultImage as a trimmed image reference, and ignores an invalid one', () => {

@@ -635,3 +635,134 @@ describe('DockerHostsView: the update every 30 seconds', () => {
     expect((await objectRowsOf(provider, 'lab')).map((object) => object.object.name)).not.toContain('shop-web-1');
   });
 });
+
+// The simple view (setting devspaces.dockerHostsView `simple`, R-ENG-008): only the Docker host of Devspaces, open from
+// the start, with one row per devspace of this computer there, and the update of that host while its row is open.
+describe('DockerHostsView: the simple view', () => {
+  const { EventEmitter } = fakeVscode;
+  let simple: boolean;
+  let checkText: string;
+  let check: Mock<NonNullable<DockerHostsDeps['check']>>;
+  let checksOff: string[];
+  const devContainer: HostObject = { kind: 'container', id: 'c-dev', name: 'devspaces-majikmate-web', purpose: 'devspace', devspaceId: 'id-1', repository: 'majikmate/web', role: 'dev container', state: 'running' };
+  let tree: HostsTree & { visible: boolean; expand(row: HostRow): void; collapse(row: HostRow): void };
+
+  function simpleView(): DockerHostsView {
+    const provider = new DockerHostsView({
+      logger,
+      showLog: vi.fn(),
+      actionsAllowed: () => false,
+      simpleView: () => simple,
+      devspaces: async (host) => (host === LIMA_HOST ? [{ id: 'id-1', repository: 'majikmate/web', source: 'config' }] : []),
+      hostAccessChecks: (repository) => (checksOff.includes(repository) ? 'off' : 'on'),
+      vmHost: LIMA_HOST,
+      hostList: async () => ({ hosts, selected }),
+      vmState: async () => vmState,
+      read,
+      check,
+      stopContainer,
+      startContainer,
+      pruneBuildCache,
+      removeObjects,
+      removeFromList,
+    });
+    provider.onDidChangeTreeData((node) => fired.push(node));
+    return provider;
+  }
+
+  beforeEach(() => {
+    simple = true;
+    checkText = 'A';
+    checksOff = [];
+    check = vi.fn(async () => checkText);
+    read.mockImplementation(async () => ({ ...inventory(), containers: [devContainer, worker] }));
+    const expands = new EventEmitter<{ element: HostsNode }>();
+    const collapses = new EventEmitter<{ element: HostsNode }>();
+    const visibility = new EventEmitter<{ visible: boolean }>();
+    tree = {
+      visible: true,
+      onDidExpandElement: expands.event as HostsTree['onDidExpandElement'],
+      onDidCollapseElement: collapses.event as HostsTree['onDidCollapseElement'],
+      onDidChangeVisibility: visibility.event as HostsTree['onDidChangeVisibility'],
+      expand: (row) => expands.fire({ element: row }),
+      collapse: (row) => collapses.fire({ element: row }),
+    };
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows only the Docker host of Devspaces, open, with its devspaces and their actions, and follows a change of the host', async () => {
+    const provider = simpleView();
+    const rows = (await provider.getChildren()) as HostRow[];
+    expect(rows).toEqual([{ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState, simple: true }]);
+    const item = provider.getTreeItem(rows[0]) as TreeItem;
+    expect(item.collapsibleState).toBe(fakeVscode.TreeItemCollapsibleState.Expanded);
+    expect(item.contextValue).toMatch(/^simpleHost;vm;/);
+    const children = await provider.getChildren(rows[0]);
+    expect(read).toHaveBeenCalledTimes(1);
+    // One devspace of this computer: the workspace volume and the dev container; the worker and the volume of another
+    // computer are not shown.
+    expect(children).toHaveLength(1);
+    const [devspace] = children as Array<Extract<HostsNode, { hostsNode: 'devspace' }>>;
+    expect(devspace).toMatchObject({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'id-1', repository: 'majikmate/web', report: devContainer });
+    expect(devspace.objects.map((object) => object.id)).toEqual(['c-dev', 'v-ws']);
+    const devspaceItem = provider.getTreeItem(devspace) as TreeItem;
+    expect(devspaceItem.label).toBe('majikmate/web');
+    // The actions are there although the full view would be read only.
+    expect(devspaceItem.contextValue).toBe('simpleDevspace;canStopDevspace;canRebuildDevspace;canDeleteDevspace;hostAccessChecked;hasReport');
+    // A click opens the report of the dev container.
+    expect((devspaceItem.command as { command?: string } | undefined)?.command).toBe('vscode.open');
+    // The switch of the host access checks follows the settings at the next show.
+    checksOff = ['majikmate/web'];
+    expect((provider.getTreeItem(devspace) as TreeItem).contextValue).toContain('hostAccessUnrestricted');
+    // Another Docker host in the repository view: the view shows that host.
+    selected = 'lab';
+    expect(((await provider.getChildren()) as HostRow[]).map((row) => [row.host, row.simple])).toEqual([['lab', true]]);
+    read.mockImplementationOnce(async () => ({ ...inventory(), volumes: [foreignVolume] }));
+    const lab = await provider.getChildren(((await provider.getChildren()) as HostRow[])[0]);
+    // No devspace of this computer on lab: a note.
+    expect(lab).toEqual([{ hostsNode: 'message', host: 'lab', message: 'noDevspaces', simple: true }]);
+  });
+
+  it('shows the stopped VM with a row that starts it in every mode, and reads nothing there', async () => {
+    vmState = { kind: 'stopped' };
+    const provider = simpleView();
+    const [row] = (await provider.getChildren()) as HostRow[];
+    const children = (await provider.getChildren(row)) as MessageRow[];
+    expect(children).toEqual([{ hostsNode: 'message', host: LIMA_HOST, message: 'vmStopped', simple: true }]);
+    expect(((provider.getTreeItem(children[0]) as TreeItem).command as { command?: string } | undefined)?.command).toBe('devspaces.startVm');
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('updates its open host every 30 seconds without an expand event, and stops while its row is closed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const provider = simpleView();
+    provider.watch(tree);
+    const [row] = (await provider.getChildren()) as HostRow[];
+    await provider.getChildren(row);
+    expect(check).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(2);
+    checkText = 'B';
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    tree.collapse(row);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(3);
+    tree.expand(row);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(4);
+    // The full view: all hosts again, closed; the host of the simple view is not updated while its full row is closed.
+    simple = false;
+    const full = (await provider.getChildren()) as HostRow[];
+    expect(full.map((entry) => [entry.host, entry.simple])).toEqual([
+      [LIMA_HOST, undefined],
+      ['lab', undefined],
+    ]);
+    await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(4);
+    provider.dispose();
+  });
+});

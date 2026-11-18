@@ -39,6 +39,8 @@ import {
   type DockerTarget,
 } from '../core/docker/dockerHost';
 import { RemovedEngineError, removedEngineImageNote, removedEngineNote } from '../core/docker/engineRemoval';
+import { sourceLabel, sourceOf } from '../core/devspaceSource';
+import { hostAccessChecks } from '../core/policy/hostAccessChecks';
 import { ensureDockerRunning, launchDetachedProcess } from '../core/docker/dockerStart';
 import { DockerTargets, operationDockerTarget, outsideOperation, runWithDockerTarget, withoutMissingVm } from '../core/docker/dockerTargets';
 import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
@@ -152,9 +154,11 @@ import {
   affectsSettings,
   devContainersDefaultExtensionsValue,
   dockerHostsActionsAllowed,
+  dockerHostsVmStartAllowed,
   readSettings,
   SETTINGS_SECTION,
   showSettingWarning,
+  simpleDockerHostsView,
   warnInvalidCacheUpdateSchedule,
   warnInvalidDefaultImage,
   warnVmResources,
@@ -1546,7 +1550,8 @@ async function activateExtension(
     vmState: readVmState,
     vmStopping: () => vmHost === WSL_HOST && keeper.stopping(WSL_DISTRIBUTION),
     startVm: () => vmCommands.start(),
-    actionsAllowed: () => dockerHostsActionsAllowed(settings),
+    // Start the VM: always in the simple view, whose host row has it in every case.
+    actionsAllowed: () => dockerHostsVmStartAllowed(settings),
     readSizes: readInventory,
     ...(vmDiskFolder !== undefined ? { localDiskFree: () => freeSpace(vmDiskFolder) } : {}),
   });
@@ -1610,7 +1615,7 @@ async function activateExtension(
     showLog: (log) => containerLogs.show(log),
     showFiles: (files) => contentFiles.show(files),
     clock: () => ({ now: Date.now(), timeZone: usableTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone) }),
-    allowed: () => ({ actions: dockerHostsActionsAllowed(settings), logs: settings.allowContainerLogs === true, files: settings.allowContentReads === true }),
+    allowed: () => ({ actions: dockerHostsVmStartAllowed(settings), logs: settings.allowContainerLogs === true, files: settings.allowContentReads === true }),
   });
   context.subscriptions.push(reportPages);
   // Before a stop or a removal of the VM: its utilization page pauses, and the worker channel, the relay connection and
@@ -1630,6 +1635,9 @@ async function activateExtension(
     logger,
     showLog: () => logger.show(),
     actionsAllowed: () => dockerHostsActionsAllowed(settings),
+    simpleView: () => simpleDockerHostsView(settings),
+    devspaces: async (host) => devspacesOfHost(await registry.list(), host).map((devspace) => ({ id: devspace.id, repository: devspace.repository, source: sourceLabel(sourceOf(devspace)) })),
+    hostAccessChecks: (repository) => hostAccessChecks(repository, settings),
     vmHost,
     hostList: async () => {
       const file = await remoteState.read();
@@ -1989,6 +1997,7 @@ async function activateExtension(
       // The menus follow dockerHostsActions by themselves (`config.` in their `when`); the rows of the view and the report
       // pages show their actions and Show Log again.
       if (
+        event.affectsConfiguration(`${SETTINGS_SECTION}.dockerHostsView`) ||
         event.affectsConfiguration(`${SETTINGS_SECTION}.dockerHostsActions`) ||
         event.affectsConfiguration(`${SETTINGS_SECTION}.allowContainerLogs`) ||
         event.affectsConfiguration(`${SETTINGS_SECTION}.allowContentReads`)
@@ -1997,6 +2006,8 @@ async function activateExtension(
         reportPages.settingsChanged();
         usagePages.settingsChanged();
       }
+      // The menus of the devspaces in the view Docker Hosts follow the switch of their host access checks.
+      if (event.affectsConfiguration(`${SETTINGS_SECTION}.hostAccessChecksOff`)) dockerHosts.changed();
       // Another scan scope loads the list again at once.
       if (!sameScope(previous.owners, settings.owners)) {
         background(sidebar.onScopeChanged(), 'load the repository list of the selected organizations');
