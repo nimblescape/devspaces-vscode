@@ -492,6 +492,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
       this.shownSimple = simple;
       this.expanded.clear();
       this.simpleOpen = true;
+      this.userReads.clear();
     }
     const rows = hostRows({ vmHost: this.deps.vmHost, vmState, hosts, selected, simple });
     const simpleHost = simple ? rows[0]?.host : undefined;
@@ -595,7 +596,9 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     // A read of the full view, or a Refresh, is a flow of the user: a password login to a remote host may ask in VS Code.
     // The simple view reads its open host when it shows, which no user asked for: a login that asks nothing, and after
     // its failure on a remote host only a login that is open, as the update does.
-    const asks = row.simple !== true || this.userReads.delete(row.host);
+    // Each read takes the mark of its Refresh.
+    const refreshed = this.userReads.delete(row.host);
+    const asks = row.simple !== true || refreshed;
     const options = !asks && this.openLoginOnly.has(row.host) ? { openLoginOnly: true } : {};
     // The check comes first, so that a change during the read shows at the next update.
     const read = async (): Promise<HostEntry> => {
