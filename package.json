@@ -710,12 +710,12 @@
       "view/title": [
         {
           "command": "devspaces.useRemoteDockerHost",
-          "when": "view == devspaces.hosts && config.devspaces.dockerHostsActions == icons",
+          "when": "view == devspaces.hosts && config.devspaces.dockerHostsActions == icons && config.devspaces.dockerHostsView == full",
           "group": "navigation@1"
         },
         {
           "command": "devspaces.useRemoteDockerHost",
-          "when": "view == devspaces.hosts && config.devspaces.dockerHostsActions == contextMenu",
+          "when": "view == devspaces.hosts && config.devspaces.dockerHostsActions == contextMenu && config.devspaces.dockerHostsView == full",
           "group": "1_hosts@1"
         },
         {
@@ -946,6 +946,116 @@
           "group": "1_actions@2"
         },
         {
+          "command": "devspaces.turnOffHostAccessChecks",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;hostAccessChecked(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
+          "group": "2_hostAccess@1"
+        },
+        {
+          "command": "devspaces.turnOnHostAccessChecks",
+          "when": "view == devspaces.hosts && viewItem =~ /^hostsObject;.*;hostAccessUnrestricted(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/",
+          "group": "2_hostAccess@1"
+        },
+        {
+          "command": "devspaces.showUtilization",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/",
+          "group": "inline@0"
+        },
+        {
+          "command": "devspaces.openConsole",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/ && config.devspaces.dockerHostsConsoleButton",
+          "group": "inline@1"
+        },
+        {
+          "command": "devspaces.refreshDockerHosts",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/",
+          "group": "inline@2"
+        },
+        {
+          "command": "devspaces.showUtilization",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/",
+          "group": "0_report@1"
+        },
+        {
+          "command": "devspaces.setUpLimaVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;vmNotSetUp(;|$)/ && (isMac || isLinux)",
+          "group": "1_engine@1"
+        },
+        {
+          "command": "devspaces.setUpWslDistribution",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;vmNotSetUp(;|$)/ && isWindows",
+          "group": "1_engine@1"
+        },
+        {
+          "command": "devspaces.updateImagesNow",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/",
+          "group": "1_engine@2"
+        },
+        {
+          "command": "devspaces.startVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;vmCanStart(;|$)/",
+          "group": "1_engine@3"
+        },
+        {
+          "command": "devspaces.stopVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;vmCanStop(;|$)/",
+          "group": "1_engine@3"
+        },
+        {
+          "command": "devspaces.vmSettings",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;vm(;|$)/ && (isMac || isLinux)",
+          "group": "1_engine@4"
+        },
+        {
+          "command": "devspaces.removeFromDockerEngine",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/ && config.devspaces.allowDestructiveActions",
+          "group": "3_remove@1"
+        },
+        {
+          "command": "devspaces.removeVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;vmSetUp(;|$)/ && config.devspaces.allowDestructiveActions",
+          "group": "3_remove@2"
+        },
+        {
+          "command": "devspaces.resetVm",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;.*;vmSetUp(;|$)/ && config.devspaces.allowDestructiveActions",
+          "group": "3_remove@3"
+        },
+        {
+          "command": "devspaces.removeFromComputer",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleHost;vm(;|$)/ && config.devspaces.allowDestructiveActions",
+          "group": "3_remove@4"
+        },
+        {
+          "command": "devspaces.showResourceReport",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?hasReport(;|$)/",
+          "group": "0_report@1"
+        },
+        {
+          "command": "devspaces.stop",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?canStopDevspace(;|$)/",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "devspaces.rebuild",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?canRebuildDevspace(;|$)/",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "devspaces.delete",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?canDeleteDevspace(;|$)/",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "devspaces.turnOffHostAccessChecks",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?hostAccessChecked(;|$)/",
+          "group": "2_hostAccess@1"
+        },
+        {
+          "command": "devspaces.turnOnHostAccessChecks",
+          "when": "view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?hostAccessUnrestricted(;|$)/",
+          "group": "2_hostAccess@1"
+        },
+        {
           "command": "devspaces.start",
           "when": "view == devspaces.repositories && viewItem =~ /canStart/",
           "group": "inline@1"
@@ -1004,16 +1114,6 @@
           "command": "devspaces.showOnGitHub",
           "when": "view == devspaces.repositories && viewItem =~ /onGitHub/",
           "group": "2_more@4"
-        },
-        {
-          "command": "devspaces.turnOffHostAccessChecks",
-          "when": "view == devspaces.repositories && viewItem =~ /hostAccessChecked/",
-          "group": "3_hostAccess@1"
-        },
-        {
-          "command": "devspaces.turnOnHostAccessChecks",
-          "when": "view == devspaces.repositories && viewItem =~ /hostAccessUnrestricted/",
-          "group": "3_hostAccess@1"
         }
       ],
       "devspaces.more": [
@@ -1051,16 +1151,6 @@
           "command": "devspaces.showOnGitHub",
           "when": "viewItem =~ /onGitHub/",
           "group": "1_more@4"
-        },
-        {
-          "command": "devspaces.turnOffHostAccessChecks",
-          "when": "viewItem =~ /hostAccessChecked/",
-          "group": "2_hostAccess@1"
-        },
-        {
-          "command": "devspaces.turnOnHostAccessChecks",
-          "when": "viewItem =~ /hostAccessUnrestricted/",
-          "group": "2_hostAccess@1"
         }
       ]
     },
@@ -1287,8 +1377,23 @@
           "default": false,
           "markdownDescription": "Create the Docker context `devspaces` for the VM of Devspaces, for other Docker tools. It never becomes the current context; turning this off removes it. It gives full access: manage devspaces only with Devspaces.\n\nIt works while the VM runs (macOS, Linux) or while a window of Devspaces is open (Windows).\n\n[Other Docker tools in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#other-docker-tools)"
         },
-        "devspaces.dockerHostsActions": {
+        "devspaces.dockerHostsView": {
           "order": 23,
+          "type": "string",
+          "scope": "application",
+          "enum": [
+            "simple",
+            "full"
+          ],
+          "default": "simple",
+          "markdownDescription": "How the view Docker Hosts shows the hosts. Simple: only the Docker host of Devspaces, which the first row of the repository view chooses, with your devspaces there and their actions. Full: every host with all its objects, with the actions of `#devspaces.dockerHostsActions#`.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)",
+          "enumDescriptions": [
+            "Only the Docker host of Devspaces and your devspaces there. Their actions are always in the context menu; the removals of the engine, the VM and the computer need `#devspaces.allowDestructiveActions#`.",
+            "Every host with its containers, images, volumes, networks and build cache, with the actions that `#devspaces.dockerHostsActions#` allows."
+          ]
+        },
+        "devspaces.dockerHostsActions": {
+          "order": 24,
           "type": "string",
           "scope": "application",
           "enum": [
@@ -1297,7 +1402,7 @@
             "icons"
           ],
           "default": "disabled",
-          "markdownDescription": "The actions of the view Docker Hosts: Stop, Start, Remove… and Delete… of its objects, the actions of the hosts and of the VM of Devspaces, and the **+** that adds a remote host. In every mode, a click on an object opens its report, and **Refresh** and **Show Utilization** work.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)",
+          "markdownDescription": "The actions of the full view Docker Hosts (`#devspaces.dockerHostsView#`): Stop, Start, Remove… and Delete… of its objects, the actions of the hosts and of the VM, and the **+** that adds a remote host. In every mode, a click on an object opens its report, and **Refresh** and **Show Utilization** work.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)",
           "enumDescriptions": [
             "No actions: the view only shows the hosts and their objects.",
             "The actions only in the context menu of a row (right-click), and the + in the menu … of the view.",
@@ -1305,35 +1410,35 @@
           ]
         },
         "devspaces.allowDestructiveActions": {
-          "order": 24,
+          "order": 25,
           "type": "boolean",
           "scope": "application",
           "default": false,
-          "markdownDescription": "Allow the actions of the view Docker Hosts that remove or delete something (**Delete…** and **Rebuild** of a devspace, **Remove…**, and the other removals of the user guide), only in the context menu of a row and with Context Menu or Icons of `#devspaces.dockerHostsActions#`. Off: the view has none of them.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
+          "markdownDescription": "Allow the removals of the view Docker Hosts (**Remove…**, **Remove the VM…** and the others of the user guide), only in the context menu of a row. The full view also needs `#devspaces.dockerHostsActions#`, and there it also covers **Delete…** and **Rebuild**; the simple view has those two always.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
         },
         "devspaces.allowContainerLogs": {
-          "order": 25,
+          "order": 26,
           "type": "boolean",
           "scope": "application",
           "default": false,
           "markdownDescription": "Allow **Show Log** of every container in the view Docker Hosts: in the menu of each container row and on the report of a container, also of a container that is not of Devspaces, and **Show Log of the Monitor** on its reports. Off: no Show Log, and the Docker pipes of Devspaces refuse the log of every container.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
         },
         "devspaces.allowContentReads": {
-          "order": 26,
+          "order": 27,
           "type": "boolean",
           "scope": "application",
           "default": false,
           "markdownDescription": "Allow **Show Files** of every volume and image in the view Docker Hosts (its menu and its report), also of those that are not of Devspaces: the tree of its folders and files with names, sizes and times, never the content of a file. Off: no Show Files.\n\n[Report of a resource in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#report-of-a-resource)"
         },
         "devspaces.dockerHostsSettingsButton": {
-          "order": 27,
+          "order": 28,
           "type": "boolean",
           "scope": "application",
           "default": false,
           "markdownDescription": "Show the button **Docker Hosts Settings…** (a gear) in the title bar of the view Docker Hosts. It switches the other settings of the view (actions, removals, logs, files, console) in your user settings.\n\n[The view Docker Hosts in the user guide](https://github.com/nimblescape/devspaces-vscode/blob/main/docs/guide.md#the-view-docker-hosts)"
         },
         "devspaces.dockerHostsConsoleButton": {
-          "order": 28,
+          "order": 29,
           "type": "boolean",
           "scope": "application",
           "default": false,

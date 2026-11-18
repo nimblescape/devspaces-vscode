@@ -4214,11 +4214,17 @@ describe('Remove Devspaces from This Docker Engine…', () => {
     // A command without an entry of the menu commandPalette is in the Command Palette, on the Docker host of Devspaces.
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromDockerEngine)).toBe(false);
     const rows = manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.removeFromDockerEngine);
-    // One entry of the context menu of a host row with an engine, never a button (inline), and only with the setting.
+    // One entry of the context menu of a host row with an engine, never a button (inline), and only with the setting; the
+    // host row of the simple view needs only allowDestructiveActions.
     expect(rows).toEqual([
       {
         command: 'devspaces.removeFromDockerEngine',
         when: 'view == devspaces.hosts && viewItem =~ /^hostsHost;.*;engine(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/ && config.devspaces.allowDestructiveActions',
+        group: '3_remove@1',
+      },
+      {
+        command: 'devspaces.removeFromDockerEngine',
+        when: 'view == devspaces.hosts && viewItem =~ /^simpleHost;.*;engine(;|$)/ && config.devspaces.allowDestructiveActions',
         group: '3_remove@1',
       },
     ]);
@@ -4868,13 +4874,18 @@ describe('Remove Devspaces from This Computer…', () => {
     expect(manifest.contributes.menus.commandPalette.some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
     // A management action of the view "Docker Hosts" (R-ENG-008): no longer in the "…" menu of the repository view, never a
     // button, and only while the actions of the view and the removals are on (devspaces.dockerHostsActions and
-    // devspaces.allowDestructiveActions, both off by default).
+    // devspaces.allowDestructiveActions, both off by default); on the VM row of the simple view only with the removals.
     expect(manifest.contributes.menus['view/title'].some((entry) => entry.command === Commands.removeFromComputer)).toBe(false);
     expect(manifest.contributes.menus['view/item/context'].filter((entry) => entry.command === Commands.removeFromComputer)).toEqual([
       {
         command: Commands.removeFromComputer,
         when: 'view == devspaces.hosts && viewItem =~ /^hostsHost;vm(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/ && config.devspaces.allowDestructiveActions',
         group: '5_removeComputer@1',
+      },
+      {
+        command: Commands.removeFromComputer,
+        when: 'view == devspaces.hosts && viewItem =~ /^simpleHost;vm(;|$)/ && config.devspaces.allowDestructiveActions',
+        group: '3_remove@4',
       },
     ]);
   });
@@ -6487,7 +6498,10 @@ describe('the switch of the host access checks', () => {
     expect(fakeVscode.window.showWarningMessage).not.toHaveBeenCalled();
   });
 
-  it('offers the commands in the context menu of repository rows only by their flags, and not in the Command Palette', () => {
+  // The switch changes the container of a devspace, so it is a management action of the view Docker Hosts (R-ENG-008):
+  // on the dev container of a devspace of this computer in the full view (with the actions of the view), and on each
+  // devspace row of the simple view always; no longer in the menus of the repository view.
+  it('offers the commands only on the devspaces of the view Docker Hosts by their flags, and not in the Command Palette', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as {
       contributes: {
         menus: Record<string, Array<{ command?: string; when?: string }>>;
@@ -6496,10 +6510,16 @@ describe('the switch of the host access checks', () => {
     };
     const menus = manifest.contributes.menus;
     const when = (menu: string, command: string) => menus[menu].filter((item) => item.command === command).map((item) => item.when);
-    expect(when('view/item/context', Commands.turnOffHostAccessChecks)).toEqual(['view == devspaces.repositories && viewItem =~ /hostAccessChecked/']);
-    expect(when('view/item/context', Commands.turnOnHostAccessChecks)).toEqual(['view == devspaces.repositories && viewItem =~ /hostAccessUnrestricted/']);
-    expect(when('devspaces.more', Commands.turnOffHostAccessChecks)).toEqual(['viewItem =~ /hostAccessChecked/']);
-    expect(when('devspaces.more', Commands.turnOnHostAccessChecks)).toEqual(['viewItem =~ /hostAccessUnrestricted/']);
+    expect(when('view/item/context', Commands.turnOffHostAccessChecks)).toEqual([
+      'view == devspaces.hosts && viewItem =~ /^hostsObject;.*;hostAccessChecked(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/',
+      'view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?hostAccessChecked(;|$)/',
+    ]);
+    expect(when('view/item/context', Commands.turnOnHostAccessChecks)).toEqual([
+      'view == devspaces.hosts && viewItem =~ /^hostsObject;.*;hostAccessUnrestricted(;|$)/ && config.devspaces.dockerHostsActions =~ /^(contextMenu|icons)$/',
+      'view == devspaces.hosts && viewItem =~ /^simpleDevspace;(.*;)?hostAccessUnrestricted(;|$)/',
+    ]);
+    expect(when('devspaces.more', Commands.turnOffHostAccessChecks)).toEqual([]);
+    expect(when('devspaces.more', Commands.turnOnHostAccessChecks)).toEqual([]);
     expect(when('commandPalette', Commands.turnOffHostAccessChecks)).toEqual(['false']);
     expect(when('commandPalette', Commands.turnOnHostAccessChecks)).toEqual(['false']);
     // A workspace or folder setting cannot turn a check off.
@@ -6964,11 +6984,12 @@ describe('the Docker host of Devspaces', () => {
     const title = manifest.contributes.menus['view/title'];
     // The first row of the list chooses the Docker host; the title bar of the repositories has no icon of the Docker
     // host. The "+" of the view "Docker Hosts" adds a remote host: a button of its title bar with the setting
-    // dockerHostsActions = icons, in its "…" menu with contextMenu, and nowhere while the view is read only (R-ENG-008).
+    // dockerHostsActions = icons, in its "…" menu with contextMenu, and nowhere while the view is read only (R-ENG-008);
+    // only in the full view, because the simple view shows only the Docker host of Devspaces.
     const hostTitle = title.filter((entry) => entry.command === 'devspaces.useRemoteDockerHost' || entry.command === 'devspaces.chooseDockerHost');
     expect(hostTitle).toEqual([
-      { command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts && config.devspaces.dockerHostsActions == icons', group: 'navigation@1' },
-      { command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts && config.devspaces.dockerHostsActions == contextMenu', group: '1_hosts@1' },
+      { command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts && config.devspaces.dockerHostsActions == icons && config.devspaces.dockerHostsView == full', group: 'navigation@1' },
+      { command: 'devspaces.useRemoteDockerHost', when: 'view == devspaces.hosts && config.devspaces.dockerHostsActions == contextMenu && config.devspaces.dockerHostsView == full', group: '1_hosts@1' },
     ]);
     const icons = Object.fromEntries(manifest.contributes.commands.map((command) => [command.command, command.icon]));
     expect(icons['devspaces.useRemoteDockerHost']).toBe('$(add)');
@@ -7172,6 +7193,61 @@ describe('the Docker host of Devspaces', () => {
     await settle(() => fakeVscode.commands.executeCommand.mock.calls.some((call) => call[0] === 'workbench.action.openSettings'), 'the Settings editor');
     expect(fakeVscode.commands.executeCommand).toHaveBeenCalledWith('workbench.action.openSettings', '@id:devspaces.allowDestructiveActions');
     expect(vm.reset).not.toHaveBeenCalled();
+  });
+
+  // The simple view (setting devspaces.dockerHostsView `simple`, the default; R-ENG-008): the management actions of its
+  // rows run whatever devspaces.dockerHostsActions says (Hannes's choice "Always in the simple view"); only the removals of
+  // the engine, the VM and the computer need devspaces.allowDestructiveActions. A row of the simple view while the
+  // setting is `full` counts as a row of the full view.
+  it('runs the management actions of a row of the simple view in every mode, the removals of its host row only with allowDestructiveActions', async () => {
+    const dockerHosts = { refresh: vi.fn(), removeFromList: vi.fn(async () => {}), stopObject: vi.fn(async () => {}), startObject: vi.fn(async () => {}), pruneBuildCache: vi.fn(async () => {}), removeObjects: vi.fn(async () => {}), invalidate: vi.fn() };
+    const vm = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}), remove: vi.fn(async () => {}), reset: vi.fn(async () => {}), settings: vi.fn(async () => {}) };
+    const update = vi.fn(async () => {});
+    h.controller.dispose();
+    fs.rmSync(h.root, { recursive: true, force: true });
+    h = createHarness({ dockerTargets: sharedTargets, remoteDocker: remote, windowDockerHost, dockerHosts, vm, updateImagesNow: update });
+    await h.registry.add(remoteDevspace());
+    const vmRow = { hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind: 'running' }, simple: true };
+    const devspaceRow = { hostsNode: 'devspace', host: 'build-box', devspaceId: REMOTE_ENV_ID, repository: 'acme/api', objects: [] };
+    const stoppedVmRow = { hostsNode: 'message', host: LIMA_HOST, message: 'vmStopped', simple: true };
+    const configuration = { inspect: vi.fn(() => ({ key: `${SETTINGS_SECTION}.hostAccessChecksOff` })), update: vi.fn(async () => undefined) };
+    fakeVscode.workspace.getConfiguration.mockReturnValue(configuration);
+    h.settings.dockerHostsView = 'simple';
+    h.settings.dockerHostsActions = 'disabled';
+    h.settings.allowDestructiveActions = false;
+    await run('stop', devspaceRow);
+    expect(h.service.stop).toHaveBeenCalledWith(REMOTE_ENV_ID);
+    expect(dockerHosts.invalidate).toHaveBeenCalledWith('build-box');
+    await run('delete', devspaceRow);
+    expect(h.service.deleteCheckInWorker).toHaveBeenCalledTimes(1);
+    fakeVscode.window.showWarningMessage.mockResolvedValueOnce(Actions.turnOffChecks);
+    await run('turnOffHostAccessChecks', devspaceRow);
+    expect(configuration.update).toHaveBeenCalledWith('hostAccessChecksOff', ['acme/api'], fakeVscode.ConfigurationTarget.Global);
+    await run('updateImagesNow', vmRow);
+    expect(update).toHaveBeenCalledTimes(1);
+    for (const command of ['startVm', 'stopVm', 'vmSettings'] as const) await run(command, vmRow);
+    await run('startVm', stoppedVmRow);
+    expect([vm.start, vm.stop, vm.settings].map((mock) => mock.mock.calls.length)).toEqual([2, 1, 1]);
+    expect(fakeVscode.window.showInformationMessage).not.toHaveBeenCalledWith(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings);
+    // The removals of the engine, the VM and the computer: only with allowDestructiveActions.
+    fakeVscode.window.showInformationMessage.mockClear();
+    for (const command of ['removeFromDockerEngine', 'removeVm', 'resetVm', 'removeFromComputer'] as const) await run(command, vmRow);
+    expect([vm.remove, vm.reset].map((mock) => mock.mock.calls.length)).toEqual([0, 0]);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledTimes(4);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.hostsViewNoDestructive, ControllerTexts.openSettings);
+    h.settings.allowDestructiveActions = true;
+    await run('removeVm', vmRow);
+    await run('resetVm', vmRow);
+    expect([vm.remove, vm.reset].map((mock) => mock.mock.calls.length)).toEqual([1, 1]);
+    // The full view: the same rows need the settings of the full view.
+    h.settings.dockerHostsView = 'full';
+    h.settings.allowDestructiveActions = false;
+    fakeVscode.window.showInformationMessage.mockClear();
+    await run('stopVm', vmRow);
+    await run('stop', devspaceRow);
+    expect(vm.stop).toHaveBeenCalledTimes(1);
+    expect(h.service.stop).toHaveBeenCalledTimes(1);
+    expect(fakeVscode.window.showInformationMessage).toHaveBeenCalledWith(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings);
   });
 
   it('runs every other command as one operation on the host that is current when it starts', async () => {

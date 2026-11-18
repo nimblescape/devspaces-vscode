@@ -503,15 +503,24 @@ export interface ExtensionSettings {
    */
   createDockerContext?: boolean;
   /**
-   * The actions of the view Docker Hosts (R-ENG-008): `disabled` (the default) shows none, the view only reads;
+   * How the view Docker Hosts shows the hosts (R-ENG-008): `simple` (the default; a value that is not known counts as
+   * `simple`) shows only the Docker host of Devspaces with one row per devspace of this computer there, and their
+   * management actions always; `full` shows every host with all its objects and the actions of dockerHostsActions.
+   * Scope `application`.
+   */
+  dockerHostsView?: DockerHostsViewMode;
+  /**
+   * The actions of the full view Docker Hosts (R-ENG-008): `disabled` (the default) shows none, the view only reads;
    * `contextMenu` shows them in the context menu of a row; `icons` also as buttons on each row. Scope `application`.
    */
   dockerHostsActions?: DockerHostsActions;
   /**
-   * The actions of the view Docker Hosts that remove or delete something (R-ENG-008): Delete… of a devspace, Remove… of
-   * objects, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine…, Remove the VM…
-   * and Remove and Set Up the VM Again…, only in the context menu of a row, and only with dockerHostsActions
-   * `contextMenu` or `icons`. Off (the default): the view has none of them. Scope `application`.
+   * The actions of the view Docker Hosts that remove or delete something (R-ENG-008): Delete… and Rebuild of a devspace,
+   * Remove… of objects, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine…,
+   * Remove Devspaces from This Computer…, Remove the VM… and Remove and Set Up the VM Again…, only in the context menu of
+   * a row. In the full view only with dockerHostsActions `contextMenu` or `icons`; the simple view has Delete… and
+   * Rebuild always and the others only with this setting. Off (the default): the view has none of the others. Scope
+   * `application`.
    */
   allowDestructiveActions?: boolean;
   /**
@@ -531,6 +540,10 @@ export interface ExtensionSettings {
   /** The button Open Console on each host row of the view Docker Hosts: a shell on that host. Default off. */
   dockerHostsConsoleButton?: boolean;
 }
+
+/** The values of the setting dockerHostsView. */
+export const DOCKER_HOSTS_VIEWS = ['simple', 'full'] as const;
+export type DockerHostsViewMode = (typeof DOCKER_HOSTS_VIEWS)[number];
 
 /** The values of the setting dockerHostsActions. */
 export const DOCKER_HOSTS_ACTIONS = ['disabled', 'contextMenu', 'icons'] as const;

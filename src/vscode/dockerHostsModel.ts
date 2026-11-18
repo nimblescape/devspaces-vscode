@@ -5,10 +5,13 @@
 // The rows of the view "Docker Hosts" (docs/requirements.md R-ENG-008, R-VM-010), below the repository view: the VM of
 // Devspaces first, then each remote host of the list of Devspaces; under each host all its containers, networks,
 // images and volumes (src/core/hosts/hostObjects.ts), those of Devspaces with their purpose, with their sizes, and its
-// build cache. The texts, icons, context values and
-// commands of each row, without `vscode` (dockerHostsView.ts renders them).
+// build cache. With the setting dockerHostsView `simple` (the default), only the Docker host of Devspaces with one row
+// per devspace of this computer there, with the management actions of the devspace and of the host always. The texts,
+// icons, context values and commands of each row, without `vscode` (dockerHostsView.ts renders them).
 import { describeDockerHost, LIMA_HOST, WSL_HOST } from '../core/docker/dockerHost';
-import { formatSize, isEarlierHelperBuild, totalSize, type BuildCacheSummary, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
+import { formatSize, isEarlierHelperBuild, totalSize, type BuildCacheSummary, type HostInventory, type HostObject, type HostObjectKind, type HostObjectPurpose } from '../core/hosts/hostObjects';
+import { Messages, StateTexts } from '../core/messages';
+import type { HostAccessChecks } from '../core/policy/hostAccessChecks';
 import type { VmState } from '../core/vm/vmState';
 import { Commands } from './commands';
 import type { RowColor } from './rowColors';
@@ -16,7 +19,10 @@ import { MonitorIcons } from './treeModel';
 
 export const DOCKER_HOSTS_VIEW_ID = 'devspaces.hosts';
 
-/** A host: the VM of Devspaces (`vm`) or a remote host of the list. `selected`: the Docker host of Devspaces. */
+/**
+ * A host: the VM of Devspaces (`vm`) or a remote host of the list. `selected`: the Docker host of Devspaces. `simple`:
+ * the one host of the simple view, whose management actions are always in its menu.
+ */
 export interface HostRow {
   hostsNode: 'host';
   host: string;
@@ -24,6 +30,7 @@ export interface HostRow {
   selected: boolean;
   /** The state of the VM, read without a start (VM row only). */
   vmState?: VmState;
+  simple?: true;
 }
 
 /** The containers, the networks, the images or the volumes of a host. */
@@ -52,15 +59,47 @@ export interface ObjectRow {
   devspaceId?: string;
 }
 
-/** A row with a note: a stopped VM, a host that could not be read, a host that was not read yet. */
+/**
+ * A devspace of this computer on the host of the simple view, with its objects there (none when its files are missing).
+ * The commands of the devspace (Stop, Rebuild, Delete…, the host access checks) take the row as their argument: it has
+ * no `kind`, so parseCommandArgument reads its `devspaceId`.
+ */
+export interface DevspaceRow {
+  hostsNode: 'devspace';
+  host: string;
+  devspaceId: string;
+  /** The name of its repository in the registry of Devspaces (the host access checks are read under it). */
+  repository: string;
+  /** The word of its source (sourceLabel) when its repository has several devspaces on the host. */
+  source?: string;
+  objects: HostObject[];
+  /** The object whose report a click and Show Report open (reportObject). */
+  report?: HostObject;
+}
+
+/**
+ * A row with a note: a stopped VM, a host that could not be read, a host that was not read yet, a host of the simple view
+ * without a devspace of this computer, a remote host of the simple view that its read when the view showed could not
+ * reach with a login that asks nothing (`loginNeeded`: a click reads it with a login that may ask). `simple`: a row of
+ * the simple view (its stopped VM always starts on a click).
+ */
 export interface MessageRow {
   hostsNode: 'message';
   host: string;
-  message: 'vmStopped' | 'vmNotRead' | 'readFailed' | 'vmUnknown';
+  message: 'vmStopped' | 'vmNotRead' | 'readFailed' | 'vmUnknown' | 'noDevspaces' | 'loginNeeded';
   detail?: string;
+  simple?: true;
 }
 
-export type HostsNode = HostRow | GroupRow | BuildCacheRow | ObjectRow | MessageRow;
+export type HostsNode = HostRow | GroupRow | BuildCacheRow | ObjectRow | DevspaceRow | MessageRow;
+
+/** A devspace of this computer on a host (from the registry of Devspaces), for the rows of the simple view. */
+export interface HostDevspace {
+  id: string;
+  repository: string;
+  /** The word of its source (sourceLabel): `default`, `config`, or the folder of an alternative configuration. */
+  source: string;
+}
 
 /** What a row looks like (dockerHostsView.ts makes a TreeItem of it). */
 export interface RowLook {
@@ -128,6 +167,18 @@ export const DockerHostsTexts = {
   vmUnknown: 'The state of the VM is not known',
   readFailed: 'Could not be read',
   readFailedTooltip: (detail: string) => `${detail}\n\nClick to open the log of Devspaces. Refresh reads the host again.`,
+  simpleVmStopped: 'Start the VM to see your devspaces',
+  simpleVmNotRead: 'Click to read your devspaces',
+  loginNeeded: 'Click to log in and read your devspaces',
+  loginNeededTooltip: (host: string, detail: string) =>
+    `Devspaces read ${host} when the view showed it, with a login that asks nothing, and could not: ${detail}\n\nClick to read it again: a login with a password asks for it in VS Code.`,
+  noDevspaces: 'No devspace of this computer on this host',
+  noDevspacesTooltip: 'Start a repository in the view Devspaces above: its devspace shows here, with Stop, Rebuild, Delete… and the host access checks in its context menu.',
+  devspace: 'devspace',
+  noContainer: 'No container',
+  devspaceTooltip: (name: string, host: string) => `The devspace ${name} on ${host}. Its context menu has Stop, Rebuild, Delete…, which checks the Git changes first, and the host access checks.`,
+  devspaceParts: (objects: readonly HostObject[]) => `Its objects there: ${objects.map((object) => `${object.kind} ${object.name}${object.role !== undefined ? ` (${object.role})` : ''}`).join(', ')}.`,
+  devspaceFilesMissing: (host: string) => `Devspaces found no container, volume or image of this devspace on ${host}. Delete… removes its record.`,
   purpose: (object: HostObject): string => {
     const role = object.role !== undefined ? ` · ${object.role}` : '';
     switch (object.purpose) {
@@ -220,9 +271,11 @@ export function objectActions(row: ObjectRow): { stopDevspace: boolean; rebuildD
 
 /** The row of a host. `actions`: the setting dockerHostsActions allows the actions of the view (the tooltip of Set Up). */
 export function hostRowLook(row: HostRow, actions = true): RowLook {
-  const flags = ['hostsHost', row.vm ? 'vm' : 'remote'];
+  // The simple view has its own prefix: its menus have the management actions always (package.json).
+  const flags = [row.simple === true ? 'simpleHost' : 'hostsHost', row.vm ? 'vm' : 'remote'];
   let description: string;
-  let collapsible: RowLook['collapsible'] = 'collapsed';
+  // The one host of the simple view is open from the start, so that its devspaces show at once.
+  let collapsible: RowLook['collapsible'] = row.simple === true ? 'expanded' : 'collapsed';
   const tooltip: string[] = [];
   if (row.vm) {
     const kind = row.vmState?.kind;
@@ -246,12 +299,12 @@ export function hostRowLook(row: HostRow, actions = true): RowLook {
     flags.push('selected');
     tooltip.push(DockerHostsTexts.selected);
   } else if (row.vm && row.vmState?.kind === 'notSetUp') {
-    tooltip.push(actions ? DockerHostsTexts.setUpInMenu : DockerHostsTexts.setUpInRepositoryView);
+    tooltip.push(actions || row.simple === true ? DockerHostsTexts.setUpInMenu : DockerHostsTexts.setUpInRepositoryView);
   } else {
     tooltip.push(DockerHostsTexts.chooseInRepositoryView);
   }
   return {
-    id: `host:${row.host}`,
+    id: `${row.simple === true ? 'simple:' : ''}host:${row.host}`,
     label: row.host,
     description,
     tooltip: tooltip.join('\n'),
@@ -304,13 +357,18 @@ export function buildCacheRowLook(row: BuildCacheRow): RowLook {
   };
 }
 
-/** The row of an object: its name, its purpose, its state and its size; its context value names its actions. */
-export function objectRowLook(row: ObjectRow): RowLook {
+/**
+ * The row of an object: its name, its purpose, its state and its size; its context value names its actions.
+ * `hostAccess`: the switch of the host access checks of a repository (hostAccessChecks); the dev container of a devspace
+ * of this computer gets Turn Off or Turn On Host Access Checks with it.
+ */
+export function objectRowLook(row: ObjectRow, hostAccess?: (repository: string) => HostAccessChecks): RowLook {
   const { object } = row;
   const actions = objectActions(row);
   const flags = ['hostsObject', object.kind, object.purpose];
   if (actions.stopDevspace) flags.push('canStopDevspace');
   if (actions.rebuildDevspace) flags.push('canRebuildDevspace');
+  if (actions.rebuildDevspace && object.repository !== undefined && hostAccess !== undefined) flags.push(hostAccessFlag(hostAccess(object.repository)));
   if (actions.deleteDevspace) flags.push('canDeleteDevspace');
   if (actions.stop) flags.push('canStop');
   if (actions.start) flags.push('canStart');
@@ -363,13 +421,43 @@ export function objectColor(object: HostObject): RowColor | undefined {
  * the stopped VM only says that it is stopped, and a click on it starts nothing.
  */
 export function messageRowLook(row: MessageRow, actions = true): RowLook {
-  const id = `message:${row.host}:${row.message}`;
+  const simple = row.simple === true;
+  const id = `${simple ? 'simple:' : ''}message:${row.host}:${row.message}`;
   switch (row.message) {
     case 'vmStopped':
-      if (!actions) return { id, label: DockerHostsTexts.vmStoppedReadOnly, tooltip: DockerHostsTexts.vmStoppedReadOnlyTooltip, contextValue: 'hostsMessage', icon: 'debug-pause', collapsible: 'none' };
-      return { id, label: DockerHostsTexts.vmStopped, tooltip: DockerHostsTexts.vmStoppedTooltip, contextValue: 'hostsMessage', icon: 'play', collapsible: 'none', command: { command: Commands.startVm, title: 'Start the VM', arguments: [row] } };
+      // The simple view has the actions of the VM always.
+      if (!actions && !simple) return { id, label: DockerHostsTexts.vmStoppedReadOnly, tooltip: DockerHostsTexts.vmStoppedReadOnlyTooltip, contextValue: 'hostsMessage', icon: 'debug-pause', collapsible: 'none' };
+      return {
+        id,
+        label: simple ? DockerHostsTexts.simpleVmStopped : DockerHostsTexts.vmStopped,
+        tooltip: DockerHostsTexts.vmStoppedTooltip,
+        contextValue: 'hostsMessage',
+        icon: 'play',
+        collapsible: 'none',
+        command: { command: Commands.startVm, title: 'Start the VM', arguments: [row] },
+      };
     case 'vmNotRead':
-      return { id, label: DockerHostsTexts.vmNotRead, tooltip: DockerHostsTexts.vmNotReadTooltip, contextValue: 'hostsMessage', icon: 'refresh', collapsible: 'none', command: { command: Commands.refreshDockerHosts, title: 'Refresh', arguments: [{ hostsNode: 'host', host: row.host }] } };
+      return {
+        id,
+        label: simple ? DockerHostsTexts.simpleVmNotRead : DockerHostsTexts.vmNotRead,
+        tooltip: DockerHostsTexts.vmNotReadTooltip,
+        contextValue: 'hostsMessage',
+        icon: 'refresh',
+        collapsible: 'none',
+        command: { command: Commands.refreshDockerHosts, title: 'Refresh', arguments: [{ hostsNode: 'host', host: row.host }] },
+      };
+    case 'loginNeeded':
+      return {
+        id,
+        label: DockerHostsTexts.loginNeeded,
+        tooltip: DockerHostsTexts.loginNeededTooltip(row.host, row.detail ?? ''),
+        contextValue: 'hostsMessage',
+        icon: 'sign-in',
+        collapsible: 'none',
+        command: { command: Commands.refreshDockerHosts, title: 'Refresh', arguments: [{ hostsNode: 'host', host: row.host }] },
+      };
+    case 'noDevspaces':
+      return { id, label: DockerHostsTexts.noDevspaces, tooltip: DockerHostsTexts.noDevspacesTooltip, contextValue: 'hostsMessage', icon: 'info', collapsible: 'none' };
     case 'vmUnknown':
       return { id, label: DockerHostsTexts.vmUnknown, description: row.detail, tooltip: row.detail ?? DockerHostsTexts.vmUnknown, contextValue: 'hostsMessage', icon: 'question', collapsible: 'none' };
     case 'readFailed':
@@ -386,8 +474,11 @@ export function messageRowLook(row: MessageRow, actions = true): RowLook {
   }
 }
 
-/** The look of any row. `actions`: the setting dockerHostsActions allows the actions of the view (messageRowLook). */
-export function rowLook(node: HostsNode, actions = true): RowLook {
+/**
+ * The look of any row. `actions`: the setting dockerHostsActions allows the actions of the view (messageRowLook).
+ * `hostAccess`: the switch of the host access checks of a repository (the menus of the devspaces of this computer).
+ */
+export function rowLook(node: HostsNode, actions = true, hostAccess?: (repository: string) => HostAccessChecks): RowLook {
   switch (node.hostsNode) {
     case 'host':
       return hostRowLook(node, actions);
@@ -396,17 +487,95 @@ export function rowLook(node: HostsNode, actions = true): RowLook {
     case 'buildCache':
       return buildCacheRowLook(node);
     case 'object':
-      return objectRowLook(node);
+      return objectRowLook(node, hostAccess);
+    case 'devspace':
+      return devspaceRowLook(node, hostAccess?.(node.repository));
     case 'message':
       return messageRowLook(node, actions);
   }
+}
+
+/** The flag of the menus for the switch of the host access checks, as the rows of the repository view have it. */
+function hostAccessFlag(checks: HostAccessChecks): string {
+  return checks === 'off' ? 'hostAccessUnrestricted' : 'hostAccessChecked';
+}
+
+/** The dev container of a devspace among its objects. */
+function devContainer(objects: readonly HostObject[]): HostObject | undefined {
+  return objects.find((object) => object.kind === 'container' && object.role === 'dev container');
+}
+
+/**
+ * The object of a devspace whose report a click on its row opens: its dev container, else its first container, else its
+ * workspace volume, else its first object.
+ */
+export function reportObject(objects: readonly HostObject[]): HostObject | undefined {
+  return (
+    devContainer(objects) ??
+    objects.find((object) => object.kind === 'container') ??
+    objects.find((object) => object.kind === 'volume' && object.role === 'workspace') ??
+    objects[0]
+  );
+}
+
+/**
+ * The row of a devspace of the simple view: its repository (with the word of its source when its repository has several
+ * devspaces on the host), the state of its dev container, and the size of its objects; its context value names its
+ * actions (Stop while a container of it runs, Rebuild with a dev container, Delete… always) and the switch of its host
+ * access checks.
+ */
+export function devspaceRowLook(row: DevspaceRow, checks?: HostAccessChecks): RowLook {
+  const container = devContainer(row.objects);
+  const running = row.objects.some(isRunningContainer);
+  const flags = ['simpleDevspace'];
+  if (running) flags.push('canStopDevspace');
+  if (container !== undefined) flags.push('canRebuildDevspace');
+  flags.push('canDeleteDevspace');
+  if (checks !== undefined) flags.push(hostAccessFlag(checks));
+  if (row.report !== undefined) flags.push('hasReport');
+  const name = row.source !== undefined ? `${row.repository} · ${row.source}` : row.repository;
+  const parts: string[] = [DockerHostsTexts.devspace];
+  const tooltip = [DockerHostsTexts.devspaceTooltip(name, row.host)];
+  if (row.objects.length === 0) {
+    parts.push(StateTexts.filesMissing);
+    tooltip.push(DockerHostsTexts.devspaceFilesMissing(row.host));
+  } else {
+    parts.push((container !== undefined ? DockerHostsTexts.containerState(container.state) : undefined) ?? DockerHostsTexts.noContainer);
+    const { bytes, complete } = totalSize(row.objects);
+    if (bytes > 0 || complete) parts.push(formatSize(bytes));
+    tooltip.push(DockerHostsTexts.devspaceParts(row.objects));
+  }
+  if (checks === 'off') {
+    parts.push(StateTexts.hostAccessUnrestricted);
+    tooltip.push(Messages.hostAccessUnrestrictedTooltip);
+  }
+  return {
+    id: `simple:devspace:${row.host}:${row.devspaceId}`,
+    label: name,
+    description: parts.join(' · '),
+    tooltip: tooltip.join('\n'),
+    contextValue: flags.join(';'),
+    icon: 'package',
+    ...(running ? {} : { color: 'inactive' as const }),
+    // A click opens the report of its main object (dockerHostsView.ts), as a click on an object row of the full view.
+    collapsible: 'none',
+  };
 }
 
 /**
  * The host rows: the VM of Devspaces first (also when it is not set up), then the other hosts of the list, in its
  * order. `vmHost`: the VM of Devspaces on this platform, undefined where there is none.
  */
-export function hostRows(input: { vmHost: string | undefined; vmState: VmState | undefined; hosts: readonly string[]; selected: string | undefined }): HostRow[] {
+export function hostRows(input: { vmHost: string | undefined; vmState: VmState | undefined; hosts: readonly string[]; selected: string | undefined; simple?: boolean }): HostRow[] {
+  const rows = allHostRows(input);
+  if (input.simple !== true) return rows;
+  // The simple view: only the Docker host of Devspaces; without one (or one that is not in the list), the VM, whose row
+  // sets it up.
+  const shown = rows.find((row) => row.selected) ?? rows.find((row) => row.vm);
+  return shown === undefined ? [] : [{ ...shown, simple: true }];
+}
+
+function allHostRows(input: { vmHost: string | undefined; vmState: VmState | undefined; hosts: readonly string[]; selected: string | undefined }): HostRow[] {
   const rows: HostRow[] = [];
   if (input.vmHost !== undefined) {
     rows.push({ hostsNode: 'host', host: input.vmHost, vm: true, selected: input.selected === input.vmHost, ...(input.vmState !== undefined ? { vmState: input.vmState } : {}) });
@@ -421,6 +590,37 @@ export function hostRows(input: { vmHost: string | undefined; vmState: VmState |
 /** The rows of the objects of a group, each with the ID of its devspace when it is a devspace of this computer. */
 export function objectRows(host: string, objects: readonly HostObject[]): ObjectRow[] {
   return objects.map((object) => ({ hostsNode: 'object', host, object, ...(object.purpose === 'devspace' && object.devspaceId !== undefined ? { devspaceId: object.devspaceId } : {}) }));
+}
+
+/**
+ * The rows of the simple view under `host`: one per devspace of this computer there, from the registry (`known`, also a
+ * devspace whose files are missing) and from the objects that the read found (purpose `devspace`), sorted by name.
+ */
+export function devspaceRows(host: string, inventory: Pick<HostInventory, 'containers' | 'images' | 'volumes' | 'networks'>, known: readonly HostDevspace[]): DevspaceRow[] {
+  const objects = [...inventory.containers, ...inventory.volumes, ...inventory.images, ...inventory.networks].filter((object) => object.purpose === 'devspace' && object.devspaceId !== undefined);
+  const devspaces = new Map<string, { repository: string; source?: string }>();
+  for (const devspace of known) devspaces.set(devspace.id, { repository: devspace.repository, source: devspace.source });
+  for (const object of objects) {
+    const id = object.devspaceId as string;
+    if (!devspaces.has(id)) devspaces.set(id, { repository: object.repository ?? id });
+  }
+  const perRepository = new Map<string, number>();
+  for (const { repository } of devspaces.values()) perRepository.set(repository.toLowerCase(), (perRepository.get(repository.toLowerCase()) ?? 0) + 1);
+  const rows = [...devspaces].map(([devspaceId, { repository, source }]): DevspaceRow => {
+    const own = objects.filter((object) => object.devspaceId === devspaceId);
+    const report = reportObject(own);
+    const several = (perRepository.get(repository.toLowerCase()) ?? 0) > 1;
+    return { hostsNode: 'devspace', host, devspaceId, repository, ...(several && source !== undefined ? { source } : {}), objects: own, ...(report !== undefined ? { report } : {}) };
+  });
+  const name = (row: DevspaceRow): string => `${row.repository.toLowerCase()} ${row.source ?? ''}`;
+  return rows.sort((a, b) => name(a).localeCompare(name(b)));
+}
+
+/** True for a row of the simple view (setting dockerHostsView `simple`): its management actions are always there. */
+export function isSimpleRow(argument: unknown): boolean {
+  if (typeof argument !== 'object' || argument === null) return false;
+  const value = argument as { hostsNode?: unknown; simple?: unknown };
+  return value.hostsNode === 'devspace' || ((value.hostsNode === 'host' || value.hostsNode === 'message') && value.simple === true);
 }
 
 /** The host of a command argument that is a host row of the view (`{ hostsNode: 'host', host }`), else undefined. */

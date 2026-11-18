@@ -4,24 +4,29 @@
 
 // The gear "Docker Hosts Settings…" in the title bar of the view Docker Hosts (docs/requirements.md R-ENG-008): a quick
 // pick that switches the settings of the view in the user settings (all have the scope `application`):
-// devspaces.dockerHostsActions, devspaces.allowDestructiveActions, devspaces.allowContainerLogs,
-// devspaces.allowContentReads and devspaces.dockerHostsConsoleButton. The setting devspaces.dockerHostsSettingsButton shows the gear (it stays in the
+// devspaces.dockerHostsView, devspaces.dockerHostsActions, devspaces.allowDestructiveActions,
+// devspaces.allowContainerLogs, devspaces.allowContentReads and devspaces.dockerHostsConsoleButton. The setting devspaces.dockerHostsSettingsButton shows the gear (it stays in the
 // Settings editor: a gear that hid itself could not show itself again); the command is not in the Command Palette, and
 // a run while the setting is off changes nothing.
 import * as vscode from 'vscode';
-import type { DockerHostsActions, ExtensionSettings } from '../core/types';
+import type { DockerHostsActions, DockerHostsViewMode, ExtensionSettings } from '../core/types';
 import type { Logger } from '../core/ports';
 import { showInformationMessage } from './notifications';
 import { SETTINGS_SECTION } from './settings';
 
 export const DockerHostsSettingsTexts = {
   title: 'Docker Hosts Settings',
-  placeHolder: 'Choose what the view Docker Hosts allows',
-  actionsGroup: 'Actions of the view',
+  placeHolder: 'Choose what the view Docker Hosts shows and allows',
+  viewGroup: 'View',
+  actionsGroup: 'Actions of the full view',
   destructiveGroup: 'Actions that remove or delete',
   logsGroup: 'Logs of containers',
   filesGroup: 'Files of volumes and images',
   consoleGroup: 'Open Console on the host rows',
+  views: {
+    simple: { label: 'Simple', detail: 'Only the Docker host of Devspaces and your devspaces there, with their actions in the context menu.' },
+    full: { label: 'Full', detail: 'Every host with its containers, images, volumes, networks and build cache, with the actions of the full view.' },
+  } satisfies Record<DockerHostsViewMode, { label: string; detail: string }>,
   actions: {
     disabled: { label: 'Disabled', detail: 'The view is read only: no action changes a host.' },
     contextMenu: { label: 'Context Menu', detail: 'The actions are in the context menu of a row.' },
@@ -31,9 +36,9 @@ export const DockerHostsSettingsTexts = {
   logsOff: { label: 'Do Not Allow', detail: 'No log of a container: the Docker pipe of Devspaces refuses every log.' },
   destructiveOn: {
     label: 'Allow',
-    detail: 'Delete… and Rebuild of a devspace, Remove…, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine…, Remove Devspaces from This Computer… and the removals of the VM in the context menu of a row (with Context Menu or Icons).',
+    detail: 'Remove…, Remove Unused Build Cache…, Remove from the List, Remove Devspaces from This Docker Engine…, Remove Devspaces from This Computer… and the removals of the VM in the context menu of a row; in the full view (with Context Menu or Icons) also Delete… and Rebuild of a devspace.',
   },
-  destructiveOff: { label: 'Do Not Allow', detail: 'The view has no action that removes or deletes something; the Command Palette keeps its commands.' },
+  destructiveOff: { label: 'Do Not Allow', detail: 'No removals in the view; the simple view keeps Delete… and Rebuild of a devspace, and the Command Palette keeps its commands.' },
   filesOn: { label: 'Allow', detail: 'Show Files of every volume and image: the tree of its folders and files, with names, sizes and times, never the content of a file.' },
   filesOff: { label: 'Do Not Allow', detail: 'No Show Files: Devspaces reads no folder or file of a volume or an image for it.' },
   consoleOn: { label: 'Show', detail: 'A button on each host row opens a terminal with a shell on that host.' },
@@ -44,17 +49,18 @@ export const DockerHostsSettingsTexts = {
 
 /** One choice of the quick pick: the setting that it writes, and its value. */
 export interface DockerHostsSettingsChoice {
-  key: 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'allowContentReads' | 'dockerHostsConsoleButton';
-  value: DockerHostsActions | boolean;
+  key: 'dockerHostsView' | 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'allowContentReads' | 'dockerHostsConsoleButton';
+  value: DockerHostsViewMode | DockerHostsActions | boolean;
 }
 
 type Item = vscode.QuickPickItem & { choice?: DockerHostsSettingsChoice };
 
 /** The items of the quick pick: a group per setting, the current value of each marked. */
 export function dockerHostsSettingsItems(
-  settings: Pick<ExtensionSettings, 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'allowContentReads' | 'dockerHostsConsoleButton'>,
+  settings: Pick<ExtensionSettings, 'dockerHostsView' | 'dockerHostsActions' | 'allowDestructiveActions' | 'allowContainerLogs' | 'allowContentReads' | 'dockerHostsConsoleButton'>,
 ): Item[] {
   const texts = DockerHostsSettingsTexts;
+  const view = settings.dockerHostsView === 'full' ? 'full' : 'simple';
   const actions = settings.dockerHostsActions ?? 'disabled';
   const destructive = settings.allowDestructiveActions === true;
   const logs = settings.allowContainerLogs === true;
@@ -67,6 +73,8 @@ export function dockerHostsSettingsItems(
     choice,
   });
   return [
+    { label: texts.viewGroup, kind: vscode.QuickPickItemKind.Separator },
+    ...(['simple', 'full'] as const).map((value) => item(texts.views[value].label, texts.views[value].detail, view === value, { key: 'dockerHostsView', value })),
     { label: texts.actionsGroup, kind: vscode.QuickPickItemKind.Separator },
     ...(['disabled', 'contextMenu', 'icons'] as const).map((value) => item(texts.actions[value].label, texts.actions[value].detail, actions === value, { key: 'dockerHostsActions', value })),
     { label: texts.destructiveGroup, kind: vscode.QuickPickItemKind.Separator },

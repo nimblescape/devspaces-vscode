@@ -19,17 +19,23 @@
 // of the repository view. The objects of a devspace of this computer get the
 // commands of the devspace (Stop, Delete…); every other object gets Stop (a running container), Start (a stopped
 // container that is not of Devspaces) or Remove… (never with force), after one question, also for several selected
-// rows. The rows come from dockerHostsModel.ts.
+// rows. With the setting dockerHostsView `simple` (the default), the view shows only the Docker host of Devspaces, open
+// from the start, with one row per devspace of this computer there and their actions (Stop, Rebuild, Delete…, the host
+// access checks) always; it follows a change of the Docker host in the repository view. The rows come from
+// dockerHostsModel.ts.
 import * as vscode from 'vscode';
 import { formatSize, type HostInventory, type HostObject, type HostObjectKind, type ObjectResult } from '../core/hosts/hostObjects';
 import { errorMessage } from '../core/errors';
 import { Actions } from '../core/messages';
+import type { HostAccessChecks } from '../core/policy/hostAccessChecks';
 import { isAbortError, type Logger } from '../core/ports';
-import { withSshPrompts } from '../core/sshAskpass';
+import { outsideSshPrompts, withSshPrompts } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
 import {
   DOCKER_HOSTS_VIEW_ID,
   type BuildCacheRow,
+  devspaceRows,
+  type HostDevspace,
   hostOfArgument,
   hostRows,
   objectActions,
@@ -87,6 +93,7 @@ export const DockerHostsCommandTexts = {
   removed: (removed: number, total: number, host: string) => (removed === total ? `Removed ${total === 1 ? '1 object' : `${total} objects`} from ${host}.` : `Removed ${removed} of ${total} objects from ${host}.`),
   left: (names: readonly string[]) => ` Left: ${listed(names)}. The log says why.`,
   readFailed: (host: string) => `The objects on ${host} could not be read.`,
+  noOpenLogin: 'Devspaces has no open login to this host.',
   vmNotRunning: (state: VmState): string =>
     state.kind === 'stopped'
       ? 'The VM of Devspaces does not run now, so Devspaces did not change its objects. Start the VM to see them again.'
@@ -115,6 +122,12 @@ export interface DockerHostsDeps {
    * the row of the stopped VM does not start the VM on a click. Missing: allowed (the tests).
    */
   actionsAllowed?: () => boolean;
+  /** Whether the setting dockerHostsView is `simple` now (simpleDockerHostsView). Missing: the full view (the tests). */
+  simpleView?: () => boolean;
+  /** The devspaces of this computer on `host` (the registry), for the rows of the simple view. Missing: none. */
+  devspaces?: (host: string) => Promise<HostDevspace[]>;
+  /** The switch of the host access checks of a repository (hostAccessChecks), for the menus of the devspaces. */
+  hostAccessChecks?: (repository: string) => HostAccessChecks;
   /** The VM of Devspaces on this platform (LIMA_HOST or WSL_HOST), undefined where there is none. */
   vmHost: string | undefined;
   /** The hosts of the list of Devspaces in its order, and the Docker host of Devspaces. */
@@ -153,7 +166,12 @@ export interface DockerHostsDeps {
  * What the last read of a host found, with the check (readHostCheck) from right before it. `notRead`: the VM runs now,
  * but was stopped at the last read.
  */
-type HostEntry = { kind: 'inventory'; inventory: HostInventory; check?: string } | { kind: 'stopped' } | { kind: 'notRead' } | { kind: 'failed'; detail: string };
+type HostEntry =
+  | { kind: 'inventory'; inventory: HostInventory; check?: string }
+  | { kind: 'stopped' }
+  | { kind: 'notRead' }
+  | { kind: 'failed'; detail: string }
+  | { kind: 'loginNeeded'; detail: string };
 
 /** The parts of the tree view of the provider that its update follows (DockerHostsView.watch). */
 export type HostsTree = Pick<vscode.TreeView<HostsNode>, 'visible' | 'onDidExpandElement' | 'onDidCollapseElement' | 'onDidChangeVisibility'>;
@@ -173,8 +191,23 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
    */
   private readonly session = Math.random().toString(36).slice(2, 10);
   private disposed = false;
-  /** The host rows that are open in the tree view (watch): only they are updated. */
+  /** The host rows of the full view that are open in the tree view (watch): only they are updated. */
   private readonly expanded = new Set<string>();
+  /**
+   * Whether the host row of the simple view is open: it opens from the start, so VS Code sends no expand event for it,
+   * only a collapse and a later expand.
+   */
+  private simpleOpen = true;
+  /** The mode of the last show of the hosts (hostRows): a change of the setting starts the open rows anew. */
+  private shownSimple: boolean | undefined;
+  /** The host of the last show of the simple view: another host has a new row, which opens from the start. */
+  private shownSimpleHost: string | undefined;
+  /**
+   * The hosts that the user asked to read (Refresh): the next read of such a host in the simple view is a flow of the
+   * user, whose login may ask. Any other read of the simple view runs when the view shows its open host, which no user
+   * asked for, so its login asks nothing (R-SEC-004); the full view reads a host only when the user opens it.
+   */
+  private readonly userReads = new Set<string>();
   /**
    * The remote hosts whose update failed: their update uses only a login that is open, until a read of the user works,
    * so that a host that needs a password gets no login without questions every UPDATE_INTERVAL_MS.
@@ -211,10 +244,14 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     this.focusLostAt = vscode.window.state.focused ? undefined : this.now();
     const subscriptions = [
       tree.onDidExpandElement(({ element }) => {
-        if (element.hostsNode === 'host') this.expanded.add(element.host);
+        if (element.hostsNode !== 'host') return;
+        if (element.simple === true) this.simpleOpen = true;
+        else this.expanded.add(element.host);
       }),
       tree.onDidCollapseElement(({ element }) => {
-        if (element.hostsNode === 'host') this.expanded.delete(element.host);
+        if (element.hostsNode !== 'host') return;
+        if (element.simple === true) this.simpleOpen = false;
+        else this.expanded.delete(element.host);
       }),
       tree.onDidChangeVisibility(({ visible }) => {
         if (visible) this.updateSoon();
@@ -239,7 +276,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
   }
 
   getTreeItem(node: HostsNode): vscode.TreeItem {
-    const look = rowLook(node, this.deps.actionsAllowed?.() ?? true);
+    const look = rowLook(node, this.deps.actionsAllowed?.() ?? true, this.deps.hostAccessChecks);
     const state =
       look.collapsible === 'expanded'
         ? vscode.TreeItemCollapsibleState.Expanded
@@ -256,6 +293,8 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     // A click on an object row opens its report with vscode.open, as the Explorer opens a file: VS Code passes the kind of
     // the click to the editor, so a click opens a preview tab (italic title) and a double click keeps it (R-ENG-010).
     if (node.hostsNode === 'object') item.command = { command: 'vscode.open', title: DockerHostsTexts.showReport, arguments: [reportUri(node)] };
+    // A devspace of the simple view opens the report of its dev container (reportObject).
+    if (node.hostsNode === 'devspace' && node.report !== undefined) item.command = { command: 'vscode.open', title: DockerHostsTexts.showReport, arguments: [reportUri({ host: node.host, object: node.report })] };
     return item;
   }
 
@@ -295,10 +334,12 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
   refresh(argument?: unknown): void {
     const host = hostOfArgument(argument);
     if (host === undefined) {
+      if (this.shownSimpleHost !== undefined) this.userReads.add(this.shownSimpleHost);
       this.entries.clear();
       this.changed();
       return;
     }
+    this.userReads.add(host);
     this.invalidate(host);
   }
 
@@ -445,9 +486,23 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
       this.deps.logger.warn(`The list of Docker hosts of Devspaces could not be read: ${errorMessage(error)}`);
     }
     const vmState = this.deps.vmHost === undefined ? undefined : await this.deps.vmState();
-    const rows = hostRows({ vmHost: this.deps.vmHost, vmState, hosts, selected });
-    // The last read of a host that left the list is forgotten.
+    const simple = this.simple();
+    if (simple !== this.shownSimple) {
+      // Another mode: the rows of the other mode are gone, so VS Code sends no collapse event for them.
+      this.shownSimple = simple;
+      this.expanded.clear();
+      this.simpleOpen = true;
+      this.userReads.clear();
+    }
+    const rows = hostRows({ vmHost: this.deps.vmHost, vmState, hosts, selected, simple });
+    const simpleHost = simple ? rows[0]?.host : undefined;
+    if (simpleHost !== this.shownSimpleHost) {
+      this.shownSimpleHost = simpleHost;
+      this.simpleOpen = true;
+    }
+    // The last read of a host that left the list (or the simple view) is forgotten, and so is a Refresh of it.
     for (const host of [...this.entries.keys()]) if (!rows.some((row) => row.host === host)) this.entries.delete(host);
+    for (const host of [...this.userReads]) if (!rows.some((row) => row.host === host)) this.userReads.delete(host);
     const vm = rows.find((row) => row.vm);
     if (vm !== undefined) this.followVm(vm);
     this.rows = new Map(rows.map((row) => [row.host, row]));
@@ -469,15 +524,22 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
 
   private async hostChildren(row: HostRow): Promise<HostsNode[]> {
     const entry = this.entries.get(row.host) ?? (await this.readHost(row));
+    const simple = row.simple === true;
     switch (entry.kind) {
       case 'stopped':
-        return [message(row.host, 'vmStopped')];
+        return [message(row.host, 'vmStopped', undefined, simple)];
       case 'notRead':
-        return [message(row.host, 'vmNotRead')];
+        return [message(row.host, 'vmNotRead', undefined, simple)];
       case 'failed':
-        return [message(row.host, 'readFailed', entry.detail)];
+        return [message(row.host, 'readFailed', entry.detail, simple)];
+      case 'loginNeeded':
+        return [message(row.host, 'loginNeeded', entry.detail, simple)];
       case 'inventory': {
         const { inventory } = entry;
+        if (row.simple === true) {
+          const devspaces = devspaceRows(row.host, inventory, await this.knownDevspaces(row.host));
+          return devspaces.length > 0 ? devspaces : [message(row.host, 'noDevspaces', undefined, true)];
+        }
         const groups: Array<GroupRow | BuildCacheRow> = [
           { hostsNode: 'group', host: row.host, group: 'container', objects: inventory.containers },
           { hostsNode: 'group', host: row.host, group: 'image', objects: inventory.images },
@@ -490,7 +552,22 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     }
   }
 
-  /** Reads `row` once at a time (the user opened it, or clicked Refresh): never a VM that does not run. */
+  /** The devspaces of this computer on `host` for the simple view; none when the registry cannot be read (logged). */
+  private async knownDevspaces(host: string): Promise<HostDevspace[]> {
+    if (this.deps.devspaces === undefined) return [];
+    try {
+      return await this.deps.devspaces(host);
+    } catch (error) {
+      this.deps.logger.warn(`The devspaces of this computer on ${host} could not be read for the view Docker Hosts: ${errorMessage(error)}`);
+      return [];
+    }
+  }
+
+  private simple(): boolean {
+    return this.deps.simpleView?.() ?? false;
+  }
+
+  /** Reads `row` once at a time (the user opened it or clicked Refresh, or the simple view shows it): never a VM that does not run. */
   private readHost(row: HostRow): Promise<HostEntry> {
     const running = this.reads.get(row.host);
     if (running !== undefined) return running;
@@ -516,34 +593,47 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
       }
     }
     const abort = new AbortController();
+    // A read of the full view, or a Refresh, is a flow of the user: a password login to a remote host may ask in VS Code.
+    // The simple view reads its open host when it shows, which no user asked for: a login that asks nothing, and after
+    // its failure on a remote host only a login that is open, as the update does.
+    // Each read takes the mark of its Refresh.
+    const refreshed = this.userReads.delete(row.host);
+    const asks = row.simple !== true || refreshed;
+    const options = !asks && this.openLoginOnly.has(row.host) ? { openLoginOnly: true } : {};
+    // The check comes first, so that a change during the read shows at the next update.
+    const read = async (): Promise<HostEntry> => {
+      const check = await this.userCheck(row.host, abort.signal, options);
+      const inventory = await this.deps.read(row.host, abort.signal, options);
+      return { kind: 'inventory', inventory, ...(check !== undefined ? { check } : {}) };
+    };
     try {
-      this.deps.logger.info(`The view Docker Hosts reads ${row.host}.`);
-      // A flow of the user: a password login to a remote host may ask in VS Code. The check comes first, so that a change
-      // during the read shows at the next update.
-      entry = await vscode.window.withProgress({ location: { viewId: DOCKER_HOSTS_VIEW_ID } }, () =>
-        withSshPrompts(async (): Promise<HostEntry> => {
-          const check = await this.userCheck(row.host, abort.signal);
-          const inventory = await this.deps.read(row.host, abort.signal);
-          return { kind: 'inventory', inventory, ...(check !== undefined ? { check } : {}) };
-        }, abort.signal),
-      );
+      this.deps.logger.info(`The view Docker Hosts reads ${row.host}${asks ? '' : ' with a login that asks nothing'}.`);
+      entry = await vscode.window.withProgress({ location: { viewId: DOCKER_HOSTS_VIEW_ID } }, () => (asks ? withSshPrompts(read, abort.signal) : outsideSshPrompts(read)));
       this.openLoginOnly.delete(row.host);
       this.updateFailed.delete(row.host);
     } catch (error) {
-      const detail = errorMessage(error);
-      this.deps.logger.warn(`${DockerHostsCommandTexts.readFailed(row.host)} ${detail}`);
-      entry = { kind: 'failed', detail: detail.split('\n')[0].slice(0, 300) };
+      // A read only on a login that is open ends with an AbortError when none is open.
+      const detail = options.openLoginOnly === true && isAbortError(error) ? DockerHostsCommandTexts.noOpenLogin : errorMessage(error).split('\n')[0].slice(0, 300);
+      if (!asks && !row.vm) {
+        // A remote host may need a password: no new login without questions until a read of the user.
+        this.openLoginOnly.add(row.host);
+        this.deps.logger.info(`The view Docker Hosts could not read ${row.host} with a login that asks nothing; a click on its row or Refresh reads it with a login that may ask: ${errorMessage(error)}`);
+        entry = { kind: 'loginNeeded', detail };
+      } else {
+        this.deps.logger.warn(`${DockerHostsCommandTexts.readFailed(row.host)} ${errorMessage(error)}`);
+        entry = { kind: 'failed', detail };
+      }
     }
     this.entries.set(row.host, entry);
     return entry;
   }
 
   /**
-   * The check before a read of the user (undefined without a check). It fails as the read would, on the same login, so a
-   * failed check is the failed read: a login that the user cancelled does not ask a second time for the read.
+   * The check before a read (undefined without a check), with the same `openLoginOnly`. It fails as the read would, on the
+   * same login, so a failed check is the failed read: a login that the user cancelled does not ask a second time for the read.
    */
-  private userCheck(host: string, signal: AbortSignal): Promise<string | undefined> {
-    return this.deps.check === undefined ? Promise.resolve(undefined) : this.deps.check(host, signal);
+  private userCheck(host: string, signal: AbortSignal, options: { openLoginOnly?: boolean }): Promise<string | undefined> {
+    return this.deps.check === undefined ? Promise.resolve(undefined) : this.deps.check(host, signal, options);
   }
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -590,13 +680,20 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
     this.lastUpdate = this.now();
     try {
       const vmState = await this.updateHostRows();
-      await Promise.all([...this.expanded].map((host) => this.updateHost(host, vmState)));
+      await Promise.all(this.openHosts().map((host) => this.updateHost(host, vmState)));
     } catch (error) {
       this.deps.logger.warn(`The update of the view Docker Hosts failed: ${errorMessage(error)}`);
     } finally {
       this.updating = false;
       this.scheduleUpdate(this.interval());
     }
+  }
+
+  /** The open hosts of the mode that the view shows: the host of the simple view while its row is open. */
+  private openHosts(): string[] {
+    if (this.shownSimple !== true) return [...this.expanded];
+    const shown = [...this.rows.values()].find((row) => row.simple === true);
+    return shown !== undefined && this.simpleOpen ? [shown.host] : [];
   }
 
   /**
@@ -612,8 +709,8 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
       // hostRows logs it at the next show.
       return vmState;
     }
-    const key = (rows: readonly HostRow[]): string => JSON.stringify(rows.map((row) => [row.host, row.selected, row.vmState?.kind, row.vmState?.memoryGiB, row.vmState?.cpus]));
-    if (key(hostRows({ vmHost: this.deps.vmHost, vmState, hosts: list.hosts, selected: list.selected })) !== key([...this.rows.values()])) this.changed();
+    const key = (rows: readonly HostRow[]): string => JSON.stringify(rows.map((row) => [row.host, row.selected, row.simple === true, row.vmState?.kind, row.vmState?.memoryGiB, row.vmState?.cpus]));
+    if (key(hostRows({ vmHost: this.deps.vmHost, vmState, hosts: list.hosts, selected: list.selected, simple: this.simple() })) !== key([...this.rows.values()])) this.changed();
     return vmState;
   }
 
@@ -641,7 +738,7 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
         this.updateFailed.delete(host);
         return;
       }
-      const why = before.kind === 'inventory' ? 'its objects changed' : before.kind === 'failed' ? 'its last read failed' : 'the VM runs again';
+      const why = before.kind === 'inventory' ? 'its objects changed' : before.kind === 'failed' || before.kind === 'loginNeeded' ? 'its last read failed' : 'the VM runs again';
       this.deps.logger.info(`The view Docker Hosts reads ${host} again: ${why}.`);
       const inventory = await this.deps.read(host, this.updateAbort.signal, options);
       if (this.entries.get(host) !== before || this.disposed) return;
@@ -675,8 +772,8 @@ export class DockerHostsView implements vscode.TreeDataProvider<HostsNode>, vsco
   }
 }
 
-function message(host: string, kind: MessageRow['message'], detail?: string): MessageRow {
-  return { hostsNode: 'message', host, message: kind, ...(detail !== undefined ? { detail } : {}) };
+function message(host: string, kind: MessageRow['message'], detail?: string, simple = false): MessageRow {
+  return { hostsNode: 'message', host, message: kind, ...(detail !== undefined ? { detail } : {}), ...(simple ? { simple: true } : {}) };
 }
 
 /** The object row of a command argument, else undefined. */

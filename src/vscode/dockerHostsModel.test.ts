@@ -12,6 +12,8 @@ import type { HostObject } from '../core/hosts/hostObjects';
 import { Commands } from './commands';
 import {
   buildCacheRowLook,
+  devspaceRowLook,
+  devspaceRows,
   DOCKER_HOSTS_VIEW_ID,
   DockerHostsTexts,
   groupRowLook,
@@ -19,12 +21,15 @@ import {
   hostOfNode,
   hostRowLook,
   hostRows,
+  isSimpleRow,
   messageRowLook,
   objectActions,
   objectColor,
   objectRowLook,
   objectRows,
+  reportObject,
   rowLook,
+  type DevspaceRow,
   type HostRow,
   type MessageRow,
   type ObjectRow,
@@ -303,6 +308,8 @@ describe('the menus of the view (package.json)', () => {
   /** The settings of the view in a `when`: devspaces.dockerHostsActions, and the buttons of the title bar and of a host row. */
   interface ViewSettings {
     actions: string;
+    /** devspaces.dockerHostsView; missing: `full` (the rows of these tests are those of the full view). */
+    view?: string;
     settingsButton?: boolean;
     consoleButton?: boolean;
     logs?: boolean;
@@ -313,6 +320,8 @@ describe('the menus of the view (package.json)', () => {
   }
   /** Whether the clauses `config.devspaces.…` of `when` hold with `settings` (the platform clauses are not checked). */
   const configHolds = (when: string, settings: ViewSettings): boolean => {
+    const view = /config\.devspaces\.dockerHostsView == (\w+)/.exec(when);
+    if (view !== null && view[1] !== (settings.view ?? 'full')) return false;
     const equal = /config\.devspaces\.dockerHostsActions == (\w+)/.exec(when);
     if (equal !== null && equal[1] !== settings.actions) return false;
     const match = /config\.devspaces\.dockerHostsActions =~ \/(.+?)\//.exec(when);
@@ -406,6 +415,73 @@ describe('the menus of the view (package.json)', () => {
     expect(commandsOf(buildCacheRowLook({ hostsNode: 'buildCache', host: 'lab', cache: { ...cache, unusedBytes: 0 } }).contextValue, false, all)).toEqual([]);
   });
 
+  // The simple view (setting dockerHostsView `simple`, R-ENG-008): the management actions of its rows are always in the
+  // context menu, whatever devspaces.dockerHostsActions says (Hannes's choice "Always in the simple view"); only the
+  // removals of the engine, the VM and the computer need devspaces.allowDestructiveActions.
+  it('offers the management actions on the rows of the simple view always, the removals of its host row only with allowDestructiveActions', () => {
+    const simpleVm = (kind: 'notSetUp' | 'stopped' | 'running') => hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind }, simple: true }).contextValue;
+    const remote = hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: true, simple: true }).contextValue;
+    for (const actions of ['disabled', 'contextMenu', 'icons', 'unknown']) {
+      const off: ViewSettings = { actions, view: 'simple' };
+      const on: ViewSettings = { actions, view: 'simple', removals: true };
+      expect(commandsOf(simpleVm('running'), false, off)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.stopVm', 'devspaces.vmSettings']);
+      expect(commandsOf(simpleVm('running'), false, on)).toEqual([
+        'devspaces.showUtilization',
+        'devspaces.updateImagesNow',
+        'devspaces.stopVm',
+        'devspaces.vmSettings',
+        'devspaces.removeFromDockerEngine',
+        'devspaces.removeVm',
+        'devspaces.resetVm',
+        'devspaces.removeFromComputer',
+      ]);
+      expect(commandsOf(simpleVm('stopped'), false, off)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.startVm', 'devspaces.vmSettings']);
+      expect(commandsOf(simpleVm('notSetUp'), false, off)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings']);
+      expect(commandsOf(simpleVm('notSetUp'), false, on)).toEqual(['devspaces.setUpLimaVm', 'devspaces.setUpWslDistribution', 'devspaces.vmSettings', 'devspaces.removeFromComputer']);
+      // A remote host: no VM actions, and no Remove from the List (the simple view shows only the host in use).
+      expect(commandsOf(remote, false, on)).toEqual(['devspaces.showUtilization', 'devspaces.updateImagesNow', 'devspaces.removeFromDockerEngine']);
+      // The buttons read only, in every mode.
+      expect(commandsOf(simpleVm('running'), true, { ...on, consoleButton: true })).toEqual(['devspaces.showUtilization', 'devspaces.openConsole', 'devspaces.refreshDockerHosts']);
+      expect(commandsOf(simpleVm('notSetUp'), true, on)).toEqual([]);
+      // A devspace: Show Report, Stop, Rebuild, Delete… and the switch of its host access checks, never a button.
+      const devspace = (objects: HostObject[], checks?: 'on' | 'off') =>
+        devspaceRowLook({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'id-1', repository: 'acme/shop', objects, ...(objects.length > 0 ? { report: objects[0] } : {}) }, checks).contextValue;
+      const dev = container('running', { purpose: 'devspace', role: 'dev container', devspaceId: 'id-1', repository: 'acme/shop' });
+      expect(commandsOf(devspace([dev], 'on'), false, off)).toEqual(['devspaces.showResourceReport', 'devspaces.stop', 'devspaces.rebuild', 'devspaces.delete', 'devspaces.turnOffHostAccessChecks']);
+      expect(commandsOf(devspace([{ ...dev, state: 'exited' }], 'off'), false, off)).toEqual(['devspaces.showResourceReport', 'devspaces.rebuild', 'devspaces.delete', 'devspaces.turnOnHostAccessChecks']);
+      // Files missing: only Delete… (it removes the record) and the switch.
+      expect(commandsOf(devspace([], 'on'), false, off)).toEqual(['devspaces.delete', 'devspaces.turnOffHostAccessChecks']);
+      for (const value of [devspace([dev], 'on'), devspace([], 'off')]) expect(commandsOf(value, true, on)).toEqual([]);
+      // No title action of the full view: no +.
+      expect(titleOf(on, true)).toEqual(['devspaces.refreshDockerHosts']);
+      expect(titleOf(on, false)).toEqual([]);
+    }
+    // The rows of the simple view get no entry of the full view, and the rows of the full view none of the simple view.
+    for (const item of items) {
+      const when = item.when ?? '';
+      if (when.includes('/^simpleHost;') || when.includes('/^simpleDevspace;')) expect(when, item.command).not.toContain('dockerHostsActions');
+    }
+  });
+
+  it('offers the switch of the host access checks on the dev container of a devspace of this computer in the full view, with the actions of the view', () => {
+    const dev = objectRow(container('running', { purpose: 'devspace', role: 'dev container', repository: 'acme/shop' }), 'id-1');
+    const checked = objectRowLook(dev, () => 'on').contextValue;
+    const unrestricted = objectRowLook(dev, () => 'off').contextValue;
+    expect(checked).toContain(';hostAccessChecked');
+    expect(unrestricted).toContain(';hostAccessUnrestricted');
+    expect(commandsOf(checked, false, { actions: 'contextMenu' })).toEqual(['devspaces.showResourceReport', 'devspaces.stop', 'devspaces.turnOffHostAccessChecks']);
+    expect(commandsOf(unrestricted, false, { actions: 'icons', removals: true })).toEqual(['devspaces.showResourceReport', 'devspaces.stop', 'devspaces.rebuild', 'devspaces.delete', 'devspaces.turnOnHostAccessChecks']);
+    expect(commandsOf(checked, false, { actions: 'disabled' })).toEqual(['devspaces.showResourceReport']);
+    expect(commandsOf(checked, true, { actions: 'icons', removals: true })).toEqual(['devspaces.stop']);
+    // The other objects of the devspace, and the objects of a devspace of another computer, have no switch.
+    expect(objectRowLook(objectRow(container('running', { purpose: 'devspace', repository: 'acme/shop' }), 'id-1'), () => 'on').contextValue).not.toContain('hostAccess');
+    expect(objectRowLook(objectRow(container('running', { purpose: 'otherDevspace', role: 'dev container', repository: 'acme/shop' })), () => 'on').contextValue).not.toContain('hostAccess');
+    // The repository view has the switch no longer.
+    const repositoryEntries = manifest.contributes.menus['view/item/context'].filter((item) => (item.when ?? '').includes('devspaces.repositories'));
+    expect(repositoryEntries.map((item) => item.command)).not.toContain('devspaces.turnOffHostAccessChecks');
+    expect(repositoryEntries.map((item) => item.command)).not.toContain('devspaces.turnOnHostAccessChecks');
+  });
+
   // The rules of Hannes for the actions that remove or delete something (R-ENG-008).
   it('offers an action that removes or deletes only in the context menu, never as a button, and only with allowDestructiveActions', () => {
     const menuEntries = new Set<string>();
@@ -426,10 +502,13 @@ describe('the menus of the view (package.json)', () => {
     }
     // Each of them is in a context menu then.
     expect([...menuEntries].sort()).toEqual([...REMOVING].sort());
-    // Every entry of package.json of such a command in the view needs the setting and is no button.
+    // Every entry of package.json of such a command in the view is no button, and needs the setting; only Rebuild and
+    // Delete… of a devspace of the simple view are there always (Hannes's choice "Always in the simple view").
     for (const item of items.filter((entry) => REMOVING.includes(entry.command ?? '') && (entry.when ?? '').includes('view == devspaces.hosts'))) {
       expect(item.group?.startsWith('inline'), item.command).toBe(false);
-      expect(item.when, item.command).toContain('config.devspaces.allowDestructiveActions');
+      const always = (item.when ?? '').includes('/^simpleDevspace;') && (item.command === 'devspaces.rebuild' || item.command === 'devspaces.delete');
+      if (always) expect(item.when, item.command).not.toContain('config.devspaces.');
+      else expect(item.when, item.command).toContain('config.devspaces.allowDestructiveActions');
     }
     // Stop and Start stay: they remove nothing.
     expect(commandsOf(rows()[4], false, { actions: 'contextMenu' })).toEqual(['devspaces.showResourceReport', 'devspaces.stop']);
@@ -521,5 +600,131 @@ describe('the menus of the view (package.json)', () => {
     const palette = manifest.contributes.menus.commandPalette;
     expect(palette).toContainEqual({ command: 'devspaces.dockerHostsSettings', when: 'false' });
     expect(palette).toContainEqual({ command: 'devspaces.openConsole', when: 'false' });
+  });
+});
+
+// The simple view (setting devspaces.dockerHostsView `simple`, the default; R-ENG-008): only the Docker host of
+// Devspaces, open from the start, with one row per devspace of this computer there.
+describe('the simple view', () => {
+  const object = (extra: Partial<HostObject> & Pick<HostObject, 'kind' | 'id'>): HostObject => ({ name: extra.id, purpose: 'devspace', ...extra });
+  const empty = { containers: [], images: [], volumes: [], networks: [] };
+
+  it('shows only the Docker host of Devspaces, else the VM, and nothing without either', () => {
+    const input = { vmHost: LIMA_HOST, vmState: { kind: 'running' as const }, hosts: ['lab', 'build-box'], simple: true };
+    expect(hostRows({ ...input, selected: 'build-box' })).toEqual([{ hostsNode: 'host', host: 'build-box', vm: false, selected: true, simple: true }]);
+    expect(hostRows({ ...input, selected: LIMA_HOST })).toEqual([{ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind: 'running' }, simple: true }]);
+    // No Docker host of Devspaces yet, or one that left the list: the VM, whose row sets it up.
+    expect(hostRows({ ...input, selected: undefined }).map((row) => [row.host, row.selected])).toEqual([[LIMA_HOST, false]]);
+    expect(hostRows({ ...input, selected: 'gone' }).map((row) => row.host)).toEqual([LIMA_HOST]);
+    expect(hostRows({ ...input, vmHost: undefined, selected: undefined })).toEqual([]);
+    // The full view is unchanged.
+    expect(hostRows({ ...input, simple: false, selected: 'lab' }).map((row) => row.host)).toEqual([LIMA_HOST, 'lab', 'build-box']);
+  });
+
+  it('opens its host row from the start, with its own prefix of the menus and its own ID', () => {
+    const look = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: true, vmState: { kind: 'running' }, simple: true });
+    expect(look.contextValue).toBe('simpleHost;vm;vmSetUp;engine;vmCanStop;selected');
+    expect(look.collapsible).toBe('expanded');
+    expect(look.id).toBe(`simple:host:${LIMA_HOST}`);
+    const notSetUp = hostRowLook({ hostsNode: 'host', host: LIMA_HOST, vm: true, selected: false, vmState: { kind: 'notSetUp' }, simple: true }, false);
+    expect(notSetUp.collapsible).toBe('none');
+    // Its menu sets the VM up also while the full view would be read only.
+    expect(notSetUp.tooltip).toContain(DockerHostsTexts.setUpInMenu);
+    expect(hostRowLook({ hostsNode: 'host', host: 'lab', vm: false, selected: true, simple: true }).contextValue).toBe('simpleHost;remote;engine;selected');
+  });
+
+  it('has one row per devspace of this computer: from the registry and from the objects that the read found, sorted by name', () => {
+    const inventory = {
+      containers: [
+        object({ kind: 'container', id: 'c-shop', name: 'devspaces-acme-shop-config-1', devspaceId: 'shop', repository: 'acme/shop', role: 'dev container', state: 'running', sizeBytes: 1000 }),
+        object({ kind: 'container', id: 'c-db', name: 'shop-db', devspaceId: 'shop', repository: 'acme/shop', role: 'service db', state: 'running', sizeBytes: 10 }),
+        object({ kind: 'container', id: 'c-monitor', name: 'devspaces-monitor', purpose: 'monitor', state: 'running' }),
+        object({ kind: 'container', id: 'c-other', name: 'other', devspaceId: 'x', purpose: 'otherDevspace', repository: 'acme/x' }),
+      ],
+      volumes: [object({ kind: 'volume', id: 'devspaces-acme-api', devspaceId: 'api', repository: 'acme/api', role: 'workspace', sizeBytes: 500 })],
+      images: [object({ kind: 'image', id: 'sha256:1', name: 'devspaces-acme-shop', devspaceId: 'shop', repository: 'acme/shop', role: 'image', sizeBytes: 9000, uniqueBytes: 4000 })],
+      networks: [],
+    };
+    const known = [
+      { id: 'shop', repository: 'acme/shop', source: 'config' },
+      { id: 'shop2', repository: 'acme/shop', source: 'default' },
+      { id: 'api', repository: 'acme/api', source: 'config' },
+    ];
+    const rows = devspaceRows(LIMA_HOST, inventory, known);
+    expect(rows.map((row) => [row.devspaceId, row.repository, row.source, row.objects.map((entry) => entry.id), row.report?.id])).toEqual([
+      // One devspace of acme/api: no word of the source.
+      ['api', 'acme/api', undefined, ['devspaces-acme-api'], 'devspaces-acme-api'],
+      // Two devspaces of acme/shop: each with the word of its source; one has nothing on the host (its files are missing).
+      ['shop', 'acme/shop', 'config', ['c-shop', 'c-db', 'sha256:1'], 'c-shop'],
+      ['shop2', 'acme/shop', 'default', [], undefined],
+    ]);
+    // An object of a devspace of this computer that the registry does not list (yet): a row with the repository of its label.
+    expect(devspaceRows(LIMA_HOST, { ...empty, volumes: inventory.volumes }, []).map((row) => [row.devspaceId, row.repository])).toEqual([['api', 'acme/api']]);
+    // Without devspaces: none (the view shows a note).
+    expect(devspaceRows(LIMA_HOST, empty, [])).toEqual([]);
+  });
+
+  it('opens the report of the dev container, else of a container, else of the workspace volume, else of the first object', () => {
+    const dev = object({ kind: 'container', id: 'dev', role: 'dev container' });
+    const service = object({ kind: 'container', id: 'service', role: 'service db' });
+    const workspace = object({ kind: 'volume', id: 'workspace', role: 'workspace' });
+    const image = object({ kind: 'image', id: 'image', role: 'image' });
+    expect(reportObject([image, workspace, service, dev])?.id).toBe('dev');
+    expect(reportObject([image, workspace, service])?.id).toBe('service');
+    expect(reportObject([image, workspace])?.id).toBe('workspace');
+    expect(reportObject([image])?.id).toBe('image');
+    expect(reportObject([])).toBeUndefined();
+  });
+
+  it('shows a devspace with its state, its size and its actions, gray while it does not run', () => {
+    const dev = object({ kind: 'container', id: 'dev', name: 'devspaces-acme-shop', role: 'dev container', state: 'running', sizeBytes: 1_000_000 });
+    const volume = object({ kind: 'volume', id: 'devspaces-acme-shop', role: 'workspace', sizeBytes: 2_000_000_000 });
+    const row: DevspaceRow = { hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'id-1', repository: 'acme/shop', objects: [dev, volume], report: dev };
+    const look = devspaceRowLook(row, 'on');
+    expect(look.label).toBe('acme/shop');
+    expect(look.description).toBe('devspace · Running · 2 GB');
+    expect(look.contextValue).toBe('simpleDevspace;canStopDevspace;canRebuildDevspace;canDeleteDevspace;hostAccessChecked;hasReport');
+    expect(look.color).toBeUndefined();
+    expect(look.icon).toBe('package');
+    expect(look.id).toBe(`simple:devspace:${LIMA_HOST}:id-1`);
+    expect(look.tooltip).toContain('container devspaces-acme-shop (dev container)');
+    // Stopped, with the checks off, and the word of its source.
+    const stopped = devspaceRowLook({ ...row, source: 'default', objects: [{ ...dev, state: 'exited' }, volume] }, 'off');
+    expect(stopped.label).toBe('acme/shop · default');
+    expect(stopped.description).toBe('devspace · Stopped · 2 GB · host access unrestricted');
+    expect(stopped.contextValue).toBe('simpleDevspace;canRebuildDevspace;canDeleteDevspace;hostAccessUnrestricted;hasReport');
+    expect(stopped.color).toBe('inactive');
+    // Without a dev container, and with nothing on the host.
+    expect(devspaceRowLook({ ...row, objects: [volume], report: volume }).description).toBe('devspace · No container · 2 GB');
+    const missing = devspaceRowLook({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'id-1', repository: 'acme/shop', objects: [] });
+    expect(missing.description).toBe('devspace · Files missing');
+    expect(missing.contextValue).toBe('simpleDevspace;canDeleteDevspace');
+    expect(missing.tooltip).toContain(DockerHostsTexts.devspaceFilesMissing(LIMA_HOST));
+    // rowLook passes the switch of the repository.
+    expect(rowLook(row, false, (repository) => (repository === 'acme/shop' ? 'off' : 'on')).contextValue).toContain('hostAccessUnrestricted');
+  });
+
+  it('starts a stopped VM with a click on its row in every mode, and has a note when the host has no devspace', () => {
+    const stopped: MessageRow = { hostsNode: 'message', host: LIMA_HOST, message: 'vmStopped', simple: true };
+    const look = messageRowLook(stopped, false);
+    expect(look.label).toBe(DockerHostsTexts.simpleVmStopped);
+    expect(look.command).toEqual({ command: Commands.startVm, title: 'Start the VM', arguments: [stopped] });
+    expect(look.id).toBe(`simple:message:${LIMA_HOST}:vmStopped`);
+    expect(messageRowLook({ hostsNode: 'message', host: LIMA_HOST, message: 'vmNotRead', simple: true }).label).toBe(DockerHostsTexts.simpleVmNotRead);
+    const none = messageRowLook({ hostsNode: 'message', host: 'lab', message: 'noDevspaces', simple: true });
+    expect(none.label).toBe(DockerHostsTexts.noDevspaces);
+    expect(none.command).toBeUndefined();
+  });
+
+  it('tells the rows of the simple view from those of the full view', () => {
+    expect(isSimpleRow({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'id-1' })).toBe(true);
+    expect(isSimpleRow({ hostsNode: 'host', host: LIMA_HOST, simple: true })).toBe(true);
+    expect(isSimpleRow({ hostsNode: 'message', host: LIMA_HOST, simple: true })).toBe(true);
+    expect(isSimpleRow({ hostsNode: 'host', host: LIMA_HOST })).toBe(false);
+    expect(isSimpleRow({ hostsNode: 'object', host: LIMA_HOST, simple: true })).toBe(false);
+    expect(isSimpleRow(undefined)).toBe(false);
+    expect(isSimpleRow({ kind: 'repository', repository: 'acme/shop' })).toBe(false);
+    // A devspace row is a devspace for the commands of the devspace, and a row of its host.
+    expect(hostOfNode({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'id-1' })).toBe(LIMA_HOST);
   });
 });

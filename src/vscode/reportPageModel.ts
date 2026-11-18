@@ -20,12 +20,16 @@ export interface ReportTarget {
   object: HostObject;
 }
 
-/** The resource of a command argument that is an object row of the view (`{ hostsNode: 'object', host, object }`), else undefined. */
+/**
+ * The resource of a command argument that is an object row of the view (`{ hostsNode: 'object', host, object }`), or a
+ * devspace row of the simple view (`{ hostsNode: 'devspace', host, report }`, the object that its report shows), else
+ * undefined.
+ */
 export function reportTargetOfArgument(argument: unknown): ReportTarget | undefined {
   if (typeof argument !== 'object' || argument === null) return undefined;
-  const value = argument as { hostsNode?: unknown; host?: unknown; object?: unknown };
-  if (value.hostsNode !== 'object' || typeof value.host !== 'string' || value.host === '') return undefined;
-  const object = value.object as Partial<HostObject> | null | undefined;
+  const value = argument as { hostsNode?: unknown; host?: unknown; object?: unknown; report?: unknown };
+  if ((value.hostsNode !== 'object' && value.hostsNode !== 'devspace') || typeof value.host !== 'string' || value.host === '') return undefined;
+  const object = (value.hostsNode === 'object' ? value.object : value.report) as Partial<HostObject> | null | undefined;
   if (typeof object !== 'object' || object === null) return undefined;
   if (!(OBJECT_KINDS as readonly unknown[]).includes(object.kind) || typeof object.id !== 'string' || object.id === '' || typeof object.name !== 'string' || typeof object.purpose !== 'string') return undefined;
   return { host: value.host, object: object as HostObject };

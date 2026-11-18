@@ -71,6 +71,8 @@ const SETTINGS = {
   // Scene 5 shows the log of the Monitor: Show Log is there only with this setting (off by default). Its lines are longer
   // than the editor beside the wide side bar.
   'devspaces.allowContainerLogs': true,
+  // Scene 3 shows all objects of the host: the full view (the simple view, the default, shows only the devspaces).
+  'devspaces.dockerHostsView': 'full',
   '[log]': { 'editor.wordWrap': 'on' },
   'security.workspace.trust.enabled': false,
   'telemetry.telemetryLevel': 'off',

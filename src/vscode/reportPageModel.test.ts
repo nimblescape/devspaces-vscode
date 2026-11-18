@@ -23,6 +23,14 @@ describe('reportTargetOfArgument', () => {
     expect(reportTargetOfArgument({ hostsNode: 'object', host: LIMA_HOST, object: monitor, devspaceId: 'x' })).toEqual({ host: LIMA_HOST, object: monitor });
   });
 
+  it('takes the object of the report of a devspace row of the simple view (its dev container)', () => {
+    expect(reportTargetOfArgument({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'x', objects: [monitor], report: monitor })).toEqual({ host: LIMA_HOST, object: monitor });
+    // A devspace whose files are missing has no report.
+    expect(reportTargetOfArgument({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'x', objects: [] })).toBeUndefined();
+    // The object of a devspace row is not its field `object`.
+    expect(reportTargetOfArgument({ hostsNode: 'devspace', host: LIMA_HOST, devspaceId: 'x', object: monitor })).toBeUndefined();
+  });
+
   it('takes nothing else: another row, no host, an object that is not complete, or no object at all', () => {
     for (const argument of [
       undefined,
