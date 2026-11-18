@@ -12,9 +12,10 @@ vi.mock('vscode', async () => (await import('./testing/fakeVscode')).fakeVscode)
 
 import { LIMA_HOST } from '../core/docker/dockerHost';
 import type { HostInventory, HostObject, ObjectResult } from '../core/hosts/hostObjects';
+import { abortError } from '../core/ports';
 import { sshPromptsAllowed } from '../core/sshAskpass';
 import type { VmState } from '../core/vm/vmState';
-import type { BuildCacheRow, GroupRow, HostRow, HostsNode, MessageRow, ObjectRow } from './dockerHostsModel';
+import { DockerHostsTexts, type BuildCacheRow, type GroupRow, type HostRow, type HostsNode, type MessageRow, type ObjectRow } from './dockerHostsModel';
 import { DockerHostsCommandTexts, DockerHostsView, UPDATE_INTERVAL_MS, type DockerHostsDeps, type HostsTree } from './dockerHostsView';
 import { fakeVscode, resetFakeVscode, type ThemeIcon, type TreeItem } from './testing/fakeVscode';
 
@@ -764,5 +765,60 @@ describe('DockerHostsView: the simple view', () => {
     await vi.advanceTimersByTimeAsync(UPDATE_INTERVAL_MS);
     expect(check).toHaveBeenCalledTimes(4);
     provider.dispose();
+  });
+
+  it('reads its host at the show with a login that asks nothing, and with a login that may ask only after Refresh', async () => {
+    selected = 'lab';
+    const prompts: boolean[] = [];
+    check.mockImplementation(async () => (prompts.push(sshPromptsAllowed()), checkText));
+    // The remote host needs a password: a login that asks nothing fails.
+    read.mockImplementation(async () => {
+      if (!sshPromptsAllowed()) throw new Error('Permission denied (publickey,password).');
+      return { ...inventory(), volumes: [foreignVolume] };
+    });
+    const provider = simpleView();
+    const [row] = (await provider.getChildren()) as HostRow[];
+    expect(row).toMatchObject({ host: 'lab', simple: true });
+    const children = (await provider.getChildren(row)) as MessageRow[];
+    expect(children).toEqual([{ hostsNode: 'message', host: 'lab', message: 'loginNeeded', detail: 'Permission denied (publickey,password).', simple: true }]);
+    const item = provider.getTreeItem(children[0]) as TreeItem;
+    expect(item.label).toBe(DockerHostsTexts.loginNeeded);
+    expect(item.command).toMatchObject({ command: 'devspaces.refreshDockerHosts', arguments: [{ hostsNode: 'host', host: 'lab' }] });
+    expect(prompts).toEqual([false]);
+    expect(read.mock.calls.map((call) => call[2])).toEqual([{}]);
+    // The row stays as it is at the next show, without a new login.
+    expect(await provider.getChildren(row)).toEqual(children);
+    expect(read).toHaveBeenCalledTimes(1);
+    // A show after an action of the user on the host: only a login that is open.
+    read.mockImplementationOnce(async () => {
+      throw abortError();
+    });
+    provider.invalidate('lab');
+    expect(await provider.getChildren(row)).toEqual([{ hostsNode: 'message', host: 'lab', message: 'loginNeeded', detail: DockerHostsCommandTexts.noOpenLogin, simple: true }]);
+    expect(read.mock.calls.map((call) => call[2])).toEqual([{}, { openLoginOnly: true }]);
+    expect(prompts).toEqual([false, false]);
+    // Refresh of the host row (also the click on the note): a flow of the user, whose login may ask.
+    provider.refresh({ hostsNode: 'host', host: 'lab' });
+    expect(await provider.getChildren(row)).toEqual([{ hostsNode: 'message', host: 'lab', message: 'noDevspaces', simple: true }]);
+    expect(prompts).toEqual([false, false, true]);
+    expect(read.mock.calls.map((call) => call[2])).toEqual([{}, { openLoginOnly: true }, {}]);
+    // Refresh of the view title marks the host of the simple view too; a later show asks nothing again.
+    provider.refresh();
+    await provider.getChildren(row);
+    provider.invalidate('lab');
+    await provider.getChildren(row);
+    expect(prompts).toEqual([false, false, true, true, false]);
+  });
+
+  it('reads the VM at the show with a login that asks nothing, and shows a failed read as such', async () => {
+    const prompts: boolean[] = [];
+    read.mockImplementation(async () => {
+      prompts.push(sshPromptsAllowed());
+      throw new Error('Cannot connect to the Docker daemon.');
+    });
+    const provider = simpleView();
+    const [row] = (await provider.getChildren()) as HostRow[];
+    expect(await provider.getChildren(row)).toEqual([{ hostsNode: 'message', host: LIMA_HOST, message: 'readFailed', detail: 'Cannot connect to the Docker daemon.', simple: true }]);
+    expect(prompts).toEqual([false]);
   });
 });

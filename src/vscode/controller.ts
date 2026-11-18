@@ -4609,7 +4609,6 @@ export class Controller implements vscode.Disposable {
       .catch((error: unknown) => this.logger.warn(`The sidebar could not be updated: ${errorMessage(error)}`));
   }
 
-  /** A row of the view Docker Hosts asked for an action while the view is read only: why, and the setting to change. */
   /**
    * Whether the settings allow `name` with `argument`, a row of the view Docker Hosts; else it logs and says why. A row of
    * the simple view (while the setting dockerHostsView is `simple`) needs only allowDestructiveActions, and only for the
@@ -4642,6 +4641,7 @@ export class Controller implements vscode.Disposable {
     return true;
   }
 
+  /** A row of the view Docker Hosts asked for an action while the view is read only: why, and the setting to change. */
   private informHostsViewReadOnly(): void {
     showInformationMessage(ControllerTexts.hostsViewReadOnly, ControllerTexts.openSettings).then(
       (choice) => {

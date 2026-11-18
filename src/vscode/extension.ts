@@ -39,8 +39,6 @@ import {
   type DockerTarget,
 } from '../core/docker/dockerHost';
 import { RemovedEngineError, removedEngineImageNote, removedEngineNote } from '../core/docker/engineRemoval';
-import { sourceLabel, sourceOf } from '../core/devspaceSource';
-import { hostAccessChecks } from '../core/policy/hostAccessChecks';
 import { ensureDockerRunning, launchDetachedProcess } from '../core/docker/dockerStart';
 import { DockerTargets, operationDockerTarget, outsideOperation, runWithDockerTarget, withoutMissingVm } from '../core/docker/dockerTargets';
 import { SshLoginCache, noPromptEnv, sshHostsOfContexts, startDockerFor, type RemoteReachabilityDeps } from '../core/docker/remoteDocker';
@@ -71,6 +69,8 @@ import { contextPipeAddress, dockerPipeBase, dockerPipeId, parseDockerPipeHost }
 import { ContextPipe } from '../core/relay/contextPipe';
 import { processDockerDial } from '../core/relay/dockerPipe';
 import { sshPromptSignal, sshPromptsAllowed } from '../core/sshAskpass';
+import { sourceLabel, sourceOf } from '../core/devspaceSource';
+import { hostAccessChecks } from '../core/policy/hostAccessChecks';
 import { DiscoveryService } from '../core/discovery/discoveryService';
 import { GitHubApi } from '../core/discovery/githubApi';
 import { sameScope } from '../core/discovery/scope';

@@ -79,12 +79,14 @@ export interface DevspaceRow {
 
 /**
  * A row with a note: a stopped VM, a host that could not be read, a host that was not read yet, a host of the simple view
- * without a devspace of this computer. `simple`: a row of the simple view (its stopped VM always starts on a click).
+ * without a devspace of this computer, a remote host of the simple view that its read when the view showed could not
+ * reach with a login that asks nothing (`loginNeeded`: a click reads it with a login that may ask). `simple`: a row of
+ * the simple view (its stopped VM always starts on a click).
  */
 export interface MessageRow {
   hostsNode: 'message';
   host: string;
-  message: 'vmStopped' | 'vmNotRead' | 'readFailed' | 'vmUnknown' | 'noDevspaces';
+  message: 'vmStopped' | 'vmNotRead' | 'readFailed' | 'vmUnknown' | 'noDevspaces' | 'loginNeeded';
   detail?: string;
   simple?: true;
 }
@@ -167,6 +169,9 @@ export const DockerHostsTexts = {
   readFailedTooltip: (detail: string) => `${detail}\n\nClick to open the log of Devspaces. Refresh reads the host again.`,
   simpleVmStopped: 'Start the VM to see your devspaces',
   simpleVmNotRead: 'Click to read your devspaces',
+  loginNeeded: 'Click to log in and read your devspaces',
+  loginNeededTooltip: (host: string, detail: string) =>
+    `Devspaces read ${host} when the view showed it, with a login that asks nothing, and could not: ${detail}\n\nClick to read it again: a login with a password asks for it in VS Code.`,
   noDevspaces: 'No devspace of this computer on this host',
   noDevspacesTooltip: 'Start a repository in the view Devspaces above: its devspace shows here, with Stop, Rebuild, Delete… and the host access checks in its context menu.',
   devspace: 'devspace',
@@ -438,6 +443,16 @@ export function messageRowLook(row: MessageRow, actions = true): RowLook {
         tooltip: DockerHostsTexts.vmNotReadTooltip,
         contextValue: 'hostsMessage',
         icon: 'refresh',
+        collapsible: 'none',
+        command: { command: Commands.refreshDockerHosts, title: 'Refresh', arguments: [{ hostsNode: 'host', host: row.host }] },
+      };
+    case 'loginNeeded':
+      return {
+        id,
+        label: DockerHostsTexts.loginNeeded,
+        tooltip: DockerHostsTexts.loginNeededTooltip(row.host, row.detail ?? ''),
+        contextValue: 'hostsMessage',
+        icon: 'sign-in',
         collapsible: 'none',
         command: { command: Commands.refreshDockerHosts, title: 'Refresh', arguments: [{ hostsNode: 'host', host: row.host }] },
       };
