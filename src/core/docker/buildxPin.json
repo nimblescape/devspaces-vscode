@@ -1,5 +1,5 @@
 {
-  "version": "0.39.0",
+  "version": "0.39.1",
   "image": "docker/buildx-bin",
-  "digest": "sha256:aa2eb88bded47a9ea6f6eb88eb2db525ac55c3fa10b7e0d683035d5e4acc2050"
+  "digest": "sha256:65035f720fc63f266620394a62edcde2318b3611ceb50b77af984578d011a0d6"
 }
